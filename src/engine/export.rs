@@ -77,7 +77,8 @@ pub fn cuts_from_switches(
     let mut cuts = vec![Cut { frame: 0, angle: pick(first_angle), scene: first_scene.to_string() }];
     for e in events {
         let mut at = e.at - latency - t0;
-        if e.mode != crate::config::TransitionMode::Cut {
+        // Mid-way through a transition (a stinger's switch is logged at its cut).
+        if !matches!(e.mode, crate::config::TransitionMode::Cut | crate::config::TransitionMode::Stinger) {
             at += e.duration_ms as i64 * 1_000_000 / 2;
         }
         let frame = ns_to_frame(at, fps).clamp(0, frames.max(1) - 1);

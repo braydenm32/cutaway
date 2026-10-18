@@ -184,6 +184,27 @@ fn fs_trans(in: VsOut) -> @location(0) vec4<f32> {
     return vec4<f32>(mix(u.dip.rgb, b, (e - 0.5) * 2.0), 1.0);
 }
 
+// A stinger over the program: tex_a/tex_b = its Y/CbCr planes; u.uv =
+// where the picture is; u.key.x = 0 solid, 1 matte at uv + u.key.yz,
+// 2 black is see-through.
+@fragment
+fn fs_stinger(in: VsOut) -> @location(0) vec4<f32> {
+    let y = textureSampleLevel(tex_a, samp, in.uv, 0.0).r;
+    let c = textureSampleLevel(tex_b, samp, in.uv, 0.0).rg;
+    let rgb = yuv_to_rgb(y, c.r, c.g);
+    let kind = i32(u.key.x + 0.5);
+    if (kind == 1) {
+        let m = textureSampleLevel(tex_a, samp, in.uv + u.key.yz, 0.0).r;
+        return vec4<f32>(rgb, clamp((m * 255.0 - 16.0) / 219.0, 0.0, 1.0));
+    }
+    if (kind == 2) {
+        // Light on black: adds over the program.
+        let a = max(rgb.r, max(rgb.g, rgb.b));
+        return vec4<f32>(rgb / max(a, 1e-4), a);
+    }
+    return vec4<f32>(rgb, 1.0);
+}
+
 // Canvas -> Y plane.
 @fragment
 fn fs_out_y(in: VsOut) -> @location(0) vec4<f32> {

@@ -34,6 +34,8 @@ pub struct Config {
     pub pads: Vec<Pad>,
     /// Syrinscape (online soundboard) control.
     pub syrinscape: SyrinscapeConfig,
+    /// The show's running order.
+    pub rundown: RundownConfig,
 }
 
 /// Syrinscape Online: moods and sounds started from Cutaway's buttons,
@@ -340,10 +342,12 @@ pub enum TransitionMode {
     Push,
     /// Fade through a colour (black by default).
     Dip,
+    /// A video plays over the top and the scenes change under it.
+    Stinger,
 }
 
 impl TransitionMode {
-    pub const ALL: [TransitionMode; 5] = [TransitionMode::Cut, TransitionMode::Mix, TransitionMode::Wipe, TransitionMode::Push, TransitionMode::Dip];
+    pub const ALL: [TransitionMode; 6] = [TransitionMode::Cut, TransitionMode::Mix, TransitionMode::Wipe, TransitionMode::Push, TransitionMode::Dip, TransitionMode::Stinger];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -352,6 +356,7 @@ impl TransitionMode {
             TransitionMode::Wipe => "Wipe",
             TransitionMode::Push => "Push",
             TransitionMode::Dip => "Dip",
+            TransitionMode::Stinger => "Stinger",
         }
     }
 
@@ -362,6 +367,7 @@ impl TransitionMode {
             TransitionMode::Wipe => "wipe",
             TransitionMode::Push => "push",
             TransitionMode::Dip => "dip",
+            TransitionMode::Stinger => "stinger",
         }
     }
 }
@@ -409,12 +415,58 @@ pub struct TransitionConfig {
     pub dip_color: String,
     /// Switch through a preview: pick the next scene, then Take.
     pub preview_mode: bool,
+    pub stinger: StingerConfig,
 }
 
 impl Default for TransitionConfig {
     fn default() -> Self {
-        Self { mode: TransitionMode::Mix, duration_ms: 400, direction: Direction::Right, dip_color: "#000000".into(), preview_mode: false }
+        Self { mode: TransitionMode::Mix, duration_ms: 400, direction: Direction::Right, dip_color: "#000000".into(), preview_mode: false, stinger: StingerConfig::default() }
     }
+}
+
+/// Where a stinger video keeps its see-through parts.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Matte {
+    /// Right or below if the video is twice as wide or tall, else solid.
+    #[default]
+    Auto,
+    /// The picture on the left, a black-and-white matte on the right.
+    Right,
+    /// The picture on top, the matte below.
+    Below,
+    /// Black is see-through (light effects on black).
+    Black,
+    /// No see-through parts: it covers the screen.
+    Solid,
+}
+
+impl Matte {
+    pub const ALL: [Matte; 5] = [Matte::Auto, Matte::Right, Matte::Below, Matte::Black, Matte::Solid];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Matte::Auto => "Automatic",
+            Matte::Right => "Matte on the right",
+            Matte::Below => "Matte below",
+            Matte::Black => "Black is see-through",
+            Matte::Solid => "Solid (covers the screen)",
+        }
+    }
+}
+
+/// The stinger transition's video.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct StingerConfig {
+    /// An MP4 or MOV file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<PathBuf>,
+    /// When the scenes change under it, in ms from its start (0 = halfway).
+    pub cut_ms: u32,
+    pub matte: Matte,
+    /// Its sound (played through the Sound pads input), in dB.
+    pub volume_db: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1177,6 +1229,44 @@ pub enum GraphicKind {
     Image,
     /// A name title (lower third) with editable text.
     Title,
+    /// A clock, countdown or stopwatch.
+    Clock,
+}
+
+/// What a clock graphic shows.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ClockKind {
+    /// The time of day.
+    #[default]
+    Time,
+    /// Counting down to a time of day ("Starting in 4:59").
+    Until,
+    /// Counting down from a length, started by a button or command.
+    Countdown,
+    /// Counting up, started by a button or command.
+    Stopwatch,
+    /// Time left in the rundown's current segment.
+    Segment,
+}
+
+impl ClockKind {
+    pub const ALL: [ClockKind; 5] = [ClockKind::Time, ClockKind::Until, ClockKind::Countdown, ClockKind::Stopwatch, ClockKind::Segment];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ClockKind::Time => "Time of day",
+            ClockKind::Until => "Countdown to a time",
+            ClockKind::Countdown => "Countdown",
+            ClockKind::Stopwatch => "Stopwatch",
+            ClockKind::Segment => "Rundown segment time left",
+        }
+    }
+
+    /// Started and stopped by buttons and commands.
+    pub fn is_timer(self) -> bool {
+        matches!(self, ClockKind::Countdown | ClockKind::Stopwatch)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1201,6 +1291,14 @@ pub struct Graphic {
     pub box_opacity: f32,
     /// Font file for titles ("" = built-in).
     pub font: PathBuf,
+    /// Clocks: what it shows (`title` is the label above it, "" for none).
+    pub clock: ClockKind,
+    /// Countdown to this time of day ("19:30").
+    pub until: String,
+    /// Countdown length in seconds.
+    pub seconds: u32,
+    pub clock_24h: bool,
+    pub show_seconds: bool,
 }
 
 impl Default for Graphic {
@@ -1221,6 +1319,11 @@ impl Default for Graphic {
             box_color: "#101820".into(),
             box_opacity: 0.75,
             font: PathBuf::new(),
+            clock: ClockKind::Time,
+            until: "19:00".into(),
+            seconds: 300,
+            clock_24h: false,
+            show_seconds: false,
         }
     }
 }
@@ -1228,6 +1331,47 @@ impl Default for Graphic {
 impl Graphic {
     pub fn title(name: &str, title: &str, subtitle: &str) -> Graphic {
         Graphic { name: name.into(), kind: GraphicKind::Title, title: title.into(), subtitle: subtitle.into(), x: 0.05, y: 0.76, width: 0.36, ..Default::default() }
+    }
+
+    pub fn clock(name: &str, clock: ClockKind, label: &str) -> Graphic {
+        Graphic { name: name.into(), kind: GraphicKind::Clock, clock, title: label.into(), x: 0.80, y: 0.05, width: 0.15, ..Default::default() }
+    }
+}
+
+/// One part of the show's running order.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Segment {
+    pub name: String,
+    /// Planned length in seconds (0 = open-ended).
+    pub seconds: u32,
+    /// Scene to take when it starts ("" = stay).
+    pub scene: String,
+    /// Commands to run when it starts (graphics, pads, Syrinscape…).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub cues: Vec<String>,
+    /// Notes for the producer (talking points, who's on).
+    pub notes: String,
+}
+
+impl Default for Segment {
+    fn default() -> Self {
+        Segment { name: "Segment".into(), seconds: 300, scene: String::new(), cues: Vec::new(), notes: String::new() }
+    }
+}
+
+/// The running order.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct RundownConfig {
+    pub segments: Vec<Segment>,
+    /// Put a marker (and a chapter) in the recording as each segment starts.
+    pub markers: bool,
+}
+
+impl Default for RundownConfig {
+    fn default() -> Self {
+        RundownConfig { segments: Vec::new(), markers: true }
     }
 }
 
@@ -1247,11 +1391,14 @@ pub struct DisplayConfig {
     pub fullscreen: bool,
     /// Turn the virtual camera on when Cutaway starts.
     pub virtual_camera: bool,
+    /// Show the time and the rundown segment's time left on this screen
+    /// (for presenters; not in the recording or stream).
+    pub clocks: bool,
 }
 
 impl Default for DisplayConfig {
     fn default() -> Self {
-        DisplayConfig { output: DisplayOutput::Off, fullscreen: true, virtual_camera: false }
+        DisplayConfig { output: DisplayOutput::Off, fullscreen: true, virtual_camera: false, clocks: false }
     }
 }
 

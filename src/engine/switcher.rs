@@ -24,6 +24,8 @@ pub enum Layout {
     One(Vec<PadState>),
     /// Two whole scenes combined by a wipe, push or dip.
     Two { from: Vec<PadState>, to: Vec<PadState>, mode: TransitionMode, t: f32, direction: [f32; 2], dip: [f32; 3] },
+    /// A stinger playing over a scene: `elapsed` since it started.
+    Stinger { states: Vec<PadState>, elapsed: Ns },
 }
 
 struct Active {
@@ -32,6 +34,8 @@ struct Active {
     mode: TransitionMode,
     start: Instant,
     dur: Duration,
+    /// Stingers: when the scenes change under it.
+    cut: Duration,
 }
 
 struct State {
@@ -78,6 +82,8 @@ impl Switcher {
 
     /// Go live with `scene`.
     pub fn take(&self, scene: Scene, mode: TransitionMode, duration_ms: u32) {
+        // A stinger needs its video (`take_stinger`).
+        let mode = if mode == TransitionMode::Stinger { TransitionMode::Mix } else { mode };
         let mut st = self.state.lock().unwrap();
         if let Some(a) = st.active.take() {
             st.current = a.to;
@@ -87,8 +93,22 @@ impl Switcher {
             st.current = scene;
         } else {
             let from = st.current.clone();
-            st.active = Some(Active { from, to: scene, mode, start: Instant::now(), dur: Duration::from_millis(duration_ms as u64) });
+            st.active = Some(Active { from, to: scene, mode, start: Instant::now(), dur: Duration::from_millis(duration_ms as u64), cut: Duration::ZERO });
         }
+    }
+
+    /// Go live with `scene` under a stinger `duration` long that starts
+    /// `delay` from now, changing scenes `cut` into it.
+    pub fn take_stinger(&self, scene: Scene, duration: Ns, cut: Ns, delay: Ns) {
+        let mut st = self.state.lock().unwrap();
+        if let Some(a) = st.active.take() {
+            st.current = a.to;
+        }
+        let duration_ms = (duration / 1_000_000).max(1) as u32;
+        self.events.lock().unwrap().push(SwitchEvent { at: clock::now() + delay + cut, scene: scene.name.clone(), mode: TransitionMode::Stinger, duration_ms, angle: scene.full_frame_source() });
+        let from = st.current.clone();
+        let ns = |n: Ns| Duration::from_nanos(n.max(0) as u64);
+        st.active = Some(Active { from, to: scene, mode: TransitionMode::Stinger, start: Instant::now() + ns(delay), dur: ns(duration.max(1)), cut: ns(cut) });
     }
 
     /// Change the live layout immediately (dragging frames around).
@@ -119,8 +139,13 @@ impl Switcher {
         let Some(a) = &st.active else {
             return Layout::One(compose(None, &st.current, 1.0, self.canvas, &st.aspects));
         };
-        let t = (a.start.elapsed().as_secs_f32() / a.dur.as_secs_f32().max(1e-3)).min(1.0);
+        let elapsed = Instant::now().saturating_duration_since(a.start);
+        let t = (elapsed.as_secs_f32() / a.dur.as_secs_f32().max(1e-3)).min(1.0);
         let out = match a.mode {
+            TransitionMode::Stinger => {
+                let scene = if elapsed < a.cut { &a.from } else { &a.to };
+                Layout::Stinger { states: compose(None, scene, 1.0, self.canvas, &st.aspects), elapsed: elapsed.as_nanos() as Ns }
+            }
             TransitionMode::Cut | TransitionMode::Mix => Layout::One(compose(Some(&a.from), &a.to, t, self.canvas, &st.aspects)),
             mode => Layout::Two {
                 from: compose(None, &a.from, 1.0, self.canvas, &st.aspects),
@@ -147,7 +172,7 @@ impl Switcher {
 
     pub fn in_transition(&self) -> bool {
         let st = self.state.lock().unwrap();
-        st.active.as_ref().is_some_and(|a| a.start.elapsed() < a.dur)
+        st.active.as_ref().is_some_and(|a| Instant::now().saturating_duration_since(a.start) < a.dur)
     }
 
     /// Switches made between two host times.
@@ -156,5 +181,51 @@ impl Switcher {
         let out = events.iter().filter(|e| e.at >= from && e.at <= to).cloned().collect();
         events.retain(|e| e.at >= from);
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene::presets;
+
+    #[test]
+    fn stinger_changes_scenes_at_its_cut_point() {
+        let scenes = presets(&["A".to_string(), "B".to_string()]);
+        let (a, b) = (scenes[0].clone(), scenes[1].clone());
+        let sw = Switcher::new((1280, 720), vec![16.0 / 9.0; 2], a.clone());
+        let shows = |l: &Layout| match l {
+            Layout::One(s) | Layout::Stinger { states: s, .. } => {
+                if s[0].alpha > 0.5 && s[1].alpha < 0.5 {
+                    "A"
+                } else if s[1].alpha > 0.5 && s[0].alpha < 0.5 {
+                    "B"
+                } else {
+                    "?"
+                }
+            }
+            _ => "two",
+        };
+        sw.take_stinger(b.clone(), 300_000_000, 150_000_000, 0);
+        let l = sw.layout();
+        assert!(matches!(l, Layout::Stinger { elapsed, .. } if elapsed < 50_000_000));
+        assert_eq!(shows(&l), "A", "before the cut point");
+        assert_eq!(sw.live().name, "B");
+        assert!(sw.in_transition());
+        std::thread::sleep(Duration::from_millis(180));
+        let l = sw.layout();
+        assert!(matches!(l, Layout::Stinger { elapsed, .. } if elapsed >= 150_000_000));
+        assert_eq!(shows(&l), "B", "after the cut point");
+        std::thread::sleep(Duration::from_millis(150));
+        let l = sw.layout();
+        assert!(matches!(l, Layout::One(_)), "over");
+        assert_eq!(shows(&l), "B");
+        // The switch is logged at the cut point.
+        let ev = sw.events_between(0, i64::MAX);
+        assert_eq!(ev.len(), 1);
+        assert_eq!(ev[0].mode, TransitionMode::Stinger);
+        // A plain take asking for a stinger mixes instead.
+        sw.take(a, TransitionMode::Stinger, 100);
+        assert!(matches!(sw.layout(), Layout::One(_)));
     }
 }

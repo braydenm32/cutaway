@@ -14,6 +14,8 @@ use std::thread::JoinHandle;
 
 const RATE: usize = 48_000;
 const BLOCK: usize = 480;
+/// The "pad" of sounds that aren't on one.
+const EXTRA: usize = usize::MAX;
 
 /// A sound on its way out.
 struct Voice {
@@ -181,6 +183,15 @@ impl PadBank {
         for v in b.voices.iter_mut().filter(|v| v.pad == i && v.fade_step.is_none()) {
             v.fade_step = Some(1.0 / (RATE as f32 * fade));
         }
+    }
+
+    /// Play a sound that isn't on a pad (a stinger's), replacing the last one.
+    pub fn play_extra(&self, sound: Arc<Vec<f32>>, gain_db: f32) {
+        let mut b = self.bank.lock().unwrap();
+        for v in b.voices.iter_mut().filter(|v| v.pad == EXTRA && v.fade_step.is_none()) {
+            v.fade_step = Some(1.0 / (RATE as f32 * 0.02));
+        }
+        b.voices.push(Voice { pad: EXTRA, sound, pos: 0, gain: 10f32.powf(gain_db.clamp(-60.0, 12.0) / 20.0), looping: false, fade_step: None, level: 1.0 });
     }
 
     pub fn stop_all(&self) {

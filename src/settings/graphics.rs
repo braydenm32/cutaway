@@ -1,7 +1,7 @@
-//! Settings → Graphics: logos, watermarks and name titles.
+//! Settings → Graphics: logos, watermarks, name titles and clocks.
 
 use super::*;
-use crate::config::{Graphic, GraphicKind};
+use crate::config::{ClockKind, Graphic, GraphicKind};
 use std::hash::{Hash, Hasher};
 
 fn fingerprint(g: &Graphic, canvas: (u32, u32)) -> u64 {
@@ -12,7 +12,7 @@ fn fingerprint(g: &Graphic, canvas: (u32, u32)) -> u64 {
 
 impl SettingsUi {
     pub(super) fn graphics(&mut self, ui: &mut egui::Ui) {
-        title(ui, "Graphics", "Logos, watermarks and name titles above every scene. Each gets its own button next to the scenes.");
+        title(ui, "Graphics", "Logos, watermarks, name titles and clocks above every scene. Each gets its own button next to the scenes.");
         let n = self.draft.graphics.len();
         if self.sel_graphic >= n {
             self.sel_graphic = n.saturating_sub(1);
@@ -25,6 +25,7 @@ impl SettingsUi {
                     let kind = match g.kind {
                         GraphicKind::Image => "image",
                         GraphicKind::Title => "title",
+                        GraphicKind::Clock => "clock",
                     };
                     let b = egui::Button::selectable(self.sel_graphic == i, RichText::new(format!("{}\n{kind}{}", g.name, if i < 9 { format!(" · Alt+{}", i + 1) } else { String::new() })).size(13.0))
                         .min_size(vec2(220.0, 40.0));
@@ -44,7 +45,11 @@ impl SettingsUi {
                         self.sel_graphic = self.draft.graphics.len() - 1;
                     }
                     if ui.button("＋ Name title").clicked() {
-                        self.draft.graphics.push(Graphic::title(&unique(names, "Title"), "Your Name", "Role or topic"));
+                        self.draft.graphics.push(Graphic::title(&unique(names.clone(), "Title"), "Your Name", "Role or topic"));
+                        self.sel_graphic = self.draft.graphics.len() - 1;
+                    }
+                    if ui.button("＋ Clock or countdown").clicked() {
+                        self.draft.graphics.push(Graphic::clock(&unique(names, "Clock"), ClockKind::Time, ""));
                         self.sel_graphic = self.draft.graphics.len() - 1;
                     }
                     if ui.add_enabled(n > 0, egui::Button::new("Remove")).clicked() {
@@ -98,32 +103,63 @@ impl SettingsUi {
                     label(ui, "Second line");
                     ui.add(egui::TextEdit::singleline(&mut g.subtitle).desired_width(300.0));
                     ui.end_row();
-                    label(ui, "Colours");
-                    ui.horizontal(|ui| {
-                        for (txt, value, fallback) in [("text", &mut g.text_color, [255u8, 255, 255]), ("box", &mut g.box_color, [16, 24, 32])] {
-                            let mut rgb = crate::config::parse_color(value).map(|c| [(c >> 16) as u8, (c >> 8) as u8, c as u8]).unwrap_or(fallback);
-                            if ui.color_edit_button_srgb(&mut rgb).changed() {
-                                *value = format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]);
-                            }
-                            ui.label(txt);
-                        }
-                        ui.add(egui::Slider::new(&mut g.box_opacity, 0.0..=1.0).text("box opacity"));
-                    });
-                    ui.end_row();
-                    label(ui, "Font");
-                    ui.horizontal(|ui| {
-                        let shown = if g.font.as_os_str().is_empty() { "built in".to_string() } else { g.font.file_name().unwrap_or_default().to_string_lossy().to_string() };
-                        ui.label(shown);
-                        if ui.button("Choose…").clicked() {
-                            if let Some(f) = rfd::FileDialog::new().add_filter("Fonts", &["ttf", "otf", "ttc"]).pick_file() {
-                                g.font = f;
-                            }
-                        }
-                        if !g.font.as_os_str().is_empty() && ui.small_button("Built in").clicked() {
-                            g.font = PathBuf::new();
+                    text_style(ui, g);
+                }
+                GraphicKind::Clock => {
+                    label(ui, "Shows");
+                    egui::ComboBox::from_id_salt("clock_kind").selected_text(g.clock.label()).width(240.0).show_ui(ui, |ui| {
+                        for k in ClockKind::ALL {
+                            ui.selectable_value(&mut g.clock, k, k.label());
                         }
                     });
                     ui.end_row();
+                    match g.clock {
+                        ClockKind::Time => {
+                            label(ui, "Format");
+                            ui.horizontal(|ui| {
+                                ui.checkbox(&mut g.clock_24h, "24-hour");
+                                ui.checkbox(&mut g.show_seconds, "seconds");
+                            });
+                            ui.end_row();
+                        }
+                        ClockKind::Until => {
+                            label(ui, "Counting down to");
+                            ui.horizontal(|ui| {
+                                ui.add(egui::TextEdit::singleline(&mut g.until).desired_width(90.0));
+                                if crate::engine::timers::parse_time_of_day(&g.until).is_none() {
+                                    ui.label(RichText::new("⚠ a time like 19:30 or 7:30 pm").color(AMBER));
+                                } else {
+                                    hint(ui, "today, by this computer's clock");
+                                }
+                            });
+                            ui.end_row();
+                        }
+                        ClockKind::Countdown => {
+                            label(ui, "From");
+                            ui.horizontal(|ui| {
+                                let mut m = g.seconds / 60;
+                                let mut sec = g.seconds % 60;
+                                let a = ui.add(egui::DragValue::new(&mut m).range(0..=599).suffix(" min"));
+                                let b = ui.add(egui::DragValue::new(&mut sec).range(0..=59).suffix(" s"));
+                                if a.changed() || b.changed() {
+                                    g.seconds = m * 60 + sec;
+                                }
+                            });
+                            ui.end_row();
+                        }
+                        _ => {}
+                    }
+                    label(ui, "Label");
+                    ui.horizontal(|ui| {
+                        ui.add(egui::TextEdit::singleline(&mut g.title).desired_width(200.0).hint_text("none"));
+                        for l in ["Starting in", "Back in", "Time left"] {
+                            if ui.small_button(l).clicked() {
+                                g.title = l.into();
+                            }
+                        }
+                    });
+                    ui.end_row();
+                    text_style(ui, g);
                 }
             }
             label(ui, "Position");
@@ -165,6 +201,10 @@ impl SettingsUi {
             let img = match g.kind {
                 GraphicKind::Title => Some(crate::engine::graphics::render_title(g, canvas)),
                 GraphicKind::Image => image::open(&g.image).ok().map(|i| i.to_rgba8()),
+                GraphicKind::Clock => {
+                    let (text, over) = crate::engine::timers::clock_text(g, &crate::engine::timers::Timers::default(), chrono::Local::now());
+                    Some(crate::engine::graphics::render_clock(g, &text, over, canvas))
+                }
             };
             match img {
                 Some(img) => {
@@ -190,6 +230,42 @@ impl SettingsUi {
         } else if g.kind == GraphicKind::Image {
             ui.label(RichText::new("⚠ Choose a PNG or JPEG image.").color(AMBER));
         }
-        hint(ui, "Titles can also be edited live from the main window (click ✎ on the title's button) — handy for changing names between guests.");
+        if g.kind == GraphicKind::Clock && g.clock.is_timer() {
+            hint(ui, &format!("Start, pause and reset it from its button in the main window (right-click), a Stream Deck Timer key, or the commands timer:{0}:start, timer:{0}:pause and timer:{0}:reset.", g.name));
+        } else if g.kind == GraphicKind::Clock && g.clock == ClockKind::Segment {
+            hint(ui, "Counts down the rundown segment that's on (Settings → Rundown), and shows how far over it runs in red.");
+        } else {
+            hint(ui, "Titles can also be edited live from the main window (click ✎ on the title's button) — handy for changing names between guests.");
+        }
     }
+}
+
+/// Text colours, box and font (titles and clocks).
+fn text_style(ui: &mut egui::Ui, g: &mut Graphic) {
+    label(ui, "Colours");
+    ui.horizontal(|ui| {
+        for (txt, value, fallback) in [("text", &mut g.text_color, [255u8, 255, 255]), ("box", &mut g.box_color, [16, 24, 32])] {
+            let mut rgb = crate::config::parse_color(value).map(|c| [(c >> 16) as u8, (c >> 8) as u8, c as u8]).unwrap_or(fallback);
+            if ui.color_edit_button_srgb(&mut rgb).changed() {
+                *value = format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]);
+            }
+            ui.label(txt);
+        }
+        ui.add(egui::Slider::new(&mut g.box_opacity, 0.0..=1.0).text("box opacity"));
+    });
+    ui.end_row();
+    label(ui, "Font");
+    ui.horizontal(|ui| {
+        let shown = if g.font.as_os_str().is_empty() { "built in".to_string() } else { g.font.file_name().unwrap_or_default().to_string_lossy().to_string() };
+        ui.label(shown);
+        if ui.button("Choose…").clicked() {
+            if let Some(f) = rfd::FileDialog::new().add_filter("Fonts", &["ttf", "otf", "ttc"]).pick_file() {
+                g.font = f;
+            }
+        }
+        if !g.font.as_os_str().is_empty() && ui.small_button("Built in").clicked() {
+            g.font = PathBuf::new();
+        }
+    });
+    ui.end_row();
 }

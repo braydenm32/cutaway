@@ -1,6 +1,7 @@
-//! The graphics layer: logos, watermarks and name titles drawn above every
-//! scene, each with its own on/off button and a fade.
+//! The graphics layer: logos, watermarks, name titles and clocks drawn
+//! above every scene, each with its own on/off button and a fade.
 
+use super::timers::{clock_text, Timers};
 use super::VIDEO_LATENCY;
 use crate::config::{parse_color, Graphic, GraphicKind};
 use crate::media::{clock, Ns};
@@ -32,6 +33,8 @@ struct Item {
     /// Program time of the last on/off change and the opacity before it.
     changed_at: Ns,
     from_alpha: f32,
+    /// Clocks: what's drawn now.
+    text: (String, bool),
 }
 
 impl Item {
@@ -61,11 +64,12 @@ pub struct Graphics {
     canvas: (u32, u32),
     items: Mutex<Vec<Item>>,
     versions: std::sync::atomic::AtomicU64,
+    pub timers: Arc<Timers>,
 }
 
 impl Graphics {
-    pub fn new(cfgs: &[Graphic], canvas: (u32, u32)) -> Arc<Self> {
-        let g = Arc::new(Graphics { canvas, items: Mutex::new(Vec::new()), versions: Default::default() });
+    pub fn new(cfgs: &[Graphic], canvas: (u32, u32), timers: Arc<Timers>) -> Arc<Self> {
+        let g = Arc::new(Graphics { canvas, items: Mutex::new(Vec::new()), versions: Default::default(), timers });
         g.update(cfgs);
         for it in g.items.lock().unwrap().iter_mut() {
             it.visible = it.cfg.visible;
@@ -91,27 +95,39 @@ impl Graphics {
                     p
                 }
                 Some(p) => {
-                    let (image, error) = self.render(cfg);
-                    Item { cfg: cfg.clone(), image, error, version: self.next_version(), visible: p.visible, changed_at: p.changed_at, from_alpha: p.from_alpha }
+                    let (image, error, text) = self.render(cfg);
+                    Item { cfg: cfg.clone(), image, error, version: self.next_version(), visible: p.visible, changed_at: p.changed_at, from_alpha: p.from_alpha, text }
                 }
                 None => {
-                    let (image, error) = self.render(cfg);
-                    Item { cfg: cfg.clone(), image, error, version: self.next_version(), visible: false, changed_at: 0, from_alpha: 0.0 }
+                    let (image, error, text) = self.render(cfg);
+                    Item { cfg: cfg.clone(), image, error, version: self.next_version(), visible: false, changed_at: 0, from_alpha: 0.0, text }
                 }
             };
             items.push(item);
         }
     }
 
-    fn render(&self, cfg: &Graphic) -> (Option<Arc<RgbaImage>>, Option<String>) {
+    fn render(&self, cfg: &Graphic) -> (Option<Arc<RgbaImage>>, Option<String>, (String, bool)) {
+        let mut text = (String::new(), false);
         let r = match cfg.kind {
             GraphicKind::Image => load_image(&cfg.image),
             GraphicKind::Title => Ok(render_title(cfg, self.canvas)),
+            GraphicKind::Clock => {
+                text = clock_text(cfg, &self.timers, chrono::Local::now());
+                Ok(render_clock(cfg, &text.0, text.1, self.canvas))
+            }
         };
         match r {
-            Ok(img) => (Some(Arc::new(img)), None),
-            Err(e) => (None, Some(e)),
+            Ok(img) => (Some(Arc::new(img)), None, text),
+            Err(e) => (None, Some(e), text),
         }
+    }
+
+    /// What a clock graphic shows now.
+    pub fn clock_text(&self, index: usize) -> Option<(String, bool)> {
+        let items = self.items.lock().unwrap();
+        let it = items.get(index).filter(|i| i.cfg.kind == GraphicKind::Clock)?;
+        Some(clock_text(&it.cfg, &self.timers, chrono::Local::now()))
     }
 
     /// (name, on, problem) for each graphic.
@@ -160,10 +176,20 @@ impl Graphics {
     /// What to draw for the program frame at time `t`.
     pub fn layers(&self, t: Ns) -> Vec<GraphicLayer> {
         let (cw, ch) = (self.canvas.0 as f32, self.canvas.1 as f32);
-        let items = self.items.lock().unwrap();
+        let mut items = self.items.lock().unwrap();
         let mut out = Vec::new();
-        for (i, it) in items.iter().enumerate() {
+        let wall = chrono::Local::now() + chrono::Duration::nanoseconds(t - clock::now());
+        for (i, it) in items.iter_mut().enumerate() {
             let alpha = it.alpha_at(t);
+            // Clocks redraw when their text changes.
+            if it.cfg.kind == GraphicKind::Clock && alpha > 0.001 {
+                let text = clock_text(&it.cfg, &self.timers, wall);
+                if text != it.text {
+                    it.image = Some(Arc::new(render_clock(&it.cfg, &text.0, text.1, self.canvas)));
+                    it.text = text;
+                    it.version = self.versions.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                }
+            }
             let Some(img) = &it.image else { continue };
             if alpha <= 0.001 || img.width() == 0 {
                 continue;
@@ -229,6 +255,37 @@ pub fn render_title(cfg: &Graphic, canvas: (u32, u32)) -> RgbaImage {
     img
 }
 
+/// A clock: an optional label over the time, in a box like a title's.
+/// The box is sized for the widest digits so it doesn't twitch each second.
+pub fn render_clock(cfg: &Graphic, text: &str, over: bool, canvas: (u32, u32)) -> RgbaImage {
+    let (bold, regular) = fonts(&cfg.font);
+    let ch = canvas.1 as f32;
+    let label = cfg.title.trim();
+    let time_px = (ch * 0.06).max(12.0);
+    let label_px = (ch * 0.026).max(8.0);
+    let pad = ch * 0.018;
+    let widest: String = text.chars().map(|c| if c.is_ascii_digit() { '0' } else { c }).collect();
+    let tw = text_width(&bold, time_px, &widest).max(text_width(&bold, time_px, text));
+    let lw = if label.is_empty() { 0.0 } else { text_width(&regular, label_px, label) };
+    let min_w = cfg.width.clamp(0.03, 1.0) * canvas.0 as f32;
+    let w = (tw.max(lw) + pad * 2.0).max(min_w).ceil() as u32;
+    let label_h = if label.is_empty() { 0.0 } else { label_px * 1.3 };
+    let h = (pad * 2.0 + label_h + time_px * 1.0).ceil() as u32;
+    let box_rgb = rgb_of(&cfg.box_color, 0x101820);
+    let text_rgb = if over { [255, 92, 92] } else { rgb_of(&cfg.text_color, 0xffffff) };
+    let box_a = (cfg.box_opacity.clamp(0.0, 1.0) * 255.0) as u8;
+    let mut img = RgbaImage::from_pixel(w.max(2), h.max(2), image::Rgba([box_rgb[0], box_rgb[1], box_rgb[2], box_a]));
+    if !label.is_empty() {
+        let dim = [((text_rgb[0] as u16 * 3 + box_rgb[0] as u16) / 4) as u8, ((text_rgb[1] as u16 * 3 + box_rgb[1] as u16) / 4) as u8, ((text_rgb[2] as u16 * 3 + box_rgb[2] as u16) / 4) as u8];
+        let ascent = regular.as_scaled(PxScale::from(label_px)).ascent();
+        draw_text(&mut img, &regular, label_px, (w as f32 - lw) / 2.0, pad + ascent, label, dim);
+    }
+    let ascent = bold.as_scaled(PxScale::from(time_px)).ascent();
+    let x = (w as f32 - text_width(&bold, time_px, text)) / 2.0;
+    draw_text(&mut img, &bold, time_px, x, pad + label_h + ascent * 0.92, text, text_rgb);
+    img
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,7 +298,7 @@ mod tests {
         // Text was drawn: some pixels are near white.
         assert!(img.pixels().filter(|p| p[0] > 200 && p[1] > 200).count() > 500);
 
-        let g = Graphics::new(&[cfg.clone(), Graphic { name: "Bug".into(), ..Default::default() }], (1920, 1080));
+        let g = Graphics::new(&[cfg.clone(), Graphic { name: "Bug".into(), ..Default::default() }], (1920, 1080), Timers::new());
         assert_eq!(g.list()[1].2.as_deref(), Some("choose an image file"));
         assert!(g.layers(clock::now()).is_empty());
         g.set_visible(0, true);
@@ -253,5 +310,27 @@ mod tests {
         let before = g.layers(t + 2_000_000_000)[0].key;
         g.set_text(0, "Sam Lee", "Guest");
         assert_ne!(g.layers(t + 2_000_000_000)[0].key, before);
+    }
+
+    #[test]
+    fn clocks_redraw_as_they_change() {
+        let mut clock = Graphic::clock("Countdown", crate::config::ClockKind::Countdown, "Back in");
+        clock.seconds = 120;
+        clock.fade_ms = 0;
+        let timers = Timers::new();
+        let g = Graphics::new(&[clock.clone()], (1280, 720), timers.clone());
+        assert_eq!(g.clock_text(0).unwrap().0, "2:00");
+        g.set_visible(0, true);
+        let t = clock::now();
+        let first = g.layers(t)[0].clone();
+        assert_eq!(g.layers(t)[0].key, first.key, "no change, no redraw");
+        // Started: the text (and picture) change; the box stays the same size.
+        timers.start("Countdown");
+        timers.inner_for_tests_shift("Countdown", std::time::Duration::from_secs(3));
+        let next = g.layers(t)[0].clone();
+        assert_ne!(next.key, first.key);
+        assert_eq!(g.clock_text(0).unwrap().0, "1:57");
+        assert_eq!((next.image.width(), next.image.height()), (first.image.width(), first.image.height()));
+        assert!(first.image.pixels().filter(|p| p[0] > 200 && p[1] > 200).count() > 200, "digits drawn");
     }
 }

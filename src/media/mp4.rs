@@ -593,7 +593,6 @@ fn ns_to_ticks(ns: Ns, timescale: u32) -> i64 {
 }
 
 impl Mp4Writer {
-    #[cfg(test)]
     pub fn create(path: &Path, brand: Brand) -> Result<Self> {
         Self::create_with_backup(path, None, brand)
     }

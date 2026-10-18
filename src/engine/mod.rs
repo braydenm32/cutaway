@@ -42,10 +42,12 @@ pub mod precheck;
 pub mod recorder;
 pub mod sessions;
 pub mod sources;
+pub mod stinger;
 pub mod streamer;
 pub mod switcher;
 pub mod take;
 pub mod text;
+pub mod timers;
 pub mod watchdog;
 
 use crate::config::{parse_color, Config, TransitionMode};
@@ -310,6 +312,8 @@ pub struct Engine {
     pub pads: Arc<pads::PadBank>,
     /// The last stretch of the recording, for instant clips.
     clips: Arc<clips::ClipBuffer>,
+    /// The stinger transition's video.
+    pub stinger: Arc<stinger::StingerPlayer>,
     monitor_volume: Arc<AtomicU32>,
     /// The virtual camera, while on: (tap id, sender).
     vcam: Mutex<Option<(u64, Box<dyn sources::Running>)>>,
@@ -484,15 +488,18 @@ impl Engine {
         switcher.set_style(cfg.transition.direction, &cfg.transition.dip_color);
         let program_preview = FrameSlot::new();
         let preview_bus = FrameSlot::new();
-        let graphics = graphics::Graphics::new(&cfg.graphics, (cw, ch));
+        let graphics = graphics::Graphics::new(&cfg.graphics, (cw, ch), timers::Timers::new());
         let looks = Arc::new(Mutex::new(LookState { generation: 1, looks: cfg.sources.iter().map(|s| s.look.clone()).collect(), style: cfg.style.clone() }));
         let preview_width = Arc::new(AtomicU32::new(cfg.program.preview_width));
         let video_taps = Arc::new(Mutex::new(VideoTaps::default()));
         let compositor_skips = Arc::new(AtomicU64::new(0));
         let captions_slot: CaptionsSlot = Arc::new(Mutex::new(None));
         let masks: Vec<Arc<cutout::MaskSlot>> = sources.iter().map(|_| cutout::MaskSlot::new()).collect();
+        let stinger = Arc::new(stinger::StingerPlayer::new((cw, ch)));
+        stinger.configure(&cfg.transition.stinger);
         {
             let ctx = CompositorLoop {
+                stinger: stinger.clone(),
                 comp,
                 slots: sources.iter().map(|s| s.slot.clone()).collect(),
                 thumbs: sources.iter().map(|s| s.preview.clone()).collect(),
@@ -554,8 +561,10 @@ impl Engine {
                 let t = c2.lock().unwrap().transition.clone();
                 let mut s = scene.clone();
                 s.retain_sources(sw_sources);
-                apply_scene_audio(&inputs2, &s, t.mode, t.duration_ms);
-                sw.take(s, t.mode, t.duration_ms);
+                // A stinger every time someone speaks would be a lot: mix.
+                let mode = if t.mode == TransitionMode::Stinger { TransitionMode::Mix } else { t.mode };
+                apply_scene_audio(&inputs2, &s, scene_audio_timing(mode, t.duration_ms));
+                sw.take(s, mode, t.duration_ms);
             });
             let a = autoswitch::AutoSwitcher {
                 shared: auto.clone(),
@@ -607,6 +616,7 @@ impl Engine {
             outputs: Mutex::new(Vec::new()),
             pads,
             clips: clips::ClipBuffer::new(),
+            stinger,
             monitor_volume: Arc::new(AtomicU32::new(1.0f32.to_bits())),
             vcam: Mutex::new(None),
             captions: captions_slot,
@@ -872,6 +882,7 @@ impl Engine {
         }
         if old.transition != new.transition {
             self.switcher.set_style(new.transition.direction, &new.transition.dip_color);
+            self.stinger.configure(&new.transition.stinger);
         }
         let new_looks: Vec<crate::config::SourceLook> = new.sources.iter().map(|s| s.look.clone()).collect();
         let old_looks: Vec<crate::config::SourceLook> = old.sources.iter().map(|s| s.look.clone()).collect();
@@ -984,7 +995,28 @@ impl Engine {
         self.auto.manual_switch();
         self.restart_players_going_on_air(&s);
         let inputs: Vec<(String, Arc<InputShared>)> = self.audio.iter().map(|a| (a.name.clone(), a.shared.clone())).collect();
-        apply_scene_audio(&inputs, &s, mode, duration_ms);
+        let mut mode = mode;
+        if mode == TransitionMode::Stinger {
+            match self.stinger.trigger() {
+                Some(st) => {
+                    if let Some(sound) = st.sound {
+                        self.pads.play_extra(sound, st.volume_db);
+                    }
+                    // Scene sound changes at the cut, as the picture does.
+                    apply_scene_audio(&inputs, &s, (clock::now() + st.cut, 150_000_000));
+                    self.switcher.take_stinger(s, st.duration, st.cut, VIDEO_LATENCY);
+                    (self.waker)();
+                    return;
+                }
+                None => {
+                    let info = self.stinger.info();
+                    let why = info.problem.unwrap_or_else(|| if info.loading { "the stinger is still loading".into() } else { "no stinger video is set (Settings → Switching)".into() });
+                    self.status.lock().unwrap().push(LogLevel::Warning, format!("Mixed instead of the stinger: {why}"));
+                    mode = TransitionMode::Mix;
+                }
+            }
+        }
+        apply_scene_audio(&inputs, &s, scene_audio_timing(mode, duration_ms));
         self.switcher.take(s, mode, duration_ms);
         (self.waker)();
     }
@@ -1118,14 +1150,18 @@ impl Drop for Engine {
     }
 }
 
+/// When a switch's sound change lands, and how long it fades.
+fn scene_audio_timing(mode: TransitionMode, duration_ms: u32) -> (Ns, Ns) {
+    let fade = if mode != TransitionMode::Cut { duration_ms.max(20) as i64 * 1_000_000 } else { 20_000_000 };
+    (clock::now() - VIDEO_LATENCY, fade)
+}
+
 /// Scenes can turn audio inputs on or off; the change is timed to land
 /// with the picture change and fades along with a transition.
-fn apply_scene_audio(inputs: &[(String, Arc<InputShared>)], scene: &crate::scene::Scene, mode: TransitionMode, duration_ms: u32) {
+fn apply_scene_audio(inputs: &[(String, Arc<InputShared>)], scene: &crate::scene::Scene, (at, fade): (Ns, Ns)) {
     if scene.audio_on.is_empty() && scene.audio_off.is_empty() {
         return;
     }
-    let at = clock::now() - VIDEO_LATENCY;
-    let fade = if mode != TransitionMode::Cut { duration_ms.max(20) as i64 * 1_000_000 } else { 20_000_000 };
     for (names, on) in [(&scene.audio_on, true), (&scene.audio_off, false)] {
         for n in names {
             if let Some((_, a)) = inputs.iter().find(|(name, _)| name.eq_ignore_ascii_case(n.trim())) {
@@ -1166,6 +1202,7 @@ struct CompositorLoop {
     skips: Arc<AtomicU64>,
     captions: CaptionsSlot,
     masks: Vec<Arc<cutout::MaskSlot>>,
+    stinger: Arc<stinger::StingerPlayer>,
 }
 
 impl CompositorLoop {
@@ -1246,6 +1283,10 @@ impl CompositorLoop {
             };
             if wants.program || wants.stream.is_some() || wants.preview || !wants.thumbs.is_empty() {
                 let layout = self.switcher.layout();
+                if let switcher::Layout::Stinger { elapsed, .. } = &layout {
+                    let f = self.stinger.frame_at(*elapsed);
+                    self.comp.set_stinger(f.as_ref(), self.stinger.matte());
+                }
                 let mut graphics = self.graphics.layers(t);
                 if let Some((_, c)) = &*self.captions.lock().unwrap() {
                     graphics.extend(c.layer());

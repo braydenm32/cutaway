@@ -119,6 +119,8 @@ pub struct App {
     remote_shared: Arc<remote::RemoteShared>,
     /// Syrinscape Online control.
     syrinscape: control::syrinscape::Syrinscape,
+    /// Where the show is in its running order.
+    rundown: control::rundown::Rundown,
     remote: Option<remote::RemoteServer>,
     midi: Option<midi::Midi>,
     osc: Option<osc::Osc>,
@@ -152,6 +154,7 @@ impl App {
         let syrinscape = control::syrinscape::Syrinscape::new(&cfg.syrinscape, waker.clone());
         let mut app = App {
             syrinscape,
+            rundown: Default::default(),
             scenes: cfg.effective_scenes(),
             display_fullscreen: cfg.display.fullscreen,
             display_controls_until: None,
@@ -307,12 +310,12 @@ impl App {
         self.run_cues(&scene.cues);
     }
 
-    /// A scene's cues (Syrinscape moods, pads, graphics…). Switching
-    /// commands are skipped, so a scene can't set off another.
+    /// A scene's (or rundown segment's) cues: Syrinscape moods, pads,
+    /// graphics… Switching commands are skipped, so one can't set off another.
     fn run_cues(&mut self, cues: &[String]) {
         for c in cues {
             match Action::parse(c) {
-                Ok(Action::Scene(_) | Action::CutTo(_) | Action::Preview(_) | Action::Take | Action::Cut | Action::Source(_)) => {}
+                Ok(Action::Scene(_) | Action::CutTo(_) | Action::Preview(_) | Action::Take | Action::Cut | Action::Source(_) | Action::Rundown(_)) => {}
                 Ok(a) => {
                     if let Err(e) = self.run_action(a) {
                         self.toast(format!("Scene cue \"{c}\": {e}"), true);
@@ -592,6 +595,65 @@ impl App {
                     SyrinCmd::Volume(v) => s.set_volume(v).map(|_| format!("Syrinscape volume {:.0}%", v * 100.0)),
                 }
             }
+            Action::Clip(secs) => {
+                let e = self.engine.as_ref().ok_or("the engine isn't running")?;
+                e.save_clip(secs).map(|n| format!("Saving {n}")).map_err(|e| format!("{e:#}"))
+            }
+            Action::Timer(t, cmd) => {
+                use crate::config::GraphicKind;
+                let names: Vec<String> = self.cfg.graphics.iter().map(|g| g.name.clone()).collect();
+                let i = t.find(&names).ok_or("there's no such clock")?;
+                let g = &self.cfg.graphics[i];
+                if g.kind != GraphicKind::Clock || !g.clock.is_timer() {
+                    return Err(format!("{} isn't a countdown or stopwatch", g.name));
+                }
+                let name = g.name.clone();
+                let e = self.engine.as_ref().ok_or("the engine isn't running")?;
+                let timers = &e.graphics.timers;
+                let what = match cmd {
+                    control::TimerCmd::Start => {
+                        timers.start(&name);
+                        "running"
+                    }
+                    control::TimerCmd::Pause => {
+                        timers.pause(&name);
+                        "paused"
+                    }
+                    control::TimerCmd::Toggle => {
+                        if timers.toggle(&name) {
+                            "running"
+                        } else {
+                            "paused"
+                        }
+                    }
+                    control::TimerCmd::Reset => {
+                        timers.reset(&name);
+                        "reset"
+                    }
+                    control::TimerCmd::Stop => {
+                        timers.stop(&name);
+                        "stopped"
+                    }
+                };
+                Ok(format!("{name} {what}"))
+            }
+            Action::Rundown(cmd) => {
+                let segs = &self.cfg.rundown.segments;
+                if segs.is_empty() {
+                    return Err("the rundown is empty (Settings → Rundown)".into());
+                }
+                let to = self.rundown.target(&cmd, segs).ok_or_else(|| match cmd {
+                    control::rundown::RundownCmd::Next => "that was the last segment".to_string(),
+                    control::rundown::RundownCmd::Previous => "that's the first segment".to_string(),
+                    control::rundown::RundownCmd::Stop => "the rundown isn't running".to_string(),
+                    _ => "there's no such segment".to_string(),
+                })?;
+                self.go_segment(to);
+                Ok(match to {
+                    Some(i) => format!("Segment {}: {}", i + 1, self.cfg.rundown.segments[i].name),
+                    None => "Rundown stopped".into(),
+                })
+            }
             Action::Media(t, cmd) => {
                 let names: Vec<String> = self.cfg.sources.iter().map(|s| s.name.clone()).collect();
                 let i = t.find(&names).ok_or("there's no such source")?;
@@ -606,6 +668,30 @@ impl App {
                 });
                 Ok("OK".into())
             }
+        }
+    }
+
+    /// Move the rundown to segment `to` (None: stop): its scene, cues,
+    /// clock and marker.
+    fn go_segment(&mut self, to: Option<usize>) {
+        self.rundown.go(to);
+        let seg = to.and_then(|i| self.cfg.rundown.segments.get(i).cloned());
+        if let Some(e) = &self.engine {
+            e.graphics.timers.set_segment(seg.as_ref().map(|s| (s.name.clone(), s.seconds)));
+        }
+        let Some(seg) = seg else { return };
+        if !seg.scene.trim().is_empty() {
+            match self.scenes.iter().position(|s| s.name.eq_ignore_ascii_case(seg.scene.trim())) {
+                Some(i) => {
+                    let s = self.scenes[i].clone();
+                    self.take_scene(&s, false);
+                }
+                None => self.toast(format!("{}: there's no scene called \"{}\"", seg.name, seg.scene), true),
+            }
+        }
+        self.run_cues(&seg.cues);
+        if self.cfg.rundown.markers && self.engine.as_ref().is_some_and(|e| e.is_recording()) {
+            let _ = self.add_marker(Some(seg.name.clone()));
         }
     }
 

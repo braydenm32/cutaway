@@ -22,6 +22,9 @@
 //! talkback  talkback:on  talkback:off   the producer's mic to presenters
 //! syrinscape:2  syrinscape:Tavern       a Syrinscape button (by number or name)
 //! syrinscape:mood:19  syrinscape:element:1541818  syrinscape:stop  syrinscape:volume:0.8
+//! clip  clip:30              save the last 30 seconds of the recording as a clip
+//! timer:Countdown:start / pause / toggle / reset / stop    a clock graphic's timer
+//! rundown:next  rundown:previous  rundown:start  rundown:stop  rundown:3  rundown:Interview
 //! ```
 
 pub mod keys;
@@ -29,6 +32,7 @@ pub mod midi;
 pub mod osc;
 pub mod profiles;
 pub mod remote;
+pub mod rundown;
 pub mod state;
 pub mod syrinscape;
 pub mod ws;
@@ -88,6 +92,17 @@ pub enum PadCmd {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum TimerCmd {
+    Start,
+    Pause,
+    Toggle,
+    /// Back to the start.
+    Reset,
+    /// Pause and go back to the start.
+    Stop,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     Scene(Target),
     CutTo(Target),
@@ -116,6 +131,11 @@ pub enum Action {
     /// The producer's mic in the presenters' (and guests') ears.
     Talkback(Toggle),
     Syrinscape(syrinscape::SyrinCmd),
+    /// Save the last N seconds (None: as set) as a clip.
+    Clip(Option<u32>),
+    /// A clock graphic's countdown or stopwatch.
+    Timer(Target, TimerCmd),
+    Rundown(rundown::RundownCmd),
 }
 
 /// A fader position (0..1) as a level: 0 is silence (-60 dB), 0.79 is
@@ -223,6 +243,26 @@ impl Action {
             "pads" if rest.is_some_and(|r| r.trim().eq_ignore_ascii_case("stop")) => Action::PadsStop,
             "talkback" | "tb" => Action::Talkback(toggle(rest)?),
             "syrinscape" | "syrin" => Action::Syrinscape(syrinscape::SyrinCmd::parse(need(rest, &verb)?)?),
+            "clip" => match rest.map(str::trim).filter(|r| !r.is_empty()) {
+                None => Action::Clip(None),
+                Some(r) => Action::Clip(Some(r.trim_end_matches('s').trim().parse::<u32>().map_err(|_| format!("\"{r}\" isn't a number of seconds"))?.clamp(1, 600))),
+            },
+            "timer" | "countdown" | "stopwatch" => {
+                let r = need(rest, &verb)?;
+                let (target, cmd) = match r.rsplit_once(':') {
+                    Some((a, b)) => match b.trim().to_lowercase().as_str() {
+                        "start" | "go" | "play" => (a, TimerCmd::Start),
+                        "pause" | "hold" => (a, TimerCmd::Pause),
+                        "toggle" => (a, TimerCmd::Toggle),
+                        "reset" | "restart" => (a, TimerCmd::Reset),
+                        "stop" => (a, TimerCmd::Stop),
+                        other => return Err(format!("unknown timer command \"{other}\" (start, pause, toggle, reset or stop)")),
+                    },
+                    None => (r, TimerCmd::Toggle),
+                };
+                Action::Timer(Target::parse(target), cmd)
+            }
+            "rundown" | "segment" => Action::Rundown(rundown::RundownCmd::parse(rest.unwrap_or("next"))),
             other => return Err(format!("unknown command \"{other}\"")),
         })
     }
@@ -253,6 +293,7 @@ pub fn suggestions(cfg: &Config) -> Vec<(String, String)> {
             ("marker", "Add a marker"),
             ("auto", "Automatic switching on/off"),
             ("captions", "Captions on/off"),
+            ("clip", "Save a clip (the last few seconds)"),
             ("transition:cut", "Transition: cut"),
             ("transition:mix", "Transition: mix"),
             ("transition:wipe", "Transition: wipe"),
@@ -263,6 +304,18 @@ pub fn suggestions(cfg: &Config) -> Vec<(String, String)> {
     );
     for g in &cfg.graphics {
         v.push((format!("graphic:{}", g.name), format!("Graphic on/off: {}", g.name)));
+    }
+    for g in cfg.graphics.iter().filter(|g| g.kind == crate::config::GraphicKind::Clock && g.clock.is_timer()) {
+        v.push((format!("timer:{}:toggle", g.name), format!("Timer start/pause: {}", g.name)));
+        v.push((format!("timer:{}:reset", g.name), format!("Timer reset: {}", g.name)));
+    }
+    if !cfg.rundown.segments.is_empty() {
+        v.push(("rundown:next".into(), "Rundown: next segment".into()));
+        v.push(("rundown:previous".into(), "Rundown: previous segment".into()));
+        v.push(("rundown:stop".into(), "Rundown: stop".into()));
+        for (i, s) in cfg.rundown.segments.iter().enumerate() {
+            v.push((format!("rundown:{}", i + 1), format!("Rundown {}: {}", i + 1, s.name)));
+        }
     }
     for a in &cfg.audio {
         v.push((format!("audio:{}", a.name), format!("Audio on/off: {}", a.name)));
@@ -320,6 +373,15 @@ mod tests {
         assert_eq!(Action::parse("pads:stop"), Ok(Action::PadsStop));
         assert_eq!(Action::parse("pad:all:stop"), Ok(Action::PadsStop));
         assert_eq!(Action::parse("talkback:on"), Ok(Action::Talkback(Toggle::On)));
+        assert_eq!(Action::parse("clip"), Ok(Action::Clip(None)));
+        assert_eq!(Action::parse("clip:45s"), Ok(Action::Clip(Some(45))));
+        assert!(Action::parse("clip:soon").is_err());
+        assert_eq!(Action::parse("timer:Back in:start"), Ok(Action::Timer(Target::Name("Back in".into()), TimerCmd::Start)));
+        assert_eq!(Action::parse("countdown:2"), Ok(Action::Timer(Target::Index(1), TimerCmd::Toggle)));
+        assert!(Action::parse("timer:Clock:explode").is_err());
+        assert_eq!(Action::parse("rundown"), Ok(Action::Rundown(rundown::RundownCmd::Next)));
+        assert_eq!(Action::parse("rundown:prev"), Ok(Action::Rundown(rundown::RundownCmd::Previous)));
+        assert_eq!(Action::parse("rundown:3"), Ok(Action::Rundown(rundown::RundownCmd::Go(Target::Index(2)))));
         assert!(Action::parse("explode").is_err());
         assert_eq!(fader_db(0.0), -60.0);
         assert!((fader_db(100.0 / 127.0)).abs() < 1e-9);

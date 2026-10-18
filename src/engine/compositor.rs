@@ -11,7 +11,7 @@
 
 use super::graphics::GraphicLayer;
 use super::switcher::Layout;
-use crate::config::{parse_color, FrameStyle, SourceLook, TransitionMode};
+use crate::config::{parse_color, FrameStyle, Matte, SourceLook, TransitionMode};
 use crate::media::{Ns, Pixels, VideoFrame};
 use crate::scene::PadState;
 use anyhow::{anyhow, bail, Context, Result};
@@ -266,6 +266,10 @@ pub struct Compositor {
     scene_a: Option<SceneTex>,
     scene_b: Option<SceneTex>,
     trans: Option<(wgpu::Buffer, wgpu::BindGroup)>,
+    /// The stinger's picture (and its matte), and whether to draw it.
+    stinger: Option<SourceGpu>,
+    stinger_pipe: wgpu::RenderPipeline,
+    stinger_draw: bool,
 }
 
 /// Create a GPU device for compositing.
@@ -382,6 +386,7 @@ impl Compositor {
         let rgba_pipe = pipe("fs_rgba", rgba, blend);
         let layer_pipe = pipe("fs_layer", rgba, blend);
         let trans_pipe = pipe("fs_trans", rgba, None);
+        let stinger_pipe = pipe("fs_stinger", rgba, blend);
         let out_y_pipe = pipe("fs_out_y", wgpu::TextureFormat::R8Unorm, None);
         let out_uv_pipe = pipe("fs_out_uv", wgpu::TextureFormat::Rg8Unorm, None);
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -436,6 +441,9 @@ impl Compositor {
             scene_a: None,
             scene_b: None,
             trans: None,
+            stinger: None,
+            stinger_pipe,
+            stinger_draw: false,
             background: [s.background_rgb[0] as f64 / 255.0, s.background_rgb[1] as f64 / 255.0, s.background_rgb[2] as f64 / 255.0],
             bg_image: None,
             stream_out: None,
@@ -768,8 +776,12 @@ impl Compositor {
         }
         let s = &mut self.sources[index];
         s.serial = Some(frame.serial);
+        Self::write_frame(&self.queue, s, frame);
+    }
+
+    /// A frame's planes into a source's textures.
+    fn write_frame(queue: &wgpu::Queue, s: &SourceGpu, frame: &VideoFrame) {
         let (w, h) = (s.width, s.height);
-        let queue = &self.queue;
         let (yt, uvt) = (&s.y, &s.uv);
         frame.pixels.with_planes(|p| {
             // A short buffer would be a GPU validation error; skip it.
@@ -790,6 +802,33 @@ impl Compositor {
                 wgpu::Extent3d { width: w / 2, height: h / 2, depth_or_array_layers: 1 },
             );
         });
+    }
+
+    /// The stinger picture to draw over the program this time (None: none).
+    pub fn set_stinger(&mut self, frame: Option<&VideoFrame>, matte: Matte) {
+        let Some(frame) = frame.filter(|f| f.width >= 2 && f.height >= 2) else {
+            self.stinger_draw = false;
+            return;
+        };
+        let fits = self.stinger.as_ref().is_some_and(|s| s.width == frame.width & !1 && s.height == frame.height & !1);
+        if !fits {
+            self.stinger = Some(self.make_source(frame.width, frame.height));
+        }
+        let s = self.stinger.as_mut().unwrap();
+        if s.serial != Some(frame.serial) {
+            s.serial = Some(frame.serial);
+            Self::write_frame(&self.queue, s, frame);
+        }
+        // kind: 0 solid, 1 matte (at uv + offset), 2 black is see-through.
+        let (uv, key) = match matte {
+            Matte::Right => ([0.0, 0.0, 0.5, 1.0], [1.0, 0.5, 0.0, 0.0]),
+            Matte::Below => ([0.0, 0.0, 1.0, 0.5], [1.0, 0.0, 0.5, 0.0]),
+            Matte::Black => ([0.0, 0.0, 1.0, 1.0], [2.0, 0.0, 0.0, 0.0]),
+            _ => ([0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 0.0, 0.0]),
+        };
+        let q = Quad { uv, key, ..Quad::full(1.0, 1.0, [0.0, 0.0]) };
+        self.queue.write_buffer(&s.slots[SLOT_A].0, 0, bytemuck::bytes_of(&q));
+        self.stinger_draw = true;
     }
 
     /// Draw the program (and the preview bus) and produce what's wanted.
@@ -823,6 +862,7 @@ impl Compositor {
         }
         let plan = match layout {
             Layout::One(states) => Plan::One(self.prepare_layers(states, SLOT_A, canvas)),
+            Layout::Stinger { states, .. } => Plan::One(self.prepare_layers(states, SLOT_A, canvas)),
             Layout::Two { from, to, mode, t, direction, dip } => {
                 let a = self.prepare_layers(from, SLOT_A, canvas);
                 let b = self.prepare_layers(to, SLOT_B, canvas);
@@ -921,6 +961,27 @@ impl Compositor {
                         rp.draw(0..4, 0..1);
                     }
                 }
+            }
+        }
+        // The stinger over everything.
+        if self.stinger_draw && matches!(layout, Layout::Stinger { .. }) {
+            if let Some(s) = &self.stinger {
+                let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("stinger"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &self.canvas.view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                rp.set_pipeline(&self.stinger_pipe);
+                rp.set_bind_group(0, &s.slots[SLOT_A].1, &[]);
+                rp.draw(0..4, 0..1);
             }
         }
         if want_bus {
@@ -1143,6 +1204,70 @@ mod tests {
         assert!(prev[0] > 240 && prev[1] < 15, "preview top-left should be red");
         assert_eq!(r.thumbs.len(), 1);
         assert!(r.thumbs[0].3[0] > 240);
+    }
+
+    #[test]
+    fn draws_a_stinger_over_the_program() {
+        let settings = CompositorSettings { canvas: (320, 180), background_rgb: [0, 0, 255], background_image: None, preview_width: 320, thumb_width: 64 };
+        let mut c = match Compositor::new(&settings) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("skipping GPU test: {e:#}");
+                return;
+            }
+        };
+        let a = c.add_source(64, 36);
+        c.upload(a, &solid(64, 36, (1.0, 0.0, 0.0), 1)); // red
+        // A stinger twice as wide: green picture | matte (white top, black bottom).
+        let (w, h) = (128u32, 36u32);
+        let (gy, gu, gv) = rgb_to_yuv(0.0, 1.0, 0.0);
+        let mut y = vec![0u8; (w * h) as usize];
+        let mut uv = vec![128u8; (w * h / 2) as usize];
+        for r in 0..h as usize {
+            for col in 0..w as usize {
+                y[r * w as usize + col] = if col < 64 { gy } else if r < 18 { 235 } else { 16 };
+            }
+        }
+        for r in 0..(h / 2) as usize {
+            for col in 0..32 {
+                uv[r * w as usize + col * 2] = gu;
+                uv[r * w as usize + col * 2 + 1] = gv;
+            }
+        }
+        let sting = VideoFrame::new_nv12(w, h, 0, y, uv, 7);
+        let rgb = |r: &Rendered, x: usize, y: usize| -> [u8; 3] {
+            let (w, _, d) = r.preview.as_ref().unwrap();
+            let i = (y * *w as usize + x) * 4;
+            [d[i], d[i + 1], d[i + 2]]
+        };
+        let near = |a: [u8; 3], b: [u8; 3]| a.iter().zip(b).all(|(x, y)| (*x as i32 - y as i32).abs() <= 12);
+        let wants = Wants { preview: true, ..Default::default() };
+        let full = PadState { x: 0, y: 0, w: 320, h: 180, alpha: 1.0, zorder: 2 };
+        let layout = Layout::Stinger { states: vec![full], elapsed: 0 };
+        let (green, red) = ([0, 255, 0], [255, 0, 0]);
+
+        c.set_stinger(Some(&sting), Matte::Right);
+        let r = c.render(&layout, None, &[], 0, 1, &wants).unwrap();
+        assert!(near(rgb(&r, 100, 30), green), "matte white: the stinger {:?}", rgb(&r, 100, 30));
+        assert!(near(rgb(&r, 100, 150), red), "matte black: the program {:?}", rgb(&r, 100, 150));
+        assert!(near(rgb(&r, 300, 30), green), "the picture fills the screen {:?}", rgb(&r, 300, 30));
+
+        c.set_stinger(Some(&sting), Matte::Solid);
+        let r = c.render(&layout, None, &[], 0, 2, &wants).unwrap();
+        assert!(near(rgb(&r, 60, 150), green), "solid covers {:?}", rgb(&r, 60, 150));
+
+        c.set_stinger(Some(&sting), Matte::Black);
+        let r = c.render(&layout, None, &[], 0, 3, &wants).unwrap();
+        assert!(near(rgb(&r, 60, 150), green), "bright shows {:?}", rgb(&r, 60, 150));
+        assert!(near(rgb(&r, 300, 150), red), "black is see-through {:?}", rgb(&r, 300, 150));
+
+        // No picture this time, or not a stinger layout: just the program.
+        c.set_stinger(None, Matte::Right);
+        let r = c.render(&layout, None, &[], 0, 4, &wants).unwrap();
+        assert!(near(rgb(&r, 100, 30), red));
+        c.set_stinger(Some(&sting), Matte::Right);
+        let r = c.render(&Layout::One(vec![full]), None, &[], 0, 5, &wants).unwrap();
+        assert!(near(rgb(&r, 100, 30), red));
     }
 
     fn half_and_half(w: u32, h: u32, left: (f32, f32, f32), right: (f32, f32, f32)) -> VideoFrame {
