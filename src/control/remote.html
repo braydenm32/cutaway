@@ -44,6 +44,17 @@
   .monitor .cc span { background:#000c; padding:2px 6px; border-radius:4px; }
   .meter { height:6px; border-radius:3px; background:#08090c; overflow:hidden; margin-top:6px; }
   .meter i { display:block; height:100%; background:var(--green); width:0; }
+  .pad { min-height:64px; text-align:left; position:relative; overflow:hidden; touch-action:none; user-select:none; -webkit-user-select:none; }
+  .pad i { position:absolute; left:0; top:0; bottom:0; opacity:.55; pointer-events:none; }
+  .pad span, .pad small { position:relative; }
+  .pad small { display:block; color:#fffb; font-size:12px; }
+  .syrin.on { background:#9a6ee0; border-color:#9a6ee0; color:#000; font-weight:600; }
+  .talk { width:100%; border-radius:28px; font-weight:700; touch-action:none; user-select:none; -webkit-user-select:none; }
+  .talk.on { background:var(--amber); border-color:var(--amber); color:#000; }
+  .segment { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px; }
+  .segment .big { font-size:30px; font-weight:700; font-variant-numeric:tabular-nums; float:right; }
+  .segment .big.over { color:var(--red); }
+  .clock.running { background:#1e7a45; border-color:var(--green); }
 </style>
 </head>
 <body>
@@ -52,6 +63,7 @@
   <button class="pill rec" id="rec" onclick="act('record')">● RECORD</button>
   <button class="pill live" id="live" onclick="act('live')">◉ GO LIVE</button>
   <button id="marker" onclick="act('marker')">＋ Marker</button>
+  <button id="clip" onclick="act('clip')">✂ Clip</button>
 </header>
 <div class="status" id="status"></div>
 <div class="monitor"><img id="program" alt=""><div class="tag">PROGRAM</div><div class="name" id="pname"></div><div class="cc" id="cc"></div></div>
@@ -59,11 +71,17 @@
   <button class="cut" onclick="act('cut')">CUT</button>
   <button class="take" onclick="act('take')">TAKE</button>
 </div>
+<div id="rundownwrap"><h2>Rundown</h2><div class="segment" id="segment"></div>
+  <div class="row" style="margin-top:8px"><button onclick="act('rundown:previous')">◀ Back</button><button class="take" id="nextseg" onclick="act('rundown:next')">Next ▶</button><button onclick="act('rundown:stop')">■</button></div></div>
 <h2 id="sceneshead">Scenes</h2>
 <div class="grid" id="scenes"></div>
 <h2>Switching</h2>
 <div class="row" id="switching"></div>
 <div id="gfxwrap"><h2>Graphics</h2><div class="grid" id="graphics"></div></div>
+<div id="clockwrap"><h2>Timers</h2><div id="clocks"></div></div>
+<div id="soundwrap"><h2>Sound</h2><div class="grid" id="pads"></div>
+  <div class="row" id="syrin" style="margin-top:8px"></div>
+  <div style="margin-top:8px"><button class="talk" id="talk">TALK (hold)</button></div></div>
 <div id="audiowrap"><h2>Audio</h2><div class="grid" id="audio"></div></div>
 <div id="mediawrap"><h2>Media</h2><div id="media"></div></div>
 <h2>Tally lights</h2>
@@ -103,6 +121,9 @@ function render() {
   live.className = 'pill live' + (s.live ? ' on' : '');
   live.textContent = s.live ? '◉ LIVE ' + clock(s.live_seconds) : '◉ GO LIVE';
   document.getElementById('marker').style.display = s.recording ? '' : 'none';
+  const clip = document.getElementById('clip');
+  clip.style.display = s.recording ? '' : 'none';
+  clip.textContent = '✂ Clip ' + (s.clip_seconds || 30) + 's';
   document.getElementById('pname').textContent = s.program || '';
   const cc = document.getElementById('cc'); cc.innerHTML = '';
   if (s.captions && s.caption_text) cc.append(el('span', '', s.caption_text));
@@ -122,11 +143,58 @@ function render() {
   const sw = document.getElementById('switching'); sw.innerHTML = '';
   sw.append(el('button', 'toggle' + (s.auto ? ' on' : ''), 'Auto switching', () => act('auto')));
   if (s.captions_available) sw.append(el('button', 'toggle' + (s.captions ? ' on' : ''), 'CC', () => act('captions')));
-  ['cut', 'mix', 'wipe', 'push', 'dip'].forEach(t => sw.append(el('button', 'toggle' + (s.transition === t ? ' on' : ''), t[0].toUpperCase() + t.slice(1), () => act('transition:' + t))));
+  ['cut', 'mix', 'wipe', 'push', 'dip', 'stinger'].forEach(t => sw.append(el('button', 'toggle' + (s.transition === t ? ' on' : ''), t[0].toUpperCase() + t.slice(1), () => act('transition:' + t))));
 
   const gfx = document.getElementById('graphics'); gfx.innerHTML = '';
   document.getElementById('gfxwrap').style.display = s.graphics.length ? '' : 'none';
   s.graphics.forEach((g, i) => gfx.append(el('button', 'toggle' + (g.on ? ' on' : ''), g.name, () => act('graphic:' + (i + 1)))));
+  // Rundown.
+  const rd = s.rundown;
+  document.getElementById('rundownwrap').style.display = rd ? '' : 'none';
+  if (rd) {
+    const seg = document.getElementById('segment'); seg.innerHTML = '';
+    if (rd.number) {
+      seg.append(el('div', 'big' + (rd.over ? ' over' : ''), rd.left));
+      seg.append(el('div', '', rd.number + '/' + rd.count + '  ' + rd.name));
+      const d = Math.round(rd.drift);
+      seg.append(el('small', '', (rd.next ? 'Next: ' + rd.next : 'Last segment') + (Math.abs(d) >= 5 ? '  ·  ' + clock(Math.abs(d)).replace(/^00:/, '') + (d > 0 ? ' over' : ' under') : '  ·  on time')));
+      seg.lastChild.style.color = 'var(--dim)';
+    } else {
+      seg.append(el('div', '', rd.count + ' segments — first: ' + (rd.next || '')));
+    }
+    const nb = document.getElementById('nextseg');
+    nb.textContent = rd.number ? 'Next ▶' : 'Start ▶';
+    nb.disabled = rd.number > 0 && !rd.next;
+  }
+  // Timers.
+  const timers = (s.clocks || []).filter(c => c.timer);
+  document.getElementById('clockwrap').style.display = timers.length ? '' : 'none';
+  const ck = document.getElementById('clocks'); ck.innerHTML = '';
+  timers.forEach(c => {
+    const r = el('div', 'row'); r.style.marginBottom = '8px';
+    r.append(el('button', 'clock' + (c.running ? ' running' : ''), c.name + '  ' + c.text, () => act('timer:' + c.name + ':toggle')));
+    r.firstChild.style.flex = '1';
+    r.append(el('button', '', 'Reset', () => act('timer:' + c.name + ':reset')), el('button', 'toggle' + (c.on ? ' on' : ''), 'On screen', () => act('graphic:' + c.name)));
+    ck.append(r);
+  });
+  // Sound: pads (held pads play while held), Syrinscape, talkback.
+  const pads = s.pads || [], syr = s.syrinscape || [];
+  document.getElementById('soundwrap').style.display = pads.length || syr.length || s.talkback_available ? '' : 'none';
+  const pd = document.getElementById('pads'); pd.innerHTML = '';
+  pads.forEach((p, i) => {
+    const b = el('button', 'pad');
+    b.style.borderColor = p.color;
+    const fill = el('i'); fill.style.background = p.color; fill.style.width = (p.playing ? Math.round(p.progress * 100) : 0) + '%';
+    b.append(fill, el('span', '', p.name), el('small', '', p.playing ? Math.ceil(p.remaining) + ' s' : 'pad ' + (i + 1)));
+    b.onpointerdown = e => { e.preventDefault(); hold('pad:' + (i + 1) + ':press', 'pad:' + (i + 1) + ':release'); };
+    pd.append(b);
+  });
+  const sy = document.getElementById('syrin'); sy.innerHTML = '';
+  syr.forEach((b, i) => sy.append(el('button', 'syrin' + (b.playing ? ' on' : ''), b.name, () => act('syrinscape:' + (i + 1)))));
+  const talk = document.getElementById('talk');
+  talk.style.display = s.talkback_available ? '' : 'none';
+  talk.className = 'talk' + (s.talkback ? ' on' : '');
+  talk.textContent = s.talkback ? 'TALKING' : 'TALK (hold)';
   const au = document.getElementById('audio'); au.innerHTML = '';
   document.getElementById('audiowrap').style.display = s.inputs.length ? '' : 'none';
   s.inputs.forEach((a, i) => {
@@ -148,6 +216,14 @@ function render() {
   const t = document.getElementById('tallies'); t.innerHTML = '';
   s.sources.forEach((src, i) => { const a = el('a', '', src.name); a.href = '/?tally=' + (i + 1) + (pin ? '&pin=' + encodeURIComponent(pin) : ''); a.style.marginRight = '14px'; t.append(a); });
 }
+
+// Hold-to-play: the release goes out when the finger lifts anywhere (the
+// buttons are redrawn as the state changes).
+let held = null;
+function hold(down, up) { if (held) act(held); held = up; act(down); }
+function letGo() { if (held) { const up = held; held = null; act(up); } }
+['pointerup', 'pointercancel'].forEach(ev => document.addEventListener(ev, letGo));
+document.getElementById('talk').onpointerdown = e => { e.preventDefault(); hold('talkback:on', 'talkback:off'); };
 
 function renderTally() {
   document.querySelectorAll('body > :not(#tally)').forEach(e => e.style.display = 'none');

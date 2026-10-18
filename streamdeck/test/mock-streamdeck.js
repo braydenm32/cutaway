@@ -214,6 +214,73 @@ function check(ok, what) {
     const lists = await until("lists for the settings panel", () => last("sendToPropertyInspector", "k-scene"));
     check(lists.payload.connected && lists.payload.scenes.length === s2.scenes.length, `settings panel lists ${lists.payload.scenes.length} scenes: ${lists.payload.status}`);
 
+    // Sound pads, talkback, the rundown, timers and clips (when the show has them).
+    const sx = await state();
+    if ((sx.pads || []).length) {
+      appear("k-pad", "pad", { pad: "1" });
+      key("keyDown", "k-pad", "pad", { settings: { pad: "1" } });
+      await until("pad 1 playing", async () => (await state()).pads[0].playing);
+      check(true, `pad key plays "${sx.pads[0].name}"`);
+      await until("the pad key to show it playing", () => {
+        const m = last("setImage", "k-pad");
+        return m && decodeURIComponent(m.payload.image).includes(" s<");
+      });
+      check(true, "pad key shows the time left");
+      key("keyUp", "k-pad", "pad", { settings: { pad: "1" } });
+    }
+    if (sx.talkback_available) {
+      appear("k-talk", "talkback", { mode: "hold" });
+      key("keyDown", "k-talk", "talkback", { settings: { mode: "hold" } });
+      await until("talkback on", async () => (await state()).talkback);
+      key("keyUp", "k-talk", "talkback", { settings: { mode: "hold" } });
+      await until("talkback off", async () => !(await state()).talkback);
+      check(true, "talkback key talks while held");
+    }
+    if (sx.rundown) {
+      appear("k-rundown", "rundown", { button: "next" });
+      appear("k-rundown-back", "rundown", { button: "previous" });
+      const n0 = sx.rundown.number;
+      key("keyDown", "k-rundown", "rundown", { settings: { button: "next" } });
+      key("keyUp", "k-rundown", "rundown", { settings: { button: "next" } });
+      const r = await until("the next segment", async () => {
+        const s = await state();
+        return s.rundown.number === n0 + 1 && s.rundown;
+      });
+      check(true, `rundown key moves to segment ${r.number}: ${r.name}`);
+      await until("the rundown key to show the time left", () => {
+        const m = last("setImage", "k-rundown");
+        return m && decodeURIComponent(m.payload.image).includes(r.left.slice(0, 2));
+      });
+      check(true, "rundown key shows the time left");
+      key("keyDown", "k-rundown-back", "rundown", { settings: { button: "previous" } });
+      key("keyUp", "k-rundown-back", "rundown", { settings: { button: "previous" } });
+    }
+    const timer = (sx.clocks || []).find((c) => c.timer);
+    if (timer) {
+      appear("k-timer", "timer", { clock: "1", button: "toggle" });
+      key("keyDown", "k-timer", "timer", { settings: { clock: "1", button: "toggle" } });
+      key("keyUp", "k-timer", "timer", { settings: { clock: "1", button: "toggle" } });
+      await until("the timer to run", async () => (await state()).clocks.find((c) => c.name === timer.name).running);
+      check(true, `timer key starts "${timer.name}"`);
+      key("keyDown", "k-timer", "timer", { settings: { clock: "1", button: "toggle" } });
+      key("keyUp", "k-timer", "timer", { settings: { clock: "1", button: "toggle" } });
+      await until("the timer to pause", async () => !(await state()).clocks.find((c) => c.name === timer.name).running);
+    }
+    appear("k-clip", "clip", {});
+    key("keyDown", "k-rec", "record");
+    key("keyUp", "k-rec", "record");
+    await until("recording", async () => (await state()).recording);
+    await sleep(2500);
+    received.length = 0;
+    key("keyDown", "k-clip", "clip");
+    key("keyUp", "k-clip", "clip");
+    await sleep(800);
+    check(!!last("showOk", "k-clip") && !last("showAlert", "k-clip"), "clip key saves a clip while recording");
+    key("keyDown", "k-rec", "record");
+    await sleep(1300);
+    key("keyUp", "k-rec", "record");
+    await until("recording to stop", async () => !(await state()).recording, 8000);
+
     // Save every key's picture, to look at (DUMP_DIR=folder).
     if (process.env.DUMP_DIR) {
       const fs = require("fs");
@@ -225,12 +292,24 @@ function check(ok, what) {
       appear("k-auto", "auto", {});
       appear("k-captions", "captions", {});
       appear("k-media", "media", { player: "1", button: "toggle" });
+      // (The last take may still be finishing.)
+      await sleep(3000);
       appear("k-command", "command", { command: "preview:2", label: "Preview 2" });
+      appear("k-syrin", "syrinscape", { button: "1" });
+      appear("k-talk", "talkback", { mode: "hold" });
+      appear("k-clip", "clip", {});
+      appear("k-timer", "timer", { clock: "1" });
+      appear("k-rundown", "rundown", { button: "next" });
+      appear("k-pad", "pad", { pad: "2" });
       key("keyDown", "k-rec", "record");
       key("keyUp", "k-rec", "record");
       await sleep(2500);
       fs.mkdirSync(process.env.DUMP_DIR, { recursive: true });
-      for (const ctx of ["k-scene", "k-source", "k-take", "k-transition", "k-rec", "k-live", "k-marker", "k-graphic", "k-audio", "k-auto", "k-captions", "k-media", "k-command"]) {
+      key("keyDown", "k-pad", "pad", { settings: { pad: "2" } });
+      key("keyUp", "k-pad", "pad", { settings: { pad: "2" } });
+      await until("recording", async () => (await state()).recording, 8000);
+      await sleep(600);
+      for (const ctx of ["k-scene", "k-source", "k-take", "k-transition", "k-rec", "k-live", "k-marker", "k-graphic", "k-audio", "k-auto", "k-captions", "k-media", "k-command", "k-pad", "k-syrin", "k-talk", "k-clip", "k-timer", "k-rundown"]) {
         const m = last("setImage", ctx);
         if (!m) continue;
         const [head, data] = m.payload.image.split(",");

@@ -784,6 +784,47 @@ impl App {
                 .collect(),
             disk,
             problems,
+            pads: e.pads.state().into_iter().map(|p| show::PadInfo { name: p.name, color: p.color, playing: p.playing, progress: p.progress, remaining: p.remaining }).collect(),
+            syrinscape: if self.cfg.syrinscape.enabled {
+                self.cfg
+                    .syrinscape
+                    .buttons
+                    .iter()
+                    .map(|b| show::SyrinInfo { name: b.name.clone(), kind: format!("{:?}", b.kind).to_lowercase(), playing: self.syrinscape.is_playing(b) })
+                    .collect()
+            } else {
+                Vec::new()
+            },
+            talkback: e.talkback(),
+            talkback_available: e.mix.talkback_input().is_some(),
+            clip_seconds: self.cfg.output.clip_seconds,
+            clocks: e
+                .graphics
+                .list()
+                .into_iter()
+                .enumerate()
+                .filter_map(|(i, (name, on, _))| {
+                    let (text, over) = e.graphics.clock_text(i)?;
+                    let timer = self.cfg.graphics.get(i).is_some_and(|g| g.clock.is_timer());
+                    let running = timer && e.graphics.timers.running(&name);
+                    Some(show::ClockState { name, text, on, timer, running, over })
+                })
+                .collect(),
+            rundown: (!self.cfg.rundown.segments.is_empty()).then(|| {
+                let st = self.rundown.status(&self.cfg.rundown.segments);
+                let (left, over) = if st.index.is_some() { panels::left_text(st.elapsed, st.planned) } else { (String::new(), false) };
+                show::RundownState {
+                    number: st.index.map(|i| i + 1).unwrap_or(0),
+                    count: st.count,
+                    name: st.name.clone(),
+                    next: st.next.clone(),
+                    elapsed: st.elapsed,
+                    planned: st.planned,
+                    left,
+                    over,
+                    drift: st.drift,
+                }
+            }),
         })
     }
 
@@ -838,6 +879,20 @@ impl App {
                     Action::Audio(t, _) => lit(t.find(&anames).is_some_and(|i| state.inputs[i].on)),
                     Action::Transition(mode) => lit(state.transition == mode.name()),
                     Action::Captions(_) => lit(state.captions),
+                    Action::Pad(t, _) => {
+                        let names: Vec<String> = state.pads.iter().map(|p| p.name.clone()).collect();
+                        lit(t.find(&names).is_some_and(|i| state.pads[i].playing))
+                    }
+                    Action::Talkback(_) => lit(state.talkback),
+                    Action::Syrinscape(control::syrinscape::SyrinCmd::Button(t)) => {
+                        let names: Vec<String> = state.syrinscape.iter().map(|b| b.name.clone()).collect();
+                        lit(t.find(&names).is_some_and(|i| state.syrinscape[i].playing))
+                    }
+                    Action::Timer(t, _) => {
+                        // Timers are named by graphic (number or name).
+                        let name = t.find(&gnames).map(|i| gnames[i].clone());
+                        lit(state.clocks.iter().any(|c| Some(&c.name) == name.as_ref() && c.running))
+                    }
                     _ => continue,
                 };
                 lights.push((msg, value));

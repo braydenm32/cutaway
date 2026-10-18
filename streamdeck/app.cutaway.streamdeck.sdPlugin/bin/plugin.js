@@ -3,7 +3,8 @@
 // Keys and dials that run Cutaway: scenes and sources with live pictures
 // and tally colours, take/cut, transitions, record, go live, markers,
 // graphics, audio inputs (Stream Deck+ dials too), auto-switching,
-// captions, media players and any Cutaway command.
+// captions, media players, sound pads, Syrinscape, talkback, clips,
+// timers, the rundown and any Cutaway command.
 //
 // No dependencies: this speaks the Stream Deck plugin protocol and
 // Cutaway's remote-control API (WebSocket + HTTP) itself, with the small
@@ -459,9 +460,51 @@ function press(ctx) {
       if (s.command && String(s.command).trim()) run(ctx, String(s.command).trim());
       else sdSend({ event: "showAlert", context: ctx });
       break;
+    case "pad":
+      // Sound starts on the press; "while held" pads stop on the release.
+      run(ctx, `pad:${target(s.pad)}:press`);
+      k.down = `pad:${target(s.pad)}:release`;
+      break;
+    case "syrinscape":
+      run(ctx, `syrinscape:${target(s.button)}`);
+      break;
+    case "talkback":
+      if ((s.mode || "hold") === "hold") {
+        run(ctx, "talkback:on");
+        k.down = "talkback:off";
+      } else {
+        run(ctx, "talkback");
+      }
+      break;
+    case "clip":
+      if (!st || !st.recording) {
+        sdSend({ event: "showAlert", context: ctx });
+        break;
+      }
+      run(ctx, s.seconds && Number(s.seconds) > 0 ? `clip:${Math.round(Number(s.seconds))}` : "clip");
+      sdSend({ event: "showOk", context: ctx });
+      break;
+    case "timer":
+      run(ctx, `timer:${clockName(s.clock)}:${s.button || "toggle"}`);
+      break;
+    case "rundown":
+      run(ctx, `rundown:${s.button || "next"}`);
+      break;
     default:
       break;
   }
+}
+
+/** A clock graphic setting ("2" = the second timer, or a name) as its name. */
+function clockName(v) {
+  const timers = ((cutaway.state && cutaway.state.clocks) || []).filter((c) => c.timer);
+  const i = indexIn(timers, v);
+  return timers[i] ? timers[i].name : target(v);
+}
+
+function timerOf(v) {
+  const timers = ((cutaway.state && cutaway.state.clocks) || []).filter((c) => c.timer);
+  return timers[indexIn(timers, v)];
 }
 
 function finishHold(ctx) {
@@ -476,7 +519,12 @@ function finishHold(ctx) {
 
 function release(ctx) {
   const k = keys.get(ctx);
-  if (!k || !k.hold) return;
+  if (!k) return;
+  if (k.down) {
+    run(null, k.down);
+    k.down = null;
+  }
+  if (!k.hold) return;
   // Let go too soon: say so on the key for a moment.
   clearTimeout(k.hold.timer);
   k.hold = null;
@@ -568,6 +616,12 @@ function offline(k) {
     captions: "CC",
     media: "Media",
     command: "Command",
+    pad: "Pad",
+    syrinscape: "Syrinscape",
+    talkback: "Talk",
+    clip: "Clip",
+    timer: "Timer",
+    rundown: "Rundown",
   };
   return svg(label(names[k.kind] || "Cutaway", 66, 22, C.dim) + label("not connected", 96, 15, C.amber, 400));
 }
@@ -663,6 +717,57 @@ function draw(k) {
     }
     case "command":
       return { image: svg(label(fit(s.label || s.command || "Command", 10), 80, 20)) };
+    case "pad": {
+      const p = (st.pads || [])[indexIn(st.pads, s.pad)];
+      if (!p) return { image: svg(label("No pad", 72, 18, C.dim)) };
+      const color = /^#[0-9a-f]{6}$/i.test(p.color || "") ? p.color : C.accent;
+      const w = p.playing ? Math.round(144 * Math.max(0, Math.min(1, p.progress))) : 0;
+      const body =
+        (p.playing ? `<rect width="${w}" height="144" fill="${color}" opacity="0.75"/>` : `<rect x="10" y="118" width="124" height="8" rx="4" fill="${color}"/>`) +
+        label(fit(p.name, 10), 70, 21) +
+        label(p.playing ? `${Math.ceil(p.remaining)} s` : "", 100, 17, C.text, 400);
+      return { image: svg(body, { bg: p.playing ? "#22262e" : C.bg, border: p.playing ? color : null }) };
+    }
+    case "syrinscape": {
+      const b = (st.syrinscape || [])[indexIn(st.syrinscape, s.button)];
+      if (!b) return { image: svg(label("Syrinscape", 64, 17, C.dim) + label("no button", 92, 15, C.amber, 400)) };
+      const stop = b.kind === "stopall";
+      const bg = stop ? "#4a1820" : b.playing ? "#9a6ee0" : C.bg;
+      return { image: svg(label(fit(b.name, 10), 72, 21, b.playing ? "#111111" : C.text) + label(stop ? "stop all" : b.kind === "mood" ? "mood" : "sound", 104, 14, b.playing ? "#111111" : C.dim, 400), { bg }) };
+    }
+    case "talkback": {
+      if (!st.talkback_available) return { image: svg(label("TALK", 66, 26, C.dim) + label("no talkback mic", 96, 13, C.amber, 400)) };
+      const on = st.talkback;
+      return { image: svg(label("TALK", 72, 32, on ? "#111111" : C.text) + label(on ? "talking" : (s.mode || "hold") === "hold" ? "hold" : "on / off", 104, 15, on ? "#111111" : C.dim, 400), { bg: on ? C.amber : C.bg }) };
+    }
+    case "clip": {
+      const secs = s.seconds && Number(s.seconds) > 0 ? Math.round(Number(s.seconds)) : st.clip_seconds || 30;
+      const c = st.recording ? C.text : C.dim;
+      const scissors = `<circle cx="52" cy="54" r="11" fill="none" stroke="${c}" stroke-width="5"/><circle cx="92" cy="54" r="11" fill="none" stroke="${c}" stroke-width="5"/><line x1="60" y1="46" x2="94" y2="18" stroke="${c}" stroke-width="5" stroke-linecap="round"/><line x1="84" y1="46" x2="50" y2="18" stroke="${c}" stroke-width="5" stroke-linecap="round"/>`;
+      return { image: svg(scissors + label("CLIP", 98, 20, c) + label(st.recording ? `last ${secs} s` : "not recording", 124, 14, st.recording ? C.text : C.dim, 400)) };
+    }
+    case "timer": {
+      const t = timerOf(s.clock);
+      if (!t) return { image: svg(label("Timer", 66, 22, C.dim) + label("no countdown", 96, 14, C.amber, 400)) };
+      const btn = s.button || "toggle";
+      const word = { toggle: t.running ? "pause" : "start", start: "start", pause: "pause", reset: "reset", stop: "stop" }[btn] || btn;
+      return { image: svg(label(fit(t.name, 11), 38, 16, C.dim, 400) + label(t.text, 84, t.text.length > 5 ? 30 : 36, t.over ? C.red : C.text) + label(word, 122, 15, C.dim, 400), { bg: t.running ? "#1d3a26" : C.bg }) };
+    }
+    case "rundown": {
+      const r = st.rundown;
+      if (!r) return { image: svg(label("Rundown", 66, 20, C.dim) + label("no segments", 96, 14, C.amber, 400)) };
+      const btn = s.button || "next";
+      if (btn === "next" || btn === "start") {
+        if (!r.number) return { image: svg(label("START", 60, 26) + label(fit(r.next || "", 12), 96, 16, C.dim, 400), { bg: "#1d3a26" }) };
+        return {
+          image: svg(label(fit(r.name, 11), 34, 16, C.dim, 400) + label(r.left, 78, r.left.length > 5 ? 30 : 36, r.over ? C.red : C.text) + label(r.next ? `▶ ${fit(r.next, 10)}` : "last", 118, 15, C.text, 400), {
+            border: r.over ? C.red : null,
+          }),
+        };
+      }
+      const words = { previous: "◀ BACK", stop: "■ STOP" };
+      return { image: svg(label(words[btn] || btn, 72, 22, r.number ? C.text : C.dim) + label(r.number ? `${r.number}/${r.count}` : "", 104, 15, C.dim, 400)) };
+    }
     default:
       return { image: svg(label("Cutaway", 80, 20, C.dim)) };
   }
@@ -784,6 +889,9 @@ function sendLists(ctx, action) {
       graphics: st ? st.graphics.map((x) => x.name) : [],
       inputs: st ? st.inputs.map((x) => x.name) : [],
       players: st ? st.players.map((x) => ({ name: x.name, source: x.source })) : [],
+      pads: st ? (st.pads || []).map((x) => x.name) : [],
+      syrinscape: st ? (st.syrinscape || []).map((x) => x.name) : [],
+      clocks: st ? (st.clocks || []).filter((x) => x.timer).map((x) => x.name) : [],
     },
   });
 }

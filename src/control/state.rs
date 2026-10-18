@@ -32,6 +32,66 @@ pub struct ShowState {
     pub players: Vec<PlayerState>,
     pub disk: String,
     pub problems: Vec<String>,
+    pub pads: Vec<PadInfo>,
+    /// Syrinscape buttons (empty when Syrinscape control is off).
+    pub syrinscape: Vec<SyrinInfo>,
+    /// The producer's mic is in the presenters' ears (and there is one).
+    pub talkback: bool,
+    pub talkback_available: bool,
+    /// What the Clip button saves.
+    pub clip_seconds: u32,
+    /// Clock graphics and what they show.
+    pub clocks: Vec<ClockState>,
+    pub rundown: Option<RundownState>,
+}
+
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+pub struct PadInfo {
+    pub name: String,
+    /// "#RRGGBB"
+    pub color: String,
+    pub playing: bool,
+    /// 0 to 1 while playing.
+    pub progress: f32,
+    pub remaining: f32,
+}
+
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+pub struct SyrinInfo {
+    pub name: String,
+    /// "mood", "element" or "stopall".
+    pub kind: String,
+    pub playing: bool,
+}
+
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+pub struct ClockState {
+    /// The graphic's name.
+    pub name: String,
+    pub text: String,
+    /// Shown on the program.
+    pub on: bool,
+    /// A countdown or stopwatch (started and stopped by buttons).
+    pub timer: bool,
+    pub running: bool,
+    pub over: bool,
+}
+
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+pub struct RundownState {
+    /// Segment number from 1 (0: not started).
+    pub number: usize,
+    pub count: usize,
+    pub name: String,
+    pub next: Option<String>,
+    pub elapsed: f64,
+    /// Seconds planned (0: open-ended).
+    pub planned: f64,
+    /// "4:59", or "-0:12" when it's over.
+    pub left: String,
+    pub over: bool,
+    /// Seconds the show is over (+) or under (-) plan.
+    pub drift: f64,
 }
 
 #[derive(Serialize, Clone, Debug, Default, PartialEq)]

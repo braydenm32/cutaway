@@ -83,6 +83,34 @@ def glyph(d, kind, box, color, accent=None):
         d.rounded_rectangle([p(2, 3), p(18, 17)], radius=1.5 * u, outline=color, width=lw)
         d.line([p(5, 7), p(8.5, 10), p(5, 13)], fill=color, width=lw, joint="curve")
         d.line([p(10, 13), p(15, 13)], fill=color, width=lw)
+    elif kind == "pad":
+        d.rounded_rectangle([p(2, 2), p(9, 9)], radius=1.2 * u, fill=color)
+        d.rounded_rectangle([p(11, 2), p(18, 9)], radius=1.2 * u, outline=color, width=lw)
+        d.rounded_rectangle([p(2, 11), p(9, 18)], radius=1.2 * u, outline=color, width=lw)
+        d.rounded_rectangle([p(11, 11), p(18, 18)], radius=1.2 * u, fill=color)
+    elif kind == "syrinscape":
+        # A dragon-ish wave: three rising sound arcs from a point.
+        d.ellipse([p(3, 12), p(7, 16)], fill=color)
+        for r in (5, 9, 13):
+            d.arc([p(5 - r, 14 - r), p(5 + r, 14 + r)], 290, 360, fill=color, width=lw)
+    elif kind == "talkback":
+        d.rounded_rectangle([p(7, 2), p(13, 12)], radius=3 * u, fill=color)
+        d.arc([p(4, 5), p(16, 15)], 0, 180, fill=color, width=lw)
+        d.line([p(10, 15), p(10, 18)], fill=color, width=lw)
+    elif kind == "clip":
+        d.ellipse([p(3, 12), p(8, 17)], outline=color, width=lw)
+        d.ellipse([p(12, 12), p(17, 17)], outline=color, width=lw)
+        d.line([p(7, 12.5), p(15, 3)], fill=color, width=lw)
+        d.line([p(13, 12.5), p(5, 3)], fill=color, width=lw)
+    elif kind == "timer":
+        d.ellipse([p(3, 4), p(17, 18)], outline=color, width=lw)
+        d.line([p(10, 11), p(10, 6.5)], fill=color, width=lw)
+        d.line([p(10, 11), p(13, 13)], fill=color, width=lw)
+        d.line([p(8, 2), p(12, 2)], fill=color, width=lw)
+    elif kind == "rundown":
+        for i, y in enumerate((4, 9, 14)):
+            d.rounded_rectangle([p(2, y), p(4, y + 2)], radius=0.5 * u, fill=accent if i == 1 else color)
+            d.rounded_rectangle([p(6, y), p(18, y + 2)], radius=0.5 * u, fill=accent if i == 1 else color)
     elif kind == "logo":
         # A frame with a diagonal cut through it.
         d.rounded_rectangle([p(2, 4), p(18, 16)], radius=2 * u, outline=color, width=lw)
@@ -138,6 +166,12 @@ ACTIONS = {
     "auto": "Auto",
     "captions": "Captions",
     "media": "Media",
+    "pad": "Pad",
+    "syrinscape": "Syrinscape",
+    "talkback": "Talk",
+    "clip": "Clip",
+    "timer": "Timer",
+    "rundown": "Rundown",
     "command": "Command",
 }
 

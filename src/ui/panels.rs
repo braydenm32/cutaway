@@ -11,7 +11,7 @@ use eframe::egui::{self, pos2, vec2, Align2, Color32, FontId, Key, Rect, RichTex
 use std::time::Duration;
 
 /// "4:59", or "-0:12" when over.
-fn left_text(elapsed: f64, planned: f64) -> (String, bool) {
+pub(super) fn left_text(elapsed: f64, planned: f64) -> (String, bool) {
     use crate::engine::timers::fmt_span;
     if planned <= 0.0 {
         (fmt_span(Duration::from_secs_f64(elapsed), false), false)

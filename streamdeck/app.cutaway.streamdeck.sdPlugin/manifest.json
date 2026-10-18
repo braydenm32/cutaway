@@ -2,9 +2,9 @@
   "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
   "UUID": "app.cutaway.streamdeck",
   "Name": "Cutaway",
-  "Version": "0.4.0.0",
+  "Version": "0.6.0.0",
   "Author": "Cutaway",
-  "Description": "Run Cutaway from your Stream Deck: scenes and sources with live pictures and tally colours, take and cut, transitions, record, go live, markers, graphics, audio inputs (with Stream Deck+ dials), auto-switching, captions, media players and any Cutaway command.",
+  "Description": "Run Cutaway from your Stream Deck: scenes and sources with live pictures and tally colours, take and cut, transitions, record, go live, markers, graphics, audio inputs (with Stream Deck+ dials), auto-switching, captions, media players, sound pads, Syrinscape, talkback, instant clips, timers, the rundown and any Cutaway command.",
   "Category": "Cutaway",
   "CategoryIcon": "imgs/plugin/category",
   "Icon": "imgs/plugin/marketplace",
@@ -74,7 +74,7 @@
     {
       "UUID": "app.cutaway.streamdeck.transition",
       "Name": "Transition",
-      "Tooltip": "Choose the transition: cut, mix, wipe, push or dip.",
+      "Tooltip": "Choose the transition: cut, mix, wipe, push, dip or stinger.",
       "Icon": "imgs/actions/transition/icon",
       "Controllers": [
         "Keypad"
@@ -204,6 +204,90 @@
       "States": [
         {
           "Image": "imgs/actions/media/key"
+        }
+      ]
+    },
+    {
+      "UUID": "app.cutaway.streamdeck.pad",
+      "Name": "Sound Pad",
+      "Tooltip": "Play a sound pad; lit with its progress while it plays.",
+      "Icon": "imgs/actions/pad/icon",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/pad/key"
+        }
+      ]
+    },
+    {
+      "UUID": "app.cutaway.streamdeck.syrinscape",
+      "Name": "Syrinscape",
+      "Tooltip": "Start a Syrinscape mood or sound set up in Cutaway.",
+      "Icon": "imgs/actions/syrinscape/icon",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/syrinscape/key"
+        }
+      ]
+    },
+    {
+      "UUID": "app.cutaway.streamdeck.talkback",
+      "Name": "Talkback",
+      "Tooltip": "Your mic in the presenters' ears while held.",
+      "Icon": "imgs/actions/talkback/icon",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/talkback/key"
+        }
+      ]
+    },
+    {
+      "UUID": "app.cutaway.streamdeck.clip",
+      "Name": "Clip",
+      "Tooltip": "Save the last few seconds of the recording as a clip.",
+      "Icon": "imgs/actions/clip/icon",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/clip/key"
+        }
+      ]
+    },
+    {
+      "UUID": "app.cutaway.streamdeck.timer",
+      "Name": "Timer",
+      "Tooltip": "Start, pause or reset a countdown or stopwatch; shows its time.",
+      "Icon": "imgs/actions/timer/icon",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/timer/key"
+        }
+      ]
+    },
+    {
+      "UUID": "app.cutaway.streamdeck.rundown",
+      "Name": "Rundown",
+      "Tooltip": "Next segment, with the time left in this one.",
+      "Icon": "imgs/actions/rundown/icon",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/rundown/key"
         }
       ]
     },

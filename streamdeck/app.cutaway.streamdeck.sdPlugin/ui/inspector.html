@@ -46,7 +46,7 @@
   </div>
   <div data-for="transition">
     <div class="row"><label for="style">Transition</label><div class="field"><select id="style" data-setting="style">
-      <option value="cut">Cut</option><option value="mix">Mix</option><option value="wipe">Wipe</option><option value="push">Push</option><option value="dip">Dip</option>
+      <option value="cut">Cut</option><option value="mix">Mix</option><option value="wipe">Wipe</option><option value="push">Push</option><option value="dip">Dip</option><option value="stinger">Stinger</option>
     </select></div></div>
   </div>
   <div data-for="record">
@@ -75,10 +75,41 @@
       <option value="toggle">Play / pause</option><option value="next">Next</option><option value="restart">From the start</option><option value="previous">Previous</option>
     </select></div></div>
   </div>
+  <div data-for="pad">
+    <div class="row"><label for="pad">Pad</label><div class="field"><select id="pad" data-setting="pad" data-list="pads"></select></div></div>
+    <div class="hint">Press to play, press again to stop. "While held" pads play while the key is held. Set up pads in Cutaway: Settings → Sound pads.</div>
+  </div>
+  <div data-for="syrinscape">
+    <div class="row"><label for="sbutton">Button</label><div class="field"><select id="sbutton" data-setting="button" data-list="syrinscape"></select></div></div>
+    <div class="hint">One of the Syrinscape buttons set up in Cutaway (Settings → Syrinscape). Lit while it's playing.</div>
+  </div>
+  <div data-for="talkback">
+    <div class="row"><label for="tmode">Key</label><div class="field"><select id="tmode" data-setting="mode">
+      <option value="hold">Talk while held</option>
+      <option value="toggle">Press on, press off</option>
+    </select></div></div>
+    <div class="hint">Your talkback mic goes to the presenters' headphones and guests, never the recording or stream (Settings → Mixing &amp; headphones).</div>
+  </div>
+  <div data-for="clip">
+    <div class="row"><label for="cseconds">Length</label><div class="field"><input type="text" id="cseconds" data-setting="seconds" placeholder="as set in Cutaway (e.g. 30)"></div></div>
+    <div class="hint">Saves the last few seconds of the recording as its own file in the take's Clips folder.</div>
+  </div>
+  <div data-for="timer">
+    <div class="row"><label for="tclock">Timer</label><div class="field"><select id="tclock" data-setting="clock" data-list="clocks"></select></div></div>
+    <div class="row"><label for="tbutton">Button</label><div class="field"><select id="tbutton" data-setting="button">
+      <option value="toggle">Start / pause</option><option value="reset">Back to the start</option><option value="start">Start</option><option value="pause">Pause</option><option value="stop">Stop and reset</option>
+    </select></div></div>
+    <div class="hint">A countdown or stopwatch clock graphic (Settings → Graphics). The key shows its time.</div>
+  </div>
+  <div data-for="rundown">
+    <div class="row"><label for="rbutton">Button</label><div class="field"><select id="rbutton" data-setting="button">
+      <option value="next">Next segment (shows time left)</option><option value="previous">Previous segment</option><option value="stop">Stop the rundown</option>
+    </select></div></div>
+  </div>
   <div data-for="command">
     <div class="row"><label for="command">Command</label><div class="field"><input type="text" id="command" data-setting="command" placeholder="e.g. preview:2"></div></div>
     <div class="row"><label for="clabel">Label</label><div class="field"><input type="text" id="clabel" data-setting="label" placeholder="shown on the key"></div></div>
-    <div class="hint">Examples: <code>scene:Interview</code>, <code>cut:3</code>, <code>graphic:Logo:on</code>, <code>mute:Guest</code>, <code>gain:Mic:-6</code>, <code>media:Clips:next</code>, <code>marker:Applause</code>. The full list is in Cutaway's README.</div>
+    <div class="hint">Examples: <code>scene:Interview</code>, <code>cut:3</code>, <code>graphic:Logo:on</code>, <code>mute:Guest</code>, <code>gain:Mic:-6</code>, <code>media:Clips:next</code>, <code>marker:Applause</code>, <code>pads:stop</code>, <code>rundown:3</code>. The full list is in Cutaway's README.</div>
   </div>
 
   <!-- Connection (shared by every key). -->

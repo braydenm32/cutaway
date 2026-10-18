@@ -21,7 +21,7 @@ dials and the Stream Deck app's virtual decks).
 | Scene | take, preview or cut to a scene | live picture of the scene, red border on air, green in preview |
 | Source | a source full screen | live picture and tally |
 | Take / Cut | preview to program | lit while something is in preview |
-| Transition | cut, mix, wipe, push, dip | lit when it's the current one |
+| Transition | cut, mix, wipe, push, dip, stinger | lit when it's the current one |
 | Record | start; hold a second to stop | red with the running time |
 | Go Live | hold to go live, hold to end | red with the running time; holds can be turned off |
 | Marker | drop a marker (optional label) | |
@@ -30,6 +30,12 @@ dials and the Stream Deck app's virtual decks).
 | Auto Switching | follow who's talking on/off | |
 | Captions | live captions on/off | |
 | Media Player | play/pause, next, restart, previous | shows the item playing |
+| Sound Pad | play a pad (press again to stop) | the pad's colour, filling as it plays, with the seconds left; "while held" pads play while the key is down |
+| Syrinscape | one of Cutaway's Syrinscape buttons | lit while that mood or sound is playing |
+| Talkback | your mic in the presenters' ears | while held (or press on, press off) |
+| Clip | save the last few seconds as a clip | while recording; the length is Cutaway's setting or the key's own |
+| Timer | start/pause, reset, start, pause or stop a countdown or stopwatch | shows its time |
+| Rundown | next segment, previous, or stop | the next key shows this segment's time left (red when over) and what's next |
 | Command | any Cutaway command | e.g. `preview:2`, `graphic:Logo:on`, `gain:Mic:-6` |
 
 Live pictures refresh once a second by default (choose Smooth, Slow or Off
@@ -53,4 +59,6 @@ node test/mock-streamdeck.js 127.0.0.1:8790 1234       # end-to-end test against
 
 The test stands in for the Stream Deck app: it takes scene 2, starts a
 recording, checks a short press doesn't stop it but a held one does, turns a
-dial, and checks the key pictures and the settings panel.
+dial, plays a pad, talks back, steps the rundown, starts a timer, saves a
+clip, and checks the key pictures and the settings panel (the pad, talkback,
+rundown and timer checks run when the show has them).
