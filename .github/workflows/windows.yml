@@ -60,7 +60,7 @@ jobs:
           $out += Get-Content "$env:LOCALAPPDATA\Cutaway\Logs\Cutaway.log" -Tail 60 -ErrorAction SilentlyContinue
           $out += Get-ChildItem -Recurse "$env:USERPROFILE\Videos\Cutaway" -ErrorAction SilentlyContinue | ForEach-Object { "$($_.FullName) $($_.Length)" }
           $out | Tee-Object -FilePath ci-logs\4-recording.log
-          if ($p.ExitCode -ne 0) { throw "the test recording failed ($($p.ExitCode))" }
+          python .github/check-take.py ci-logs\4-recording.log "$env:USERPROFILE\Videos\Cutaway" $p.ExitCode
 
       - uses: actions/upload-artifact@v4
         with:

@@ -59,7 +59,7 @@ jobs:
           tail -60 ~/Library/Logs/Cutaway/Cutaway.log >> ci-logs/4-recording.log 2>&1 || true
           ls -laR ~/Movies/Cutaway >> ci-logs/4-recording.log 2>&1 || true
           cat ci-logs/4-recording.log
-          exit $status
+          python3 .github/check-take.py ci-logs/4-recording.log ~/Movies/Cutaway $status
 
       - name: Zip the app
         run: |

@@ -125,6 +125,13 @@ pub struct App {
     /// Title being edited live: (graphic, title, subtitle).
     title_edit: Option<(usize, String, String)>,
     display_fullscreen: bool,
+    /// The output window's corner button shows until then (after the
+    /// mouse moves over the window), like a video player's controls.
+    display_controls_until: Option<Instant>,
+    /// Frames left in which to give the output window the keyboard (so Esc
+    /// and F reach it once it opens or goes full screen).
+    display_focus_frames: u8,
+    display_was_open: bool,
     sync: Option<SyncWizard>,
     /// The transition T toggles back to from Cut.
     last_transition: TransitionMode,
@@ -143,6 +150,9 @@ impl App {
         let mut app = App {
             scenes: cfg.effective_scenes(),
             display_fullscreen: cfg.display.fullscreen,
+            display_controls_until: None,
+            display_focus_frames: 0,
+            display_was_open: false,
             sync: None,
             last_transition: if cfg.transition.mode == TransitionMode::Cut { TransitionMode::Mix } else { cfg.transition.mode },
             cfg,
@@ -2431,10 +2441,25 @@ impl App {
 
     fn display_window(&mut self, ctx: &egui::Context) {
         if self.cfg.display.output == DisplayOutput::Off || self.engine.is_none() {
+            self.display_was_open = false;
             return;
         }
+        if !self.display_was_open {
+            // Just opened: it gets the keyboard, and shows its button a moment.
+            self.display_was_open = true;
+            self.display_fullscreen = self.cfg.display.fullscreen;
+            self.display_focus_frames = 3;
+            self.display_controls_until = Some(Instant::now() + Duration::from_secs(3));
+        }
+        let viewport = egui::ViewportId::from_hash_of("cutaway_output");
+        let full_now = self.display_fullscreen;
+        let controls_until = self.display_controls_until;
+        let mut moved = false;
+        let mut actual_full = None;
         let multiview = self.cfg.display.output == DisplayOutput::Multiview;
-        let mut builder = egui::ViewportBuilder::default().with_title("Cutaway — Output").with_inner_size([960.0, 540.0]).with_fullscreen(self.display_fullscreen);
+        let mut builder = egui::ViewportBuilder::default().with_title("Cutaway — Output").with_inner_size([960.0, 540.0]).with_fullscreen(self.cfg.display.fullscreen);
+        // (The setting only says how it opens: after that, full screen goes on
+        // and off by command, following the window's real state.)
         if self.self_test.is_some() {
             // Screenshots: beside the main window rather than under it.
             builder = builder.with_position([1500.0, 60.0]);
@@ -2458,8 +2483,13 @@ impl App {
         let recording = engine.is_recording();
         let mut close = false;
         let mut toggle_full = false;
-        ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("cutaway_output"), builder, |ui, _class| {
+        ctx.show_viewport_immediate(viewport, builder, |ui, _class| {
             let ctx = ui.ctx().clone();
+            // Full screen as the window really is (macOS can also leave it
+            // with its own controls).
+            actual_full = ctx.input(|i| i.viewport().fullscreen);
+            let full_now = actual_full.unwrap_or(full_now);
+            moved = ctx.input(|i| i.pointer.is_moving() || i.pointer.any_pressed());
             egui::CentralPanel::default().frame(egui::Frame::new().fill(Color32::BLACK)).show(ui, |ui| {
                 let area = ui.max_rect();
                 let resp = ui.interact(area, ui.scope_id().with("out"), Sense::click());
@@ -2512,21 +2542,61 @@ impl App {
                 if resp.double_clicked() {
                     toggle_full = true;
                 }
-                resp.on_hover_text("Double-click (or F): full screen. Esc: leave full screen.");
+                // The corner button, while the mouse is moving over the
+                // window (or over the button), like a video player's.
+                let button = Rect::from_min_size(area.right_top() + vec2(-60.0, 16.0), vec2(44.0, 44.0));
+                let b = ui.interact(button, ui.scope_id().with("full screen button"), Sense::click());
+                let showing = b.hovered() || controls_until.is_some_and(|t| Instant::now() < t);
+                if showing {
+                    let fill = if b.hovered() { Color32::from_black_alpha(220) } else { Color32::from_black_alpha(150) };
+                    painter.rect_filled(button, 8.0, fill);
+                    full_screen_icon(&painter, button.shrink(12.0), !full_now, Color32::WHITE);
+                    if b.clicked() {
+                        toggle_full = true;
+                    }
+                    b.on_hover_text(if full_now { "Leave full screen (Esc)" } else { "Full screen (F, or double-click)" });
+                } else {
+                    resp.on_hover_text("Double-click (or F): full screen. Esc: leave full screen.");
+                }
             });
             if ctx.input(|i| i.key_pressed(Key::F)) {
                 toggle_full = true;
             }
-            if ctx.input(|i| i.key_pressed(Key::Escape)) && self.display_fullscreen {
+            if ctx.input(|i| i.key_pressed(Key::Escape)) && full_now {
                 toggle_full = true;
             }
             if ctx.input(|i| i.viewport().close_requested()) {
                 close = true;
             }
         });
+        if let Some(f) = actual_full {
+            self.display_fullscreen = f;
+        }
+        if moved {
+            self.display_controls_until = Some(Instant::now() + Duration::from_secs(2));
+        }
+        if let Some(t) = self.display_controls_until {
+            if Instant::now() < t {
+                // Hide the button on time even if nothing else moves.
+                ctx.request_repaint_after_for(t - Instant::now(), viewport);
+            } else {
+                self.display_controls_until = None;
+                ctx.request_repaint_of(viewport);
+            }
+        }
         if toggle_full {
             self.display_fullscreen = !self.display_fullscreen;
-            ctx.send_viewport_cmd_to(egui::ViewportId::from_hash_of("cutaway_output"), egui::ViewportCommand::Fullscreen(self.display_fullscreen));
+            ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Fullscreen(self.display_fullscreen));
+            if self.display_fullscreen {
+                self.display_focus_frames = 3;
+            }
+        }
+        if self.display_focus_frames > 0 {
+            // Keys go to the focused window: without this, Esc pressed on a
+            // freshly opened full-screen output went to the main window.
+            self.display_focus_frames -= 1;
+            ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Focus);
+            ctx.request_repaint_of(viewport);
         }
         if close {
             self.cfg.display.output = DisplayOutput::Off;
@@ -2838,6 +2908,22 @@ fn snap(v: f32, size: f32) -> f32 {
         }
     }
     v.clamp(-size + 0.02, 0.98)
+}
+
+/// The full-screen icon of video players: four corners pointing out (go
+/// full screen) or in (leave it).
+fn full_screen_icon(p: &egui::Painter, r: Rect, enter: bool, color: Color32) {
+    let s = Stroke::new(2.5, color);
+    let arm = r.width() * 0.36;
+    for (right, bottom) in [(false, false), (true, false), (false, true), (true, true)] {
+        let corner = pos2(if right { r.right() } else { r.left() }, if bottom { r.bottom() } else { r.top() });
+        // Towards the middle from this corner.
+        let (dx, dy) = (if right { -1.0 } else { 1.0 }, if bottom { -1.0 } else { 1.0 });
+        let elbow = if enter { corner } else { corner + vec2(dx * arm, dy * arm) };
+        let (ax, ay) = if enter { (dx * arm, dy * arm) } else { (-dx * arm, -dy * arm) };
+        p.line_segment([elbow, elbow + vec2(ax, 0.0)], s);
+        p.line_segment([elbow, elbow + vec2(0.0, ay)], s);
+    }
 }
 
 fn unique_name(scenes: &[Scene], base: &str) -> String {
