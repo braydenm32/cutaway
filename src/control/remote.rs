@@ -150,6 +150,12 @@ impl RemoteServer {
             while !s2.load(Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((conn, _)) => {
+                        // On macOS and Windows a connection inherits the
+                        // listener's non-blocking mode; the client code
+                        // expects blocking reads (with timeouts).
+                        if conn.set_nonblocking(false).is_err() {
+                            continue;
+                        }
                         let sh = shared.clone();
                         let _ = std::thread::Builder::new().name("remote client".into()).spawn(move || {
                             let _ = handle(conn, &sh);
