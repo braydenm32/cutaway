@@ -39,7 +39,9 @@ jobs:
       - name: Unit tests (including Media Foundation encode and decode)
         run: |
           mkdir -p ci-logs
-          cargo test --release 2>&1 | tee ci-logs/1-tests.log
+          # One test at a time, output shown as it happens: if a test crashes
+          # the process, the report can say which one.
+          cargo test --release -- --test-threads=1 --nocapture 2>&1 | tee ci-logs/1-tests.log
 
       - name: Virtual camera tests
         run: cargo test --release --manifest-path windows/vcam/Cargo.toml 2>&1 | tee ci-logs/2-vcam-tests.log

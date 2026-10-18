@@ -75,7 +75,16 @@ pub fn disk_space(path: &Path) -> Option<(u64, u64)> {
         let unit = st.f_frsize as u64;
         Some((st.f_bavail as u64 * unit, st.f_blocks as u64 * unit))
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use windows::core::HSTRING;
+        use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+        let (mut free, mut total) = (0u64, 0u64);
+        // SAFETY: plain call with valid out-pointers.
+        unsafe { GetDiskFreeSpaceExW(&HSTRING::from(p.as_os_str()), Some(&raw mut free), Some(&raw mut total), None) }.ok()?;
+        Some((free, total))
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         None
     }

@@ -105,10 +105,39 @@ fn esc(s: &str) -> String {
 /// `file://` URL with everything but safe characters percent-encoded.
 fn file_url(path: &Path, host: &str) -> String {
     let abs = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    file_url_of(&abs.to_string_lossy(), cfg!(windows), host)
+}
+
+/// The URL of an absolute path, written the Windows way (`C:\Videos\a.mp4`
+/// → `file:///C:/Videos/a.mp4`; `\\server\share\a.mp4` →
+/// `file://server/share/a.mp4`) or the Unix way.
+fn file_url_of(path: &str, windows: bool, host: &str) -> String {
+    let mut host = host.to_string();
+    let mut path = path.to_string();
+    if windows {
+        path = path.replace('\\', "/");
+        if let Some(rest) = path.strip_prefix("//?/UNC/") {
+            path = format!("//{rest}");
+        } else if let Some(rest) = path.strip_prefix("//?/") {
+            path = rest.to_string();
+        }
+        if let Some(unc) = path.strip_prefix("//") {
+            // A network share: the server is the URL's host.
+            let (server, rest) = unc.split_once('/').unwrap_or((unc, ""));
+            host = server.to_string();
+            path = format!("/{rest}");
+        } else if !path.starts_with('/') {
+            path.insert(0, '/');
+        }
+    }
     let mut out = format!("file://{host}");
-    for b in abs.to_string_lossy().as_bytes() {
+    let bytes = path.as_bytes();
+    // A drive letter's colon stays as it is (`/C:/`).
+    let drive = windows && bytes.len() >= 3 && bytes[0] == b'/' && bytes[1].is_ascii_alphabetic() && bytes[2] == b':';
+    for (i, b) in bytes.iter().enumerate() {
         match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => out.push(*b as char),
+            b':' if drive && i == 2 => out.push(':'),
             _ => {
                 let _ = write!(out, "%{b:02X}");
             }
@@ -442,7 +471,8 @@ mod tests {
     fn fcpxml_is_well_formed_and_complete() {
         let x = fcpxml(&sample());
         assert!(x.contains("<multicam format=\"f1\" tcStart=\"37230s\""), "{x}");
-        assert!(x.contains("src=\"file:///tmp/Take%201/Wide.mp4\""));
+        // (On Windows "/tmp" is on the current drive: file:///D:/tmp/….)
+        assert!(x.contains("src=\"file:///") && x.contains("/tmp/Take%201/Wide.mp4\""), "{x}");
         assert!(x.contains("name=\"Take &amp; Co Multicam\""));
         // Host is 25 fps: its own format and timecode start.
         assert!(x.contains("start=\"37230s\" duration=\"10s\" hasVideo=\"1\" format=\"f2\""), "{x}");
@@ -455,11 +485,23 @@ mod tests {
     #[test]
     fn premiere_xml_is_well_formed() {
         let x = premiere_xml(&sample());
-        assert!(x.contains("<pathurl>file://localhost/tmp/Take%201/Host.mp4</pathurl>"));
+        assert!(x.contains("<pathurl>file://localhost/") && x.contains("/tmp/Take%201/Host.mp4</pathurl>"), "{x}");
         // Host at 25 fps: frames 180..300 of the sequence are 150..250 in the file.
         assert!(x.contains("<start>180</start><end>300</end><in>150</in><out>250</out>"), "{x}");
         assert_eq!(x.matches("<file id=\"file-1\">").count(), 1, "each file described once");
         xml_balanced(&x);
+    }
+
+    #[test]
+    fn file_urls_on_each_system() {
+        assert_eq!(file_url_of("/Users/me/Movies/Take 1/Wide.mp4", false, ""), "file:///Users/me/Movies/Take%201/Wide.mp4");
+        assert_eq!(file_url_of("/a/b:c.mp4", false, "localhost"), "file://localhost/a/b%3Ac.mp4");
+        assert_eq!(file_url_of(r"C:\Users\Me\Videos\Cutaway\Take 1\Wide.mp4", true, ""), "file:///C:/Users/Me/Videos/Cutaway/Take%201/Wide.mp4");
+        assert_eq!(file_url_of(r"D:\Show\Host.mp4", true, "localhost"), "file://localhost/D:/Show/Host.mp4");
+        assert_eq!(file_url_of(r"\\?\C:\Long\Path.mp4", true, ""), "file:///C:/Long/Path.mp4");
+        assert_eq!(file_url_of(r"\\nas\shows\Take 2\Program.mp4", true, "localhost"), "file://nas/shows/Take%202/Program.mp4");
+        assert_eq!(file_url_of(r"\\?\UNC\nas\shows\a.mp4", true, ""), "file://nas/shows/a.mp4");
+        assert_eq!(file_url_of(r"C:\Takes\10:30.mp4", true, ""), "file:///C:/Takes/10%3A30.mp4");
     }
 
     #[test]

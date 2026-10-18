@@ -14,16 +14,17 @@ import sys
 
 MAX_CHARS = 6000
 MAX_NOTES = 9
+ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
 def escape(text: str) -> str:
     return text.replace("%", "%25").replace("\r", "").replace("\n", "%0A")
 
 
-def note(title: str, body: str) -> None:
+def note(title: str, body: str, keep_end: bool = False) -> None:
     body = body.strip()
     if len(body) > MAX_CHARS:
-        body = body[:MAX_CHARS] + "\n…"
+        body = ("…\n" + body[-MAX_CHARS:]) if keep_end else (body[:MAX_CHARS] + "\n…")
     title = escape(title).replace(",", "%2C").replace(":", "%3A")
     print(f"::error title={title}::{escape(body)}")
 
@@ -41,7 +42,7 @@ def problems(lines: list[str]) -> list[tuple[str, str]]:
             found.append(("Build error", "\n".join(lines[i:j])))
             i = j
             continue
-        # A failed test's captured output.
+        # A failed test's captured output (tests run with output captured).
         m = re.match(r"^---- (.+) stdout ----$", line)
         if m:
             j = i + 1
@@ -50,11 +51,28 @@ def problems(lines: list[str]) -> list[tuple[str, str]]:
             found.append((f"Test failed: {m.group(1)}", "\n".join(lines[i + 1 : j])))
             i = j
             continue
-        # A panic outside a test (a test binary crashing, or a build script).
-        if re.match(r"^thread '.*' panicked at", line) and not any(t.startswith("Test failed") for t, _ in found):
-            found.append(("Panic", "\n".join(lines[i : i + 25])))
+        # A panic printed as it happened (tests run with --nocapture).
+        m = re.match(r"^thread '(.*?)'.* panicked at", line)
+        if m:
+            j = i + 1
+            while j < len(lines) and j < i + 30 and not lines[j].startswith("test ") and not lines[j].startswith("note: run with"):
+                j += 1
+            found.append((f"Panic in {m.group(1)}", "\n".join(lines[i:j])))
+            i = j
+            continue
         i += 1
     return found
+
+
+def crashed_in(lines: list[str]) -> str | None:
+    """With --test-threads=1, the test running when the process died."""
+    if any(l.startswith("test result:") for l in lines):
+        return None
+    for l in reversed(lines):
+        m = re.match(r"^test (\S+) \.\.\. ?(\S*)", l)
+        if m:
+            return None if m.group(2) in ("ok", "FAILED", "ignored") else m.group(1)
+    return None
 
 
 def main() -> None:
@@ -64,17 +82,22 @@ def main() -> None:
         note("No log", f"nothing in {folder}")
         return
     log = logs[-1]
-    lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
+    text = ANSI.sub("", log.read_text(encoding="utf-8", errors="replace"))
+    lines = text.splitlines()
     found = problems(lines)
-    summary = [l for l in lines if l.startswith("test result: FAILED") or l.startswith("error: test failed")]
-    if summary:
-        found.append(("Test summary", "\n".join(summary)))
-    if not found:
-        found = [(f"{log.stem} failed (end of its output)", "\n".join(lines[-80:]))]
-    for title, body in found[:MAX_NOTES]:
+    summary = [l for l in lines if l.startswith("test result:") or "process didn't exit successfully" in l or l.startswith("error: test failed")]
+    failed = [l.strip() for l in lines if l.endswith("... FAILED")]
+    if failed or summary:
+        found.append(("Summary", "\n".join(failed + summary)))
+    crash = crashed_in(lines)
+    if crash:
+        found.insert(0, (f"Crashed while running {crash}", "\n".join(lines[-40:])))
+    for title, body in found[: MAX_NOTES - 1]:
         note(f"{log.stem}: {title}", body)
-    if len(found) > MAX_NOTES:
-        note(f"{log.stem}: more", f"{len(found) - MAX_NOTES} more problems in the full log")
+    if len(found) > MAX_NOTES - 1:
+        note(f"{log.stem}: more", f"{len(found) - MAX_NOTES + 1} more problems in the full log")
+    # The end of the output, always.
+    note(f"{log.stem}: end of the output", "\n".join(lines[-120:]), keep_end=True)
 
 
 if __name__ == "__main__":
