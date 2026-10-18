@@ -35,6 +35,7 @@ dials and the Stream Deck app's virtual decks).
 | Talkback | your mic in the presenters' ears | while held (or press on, press off) |
 | Clip | save the last few seconds as a clip | while recording; the length is Cutaway's setting or the key's own |
 | Timer | start/pause, reset, start, pause or stop a countdown or stopwatch | shows its time |
+| Guest | a remote guest spot: show them full screen or in preview | green with their name when they're on; the border shows the tally |
 | Rundown | next segment, previous, or stop | the next key shows this segment's time left (red when over) and what's next |
 | Command | any Cutaway command | e.g. `preview:2`, `graphic:Logo:on`, `gain:Mic:-6` |
 

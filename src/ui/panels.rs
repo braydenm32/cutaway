@@ -143,6 +143,71 @@ impl App {
         ui.separator();
     }
 
+    /// Remote guests: who's on, and their links.
+    pub(super) fn guests_panel(&mut self, ui: &mut egui::Ui) {
+        let hub = crate::engine::guests::hub();
+        let guests = hub.guests();
+        if guests.is_empty() || !self.cfg.guests.enabled {
+            return;
+        }
+        ui.add_space(4.0);
+        self.section_heading(ui, "GUESTS", Section::Guests);
+        let reach = hub.reach();
+        match &reach {
+            crate::net::tunnel::TunnelState::Up(_) => {}
+            crate::net::tunnel::TunnelState::Starting(s) => {
+                ui.label(RichText::new(s).color(TEXT_DIM).size(12.0));
+                ui.ctx().request_repaint_after(Duration::from_millis(500));
+            }
+            crate::net::tunnel::TunnelState::Failed(e) => {
+                ui.label(RichText::new(format!("⚠ {e}")).color(AMBER).size(12.0));
+            }
+            crate::net::tunnel::TunnelState::Off => {}
+        }
+        let mut kick = None;
+        let mut copied = None;
+        for g in &guests {
+            ui.horizontal(|ui| {
+                let (dot, color) = if g.connected { ("●", GREEN) } else if g.connecting { ("●", AMBER) } else { ("○", TEXT_DIM) };
+                ui.label(RichText::new(dot).color(color));
+                ui.label(RichText::new(&g.source).strong());
+                let detail = if g.connected {
+                    let t = g.since.map(|s| crate::engine::timers::fmt_span(s.elapsed(), false)).unwrap_or_default();
+                    format!("{} {t}", if g.guest_name.is_empty() { "on".to_string() } else { g.guest_name.clone() })
+                } else if g.connecting {
+                    "joining…".into()
+                } else {
+                    "waiting".into()
+                };
+                ui.add(egui::Label::new(RichText::new(detail).color(TEXT_DIM).size(12.0)).truncate());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if g.connected || g.connecting {
+                        if ui.small_button("✕").on_hover_text("Disconnect them").clicked() {
+                            kick = Some(g.id.clone());
+                        }
+                    }
+                    if let Some(link) = hub.link(&g.id) {
+                        if ui.small_button("Copy link").on_hover_text(&link).clicked() {
+                            ui.ctx().copy_text(link);
+                            copied = Some(g.source.clone());
+                        }
+                    }
+                });
+            });
+        }
+        if guests.iter().any(|g| g.connected) {
+            ui.ctx().request_repaint_after(Duration::from_secs(1));
+        }
+        if let Some(id) = kick {
+            hub.kick(&id);
+        }
+        if let Some(name) = copied {
+            self.toast(format!("Copied {name}'s link: send it to them"), false);
+        }
+        ui.add_space(4.0);
+        ui.separator();
+    }
+
     /// Sound pads, Syrinscape buttons and the talkback button.
     pub(super) fn sound_panel(&mut self, ui: &mut egui::Ui) {
         let Some(engine) = &self.engine else { return };

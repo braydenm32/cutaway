@@ -30,11 +30,13 @@ pub mod export;
 pub mod feed;
 pub mod framing;
 pub mod graphics;
+pub mod guests;
 pub mod health;
 pub mod inputs;
 pub mod lipsync;
 pub mod ndi;
 pub mod netsrc;
+pub mod opus;
 pub mod pads;
 pub mod player;
 pub mod podcast;
@@ -521,6 +523,15 @@ impl Engine {
             };
             threads.push(std::thread::Builder::new().name("compositor".into()).spawn(move || ctx.run())?);
         }
+
+        // ---- remote guests hear the mix and see the program --------------------------
+        guests::hub().attach_engine(guests::EngineLink {
+            mix_taps: mix_taps.clone(),
+            video_taps: video_taps.clone(),
+            inputs: cfg.audio.iter().enumerate().map(|(i, a)| (a.device.clone(), i)).collect(),
+            status: status.clone(),
+            waker: waker.clone(),
+        });
 
         // ---- watchdog: reconnects devices, keeps health figures current -----------
         let shared_cfg = Arc::new(Mutex::new(cfg.clone()));
@@ -1126,6 +1137,7 @@ impl Engine {
             self.stop_recording();
         }
         self.wait_finalized();
+        guests::hub().detach_engine();
         self.monitor.lock().unwrap().take();
         self.outputs.lock().unwrap().clear();
         if let Some((_, r)) = self.vcam.lock().unwrap().take() {

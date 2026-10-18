@@ -490,6 +490,12 @@ function press(ctx) {
     case "rundown":
       run(ctx, `rundown:${s.button || "next"}`);
       break;
+    case "guest": {
+      const g = (st && st.guests || [])[indexIn(st && st.guests, s.guest)];
+      if (!g || !g.source) sdSend({ event: "showAlert", context: ctx });
+      else run(ctx, `${(s.press || "source") === "preview" ? "preview" : "source"}:${g.source}`);
+      break;
+    }
     default:
       break;
   }
@@ -622,6 +628,7 @@ function offline(k) {
     clip: "Clip",
     timer: "Timer",
     rundown: "Rundown",
+    guest: "Guest",
   };
   return svg(label(names[k.kind] || "Cutaway", 66, 22, C.dim) + label("not connected", 96, 15, C.amber, 400));
 }
@@ -768,6 +775,16 @@ function draw(k) {
       const words = { previous: "◀ BACK", stop: "■ STOP" };
       return { image: svg(label(words[btn] || btn, 72, 22, r.number ? C.text : C.dim) + label(r.number ? `${r.number}/${r.count}` : "", 104, 15, C.dim, 400)) };
     }
+    case "guest": {
+      const g = (st.guests || [])[indexIn(st.guests, s.guest)];
+      if (!g) return { image: svg(label("Guest", 66, 22, C.dim) + label("no guest spot", 96, 14, C.amber, 400)) };
+      const src = st.sources[g.source - 1];
+      const tally = src ? src.tally : "off";
+      const border = tally === "program" ? C.red : tally === "preview" ? C.green : null;
+      const status = g.connected ? fit(g.guest_name || "on", 12) : g.connecting ? "joining…" : "waiting";
+      const dot = `<circle cx="72" cy="48" r="14" fill="${g.connected ? C.green : g.connecting ? C.amber : C.raised}"/>`;
+      return { image: svg(dot + label(fit(g.name, 11), 92, 19) + label(status, 120, 15, g.connected ? C.text : C.dim, 400), { border }), tally };
+    }
     default:
       return { image: svg(label("Cutaway", 80, 20, C.dim)) };
   }
@@ -892,6 +909,7 @@ function sendLists(ctx, action) {
       pads: st ? (st.pads || []).map((x) => x.name) : [],
       syrinscape: st ? (st.syrinscape || []).map((x) => x.name) : [],
       clocks: st ? (st.clocks || []).filter((x) => x.timer).map((x) => x.name) : [],
+      guests: st ? (st.guests || []).map((x) => x.name) : [],
     },
   });
 }

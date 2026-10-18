@@ -106,6 +106,14 @@
       <option value="next">Next segment (shows time left)</option><option value="previous">Previous segment</option><option value="stop">Stop the rundown</option>
     </select></div></div>
   </div>
+  <div data-for="guest">
+    <div class="row"><label for="gguest">Guest spot</label><div class="field"><select id="gguest" data-setting="guest" data-list="guests"></select></div></div>
+    <div class="row"><label for="gpress">When pressed</label><div class="field"><select id="gpress" data-setting="press">
+      <option value="source">Show them full screen</option>
+      <option value="preview">Put them in preview</option>
+    </select></div></div>
+    <div class="hint">Green when the guest is on, with the name they gave; the border shows the tally.</div>
+  </div>
   <div data-for="command">
     <div class="row"><label for="command">Command</label><div class="field"><input type="text" id="command" data-setting="command" placeholder="e.g. preview:2"></div></div>
     <div class="row"><label for="clabel">Label</label><div class="field"><input type="text" id="clabel" data-setting="label" placeholder="shown on the key"></div></div>

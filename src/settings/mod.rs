@@ -5,6 +5,7 @@
 mod captions;
 mod control;
 mod graphics;
+mod guests;
 mod mixing;
 mod outputs;
 mod rundown;
@@ -34,6 +35,7 @@ pub enum Section {
     Switching,
     Graphics,
     Rundown,
+    Guests,
     Captions,
     Recording,
     Streaming,
@@ -44,7 +46,7 @@ pub enum Section {
 }
 
 impl Section {
-    const ALL: [Section; 17] = [
+    const ALL: [Section; 18] = [
         Section::General,
         Section::Sources,
         Section::Audio,
@@ -55,6 +57,7 @@ impl Section {
         Section::Switching,
         Section::Graphics,
         Section::Rundown,
+        Section::Guests,
         Section::Captions,
         Section::Recording,
         Section::Streaming,
@@ -80,6 +83,7 @@ impl Section {
             Section::Switching => "Switching",
             Section::Graphics => "Graphics",
             Section::Rundown => "Rundown",
+            Section::Guests => "Remote guests",
             Section::Captions => "Captions",
             Section::Recording => "Recording",
             Section::Streaming => "Streaming",
@@ -124,6 +128,10 @@ pub struct SettingsContext {
     pub input_levels: Vec<Vec<f32>>,
     /// The stinger video as loaded.
     pub stinger: Option<crate::engine::stinger::StingerInfo>,
+    /// Remote guests: how they reach Cutaway, the links' start, who's on.
+    pub guest_reach: crate::net::tunnel::TunnelState,
+    pub guest_base: Option<String>,
+    pub guest_status: Vec<crate::engine::guests::GuestInfo>,
 }
 
 type EncoderLists = (Vec<String>, Vec<String>);
@@ -304,6 +312,7 @@ impl SettingsUi {
                                     Section::Switching => self.switching(ui, info),
                                     Section::Graphics => self.graphics(ui),
                                     Section::Rundown => self.rundown(ui),
+                                    Section::Guests => self.guests(ui, info),
                                     Section::Captions => self.captions(ui, info),
                                     Section::Recording => self.recording(ui),
                                     Section::Streaming => self.streaming(ui),
@@ -424,6 +433,7 @@ impl SettingsUi {
             Section::Pads => a.pads != b.pads,
             Section::Syrinscape => a.syrinscape != b.syrinscape,
             Section::Rundown => a.rundown != b.rundown,
+            Section::Guests => a.guests != b.guests,
             Section::Program => a.program != b.program || a.style != b.style,
             Section::Switching => a.transition != b.transition || a.auto_switch != b.auto_switch,
             Section::Graphics => a.graphics != b.graphics,

@@ -233,6 +233,10 @@ pub fn start_video(
     if let Some(name) = spec.strip_prefix("ndi:").or_else(|| spec.strip_prefix("NDI:")) {
         return super::ndi::start(name.trim(), cfg, slot, hub.clone(), net.clone());
     }
+    if cfg.guest_id().is_some() {
+        let r = super::guests::start_source(cfg, slot, hub.clone())?;
+        return Ok((r, "remote guest".into()));
+    }
     let sink: platform::FrameSink = Arc::new(move |f| slot.push(f));
     if lower == "screen" {
         let r = platform::open_screen(cfg.width, cfg.height, cfg.fps, sink)?;

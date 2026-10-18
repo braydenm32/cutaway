@@ -4,7 +4,7 @@
   "Name": "Cutaway",
   "Version": "0.6.0.0",
   "Author": "Cutaway",
-  "Description": "Run Cutaway from your Stream Deck: scenes and sources with live pictures and tally colours, take and cut, transitions, record, go live, markers, graphics, audio inputs (with Stream Deck+ dials), auto-switching, captions, media players, sound pads, Syrinscape, talkback, instant clips, timers, the rundown and any Cutaway command.",
+  "Description": "Run Cutaway from your Stream Deck: scenes and sources with live pictures and tally colours, take and cut, transitions, record, go live, markers, graphics, audio inputs (with Stream Deck+ dials), auto-switching, captions, media players, sound pads, Syrinscape, talkback, instant clips, timers, the rundown, remote guests and any Cutaway command.",
   "Category": "Cutaway",
   "CategoryIcon": "imgs/plugin/category",
   "Icon": "imgs/plugin/marketplace",
@@ -288,6 +288,20 @@
       "States": [
         {
           "Image": "imgs/actions/rundown/key"
+        }
+      ]
+    },
+    {
+      "UUID": "app.cutaway.streamdeck.guest",
+      "Name": "Guest",
+      "Tooltip": "A remote guest: whether they're on, and a press shows them.",
+      "Icon": "imgs/actions/guest/icon",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/guest/key"
         }
       ]
     },

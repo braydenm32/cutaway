@@ -36,6 +36,8 @@ pub struct Config {
     pub syrinscape: SyrinscapeConfig,
     /// The show's running order.
     pub rundown: RundownConfig,
+    /// Guests joining from a web browser by link.
+    pub guests: GuestsConfig,
 }
 
 /// Syrinscape Online: moods and sounds started from Cutaway's buttons,
@@ -1335,6 +1337,59 @@ impl Graphic {
 
     pub fn clock(name: &str, clock: ClockKind, label: &str) -> Graphic {
         Graphic { name: name.into(), kind: GraphicKind::Clock, clock, title: label.into(), x: 0.80, y: 0.05, width: 0.15, ..Default::default() }
+    }
+}
+
+/// How guests reach Cutaway's guest page.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum GuestAccess {
+    /// A free Cloudflare quick tunnel: an https://….trycloudflare.com address,
+    /// nothing to set up.
+    #[default]
+    Tunnel,
+    /// Your own HTTPS address that forwards to the guest port.
+    Custom,
+}
+
+/// Guests join from their browser: no app, just a link. Each guest has a
+/// video source (device "guest:ID") and an audio input ("source:NAME").
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct GuestsConfig {
+    pub enabled: bool,
+    /// Port of the guests' web page (only guest pages are served on it).
+    pub port: u16,
+    pub access: GuestAccess,
+    /// With Custom access: the https:// address that reaches the port.
+    pub public_url: String,
+    /// Send the program picture back so guests can see the show.
+    pub return_video: bool,
+    /// A TURN server for guests behind strict firewalls ("" = none).
+    pub turn_url: String,
+    pub turn_username: String,
+    pub turn_password: String,
+}
+
+impl Default for GuestsConfig {
+    fn default() -> Self {
+        GuestsConfig {
+            enabled: false,
+            port: 8791,
+            access: GuestAccess::Tunnel,
+            public_url: String::new(),
+            return_video: true,
+            turn_url: String::new(),
+            turn_username: String::new(),
+            turn_password: String::new(),
+        }
+    }
+}
+
+impl SourceConfig {
+    /// A remote guest's link id, for a "guest:ID" source.
+    pub fn guest_id(&self) -> Option<&str> {
+        self.device.trim().strip_prefix("guest:").map(str::trim).filter(|s| !s.is_empty())
     }
 }
 

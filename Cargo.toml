@@ -47,6 +47,12 @@ epaint_default_fonts = "0.37"
 symphonia = { version = "0.6.1", features = ["mp3", "aac", "isomp4", "aiff", "alac", "caf"] }
 # HTTPS requests: Syrinscape, speech model and tunnel downloads.
 ureq = { version = "3", default-features = false, features = ["native-tls"] }
+# Remote guests: WebRTC from their browser (H.264 and Opus).
+webrtc = "0.21.1"
+rtc = "0.21.1"
+async-trait = "0.1"
+unsafe-libopus = "0.2"
+getrandom = "0.3"
 
 # Software encoders: used for development builds on Linux. macOS uses
 # VideoToolbox and AudioToolbox; Windows uses Media Foundation.

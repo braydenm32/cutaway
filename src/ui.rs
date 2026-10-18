@@ -226,6 +226,7 @@ impl App {
     /// Start or stop the remote server and MIDI to match the settings.
     fn apply_control_settings(&mut self) {
         self.syrinscape.set_token(&self.cfg.syrinscape.token);
+        crate::engine::guests::hub().apply(&self.cfg, self.waker.clone());
         let r = self.cfg.remote.clone();
         *self.remote_shared.pin.lock().unwrap() = r.pin.trim().to_string();
         let running_port = self.remote.as_ref().map(|s| s.port);
@@ -798,6 +799,21 @@ impl App {
             talkback: e.talkback(),
             talkback_available: e.mix.talkback_input().is_some(),
             clip_seconds: self.cfg.output.clip_seconds,
+            guests: if self.cfg.guests.enabled {
+                crate::engine::guests::hub()
+                    .guests()
+                    .into_iter()
+                    .map(|g| show::GuestState {
+                        source: e.sources.iter().position(|s| s.name == g.source).map(|i| i + 1).unwrap_or(0),
+                        name: g.source,
+                        guest_name: g.guest_name,
+                        connected: g.connected,
+                        connecting: g.connecting,
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            },
             clocks: e
                 .graphics
                 .list()
@@ -2984,6 +3000,9 @@ impl App {
             vcam_on,
             input_levels: levels,
             stinger: self.engine.as_ref().map(|e| e.stinger.info()),
+            guest_reach: crate::engine::guests::hub().reach(),
+            guest_base: crate::engine::guests::hub().base_url(),
+            guest_status: crate::engine::guests::hub().guests(),
         }
     }
 
@@ -3111,6 +3130,7 @@ impl eframe::App for App {
                 ui.add_space(4.0);
                 ui.separator();
                 self.rundown_panel(ui);
+                self.guests_panel(ui);
                 self.graphics_panel(ui);
                 self.sound_panel(ui);
             });

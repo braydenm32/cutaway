@@ -111,6 +111,10 @@ def glyph(d, kind, box, color, accent=None):
         for i, y in enumerate((4, 9, 14)):
             d.rounded_rectangle([p(2, y), p(4, y + 2)], radius=0.5 * u, fill=accent if i == 1 else color)
             d.rounded_rectangle([p(6, y), p(18, y + 2)], radius=0.5 * u, fill=accent if i == 1 else color)
+    elif kind == "guest":
+        d.ellipse([p(6.5, 2.5), p(13.5, 9.5)], fill=color)
+        d.rounded_rectangle([p(4, 11), p(16, 18)], radius=3 * u, fill=color)
+        d.ellipse([p(14.5, 1.5), p(18.5, 5.5)], fill=accent)
     elif kind == "logo":
         # A frame with a diagonal cut through it.
         d.rounded_rectangle([p(2, 4), p(18, 16)], radius=2 * u, outline=color, width=lw)
@@ -172,6 +176,7 @@ ACTIONS = {
     "clip": "Clip",
     "timer": "Timer",
     "rundown": "Rundown",
+    "guest": "Guest",
     "command": "Command",
 }
 

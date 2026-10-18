@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0e1014">
+<meta name="robots" content="noindex">
+<title>Join the show</title>
+<style>
+  :root { --bg:#0e1014; --panel:#16191f; --raised:#22262e; --line:#343944; --text:#e8eaf0; --dim:#8c93a0; --red:#e83440; --green:#3ac470; --amber:#f5a623; --accent:#5aa0ff; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; background:var(--bg); color:var(--text); font:16px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  main { max-width:960px; margin:0 auto; padding:20px 16px 40px; }
+  h1 { font-size:22px; margin:6px 0 2px; }
+  .sub { color:var(--dim); margin-bottom:16px; }
+  .stage { position:relative; background:#000; border-radius:12px; overflow:hidden; aspect-ratio:16/9; }
+  .stage video { width:100%; height:100%; object-fit:cover; display:block; }
+  #self { position:absolute; right:12px; bottom:12px; width:24%; aspect-ratio:16/9; border-radius:8px; border:2px solid #fff6; object-fit:cover; background:#111; transform:scaleX(-1); }
+  #self.big { position:static; width:100%; border:none; border-radius:0; }
+  .badge { position:absolute; left:12px; top:12px; padding:4px 10px; border-radius:6px; font-size:13px; font-weight:700; background:#000a; }
+  .badge.live { background:var(--red); }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:14px; }
+  label { color:var(--dim); font-size:14px; display:block; margin:12px 0 4px; }
+  input, select { width:100%; font:inherit; color:var(--text); background:var(--raised); border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+  button { font:inherit; color:var(--text); background:var(--raised); border:1px solid var(--line); border-radius:24px; padding:11px 20px; cursor:pointer; min-height:46px; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#071225; font-weight:700; }
+  button.off { background:var(--red); border-color:var(--red); }
+  button:disabled { opacity:.5; }
+  .meter { height:8px; border-radius:4px; background:#08090c; overflow:hidden; margin-top:8px; }
+  .meter i { display:block; height:100%; width:0; background:var(--green); transition:width .08s; }
+  .note { color:var(--dim); font-size:14px; margin-top:12px; }
+  .warn { color:var(--amber); }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:0 14px; }
+  @media (max-width:640px) { .grid { grid-template-columns:1fr; } }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title">Join the show</h1>
+  <div class="sub" id="subtitle">Check your camera and microphone, then join.</div>
+
+  <section id="setup">
+    <div class="stage"><video id="preview" autoplay playsinline muted></video><div class="badge" id="pbadge">Your camera</div></div>
+    <div class="meter"><i id="level"></i></div>
+    <div class="grid">
+      <div><label for="name">Your name</label><input id="name" maxlength="40" autocomplete="name" placeholder="How you'd like to be introduced"></div>
+      <div><label for="cam">Camera</label><select id="cam"></select></div>
+      <div><label for="mic">Microphone</label><select id="mic"></select></div>
+      <div><label for="spk">Speaker</label><select id="spk"></select></div>
+    </div>
+    <div class="row"><button class="primary" id="join" disabled>Join</button><span id="status" class="note"></span></div>
+    <div class="note">Use headphones if you can, so the show's sound doesn't echo back. Keep this page open while you're on.</div>
+  </section>
+
+  <section id="onair" hidden>
+    <div class="stage"><video id="program" autoplay playsinline></video><video id="self" autoplay playsinline muted></video><div class="badge" id="badge">Connecting…</div></div>
+    <div class="meter"><i id="level2"></i></div>
+    <div class="row">
+      <button id="mute">Mute</button>
+      <button id="camoff">Camera off</button>
+      <button id="leave">Leave</button>
+      <span id="status2" class="note"></span>
+    </div>
+    <audio id="ret" autoplay></audio>
+  </section>
+</main>
+<script>
+const id = location.pathname.split('/').filter(Boolean)[1];
+const base = '/g/' + id;
+let info = { iceServers: [], show: '', slot: '', returnVideo: true };
+let stream = null, pc = null, meterStop = null;
+const $ = (x) => document.getElementById(x);
+const say = (t, warn, where) => { const s = $(where || 'status'); s.textContent = t; s.className = 'note' + (warn ? ' warn' : ''); };
+
+async function load() {
+  try {
+    const r = await fetch(base + '/info');
+    if (!r.ok) throw new Error(await r.text());
+    info = await r.json();
+  } catch (e) {
+    $('title').textContent = 'This link isn\'t active';
+    $('subtitle').textContent = 'Ask the host for a new link (the show may not have started yet).';
+    $('setup').hidden = true;
+    return;
+  }
+  if (info.show) $('title').textContent = 'Join ' + info.show;
+  try { $('name').value = localStorage.getItem('cutaway_guest_name') || ''; } catch (e) {}
+  await start();
+}
+
+async function start() {
+  if (!navigator.mediaDevices || !window.RTCPeerConnection) {
+    say('This browser can\'t send video. Try Chrome, Edge, Safari or Firefox.', true);
+    return;
+  }
+  try {
+    await openMedia();
+  } catch (e) {
+    say('Allow the camera and microphone to join (' + e.message + ').', true);
+    return;
+  }
+  await listDevices();
+  $('join').disabled = false;
+  // Cutaway takes H.264 video.
+  try {
+    const ok = RTCRtpSender.getCapabilities('video').codecs.some(c => c.mimeType.toLowerCase() === 'video/h264');
+    if (!ok) say('This browser can\'t send the kind of video the show uses, so you\'d be heard but not seen. Chrome, Edge or Safari work best.', true);
+  } catch (e) {}
+}
+
+async function openMedia() {
+  const cam = $('cam').value, mic = $('mic').value;
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = await navigator.mediaDevices.getUserMedia({
+    video: { deviceId: cam ? { exact: cam } : undefined, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+    audio: { deviceId: mic ? { exact: mic } : undefined, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+  });
+  $('preview').srcObject = stream;
+  $('self').srcObject = stream;
+  meter(stream);
+  if (pc) {
+    // Swap devices mid-show.
+    for (const s of pc.getSenders()) {
+      const t = stream.getTracks().find(t => s.track && t.kind === s.track.kind);
+      if (t) await s.replaceTrack(t);
+    }
+  }
+}
+
+async function listDevices() {
+  const devs = await navigator.mediaDevices.enumerateDevices();
+  const fill = (sel, kind, current) => {
+    const keep = sel.value;
+    sel.innerHTML = '';
+    devs.filter(d => d.kind === kind).forEach((d, i) => {
+      const o = document.createElement('option');
+      o.value = d.deviceId; o.textContent = d.label || (kind + ' ' + (i + 1));
+      sel.appendChild(o);
+    });
+    if (current) sel.value = current; else if (keep) sel.value = keep;
+  };
+  const vt = stream && stream.getVideoTracks()[0], at = stream && stream.getAudioTracks()[0];
+  fill($('cam'), 'videoinput', vt && vt.getSettings().deviceId);
+  fill($('mic'), 'audioinput', at && at.getSettings().deviceId);
+  fill($('spk'), 'audiooutput');
+  $('spk').parentElement.hidden = !('setSinkId' in HTMLMediaElement.prototype) || !$('spk').options.length;
+}
+
+function meter(s) {
+  if (meterStop) meterStop();
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const src = ctx.createMediaStreamSource(s);
+    const an = ctx.createAnalyser(); an.fftSize = 512; src.connect(an);
+    const buf = new Float32Array(an.fftSize);
+    let on = true;
+    const tick = () => {
+      if (!on) return;
+      an.getFloatTimeDomainData(buf);
+      let peak = 0; for (const v of buf) peak = Math.max(peak, Math.abs(v));
+      const db = 20 * Math.log10(peak + 1e-6);
+      const w = Math.max(0, Math.min(100, (db + 60) / 60 * 100)) + '%';
+      $('level').style.width = w; $('level2').style.width = w;
+      requestAnimationFrame(tick);
+    };
+    tick();
+    meterStop = () => { on = false; ctx.close(); };
+  } catch (e) {}
+}
+
+$('cam').onchange = () => openMedia().catch(e => say(e.message, true));
+$('mic').onchange = () => openMedia().catch(e => say(e.message, true));
+$('spk').onchange = () => { if ($('ret').setSinkId) $('ret').setSinkId($('spk').value).catch(() => {}); };
+
+async function join() {
+  $('join').disabled = true;
+  const name = $('name').value.trim();
+  try { localStorage.setItem('cutaway_guest_name', name); } catch (e) {}
+  say('Connecting…');
+  pc = new RTCPeerConnection({ iceServers: info.iceServers });
+  const vt = stream.getVideoTracks()[0], at = stream.getAudioTracks()[0];
+  const audio = pc.addTransceiver(at, { direction: 'sendrecv', streams: [stream] });
+  const video = pc.addTransceiver(vt, { direction: info.returnVideo ? 'sendrecv' : 'sendonly', streams: [stream], sendEncodings: [{ maxBitrate: 2500000, maxFramerate: 30 }] });
+  // H.264 (what Cutaway decodes in hardware), simplest profile first.
+  try {
+    const caps = RTCRtpReceiver.getCapabilities('video').codecs;
+    const h264 = caps.filter(c => c.mimeType.toLowerCase() === 'video/h264' && /packetization-mode=1/.test(c.sdpFmtpLine || ''));
+    h264.sort((a, b) => (/42e01f/.test(b.sdpFmtpLine) ? 1 : 0) - (/42e01f/.test(a.sdpFmtpLine) ? 1 : 0));
+    if (h264.length && video.setCodecPreferences) video.setCodecPreferences(h264);
+  } catch (e) {}
+  pc.ontrack = (e) => {
+    if (e.track.kind === 'audio') {
+      $('ret').srcObject = new MediaStream([e.track]);
+      if ($('spk').value && $('ret').setSinkId) $('ret').setSinkId($('spk').value).catch(() => {});
+    } else {
+      $('program').srcObject = new MediaStream([e.track]);
+    }
+  };
+  pc.onconnectionstatechange = () => {
+    const s = pc.connectionState;
+    if (s === 'connected') { $('badge').textContent = 'ON THE SHOW'; $('badge').className = 'badge live'; say('', false, 'status2'); }
+    if (s === 'disconnected') say('Connection trouble… trying to recover.', true, 'status2');
+    if (s === 'failed') { $('badge').textContent = 'Disconnected'; $('badge').className = 'badge'; say('The connection failed. Reload the page to rejoin.', true, 'status2'); }
+  };
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  // All the ways to reach this browser, in one go.
+  await new Promise((done) => {
+    if (pc.iceGatheringState === 'complete') return done();
+    const t = setTimeout(done, 3000);
+    pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === 'complete') { clearTimeout(t); done(); } };
+  });
+  try {
+    const r = await fetch(base + '/offer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sdp: pc.localDescription.sdp, name }) });
+    const body = await r.json().catch(() => ({ error: 'no answer from the show' }));
+    if (!r.ok || !body.sdp) throw new Error(body.error || ('HTTP ' + r.status));
+    await pc.setRemoteDescription({ type: 'answer', sdp: body.sdp });
+  } catch (e) {
+    say('Couldn\'t join: ' + e.message, true);
+    pc.close(); pc = null; $('join').disabled = false;
+    return;
+  }
+  $('setup').hidden = true; $('onair').hidden = false;
+  $('self').classList.toggle('big', !info.returnVideo);
+  if (!info.returnVideo) $('program').hidden = true;
+}
+$('join').onclick = join;
+
+$('mute').onclick = () => {
+  const t = stream.getAudioTracks()[0]; t.enabled = !t.enabled;
+  $('mute').textContent = t.enabled ? 'Mute' : 'Unmute'; $('mute').className = t.enabled ? '' : 'off';
+};
+$('camoff').onclick = () => {
+  const t = stream.getVideoTracks()[0]; t.enabled = !t.enabled;
+  $('camoff').textContent = t.enabled ? 'Camera off' : 'Camera on'; $('camoff').className = t.enabled ? '' : 'off';
+};
+$('leave').onclick = () => {
+  fetch(base + '/leave', { method: 'POST' }).catch(() => {});
+  if (pc) pc.close(); pc = null;
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  $('onair').hidden = true; $('setup').hidden = true;
+  $('title').textContent = 'Thanks for joining!'; $('subtitle').textContent = 'You can close this page.';
+};
+window.addEventListener('pagehide', () => { if (pc) navigator.sendBeacon(base + '/leave'); });
+load();
+</script>
+</body>
+</html>

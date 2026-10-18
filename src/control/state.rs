@@ -43,6 +43,20 @@ pub struct ShowState {
     /// Clock graphics and what they show.
     pub clocks: Vec<ClockState>,
     pub rundown: Option<RundownState>,
+    /// Remote guest spots.
+    pub guests: Vec<GuestState>,
+}
+
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+pub struct GuestState {
+    /// The spot (its source's name).
+    pub name: String,
+    /// Its source number (from 1).
+    pub source: usize,
+    /// The name the guest gave.
+    pub guest_name: String,
+    pub connected: bool,
+    pub connecting: bool,
 }
 
 #[derive(Serialize, Clone, Debug, Default, PartialEq)]
