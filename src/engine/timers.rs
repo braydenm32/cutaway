@@ -21,6 +21,7 @@ impl Timer {
 /// The rundown's current segment, for its clock.
 #[derive(Clone, Debug)]
 pub struct SegmentClock {
+    #[allow(dead_code)]
     pub name: String,
     /// Zero: open-ended.
     pub planned: Duration,

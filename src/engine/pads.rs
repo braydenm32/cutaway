@@ -117,6 +117,7 @@ impl PadBank {
     }
 
     /// Wait until every sound has loaded (tests, headless runs).
+    #[cfg(test)]
     pub fn wait_loaded(&self, timeout: std::time::Duration) -> bool {
         let start = std::time::Instant::now();
         while start.elapsed() < timeout {

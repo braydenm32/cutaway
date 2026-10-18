@@ -7,8 +7,11 @@ mod control;
 mod graphics;
 mod mixing;
 mod outputs;
+mod rundown;
+mod sound;
 mod sources;
 mod switching;
+
 
 use crate::config::{AudioConfig, Codec, Config, Container, Service, SourceConfig, StreamDestination};
 use crate::devices::{self, DeviceInfo, Kind, Mode, TEST_PATTERN_NAMES};
@@ -25,9 +28,12 @@ pub enum Section {
     Sources,
     Audio,
     Mixing,
+    Pads,
+    Syrinscape,
     Program,
     Switching,
     Graphics,
+    Rundown,
     Captions,
     Recording,
     Streaming,
@@ -38,14 +44,17 @@ pub enum Section {
 }
 
 impl Section {
-    const ALL: [Section; 14] = [
+    const ALL: [Section; 17] = [
         Section::General,
         Section::Sources,
         Section::Audio,
         Section::Mixing,
+        Section::Pads,
+        Section::Syrinscape,
         Section::Program,
         Section::Switching,
         Section::Graphics,
+        Section::Rundown,
         Section::Captions,
         Section::Recording,
         Section::Streaming,
@@ -65,9 +74,12 @@ impl Section {
             Section::Sources => "Video sources",
             Section::Audio => "Audio inputs",
             Section::Mixing => "Mixing & headphones",
+            Section::Pads => "Sound pads",
+            Section::Syrinscape => "Syrinscape",
             Section::Program => "Program & look",
             Section::Switching => "Switching",
             Section::Graphics => "Graphics",
+            Section::Rundown => "Rundown",
             Section::Captions => "Captions",
             Section::Recording => "Recording",
             Section::Streaming => "Streaming",
@@ -110,6 +122,8 @@ pub struct SettingsContext {
     pub vcam_on: bool,
     /// Live level (dB) of each audio input's channels.
     pub input_levels: Vec<Vec<f32>>,
+    /// The stinger video as loaded.
+    pub stinger: Option<crate::engine::stinger::StingerInfo>,
 }
 
 type EncoderLists = (Vec<String>, Vec<String>);
@@ -143,6 +157,16 @@ pub struct SettingsUi {
     plugin_note: Option<String>,
     pending: Option<SettingsAction>,
     previews: std::collections::HashMap<String, (u64, egui::TextureHandle)>,
+    /// Syrinscape: a connection for testing and browsing, what was opened.
+    syrin: Option<crate::control::syrinscape::Syrinscape>,
+    syrin_tested: bool,
+    syrin_link: String,
+    syrin_soundset: Option<String>,
+    sel_segment: usize,
+    /// Apps that can be listened to (for "Sound from an app").
+    apps: Option<Vec<String>>,
+    /// Installing the Resolve script: what happened.
+    resolve_note: Option<(String, bool)>,
 }
 
 const RESOLUTIONS: &[(u32, u32, &str)] = &[
@@ -187,6 +211,13 @@ impl SettingsUi {
             plugin_note: None,
             pending: None,
             previews: Default::default(),
+            syrin: None,
+            syrin_tested: false,
+            syrin_link: String::new(),
+            syrin_soundset: None,
+            sel_segment: 0,
+            apps: None,
+            resolve_note: None,
         }
     }
 
@@ -242,16 +273,17 @@ impl SettingsUi {
                     ui.vertical(|ui| {
                         ui.set_width(170.0);
                         ui.set_min_height(body_h);
-                        for s in Section::ALL {
-                            let changed = self.section_dirty(s);
-                            let text = if changed { format!("{}  •", s.label()) } else { s.label().to_string() };
-                            let selected = self.section == s;
-                            let b = egui::Button::selectable(selected, RichText::new(text).size(14.0))
-                                .min_size(vec2(170.0, 32.0));
-                            if ui.add(b).clicked() {
-                                self.section = s;
+                        egui::ScrollArea::vertical().id_salt("sections").max_height(body_h).show(ui, |ui| {
+                            for s in Section::ALL {
+                                let changed = self.section_dirty(s);
+                                let text = if changed { format!("{}  •", s.label()) } else { s.label().to_string() };
+                                let selected = self.section == s;
+                                let b = egui::Button::selectable(selected, RichText::new(text).size(14.0)).min_size(vec2(170.0, 29.0));
+                                if ui.add(b).clicked() {
+                                    self.section = s;
+                                }
                             }
-                        }
+                        });
                     });
                     ui.separator();
                     // ---- content
@@ -266,9 +298,12 @@ impl SettingsUi {
                                     Section::Sources => self.sources(ui),
                                     Section::Audio => self.audio_inputs(ui),
                                     Section::Mixing => self.mixing(ui),
+                                    Section::Pads => self.pads(ui),
+                                    Section::Syrinscape => self.syrinscape(ui),
                                     Section::Program => self.program(ui),
                                     Section::Switching => self.switching(ui, info),
                                     Section::Graphics => self.graphics(ui),
+                                    Section::Rundown => self.rundown(ui),
                                     Section::Captions => self.captions(ui, info),
                                     Section::Recording => self.recording(ui),
                                     Section::Streaming => self.streaming(ui),
@@ -386,6 +421,9 @@ impl SettingsUi {
             Section::Sources => a.sources != b.sources,
             Section::Audio => a.audio != b.audio,
             Section::Mixing => a.mix != b.mix,
+            Section::Pads => a.pads != b.pads,
+            Section::Syrinscape => a.syrinscape != b.syrinscape,
+            Section::Rundown => a.rundown != b.rundown,
             Section::Program => a.program != b.program || a.style != b.style,
             Section::Switching => a.transition != b.transition || a.auto_switch != b.auto_switch,
             Section::Graphics => a.graphics != b.graphics,
@@ -528,10 +566,18 @@ impl SettingsUi {
                     ui.add_sized([240.0, 22.0], egui::TextEdit::singleline(&mut a.name));
                     ui.end_row();
                     label(ui, "Device");
-                    audio_device_combo(ui, &mut a.device, devices, &sound_sources);
+                    ui.vertical(|ui| {
+                        let opened = audio_device_combo(ui, &mut a.device, devices, &sound_sources, self.apps.as_deref());
+                        if opened && self.apps.is_none() {
+                            self.apps = Some(crate::platform::app_audio::list());
+                        }
+                        if a.device.starts_with("app:") {
+                            hint(ui, if cfg!(target_os = "macos") { "Needs Screen Recording permission (System Settings → Privacy & Security)." } else { "The app is found by name each time Cutaway starts." });
+                        }
+                    });
                     ui.end_row();
-                    let from_source = a.device.starts_with("source:");
-                    if from_source {
+                    let stereo_only = a.device.starts_with("source:") || a.is_pads() || a.device.starts_with("app:");
+                    if stereo_only {
                         a.channels = 2;
                     }
                     label(ui, "Channels to capture");
@@ -567,6 +613,9 @@ impl SettingsUi {
                         ui.checkbox(&mut a.to_recording, "the recording");
                         ui.checkbox(&mut a.to_stream, "the live stream");
                     });
+                    ui.end_row();
+                    label(ui, "Duck under voices");
+                    ui.checkbox(&mut a.duck, "turn down while other inputs talk (music, pads, ambience)");
                     ui.end_row();
                     label(ui, "Record to WAV");
                     ui.checkbox(&mut a.record, "");
@@ -790,6 +839,32 @@ impl SettingsUi {
             ui.end_row();
             label(ui, "Editor timelines");
             ui.checkbox(&mut o.export_timelines, "save the live edit for Final Cut Pro, DaVinci Resolve and Premiere Pro");
+            ui.end_row();
+            label(ui, "Audio sessions");
+            ui.checkbox(&mut o.daw_sessions, "save a REAPER session and a DAWproject (Fender Studio Pro, Bitwig, Cubase) with every WAV on its own track");
+            ui.end_row();
+            label(ui, "DaVinci Resolve");
+            ui.vertical(|ui| {
+                ui.checkbox(&mut o.resolve_project, "save what Cutaway's Resolve script needs to build a project from the take");
+                ui.horizontal(|ui| {
+                    if ui.button("Install the Resolve script").on_hover_text("Adds \"Cutaway - Build project from a take\" to Resolve's Workspace → Scripts menu").clicked() {
+                        self.resolve_note = Some(match crate::engine::sessions::install_resolve_script() {
+                            Ok(p) => (format!("Installed in {}. In Resolve: Workspace → Scripts → Cutaway - Build project from a take.", p.display()), false),
+                            Err(e) => (format!("Couldn't install it: {e:#}"), true),
+                        });
+                    }
+                });
+                if let Some((note, err)) = &self.resolve_note {
+                    ui.label(RichText::new(note).color(if *err { AMBER } else { GREEN }).size(12.0));
+                }
+            });
+            ui.end_row();
+            label(ui, "Instant clips");
+            ui.horizontal(|ui| {
+                ui.label("the Clip button saves the last");
+                ui.add(egui::DragValue::new(&mut o.clip_seconds).range(5..=600).suffix(" s"));
+                hint(ui, "to the take's Clips folder");
+            });
             ui.end_row();
             label(ui, "Proxy files");
             ui.horizontal(|ui| {
@@ -1196,7 +1271,9 @@ pub(super) fn short_device(device: &str) -> String {
         "screen" => "Screen capture".into(),
         "default" => "System default".into(),
         "media" => "Media player".into(),
+        "pads" => "Sound pads".into(),
         d if d.starts_with("source:") => format!("Sound from {}", d[7..].trim()),
+        d if d.starts_with("app:") => format!("Sound from {}", d[4..].trim()),
         d if d.starts_with("ndi:") => format!("NDI {}", d[4..].trim()),
         d if d.starts_with("frame:") => format!("Auto-framed from {}", d[6..].trim()),
         d if d.starts_with("srt-in:") => format!("SRT input :{}", &d[7..]),
@@ -1229,8 +1306,9 @@ pub(super) fn video_device_combo(ui: &mut egui::Ui, value: &mut String, devices:
     });
 }
 
-pub(super) fn audio_device_combo(ui: &mut egui::Ui, value: &mut String, devices: &[DeviceInfo], video_sources: &[String]) {
-    egui::ComboBox::from_id_salt("audio_device").selected_text(short_audio_device(value)).width(300.0).show_ui(ui, |ui| {
+/// Returns true while the list is open (so the app list can be fetched).
+pub(super) fn audio_device_combo(ui: &mut egui::Ui, value: &mut String, devices: &[DeviceInfo], video_sources: &[String], apps: Option<&[String]>) -> bool {
+    let r = egui::ComboBox::from_id_salt("audio_device").selected_text(short_audio_device(value)).width(300.0).height(420.0).show_ui(ui, |ui| {
         if devices.is_empty() {
             ui.label(RichText::new("No audio inputs found").color(TEXT_DIM));
         }
@@ -1240,13 +1318,32 @@ pub(super) fn audio_device_combo(ui: &mut egui::Ui, value: &mut String, devices:
         ui.separator();
         ui.selectable_value(value, "default".to_string(), "System default input");
         ui.selectable_value(value, "test".to_string(), "Test tone");
+        ui.selectable_value(value, "pads".to_string(), "Sound pads");
         if !video_sources.is_empty() {
             ui.separator();
             for v in video_sources {
                 ui.selectable_value(value, format!("source:{v}"), format!("Sound from {v}"));
             }
         }
+        if crate::platform::app_audio::available() {
+            ui.separator();
+            ui.label(RichText::new("Sound from an app").color(TEXT_DIM).size(12.0));
+            match apps {
+                None => {
+                    ui.spinner();
+                }
+                Some([]) => {
+                    ui.label(RichText::new("No apps found").color(TEXT_DIM));
+                }
+                Some(list) => {
+                    for app in list {
+                        ui.selectable_value(value, format!("app:{app}"), format!("  {app}"));
+                    }
+                }
+            }
+        }
     });
+    r.inner.is_some()
 }
 
 pub(super) fn mode_combo(ui: &mut egui::Ui, modes: &[Mode], src: &mut SourceConfig) {
@@ -1380,6 +1477,10 @@ fn shortcuts(ui: &mut egui::Ui) {
         ("A".into(), "Automatic switching on / off"),
         ("C".into(), "Live captions on screen / off"),
         ("M".into(), "Add a marker while recording"),
+        ("K".into(), "Save a clip of the last few seconds while recording"),
+        ("F1 – F12".into(), "Sound pads 1–12 (hold for \"while held\" pads)"),
+        ("B (hold)".into(), "Talkback: your mic in the presenters' ears while held"),
+        ("N".into(), "Next rundown segment (Shift+N goes back)"),
         ("Alt + 1 – 9".into(), "Show / hide graphic 1–9"),
         ("E".into(), "Edit the live layout"),
         (format!("{cmd}R"), "Start / stop recording"),

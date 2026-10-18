@@ -54,6 +54,15 @@ pub enum Target {
     Name(String),
 }
 
+impl std::fmt::Display for Target {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Target::Index(i) => write!(f, "{}", i + 1),
+            Target::Name(n) => write!(f, "{n}"),
+        }
+    }
+}
+
 impl Target {
     pub fn parse(s: &str) -> Target {
         match s.trim().parse::<usize>() {
@@ -268,6 +277,60 @@ impl Action {
     }
 }
 
+impl Action {
+    /// In words, for lists of cues.
+    pub fn describe(&self) -> String {
+        let t = |x: &Toggle, on: &str, off: &str, both: &str| match x {
+            Toggle::On => on.to_string(),
+            Toggle::Off => off.to_string(),
+            Toggle::Toggle => both.to_string(),
+        };
+        match self {
+            Action::Scene(x) => format!("Take scene {x}"),
+            Action::CutTo(x) => format!("Cut to scene {x}"),
+            Action::Preview(x) => format!("Preview scene {x}"),
+            Action::Take => "Take".into(),
+            Action::Cut => "Cut".into(),
+            Action::Transition(m) => format!("Transition: {}", m.label()),
+            Action::Record(x) => t(x, "Start recording", "Stop recording", "Record on/off"),
+            Action::Live(x) => t(x, "Go live", "End the stream", "Live on/off"),
+            Action::Marker(n) => n.as_ref().map(|n| format!("Marker \"{n}\"")).unwrap_or_else(|| "Add a marker".into()),
+            Action::Auto(x) => t(x, "Automatic switching on", "Automatic switching off", "Automatic switching on/off"),
+            Action::Graphic(g, x) => format!("{} {g}", t(x, "Show", "Hide", "Show/hide")),
+            Action::Audio(a, x) => format!("{} {a}", t(x, "Turn on", "Turn off", "Turn on/off")),
+            Action::Gain(a, db) => format!("{a} to {db:+.1} dB"),
+            Action::Media(s, c) => format!("{s}: {}", format!("{c:?}").to_lowercase()),
+            Action::Source(s) => format!("Source {s} full screen"),
+            Action::Captions(x) => t(x, "Captions on", "Captions off", "Captions on/off"),
+            Action::Pad(p, c) => match c {
+                PadCmd::Press => format!("Pad {p}"),
+                PadCmd::Play => format!("Play pad {p}"),
+                PadCmd::Stop => format!("Stop pad {p}"),
+                PadCmd::Release => format!("Release pad {p}"),
+            },
+            Action::PadsStop => "Stop every pad".into(),
+            Action::Talkback(x) => t(x, "Talkback on", "Talkback off", "Talkback on/off"),
+            Action::Syrinscape(c) => match c {
+                syrinscape::SyrinCmd::Button(b) => format!("Syrinscape {b}"),
+                syrinscape::SyrinCmd::StopButton(b) => format!("Syrinscape: stop {b}"),
+                syrinscape::SyrinCmd::Play(k, id) => format!("Syrinscape: play {k:?} {id}").to_lowercase(),
+                syrinscape::SyrinCmd::Stop(k, id) => format!("Syrinscape: stop {k:?} {id}").to_lowercase(),
+                syrinscape::SyrinCmd::StopAll => "Syrinscape: stop everything".into(),
+                syrinscape::SyrinCmd::Volume(v) => format!("Syrinscape volume {:.0}%", v * 100.0),
+            },
+            Action::Clip(s) => s.map(|s| format!("Save a {s} s clip")).unwrap_or_else(|| "Save a clip".into()),
+            Action::Timer(c, cmd) => format!("{c}: {}", format!("{cmd:?}").to_lowercase()),
+            Action::Rundown(c) => match c {
+                rundown::RundownCmd::Start => "Rundown: start".into(),
+                rundown::RundownCmd::Next => "Rundown: next".into(),
+                rundown::RundownCmd::Previous => "Rundown: previous".into(),
+                rundown::RundownCmd::Stop => "Rundown: stop".into(),
+                rundown::RundownCmd::Go(s) => format!("Rundown: go to {s}"),
+            },
+        }
+    }
+}
+
 /// A request from a controller, with somewhere to send the result.
 pub struct Request {
     pub action: Action,
@@ -382,6 +445,9 @@ mod tests {
         assert_eq!(Action::parse("rundown"), Ok(Action::Rundown(rundown::RundownCmd::Next)));
         assert_eq!(Action::parse("rundown:prev"), Ok(Action::Rundown(rundown::RundownCmd::Previous)));
         assert_eq!(Action::parse("rundown:3"), Ok(Action::Rundown(rundown::RundownCmd::Go(Target::Index(2)))));
+        assert_eq!(Action::parse("pad:Applause").unwrap().describe(), "Pad Applause");
+        assert_eq!(Action::parse("graphic:2:on").unwrap().describe(), "Show 2");
+        assert_eq!(Action::parse("timer:Back in:start").unwrap().describe(), "Back in: start");
         assert!(Action::parse("explode").is_err());
         assert_eq!(fader_db(0.0), -60.0);
         assert!((fader_db(100.0 / 127.0)).abs() < 1e-9);

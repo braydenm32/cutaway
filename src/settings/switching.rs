@@ -46,6 +46,57 @@ impl SettingsUi {
         });
         hint(ui, "Mix glides frames to their new places and cross-fades; wipe, push and dip change the whole picture. Without preview, clicking a scene takes it straight to air.");
 
+        ui.add_space(14.0);
+        subtitle(ui, "Stinger");
+        let has_pads = self.draft.audio.iter().any(|a| a.is_pads());
+        let st = &mut self.draft.transition.stinger;
+        egui::Grid::new("stinger").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            label(ui, "Video");
+            ui.horizontal(|ui| {
+                let shown = st.file.as_ref().and_then(|f| f.file_name()).map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| "none".into());
+                ui.label(shown);
+                if ui.button("Choose…").clicked() {
+                    if let Some(f) = rfd::FileDialog::new().add_filter("Video", &["mp4", "mov", "m4v"]).pick_file() {
+                        st.file = Some(f);
+                    }
+                }
+                if st.file.is_some() && ui.small_button("Clear").clicked() {
+                    st.file = None;
+                }
+            });
+            ui.end_row();
+            label(ui, "See-through parts");
+            egui::ComboBox::from_id_salt("matte").selected_text(st.matte.label()).width(240.0).show_ui(ui, |ui| {
+                for m in crate::config::Matte::ALL {
+                    ui.selectable_value(&mut st.matte, m, m.label());
+                }
+            });
+            ui.end_row();
+            label(ui, "Change scenes at");
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(&mut st.cut_ms).range(0..=10_000).speed(10).suffix(" ms"));
+                hint(ui, if st.cut_ms == 0 { "0 = halfway" } else { "from the start, when the video covers the screen" });
+            });
+            ui.end_row();
+            label(ui, "Its sound");
+            ui.add(egui::Slider::new(&mut st.volume_db, -40.0..=12.0).suffix(" dB"));
+            ui.end_row();
+        });
+        if let Some(i) = &info.stinger {
+            if let Some(p) = &i.problem {
+                ui.label(RichText::new(format!("⚠ {p}")).color(AMBER));
+            } else if i.loading {
+                hint(ui, "Loading…");
+            } else if i.loaded {
+                let matte = i.matte.map(|m| m.label()).unwrap_or("");
+                hint(ui, &format!("{:.1} s, {}×{}, {matte}; scenes change at {:.2} s{}.", i.seconds, i.size.0, i.size.1, i.cut_seconds, if i.has_sound { ", with sound" } else { "" }));
+            }
+        }
+        hint(ui, "A stinger is a short video (a logo sweep, a burst of colour) that plays over the program while the scenes change underneath. Most stinger packs come with a \"track matte\" version — picture and a black-and-white matte side by side or one above the other — which works on any computer. Pick Stinger as the transition to use it; automatic switching mixes instead.");
+        if !has_pads {
+            hint(ui, "Its sound plays through the Sound pads input (add one in Settings → Sound pads).");
+        }
+
         ui.add_space(16.0);
         subtitle(ui, "Automatic switching");
         let scenes: Vec<String> = self.draft.effective_scenes().iter().map(|s| s.name.clone()).collect();

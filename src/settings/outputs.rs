@@ -20,6 +20,9 @@ impl SettingsUi {
             label(ui, "Full screen");
             ui.checkbox(&mut d.fullscreen, "fill the screen it's on");
             ui.end_row();
+            label(ui, "Clocks");
+            ui.checkbox(&mut d.clocks, "show the time and the rundown segment's time left (only on this screen)");
+            ui.end_row();
         });
         hint(ui, "A window opens with the picture. Drag it to the projector, TV or confidence monitor, then double-click it (or press F) to fill that screen; Esc leaves full screen. The header's Screen button turns it on and off.");
 

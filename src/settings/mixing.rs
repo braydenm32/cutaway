@@ -136,5 +136,133 @@ impl SettingsUi {
             hint(ui, "Headphone output needs macOS or Windows.");
         }
         hint(ui, "You hear the mix in sync with the program picture (a few frames behind live). The headphone buttons on the audio strips solo an input quickly.");
+
+        ui.add_space(14.0);
+        subtitle(ui, "Ducking");
+        let ducked: Vec<String> = self.draft.audio.iter().filter(|a| a.duck).map(|a| a.name.clone()).collect();
+        let m = &mut self.draft.mix;
+        egui::Grid::new("ducking").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            label(ui, "Turn down by");
+            ui.add(egui::Slider::new(&mut m.duck_db, -40.0..=-3.0).suffix(" dB"));
+            ui.end_row();
+            label(ui, "When a voice is above");
+            ui.add(egui::Slider::new(&mut m.duck_threshold_db, -60.0..=-10.0).suffix(" dBFS"));
+            ui.end_row();
+            label(ui, "Back up after");
+            ui.add(egui::DragValue::new(&mut m.duck_release_ms).range(100..=5000).speed(10).suffix(" ms of quiet"));
+            ui.end_row();
+        });
+        hint(ui, &if ducked.is_empty() {
+            "No inputs duck yet: tick \"Duck under voices\" on music, pads or Syrinscape in Settings → Audio inputs.".to_string()
+        } else {
+            format!("Ducking: {}. They go down smoothly when anyone else talks, and come back up after the pause.", ducked.join(", "))
+        });
+
+        ui.add_space(14.0);
+        subtitle(ui, "Talkback");
+        let inputs: Vec<String> = self.draft.audio.iter().map(|a| a.name.clone()).collect();
+        let m = &mut self.draft.mix;
+        egui::Grid::new("talkback").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            label(ui, "Your mic");
+            let shown = if m.talkback_input.is_empty() { "none".to_string() } else { m.talkback_input.clone() };
+            egui::ComboBox::from_id_salt("tb_input").selected_text(shown).width(240.0).show_ui(ui, |ui| {
+                ui.selectable_value(&mut m.talkback_input, String::new(), "none");
+                for n in &inputs {
+                    ui.selectable_value(&mut m.talkback_input, n.clone(), n);
+                }
+            });
+            ui.end_row();
+            label(ui, "While talking back");
+            ui.add(egui::Slider::new(&mut m.talkback_dim_db, -40.0..=0.0).suffix(" dB").text("dim the rest"));
+            ui.end_row();
+            label(ui, "Remote guests");
+            ui.checkbox(&mut m.talkback_to_guests, "hear talkback too");
+            ui.end_row();
+        });
+        hint(ui, "Hold the TALK button (or B, or a Stream Deck Talkback key) and your mic goes only to the outputs below with talkback ticked — never into the recording or the stream.");
+
+        ui.add_space(14.0);
+        subtitle(ui, "More outputs");
+        hint(ui, "Presenters' headphones, or a return feed for a caller on a phone hybrid or a video call: a mix with their own voice left out (mix-minus), so they don't hear themselves echo.");
+        let mut remove = None;
+        let n_out = self.draft.mix.outputs.len();
+        for i in 0..n_out {
+            let o = &mut self.draft.mix.outputs[i];
+            egui::Frame::new().fill(RAISED).corner_radius(4.0).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
+                egui::Grid::new(("out", i)).num_columns(2).spacing([16.0, 8.0]).show(ui, |ui| {
+                    label(ui, "Name");
+                    ui.horizontal(|ui| {
+                        ui.add(egui::TextEdit::singleline(&mut o.name).desired_width(200.0));
+                        if ui.small_button("Remove").clicked() {
+                            remove = Some(i);
+                        }
+                    });
+                    ui.end_row();
+                    label(ui, "Device");
+                    let shown = if o.device.is_empty() || o.device == "default" { "System output".to_string() } else { o.device.clone() };
+                    let devs = &self.outputs;
+                    egui::ComboBox::from_id_salt(("out_dev", i)).selected_text(shown).width(300.0).show_ui(ui, |ui| {
+                        ui.selectable_value(&mut o.device, "default".to_string(), "System output");
+                        for d in devs {
+                            ui.selectable_value(&mut o.device, d.name.clone(), &d.name).on_hover_text(&d.summary);
+                        }
+                    });
+                    ui.end_row();
+                    label(ui, "Channels");
+                    ui.horizontal(|ui| {
+                        let max = devs.iter().find(|d| d.name == o.device).map(|d| d.max_channels.max(2)).unwrap_or(2).max(o.right).max(2);
+                        let mut pair = (o.left.max(1) - 1) / 2;
+                        egui::ComboBox::from_id_salt(("out_ch", i)).selected_text(format!("{} and {}", o.left, o.right)).show_ui(ui, |ui| {
+                            for p in 0..max.div_ceil(2) {
+                                ui.selectable_value(&mut pair, p, format!("{} and {}", p * 2 + 1, p * 2 + 2));
+                            }
+                        });
+                        o.left = pair * 2 + 1;
+                        o.right = pair * 2 + 2;
+                        ui.add(egui::Slider::new(&mut o.volume_db, -40.0..=12.0).suffix(" dB").text("volume"));
+                    });
+                    ui.end_row();
+                    label(ui, "Mix");
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(&mut o.mix, "recording".to_string(), "the recording mix");
+                        ui.selectable_value(&mut o.mix, "stream".to_string(), "the stream mix");
+                    });
+                    ui.end_row();
+                    label(ui, "Leave out");
+                    ui.horizontal_wrapped(|ui| {
+                        for n in &inputs {
+                            let mut out = o.minus.iter().any(|m| m.eq_ignore_ascii_case(n));
+                            if ui.checkbox(&mut out, n).changed() {
+                                o.minus.retain(|m| !m.eq_ignore_ascii_case(n));
+                                if out {
+                                    o.minus.push(n.clone());
+                                }
+                            }
+                        }
+                    });
+                    ui.end_row();
+                    label(ui, "Talkback");
+                    ui.checkbox(&mut o.talkback, "heard here");
+                    ui.end_row();
+                });
+            });
+            ui.add_space(6.0);
+        }
+        if let Some(i) = remove {
+            self.draft.mix.outputs.remove(i);
+        }
+        ui.horizontal(|ui| {
+            if ui.button("＋ Headphones").clicked() {
+                let name = unique(self.draft.mix.outputs.iter().map(|o| o.name.clone()).collect(), "Presenter headphones");
+                self.draft.mix.outputs.push(crate::config::AudioOutput { name, ..Default::default() });
+            }
+            if ui.button("＋ Mix-minus for a caller").clicked() {
+                let name = unique(self.draft.mix.outputs.iter().map(|o| o.name.clone()).collect(), "Caller return");
+                self.draft.mix.outputs.push(crate::config::AudioOutput { name, talkback: false, ..Default::default() });
+            }
+        });
+        if !cfg!(any(target_os = "macos", windows)) {
+            hint(ui, "Outputs need macOS or Windows.");
+        }
     }
 }

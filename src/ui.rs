@@ -19,6 +19,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+mod panels;
+
 pub mod theme {
     use eframe::egui::Color32;
     pub const BG: Color32 = Color32::from_rgb(14, 16, 20);
@@ -121,6 +123,9 @@ pub struct App {
     syrinscape: control::syrinscape::Syrinscape,
     /// Where the show is in its running order.
     rundown: control::rundown::Rundown,
+    /// The pad held down with the mouse, and the talkback button.
+    pad_held: Option<usize>,
+    talk_held: bool,
     remote: Option<remote::RemoteServer>,
     midi: Option<midi::Midi>,
     osc: Option<osc::Osc>,
@@ -155,6 +160,8 @@ impl App {
         let mut app = App {
             syrinscape,
             rundown: Default::default(),
+            pad_held: None,
+            talk_held: false,
             scenes: cfg.effective_scenes(),
             display_fullscreen: cfg.display.fullscreen,
             display_controls_until: None,
@@ -901,6 +908,7 @@ impl App {
         if (space || enter) && self.preview_mode() {
             self.take_preview(enter);
         }
+        self.extra_keys(ctx);
     }
 
     fn run_self_test(&mut self, ctx: &egui::Context) {
@@ -949,6 +957,16 @@ impl App {
                     self.sync = Some(SyncWizard { job, apply: Vec::new() });
                 }
                 let _ = self.add_marker(None);
+                // Commands to set the scene for a screenshot, ";"-separated.
+                if let Ok(cmds) = std::env::var("CUTAWAY_UI_TEST_COMMANDS") {
+                    for c in cmds.split(';').filter(|c| !c.trim().is_empty()) {
+                        if let Ok(a) = Action::parse(c) {
+                            if let Err(e) = self.run_action(a) {
+                                eprintln!("ui test: {c}: {e}");
+                            }
+                        }
+                    }
+                }
                 3
             }
             3 if t > 6.0 && std::env::var_os("CUTAWAY_UI_TEST_SETTINGS").is_some() => {
@@ -1070,6 +1088,7 @@ impl App {
         let streaming = engine.is_streaming();
         let mut status_line: Option<(String, Color32)> = None;
         let mut marker_clicked = false;
+        let mut clip_clicked = false;
 
         // ---- record
         match &rec {
@@ -1083,6 +1102,13 @@ impl App {
                 let mtext = if markers > 0 { format!("◆ Marker ({markers})") } else { "◆ Marker".into() };
                 if ui.add(egui::Button::new(mtext).min_size(vec2(0.0, 30.0))).on_hover_text("Mark this moment (M): becomes a chapter and a timeline marker").clicked() {
                     marker_clicked = true;
+                }
+                if ui
+                    .add(egui::Button::new("✂ Clip").min_size(vec2(0.0, 30.0)))
+                    .on_hover_text(format!("Save the last {} seconds as a clip in the take's Clips folder (K)", self.cfg.output.clip_seconds))
+                    .clicked()
+                {
+                    clip_clicked = true;
                 }
                 if let Some(d) = &disk {
                     let left = d.seconds_left().map(crate::engine::health::fmt_left).unwrap_or_default();
@@ -1146,6 +1172,12 @@ impl App {
         if marker_clicked {
             match self.add_marker(None) {
                 Ok(n) => self.toast(format!("{n} added"), false),
+                Err(e) => self.toast(e, true),
+            }
+        }
+        if clip_clicked {
+            match self.run_action(Action::Clip(None)) {
+                Ok(m) => self.toast(m, false),
                 Err(e) => self.toast(e, true),
             }
         }
@@ -1450,6 +1482,7 @@ impl App {
         let mut scene = engine.switcher.live();
         let names: Vec<String> = engine.sources.iter().map(|s| s.name.clone()).collect();
         let inputs: Vec<String> = engine.audio.iter().map(|a| a.name.clone()).collect();
+        let cue_suggestions = control::suggestions(&self.cfg);
         let mut changed = false;
         let mut new_scene: Option<Scene> = None;
         let mut delete = false;
@@ -1520,6 +1553,39 @@ impl App {
                     }
                 }
                 ui.label(RichText::new("e.g. a break scene that mutes the mics and brings up the music. Changes land with the picture and fade with mixes.").size(11.5).color(TEXT_DIM));
+            });
+            // Scene cues: commands run when the scene is taken.
+            let n_cues = scene.cues.len();
+            ui.menu_button(if n_cues > 0 { format!("Scene cues ({n_cues})") } else { "Scene cues".into() }, |ui| {
+                ui.set_min_width(300.0);
+                ui.label(RichText::new("When this scene is taken, also:").strong());
+                let label_of = |c: &str| cue_suggestions.iter().find(|(cmd, _)| cmd.eq_ignore_ascii_case(c)).map(|(_, l)| l.clone()).or_else(|| Action::parse(c).ok().map(|a| a.describe())).unwrap_or_else(|| c.to_string());
+                let mut remove = None;
+                for (i, c) in scene.cues.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(label_of(c));
+                        if ui.small_button("✕").clicked() {
+                            remove = Some(i);
+                        }
+                    });
+                }
+                if let Some(i) = remove {
+                    scene.cues.remove(i);
+                    changed = true;
+                }
+                ui.menu_button("＋ Add", |ui| {
+                    egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                        let skip = |c: &str| ["scene:", "cut:", "preview:", "source:", "rundown:"].iter().any(|p| c.starts_with(p)) || c == "take" || c == "cut";
+                        for (cmd, l) in cue_suggestions.iter().filter(|(c, _)| !skip(c)) {
+                            if ui.button(l).clicked() {
+                                scene.cues.push(cmd.clone());
+                                changed = true;
+                                ui.close();
+                            }
+                        }
+                    });
+                });
+                ui.label(RichText::new("e.g. start a Syrinscape mood, play a pad, show a title. Any command works (Settings → Remote & MIDI lists them); edit them in the settings file.").size(11.5).color(TEXT_DIM));
             });
             ui.separator();
             if ui.button("Duplicate scene").clicked() {
@@ -2014,18 +2080,34 @@ impl App {
         });
         let mut toggle = None;
         let mut edit = None;
+        let mut clock_menus = Vec::new();
+        let mut ticking = false;
         ui.horizontal_wrapped(|ui| {
             for (i, (name, on, problem)) in list.iter().enumerate() {
-                let text = RichText::new(name).strong().size(12.5).color(if *on { Color32::BLACK } else { Color32::WHITE });
+                let clock = self.engine.as_ref().and_then(|e| e.graphics.clock_text(i));
+                let shown = match &clock {
+                    Some((t, _)) => {
+                        ticking = true;
+                        format!("{name}  {t}")
+                    }
+                    None => name.clone(),
+                };
+                let over = clock.as_ref().is_some_and(|c| c.1);
+                let text = RichText::new(shown).strong().size(12.5).color(if *on { Color32::BLACK } else if over { RED } else { Color32::WHITE });
                 let b = egui::Button::new(text).fill(if *on { AMBER } else { RAISED }).min_size(vec2(64.0, 28.0));
                 let mut r = ui.add(b);
+                let is_timer = self.cfg.graphics.get(i).is_some_and(|g| g.kind == crate::config::GraphicKind::Clock && g.clock.is_timer());
                 r = r.on_hover_text(match problem {
                     Some(p) => format!("⚠ {p}"),
+                    None if is_timer => "Show / hide. Right-click to start, pause or reset it.".into(),
                     None if i < 9 => format!("Show / hide (Alt+{})", i + 1),
                     None => "Show / hide".into(),
                 });
                 if r.clicked() {
                     toggle = Some(i);
+                }
+                if is_timer {
+                    clock_menus.push((r.clone(), i));
                 }
                 let is_title = self.cfg.graphics.get(i).is_some_and(|g| g.kind == crate::config::GraphicKind::Title);
                 if is_title && ui.small_button("✎").on_hover_text("Change the text now").clicked() {
@@ -2033,6 +2115,12 @@ impl App {
                 }
             }
         });
+        for (r, i) in clock_menus {
+            self.clock_menu(&r, i);
+        }
+        if ticking {
+            ui.ctx().request_repaint_after(Duration::from_millis(500));
+        }
         if let Some(i) = toggle {
             self.toggle_graphic(i, None);
         }
@@ -2095,6 +2183,7 @@ impl App {
         };
         let strips: Vec<(String, String, bool, f32)> = engine.audio.iter().map(|a| (a.name.clone(), a.description(), a.shared.is_on(), a.shared.reduction_db())).collect();
         let monitoring = !self.cfg.mix.monitor_device.is_empty();
+        let ducking = engine.mix.ducking_db();
         if strips.is_empty() {
             ui.add_space(10.0);
             ui.label(RichText::new("No audio inputs.\nAdd your interface in Settings → Audio inputs.").color(TEXT_DIM));
@@ -2155,8 +2244,14 @@ impl App {
                                 } else if !ac.to_stream {
                                     tags.push_str("R");
                                 }
+                                if ac.duck {
+                                    tags.push_str(" D");
+                                }
                                 if !tags.is_empty() {
-                                    ui.label(RichText::new(tags.trim()).size(10.0).color(ACCENT)).on_hover_text("FX: voice processing on · R: recording only · S: stream only");
+                                    ui.label(RichText::new(tags.trim()).size(10.0).color(ACCENT)).on_hover_text("FX: voice processing on · R: recording only · S: stream only · D: ducks under voices");
+                                }
+                                if ac.duck && ducking < -0.5 {
+                                    ui.label(RichText::new(format!("↓{:.0}", -ducking)).size(10.0).color(AMBER)).on_hover_text("Turned down under the voices right now (dB)");
                                 }
                             });
                         }
@@ -2640,6 +2735,15 @@ impl App {
         let live_name = engine.switcher.live().name;
         let preview_name = engine.switcher.preview().map(|p| p.name);
         let recording = engine.is_recording();
+        let clocks = self.cfg.display.clocks.then(|| {
+            let st = self.rundown.status(&self.cfg.rundown.segments);
+            let segment = st.index.map(|_| (st.name.clone(), st.elapsed, st.planned));
+            let rec = match &engine.status.lock().unwrap().rec {
+                RecState::Recording { since, .. } => Some(since.elapsed()),
+                _ => None,
+            };
+            (segment, rec)
+        });
         let mut close = false;
         let mut toggle_full = false;
         ctx.show_viewport_immediate(viewport, builder, |ui, _class| {
@@ -2697,6 +2801,10 @@ impl App {
                         painter.rect_stroke(rr, 0.0, Stroke::new(if *on_air || *pv { 3.0 } else { 1.0 }, color), StrokeKind::Outside);
                         painter.text(rr.left_bottom() + vec2(6.0, -6.0), Align2::LEFT_BOTTOM, format!("{} {}", i + 1, name), FontId::proportional(14.0), Color32::WHITE);
                     }
+                }
+                if let Some((segment, rec)) = &clocks {
+                    App::draw_display_clocks(&painter, area, segment.clone(), *rec);
+                    ui.ctx().request_repaint_after(Duration::from_millis(250));
                 }
                 if resp.double_clicked() {
                     toggle_full = true;
@@ -2820,6 +2928,7 @@ impl App {
             captions_status: self.engine.as_ref().and_then(|e| e.captions()).map(|c| c.status()),
             vcam_on,
             input_levels: levels,
+            stinger: self.engine.as_ref().map(|e| e.stinger.info()),
         }
     }
 
@@ -2940,10 +3049,16 @@ impl eframe::App for App {
         }
         egui::Panel::right("audio").resizable(true).default_size(400.0).frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(12, 8))).show(ui, |ui| {
             ui.set_min_width(280.0);
-            self.stream_panel(ui);
-            ui.add_space(4.0);
-            ui.separator();
-            self.graphics_panel(ui);
+            // Leave the audio strips at least half the height.
+            let max_top = (ui.available_height() - 260.0).max(200.0);
+            egui::ScrollArea::vertical().id_salt("right_top").max_height(max_top).show(ui, |ui| {
+                self.stream_panel(ui);
+                ui.add_space(4.0);
+                ui.separator();
+                self.rundown_panel(ui);
+                self.graphics_panel(ui);
+                self.sound_panel(ui);
+            });
             self.audio_panel(ui);
         });
         egui::CentralPanel::default().frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin::same(14))).show(ui, |ui| self.monitors(ui));

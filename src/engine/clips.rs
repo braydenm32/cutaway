@@ -34,7 +34,6 @@ pub struct ClipBuffer {
 pub struct Clip {
     pub path: PathBuf,
     pub seconds: f64,
-    pub number: u32,
 }
 
 impl ClipBuffer {
@@ -54,10 +53,6 @@ impl ClipBuffer {
         i.folder = None;
         i.video.clear();
         i.audio.clear();
-    }
-
-    pub fn recording(&self) -> bool {
-        self.inner.lock().unwrap().folder.is_some()
     }
 
     /// What the Program file is getting.
@@ -141,7 +136,7 @@ impl ClipBuffer {
             }
         }
         w.finish()?;
-        Ok(Clip { path, seconds: (end - t0) as f64 / 1e9, number })
+        Ok(Clip { path, seconds: (end - t0) as f64 / 1e9 })
     }
 }
 
@@ -177,7 +172,6 @@ mod tests {
         assert!(clip.path.ends_with("Clips/Clip 01 (0m48s).mp4"), "{}", clip.path.display());
         assert!(std::fs::metadata(&clip.path).unwrap().len() > 1000);
         let second = b.save(5, b.reserve().unwrap()).unwrap();
-        assert_eq!(second.number, 2);
         assert!(second.path.ends_with("Clips/Clip 02 (0m54s).mp4"), "{}", second.path.display());
         b.stop();
         assert!(b.reserve().is_err());

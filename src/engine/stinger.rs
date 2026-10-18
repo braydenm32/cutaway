@@ -83,7 +83,6 @@ struct Shared {
 
 pub struct StingerPlayer {
     shared: Arc<Shared>,
-    canvas: (u32, u32),
     thread: Option<JoinHandle<()>>,
 }
 
@@ -92,7 +91,7 @@ impl StingerPlayer {
         let shared = Arc::new(Shared { state: Mutex::new(State::default()), cond: Condvar::new() });
         let s2 = shared.clone();
         let thread = std::thread::Builder::new().name("stinger".into()).spawn(move || worker(s2, canvas)).ok();
-        StingerPlayer { shared, canvas, thread }
+        StingerPlayer { shared, thread }
     }
 
     /// New settings: a changed file (or matte) is loaded in the background.
@@ -120,7 +119,8 @@ impl StingerPlayer {
         i
     }
 
-    /// Wait for a load to finish (tests, start-up).
+    /// Wait for a load to finish.
+    #[cfg(test)]
     pub fn wait_loaded(&self, timeout: Duration) -> bool {
         let start = Instant::now();
         while start.elapsed() < timeout {
@@ -165,10 +165,6 @@ impl StingerPlayer {
     /// How its see-through parts are stored (Solid when nothing's loaded).
     pub fn matte(&self) -> Matte {
         self.shared.state.lock().unwrap().clip.as_ref().map(|c| c.matte).unwrap_or(Matte::Solid)
-    }
-
-    pub fn canvas(&self) -> (u32, u32) {
-        self.canvas
     }
 }
 

@@ -77,10 +77,6 @@ impl Session {
         Ok(Session { name, tracks, video, markers: markers.to_vec(), start_tc, fps })
     }
 
-    fn length(&self) -> f64 {
-        self.tracks.iter().map(|t| t.seconds).chain(self.video.iter().map(|v| v.1)).fold(0.0, f64::max)
-    }
-
     /// A REAPER project (.rpp).
     pub fn reaper(&self) -> String {
         let q = |s: &str| s.replace('"', "'");

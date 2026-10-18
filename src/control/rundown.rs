@@ -55,10 +55,6 @@ pub struct Rundown {
 }
 
 impl Rundown {
-    pub fn current(&self) -> Option<usize> {
-        self.current
-    }
-
     /// Where a command goes: Some(Some(i)) to segment i, Some(None) to
     /// stop, None for nowhere (the end, or no such segment).
     pub fn target(&self, cmd: &RundownCmd, segments: &[Segment]) -> Option<Option<usize>> {
@@ -182,7 +178,7 @@ mod tests {
         assert_eq!(r.target(&RundownCmd::Next, &s), None, "the end");
         assert_eq!(r.target(&RundownCmd::Stop, &s), Some(None));
         r.go(None);
-        assert_eq!(r.current(), None);
+        assert_eq!(r.status(&s).index, None);
         assert_eq!(r.status(&s).show, 0.0);
         assert_eq!(planned_total(&s), 660);
         assert_eq!(Rundown::default().target(&RundownCmd::Next, &[]), None);
