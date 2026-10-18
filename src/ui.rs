@@ -117,6 +117,8 @@ pub struct App {
     requests_tx: Sender<Request>,
     requests_rx: Receiver<Request>,
     remote_shared: Arc<remote::RemoteShared>,
+    /// Syrinscape Online control.
+    syrinscape: control::syrinscape::Syrinscape,
     remote: Option<remote::RemoteServer>,
     midi: Option<midi::Midi>,
     osc: Option<osc::Osc>,
@@ -147,7 +149,9 @@ impl App {
         let waker: Waker = Arc::new(move || ctx.request_repaint());
         let (requests_tx, requests_rx) = unbounded();
         let remote_shared = remote::RemoteShared::new(requests_tx.clone(), waker.clone());
+        let syrinscape = control::syrinscape::Syrinscape::new(&cfg.syrinscape, waker.clone());
         let mut app = App {
+            syrinscape,
             scenes: cfg.effective_scenes(),
             display_fullscreen: cfg.display.fullscreen,
             display_controls_until: None,
@@ -211,6 +215,7 @@ impl App {
 
     /// Start or stop the remote server and MIDI to match the settings.
     fn apply_control_settings(&mut self) {
+        self.syrinscape.set_token(&self.cfg.syrinscape.token);
         let r = self.cfg.remote.clone();
         *self.remote_shared.pin.lock().unwrap() = r.pin.trim().to_string();
         let running_port = self.remote.as_ref().map(|s| s.port);
@@ -298,6 +303,23 @@ impl App {
             let mode = if force_cut { TransitionMode::Cut } else { self.mode() };
             e.take_scene(scene, mode, self.cfg.transition.duration_ms);
             self.selected_layer = None;
+        }
+        self.run_cues(&scene.cues);
+    }
+
+    /// A scene's cues (Syrinscape moods, pads, graphics…). Switching
+    /// commands are skipped, so a scene can't set off another.
+    fn run_cues(&mut self, cues: &[String]) {
+        for c in cues {
+            match Action::parse(c) {
+                Ok(Action::Scene(_) | Action::CutTo(_) | Action::Preview(_) | Action::Take | Action::Cut | Action::Source(_)) => {}
+                Ok(a) => {
+                    if let Err(e) = self.run_action(a) {
+                        self.toast(format!("Scene cue \"{c}\": {e}"), true);
+                    }
+                }
+                Err(e) => self.toast(format!("Scene cue \"{c}\": {e}"), true),
+            }
         }
     }
 
@@ -518,6 +540,57 @@ impl App {
                 let i = t.find(&names).ok_or("there's no such source")?;
                 self.show_source(i, false);
                 Ok(format!("{} full screen", names[i]))
+            }
+            Action::Pad(t, cmd) => {
+                let e = self.engine.as_ref().ok_or("the engine isn't running")?;
+                let names = e.pads.names();
+                let i = t.find(&names).ok_or("there's no such pad")?;
+                match cmd {
+                    control::PadCmd::Press => e.pads.press(i).map(|on| format!("{} {}", names[i], if on { "playing" } else { "stopped" })),
+                    control::PadCmd::Play => e.pads.play(i).map(|_| format!("{} playing", names[i])),
+                    control::PadCmd::Stop => {
+                        e.pads.stop(i);
+                        Ok(format!("{} stopped", names[i]))
+                    }
+                    control::PadCmd::Release => {
+                        e.pads.release(i);
+                        Ok("OK".into())
+                    }
+                }
+            }
+            Action::PadsStop => {
+                let e = self.engine.as_ref().ok_or("the engine isn't running")?;
+                e.pads.stop_all();
+                Ok("Pads stopped".into())
+            }
+            Action::Talkback(t) => {
+                let e = self.engine.as_ref().ok_or("the engine isn't running")?;
+                if e.mix.talkback_input().is_none() {
+                    return Err("there's no talkback mic (Settings → Mixing & headphones)".into());
+                }
+                let on = toggle(&t, e.talkback());
+                e.set_talkback(on);
+                Ok(format!("Talkback {}", if on { "on" } else { "off" }))
+            }
+            Action::Syrinscape(cmd) => {
+                use control::syrinscape::SyrinCmd;
+                if !self.cfg.syrinscape.enabled {
+                    return Err("Syrinscape control is off (Settings → Syrinscape)".into());
+                }
+                let buttons = self.cfg.syrinscape.buttons.clone();
+                let names: Vec<String> = buttons.iter().map(|b| b.name.clone()).collect();
+                let s = &self.syrinscape;
+                match cmd {
+                    SyrinCmd::Button(t) => s.press(&buttons[t.find(&names).ok_or("there's no such Syrinscape button")?]),
+                    SyrinCmd::StopButton(t) => {
+                        let b = &buttons[t.find(&names).ok_or("there's no such Syrinscape button")?];
+                        s.stop(b.kind, b.id).map(|_| format!("Syrinscape: stopped {}", b.name))
+                    }
+                    SyrinCmd::Play(k, id) => s.play(k, id).map(|_| "Syrinscape: playing".into()),
+                    SyrinCmd::Stop(k, id) => s.stop(k, id).map(|_| "Syrinscape: stopped".into()),
+                    SyrinCmd::StopAll => s.stop_all().map(|_| "Syrinscape: stopped everything".into()),
+                    SyrinCmd::Volume(v) => s.set_volume(v).map(|_| format!("Syrinscape volume {:.0}%", v * 100.0)),
+                }
             }
             Action::Media(t, cmd) => {
                 let names: Vec<String> = self.cfg.sources.iter().map(|s| s.name.clone()).collect();

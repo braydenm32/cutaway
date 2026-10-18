@@ -30,6 +30,47 @@ pub struct Config {
     pub osc: OscConfig,
     pub podcast: PodcastConfig,
     pub captions: CaptionsConfig,
+    /// Sound pads: jingles, stings and beds on keys, Stream Deck and MIDI.
+    pub pads: Vec<Pad>,
+    /// Syrinscape (online soundboard) control.
+    pub syrinscape: SyrinscapeConfig,
+}
+
+/// Syrinscape Online: moods and sounds started from Cutaway's buttons,
+/// keys, Stream Deck and scenes. Syrinscape's player plays them; its sound
+/// comes in through an audio input (an app's sound, or a virtual cable).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct SyrinscapeConfig {
+    pub enabled: bool,
+    /// Your auth token (syrinscape.com/account/auth-token/). Keep it private.
+    pub token: String,
+    /// The buttons in Cutaway's Syrinscape panel.
+    pub buttons: Vec<SyrinButton>,
+}
+
+/// What a Syrinscape button starts.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SyrinKind {
+    /// A mood (a whole scene's sound; starting one replaces the last).
+    #[default]
+    Mood,
+    /// One element: a music track, ambience or sound effect.
+    Element,
+    /// Stop everything.
+    StopAll,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct SyrinButton {
+    pub name: String,
+    pub kind: SyrinKind,
+    /// Syrinscape's number for the mood or element.
+    pub id: u64,
+    /// Its soundset (for display).
+    pub soundset: String,
 }
 
 
@@ -124,6 +165,13 @@ pub struct OutputConfig {
     pub input_tracks_post_fader: bool,
     /// Save the recording mix as a WAV too.
     pub mix_wav: bool,
+    /// REAPER (.rpp) and DAWproject (Fender Studio Pro, Bitwig, Cubase)
+    /// sessions with every WAV on its own track.
+    pub daw_sessions: bool,
+    /// The take file Cutaway's DaVinci Resolve script builds a project from.
+    pub resolve_project: bool,
+    /// Length of an instant clip, in seconds.
+    pub clip_seconds: u32,
 }
 
 impl OutputConfig {
@@ -158,6 +206,9 @@ impl Default for OutputConfig {
             input_tracks: false,
             input_tracks_post_fader: false,
             mix_wav: false,
+            daw_sessions: true,
+            resolve_project: true,
+            clip_seconds: 30,
         }
     }
 }
@@ -647,6 +698,8 @@ pub struct AudioConfig {
     pub to_stream: bool,
     /// Voice processing for the mixes (the WAV stays untouched).
     pub processing: VoiceProcessing,
+    /// Turned down automatically while others talk (music, pads, ambience).
+    pub duck: bool,
 }
 
 /// A channel strip for a microphone. Off by default: a DAW's output is
@@ -713,7 +766,15 @@ impl Default for AudioConfig {
             to_recording: true,
             to_stream: true,
             processing: VoiceProcessing::default(),
+            duck: false,
         }
+    }
+}
+
+impl AudioConfig {
+    /// The sound pads' strip.
+    pub fn is_pads(&self) -> bool {
+        self.device.trim().eq_ignore_ascii_case("pads")
     }
 }
 
@@ -938,6 +999,101 @@ pub struct MixConfig {
     /// "program", "stream", or an input's name (solo).
     pub monitor_source: String,
     pub monitor_volume_db: f32,
+    /// Ducking: inputs marked to duck go down by this much while others talk.
+    pub duck_db: f32,
+    /// What counts as talking (the loudest other input, after its fader).
+    pub duck_threshold_db: f32,
+    /// How long after the talking stops before the ducked inputs come back.
+    pub duck_release_ms: u32,
+    /// Extra outputs: presenters' headphones, mix-minus returns for callers.
+    pub outputs: Vec<AudioOutput>,
+    /// The producer's talkback mic ("" = none). Never heard in the
+    /// recording or the stream; only in outputs with talkback on.
+    pub talkback_input: String,
+    /// While talking back, what else is in those outputs dips by this much.
+    pub talkback_dim_db: f32,
+    /// Remote guests hear talkback too.
+    pub talkback_to_guests: bool,
+}
+
+/// An audio output fed with a mix: presenters' headphones, or a mix-minus
+/// return for a caller (everything except their own voice).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct AudioOutput {
+    pub name: String,
+    /// Output device (as listed in Settings; "" or "default" = the system output).
+    pub device: String,
+    /// Output channels (1-based), e.g. 3 and 4 on an interface.
+    pub left: u32,
+    pub right: u32,
+    /// "recording" or "stream": which mix it starts from.
+    pub mix: String,
+    /// Inputs left out (a caller's own voice).
+    pub minus: Vec<String>,
+    /// Talkback is heard here.
+    pub talkback: bool,
+    pub volume_db: f32,
+}
+
+impl Default for AudioOutput {
+    fn default() -> Self {
+        AudioOutput {
+            name: "Headphones".into(),
+            device: String::new(),
+            left: 1,
+            right: 2,
+            mix: "recording".into(),
+            minus: Vec::new(),
+            talkback: true,
+            volume_db: 0.0,
+        }
+    }
+}
+
+/// How a sound pad plays.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PadMode {
+    /// Plays to the end; pressing again stops it.
+    #[default]
+    Once,
+    /// Plays round and round until pressed again.
+    Loop,
+    /// Plays while the pad is held down.
+    Hold,
+}
+
+impl PadMode {
+    pub const ALL: [PadMode; 3] = [PadMode::Once, PadMode::Loop, PadMode::Hold];
+    pub fn label(self) -> &'static str {
+        match self {
+            PadMode::Once => "play once",
+            PadMode::Loop => "loop",
+            PadMode::Hold => "while held",
+        }
+    }
+}
+
+/// A sound on a pad.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Pad {
+    pub name: String,
+    /// WAV, AIFF, MP3, AAC/M4A, FLAC, Ogg or CAF.
+    pub file: PathBuf,
+    pub mode: PadMode,
+    pub gain_db: f32,
+    /// Fade when stopped early, in milliseconds.
+    pub fade_ms: u32,
+    /// Button colour.
+    pub color: String,
+}
+
+impl Default for Pad {
+    fn default() -> Self {
+        Pad { name: "Pad".into(), file: PathBuf::new(), mode: PadMode::Once, gain_db: 0.0, fade_ms: 300, color: "#3b6fd8".into() }
+    }
 }
 
 impl Default for MixConfig {
@@ -950,6 +1106,13 @@ impl Default for MixConfig {
             monitor_device: String::new(),
             monitor_source: "program".into(),
             monitor_volume_db: 0.0,
+            duck_db: -12.0,
+            duck_threshold_db: -40.0,
+            duck_release_ms: 800,
+            outputs: Vec::new(),
+            talkback_input: String::new(),
+            talkback_dim_db: -12.0,
+            talkback_to_guests: true,
         }
     }
 }
@@ -1177,6 +1340,7 @@ impl Config {
                     x.to_recording = true;
                     x.to_stream = true;
                     x.processing = VoiceProcessing::default();
+                    x.duck = false;
                     x
                 })
                 .collect()

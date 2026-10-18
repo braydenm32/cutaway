@@ -3,6 +3,7 @@
 //! part of the operating system, so nothing needs installing.
 
 pub mod aac;
+mod appaudio;
 pub mod aacdec;
 mod camera;
 pub mod pixel_buffer;
@@ -14,6 +15,7 @@ pub mod vt;
 pub mod vtdec;
 
 pub use camera::{check_microphone_access, list_video_devices, open_camera};
+pub use appaudio::{list_apps, open_app_audio};
 pub use screen::open_screen;
 
 use crate::media::{clock, Ns, Pixels, VideoFrame, NS_PER_SEC};

@@ -3,6 +3,7 @@
 //! Graphics Capture for screens. All part of Windows 11, so nothing needs
 //! installing.
 
+pub mod appaudio;
 pub mod camera;
 pub mod mf;
 pub mod screen;

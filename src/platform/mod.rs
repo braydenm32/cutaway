@@ -57,10 +57,11 @@ mod none {
     }
     pub fn open_audio_output(
         _name: &str,
+        _channels: (u32, u32),
         _rx: crossbeam_channel::Receiver<crate::media::AudioBlock>,
         _volume: Arc<std::sync::atomic::AtomicU32>,
     ) -> Result<Box<dyn Running>> {
-        bail!("headphone monitoring isn't available in this build (macOS only for now)")
+        bail!("audio outputs need macOS or Windows")
     }
     pub fn request_permissions() {}
     pub fn permissions_changed() -> bool {
@@ -70,6 +71,49 @@ mod none {
 
 #[cfg(not(any(target_os = "macos", windows)))]
 pub use none::*;
+
+/// Sound from one app (Syrinscape, Spotify, a browser…), without a virtual
+/// audio cable: ScreenCaptureKit on macOS, process loopback on Windows.
+pub mod app_audio {
+    use crate::engine::sources::AudioStarted;
+    use anyhow::Result;
+
+    pub fn available() -> bool {
+        cfg!(any(target_os = "macos", windows))
+    }
+
+    /// Apps that can be listened to, by name.
+    pub fn list() -> Vec<String> {
+        #[cfg(target_os = "macos")]
+        {
+            super::macos::list_apps()
+        }
+        #[cfg(windows)]
+        {
+            super::win::appaudio::list_apps()
+        }
+        #[cfg(not(any(target_os = "macos", windows)))]
+        {
+            Vec::new()
+        }
+    }
+
+    pub fn open(name: &str, sink: super::AudioSink) -> Result<AudioStarted> {
+        #[cfg(target_os = "macos")]
+        {
+            super::macos::open_app_audio(name, sink)
+        }
+        #[cfg(windows)]
+        {
+            super::win::appaudio::open_app_audio(name, sink)
+        }
+        #[cfg(not(any(target_os = "macos", windows)))]
+        {
+            let _ = (name, sink);
+            anyhow::bail!("sound from an app needs macOS or Windows")
+        }
+    }
+}
 
 /// The virtual camera: a camera extension on macOS, a virtual camera
 /// source on Windows 11.

@@ -107,6 +107,7 @@ pub fn spawn_mp4(
     status: Arc<Mutex<Status>>,
     label: String,
     opts: FileOpts,
+    clips: Option<Arc<super::clips::ClipBuffer>>,
 ) -> JoinHandle<Result<(PathBuf, u64)>> {
     std::thread::Builder::new()
         .name(format!("write {label}"))
@@ -125,6 +126,9 @@ pub fn spawn_mp4(
             let mut failed: Option<anyhow::Error> = None;
             let mut audio_end = None;
             for msg in rx {
+                if let Some(c) = &clips {
+                    c.push(&msg);
+                }
                 if failed.is_some() {
                     continue; // keep draining so producers never block
                 }

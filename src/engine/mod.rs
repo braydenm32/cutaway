@@ -21,6 +21,7 @@ pub mod audio;
 pub mod autoswitch;
 pub mod captions;
 pub mod compositor;
+pub mod clips;
 pub mod cutout;
 pub mod decode;
 pub mod dsp;
@@ -34,10 +35,12 @@ pub mod inputs;
 pub mod lipsync;
 pub mod ndi;
 pub mod netsrc;
+pub mod pads;
 pub mod player;
 pub mod podcast;
 pub mod precheck;
 pub mod recorder;
+pub mod sessions;
 pub mod sources;
 pub mod streamer;
 pub mod switcher;
@@ -301,6 +304,12 @@ pub struct Engine {
     pub auto: Arc<autoswitch::AutoShared>,
     /// Headphone output: (device, source, tap id, running output).
     monitor: Mutex<Option<(String, String, u64, Box<dyn sources::Running>)>>,
+    /// Extra outputs (presenters' headphones, mix-minus returns).
+    outputs: Mutex<Vec<RunningOutput>>,
+    /// Sound pads (played through the "pads" input strip).
+    pub pads: Arc<pads::PadBank>,
+    /// The last stretch of the recording, for instant clips.
+    clips: Arc<clips::ClipBuffer>,
     monitor_volume: Arc<AtomicU32>,
     /// The virtual camera, while on: (tap id, sender).
     vcam: Mutex<Option<(u64, Box<dyn sources::Running>)>>,
@@ -310,6 +319,24 @@ pub struct Engine {
     /// Background removal: each source's masks, and what makes them.
     masks: Vec<Arc<cutout::MaskSlot>>,
     cutouts: Mutex<Vec<CutoutState>>,
+}
+
+/// An extra audio output while it runs.
+struct RunningOutput {
+    cfg: crate::config::AudioOutput,
+    tap: u64,
+    volume: Arc<AtomicU32>,
+    running: Box<dyn sources::Running>,
+}
+
+fn db_to_gain(db: f32) -> f32 {
+    10f32.powf(db.clamp(-60.0, 12.0) / 20.0)
+}
+
+/// The talkback mic's input number, if one is set and exists.
+fn talkback_index(cfg: &Config) -> Option<usize> {
+    let name = cfg.mix.talkback_input.trim();
+    (!name.is_empty()).then(|| cfg.audio.iter().position(|a| a.name.trim().eq_ignore_ascii_case(name))).flatten()
 }
 
 /// Background removal for one source.
@@ -363,6 +390,8 @@ impl Engine {
         // A device that can't be opened now is retried in the background
         // (see watchdog), so plugging it in later just works.
         let hub = feed::AudioHub::new();
+        let pads = pads::PadBank::new(&cfg.pads);
+        *hub.pads.lock().unwrap() = Some(pads.clone());
         let mut sources = Vec::new();
         let mut aspects = Vec::new();
         // Every source's frames first: an auto-framed source is cut from
@@ -425,7 +454,7 @@ impl Engine {
                 right: ac.program_right,
                 delay: ac.delay_ms as i64 * 1_000_000,
                 shared: shared.clone(),
-                gaps_expected: input.from_source(),
+                gaps_expected: input.gaps_expected(),
             });
             audio.push(AudioHandle { name: ac.name.clone(), record: ac.record, split: ac.split_channels, shared, input });
         }
@@ -433,6 +462,7 @@ impl Engine {
         let audio_latency = audio::mix_latency(max_audio_delay);
         let mix_taps: MixTaps = Arc::new(Mutex::new(Vec::new()));
         let mix = MixShared::new(&cfg.mix);
+        mix.set_talkback_input(talkback_index(cfg));
 
         let mut threads = Vec::new();
         {
@@ -574,6 +604,9 @@ impl Engine {
             take_monitor,
             auto,
             monitor: Mutex::new(None),
+            outputs: Mutex::new(Vec::new()),
+            pads,
+            clips: clips::ClipBuffer::new(),
             monitor_volume: Arc::new(AtomicU32::new(1.0f32.to_bits())),
             vcam: Mutex::new(None),
             captions: captions_slot,
@@ -583,6 +616,7 @@ impl Engine {
         })
         .map(|e| {
             e.apply_monitor(&cfg.mix);
+            e.apply_outputs(&cfg.mix);
             e.apply_captions(&cfg.captions);
             e.apply_cutouts(&cfg.sources);
             e
@@ -728,7 +762,7 @@ impl Engine {
             audio::MixKind::Recording
         };
         let (tx, rx) = bounded(64);
-        match crate::platform::open_audio_output(&device, rx, self.monitor_volume.clone()) {
+        match crate::platform::open_audio_output(&device, (1, 2), rx, self.monitor_volume.clone()) {
             Ok(running) => {
                 let id = self.tap_ids.fetch_add(1, Ordering::Relaxed);
                 self.mix_taps.lock().unwrap().push((id, kind, tx));
@@ -736,6 +770,65 @@ impl Engine {
             }
             Err(e) => self.status.lock().unwrap().push(LogLevel::Warning, format!("Headphones: {e:#}")),
         }
+    }
+
+    // ---- outputs: presenters' headphones, mix-minus returns ------------------------------
+
+    /// The mix kind an output needs.
+    fn output_kind(&self, o: &crate::config::AudioOutput) -> audio::MixKind {
+        let mut minus = 0u64;
+        for name in &o.minus {
+            if let Some(i) = self.audio.iter().position(|a| a.name.eq_ignore_ascii_case(name.trim())) {
+                if i < 64 {
+                    minus |= 1 << i;
+                }
+            }
+        }
+        audio::MixKind::Feed { stream: o.mix.trim().eq_ignore_ascii_case("stream"), minus, talkback: o.talkback }
+    }
+
+    /// Start, change or stop the extra outputs to match the settings.
+    pub fn apply_outputs(&self, mix: &crate::config::MixConfig) {
+        let mut outs = self.outputs.lock().unwrap();
+        // Volume changes apply in place; anything else reopens that output.
+        let mut keep: Vec<RunningOutput> = Vec::new();
+        for o in outs.drain(..) {
+            match mix.outputs.iter().find(|c| c.device == o.cfg.device && c.left == o.cfg.left && c.right == o.cfg.right && c.mix == o.cfg.mix && c.minus == o.cfg.minus && c.talkback == o.cfg.talkback) {
+                Some(c) if !keep.iter().any(|k| k.cfg == *c) => {
+                    o.volume.store(db_to_gain(c.volume_db).to_bits(), Ordering::Relaxed);
+                    keep.push(RunningOutput { cfg: c.clone(), ..o });
+                }
+                _ => {
+                    self.mix_taps.lock().unwrap().retain(|t| t.0 != o.tap);
+                    drop(o.running);
+                }
+            }
+        }
+        for c in &mix.outputs {
+            if keep.iter().any(|k| k.cfg == *c) {
+                continue;
+            }
+            let volume = Arc::new(AtomicU32::new(db_to_gain(c.volume_db).to_bits()));
+            let (tx, rx) = bounded(64);
+            match crate::platform::open_audio_output(&c.device, (c.left, c.right), rx, volume.clone()) {
+                Ok(running) => {
+                    let tap = self.tap_ids.fetch_add(1, Ordering::Relaxed);
+                    self.mix_taps.lock().unwrap().push((tap, self.output_kind(c), tx));
+                    keep.push(RunningOutput { cfg: c.clone(), tap, volume, running });
+                }
+                Err(e) => self.status.lock().unwrap().push(LogLevel::Warning, format!("Output \"{}\": {e:#}", c.name)),
+            }
+        }
+        *outs = keep;
+    }
+
+    /// Talkback pressed or let go.
+    pub fn set_talkback(&self, on: bool) {
+        self.mix.set_talkback(on);
+    }
+
+    pub fn talkback(&self) -> bool {
+        self.mix.talkback()
     }
 
     // ---- settings ------------------------------------------------------------------
@@ -767,10 +860,16 @@ impl Engine {
             if let Some(h) = self.audio.get(i) {
                 h.shared.set_routing(a.to_recording, a.to_stream);
                 h.shared.set_processing(&a.processing);
+                h.shared.set_duck(a.duck);
             }
         }
         self.mix.apply(&new.mix);
+        self.mix.set_talkback_input(talkback_index(new));
         self.apply_monitor(&new.mix);
+        self.apply_outputs(&new.mix);
+        if old.pads != new.pads {
+            self.pads.set_pads(&new.pads);
+        }
         if old.transition != new.transition {
             self.switcher.set_style(new.transition.direction, &new.transition.dip_color);
         }
@@ -996,6 +1095,7 @@ impl Engine {
         }
         self.wait_finalized();
         self.monitor.lock().unwrap().take();
+        self.outputs.lock().unwrap().clear();
         if let Some((_, r)) = self.vcam.lock().unwrap().take() {
             drop(r);
         }

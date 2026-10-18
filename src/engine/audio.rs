@@ -282,6 +282,8 @@ pub struct InputShared {
     levels: Mutex<Vec<f32>>,
     /// Compressor gain reduction (dB) for the UI.
     reduction: AtomicU32,
+    /// Turned down while others talk.
+    duck: AtomicBool,
 }
 
 impl InputShared {
@@ -300,6 +302,7 @@ impl InputShared {
             resyncs: Default::default(),
             levels: Mutex::new(Vec::new()),
             reduction: AtomicU32::new(0),
+            duck: AtomicBool::new(cfg.duck),
         });
         s.set_gain_db(cfg.gain_db);
         s
@@ -333,6 +336,9 @@ impl InputShared {
     pub fn set_routing(&self, to_recording: bool, to_stream: bool) {
         self.to_recording.store(to_recording, Ordering::Relaxed);
         self.to_stream.store(to_stream, Ordering::Relaxed);
+    }
+    pub fn set_duck(&self, on: bool) {
+        self.duck.store(on, Ordering::Relaxed);
     }
     pub fn set_processing(&self, p: &VoiceProcessing) {
         let mut cur = self.processing.lock().unwrap();
@@ -395,6 +401,10 @@ pub enum MixKind {
     /// One input for its own track in the files: after processing, and
     /// either before the fader or as heard in the mix.
     Track { input: usize, post_fader: bool },
+    /// An output feed: the recording or stream mix without the inputs in
+    /// `minus` (bit per input: a caller's own voice), with talkback when
+    /// it's on.
+    Feed { stream: bool, minus: u64, talkback: bool },
 }
 
 /// Consumers of the mixes (recording, streaming, monitoring), by id.
@@ -408,6 +418,15 @@ pub struct MixShared {
     target_lufs: AtomicU32,
     reset_recording: AtomicBool,
     reset_stream: AtomicBool,
+    duck_db: AtomicU32,
+    duck_threshold_db: AtomicU32,
+    duck_release_ms: AtomicU32,
+    /// How far ducked inputs are down right now (dB, for the UI).
+    ducking_db: AtomicU32,
+    /// The talkback mic (input index, -1 = none) and whether it's pressed.
+    talkback_input: AtomicI64,
+    talkback_on: AtomicBool,
+    talkback_dim_db: AtomicU32,
 }
 
 impl MixShared {
@@ -419,6 +438,13 @@ impl MixShared {
             target_lufs: AtomicU32::new(0),
             reset_recording: AtomicBool::new(false),
             reset_stream: AtomicBool::new(false),
+            duck_db: AtomicU32::new(0),
+            duck_threshold_db: AtomicU32::new(0),
+            duck_release_ms: AtomicU32::new(800),
+            ducking_db: AtomicU32::new(0f32.to_bits()),
+            talkback_input: AtomicI64::new(-1),
+            talkback_on: AtomicBool::new(false),
+            talkback_dim_db: AtomicU32::new(0),
         });
         m.apply(cfg);
         m
@@ -428,6 +454,29 @@ impl MixShared {
         self.ceiling_db.store(cfg.limiter_ceiling_db.clamp(-12.0, 0.0).to_bits(), Ordering::Relaxed);
         self.levelling.store(cfg.stream_levelling, Ordering::Relaxed);
         self.target_lufs.store(cfg.stream_target_lufs.clamp(-30.0, -8.0).to_bits(), Ordering::Relaxed);
+        self.duck_db.store(cfg.duck_db.clamp(-40.0, 0.0).to_bits(), Ordering::Relaxed);
+        self.duck_threshold_db.store(cfg.duck_threshold_db.clamp(-70.0, -10.0).to_bits(), Ordering::Relaxed);
+        self.duck_release_ms.store(cfg.duck_release_ms.clamp(50, 10_000), Ordering::Relaxed);
+        self.talkback_dim_db.store(cfg.talkback_dim_db.clamp(-60.0, 0.0).to_bits(), Ordering::Relaxed);
+    }
+    /// Which input is the talkback mic (never heard in the recording or stream).
+    pub fn set_talkback_input(&self, input: Option<usize>) {
+        self.talkback_input.store(input.map(|i| i as i64).unwrap_or(-1), Ordering::Relaxed);
+    }
+    pub fn talkback_input(&self) -> Option<usize> {
+        let i = self.talkback_input.load(Ordering::Relaxed);
+        (i >= 0).then_some(i as usize)
+    }
+    /// Talking back (held down).
+    pub fn set_talkback(&self, on: bool) {
+        self.talkback_on.store(on, Ordering::Relaxed);
+    }
+    pub fn talkback(&self) -> bool {
+        self.talkback_on.load(Ordering::Relaxed)
+    }
+    /// How far the ducked inputs are turned down right now (dB, 0 = not).
+    pub fn ducking_db(&self) -> f32 {
+        f32::from_bits(self.ducking_db.load(Ordering::Relaxed))
     }
     /// Start measuring the integrated loudness of the recording afresh.
     pub fn reset_recording_loudness(&self) {
@@ -534,6 +583,9 @@ pub fn run_mixer(inputs: Vec<MixInput>, names: Vec<String>, taps: MixTaps, maste
     let mut rec = Master::new();
     let mut stream = Master::new();
     let mut leveller = Leveller::default();
+    let mut feed_limiters: std::collections::HashMap<(bool, u64), Limiter> = std::collections::HashMap::new();
+    let mut duck_until: Ns = 0;
+    let mut duck_now_db = 0.0f32;
     let mut t = (clock::now() / BLOCK_NS) * BLOCK_NS;
     let mut buf = vec![0.0f32; BLOCK * 2];
     let mut n = 0u64;
@@ -599,10 +651,13 @@ pub fn run_mixer(inputs: Vec<MixInput>, names: Vec<String>, taps: MixTaps, maste
             }
         }
         let wanted: Vec<MixKind> = taps.lock().unwrap().iter().map(|t| t.1).collect();
-        let mut rec_mix = vec![0.0f32; BLOCK * 2];
-        let mut stream_mix = vec![0.0f32; BLOCK * 2];
-        let mut solos: Vec<(usize, Vec<f32>)> = Vec::new();
-        let mut tracks: Vec<(usize, bool, Vec<f32>)> = Vec::new();
+        // Inputs some feed leaves out: their contributions are kept to subtract.
+        let minus_any: u64 = wanted.iter().fold(0, |m, k| if let MixKind::Feed { minus, .. } = k { m | minus } else { m });
+        let talkback_input = master.talkback_input();
+        let talkback_on = master.talkback();
+
+        // Pass 1: each input's audio for this block, after its processing.
+        let mut processed: Vec<Option<Vec<f32>>> = vec![None; inputs.len()];
         for (i, inp) in inputs.iter().enumerate() {
             let strip = &mut strips[i];
             let Some(a) = strip.aligner.as_mut() else { continue };
@@ -626,6 +681,41 @@ pub fn run_mixer(inputs: Vec<MixInput>, names: Vec<String>, taps: MixTaps, maste
                 inp.shared.reduction.store(c.reduction_db().to_bits(), Ordering::Relaxed);
             }
             strip.meter.add(&buf, 2);
+            processed[i] = Some(buf.clone());
+        }
+
+        // Ducking: is anyone (not ducked, on air) talking?
+        let threshold = 10f32.powf(f32::from_bits(master.duck_threshold_db.load(Ordering::Relaxed)) / 20.0);
+        let talking = inputs.iter().enumerate().any(|(i, inp)| {
+            let Some(b) = &processed[i] else { return false };
+            if inp.shared.duck.load(Ordering::Relaxed) || Some(i) == talkback_input || (strips[i].level == 0.0 && strips[i].target == 0.0) {
+                return false;
+            }
+            let rms = (b.iter().map(|s| s * s).sum::<f32>() / b.len().max(1) as f32).sqrt();
+            rms * inp.shared.gain() * strips[i].level.max(strips[i].target) > threshold
+        });
+        if talking {
+            duck_until = t + master.duck_release_ms.load(Ordering::Relaxed) as i64 * 1_000_000;
+        }
+        let duck_db = f32::from_bits(master.duck_db.load(Ordering::Relaxed));
+        let duck_target = if t < duck_until { duck_db } else { 0.0 };
+        let duck_prev = duck_now_db;
+        // Down in about 150 ms, back up in about 600 ms.
+        let (down, up) = (duck_db.abs() / 15.0, duck_db.abs() / 60.0);
+        duck_now_db = if duck_target < duck_now_db { (duck_now_db - down.max(0.1)).max(duck_target) } else { (duck_now_db + up.max(0.05)).min(duck_target) };
+        master.ducking_db.store(duck_now_db.to_bits(), Ordering::Relaxed);
+        let (duck_from, duck_to) = (10f32.powf(duck_prev / 20.0), 10f32.powf(duck_now_db / 20.0));
+
+        // Pass 2: into the mixes.
+        let mut rec_mix = vec![0.0f32; BLOCK * 2];
+        let mut stream_mix = vec![0.0f32; BLOCK * 2];
+        let mut solos: Vec<(usize, Vec<f32>)> = Vec::new();
+        let mut tracks: Vec<(usize, bool, Vec<f32>)> = Vec::new();
+        let mut contrib: Vec<(usize, bool, bool, Vec<f32>)> = Vec::new();
+        let mut talkback_sig: Option<Vec<f32>> = None;
+        for (i, inp) in inputs.iter().enumerate() {
+            let strip = &mut strips[i];
+            let Some(buf) = processed[i].as_ref() else { continue };
             let g = inp.shared.gain();
             if wanted.contains(&MixKind::Input(i)) {
                 solos.push((i, buf.iter().map(|s| s * g).collect()));
@@ -634,6 +724,16 @@ pub fn run_mixer(inputs: Vec<MixInput>, names: Vec<String>, taps: MixTaps, maste
                 tracks.push((i, false, buf.clone()));
             }
             let post = wanted.contains(&MixKind::Track { input: i, post_fader: true });
+            if Some(i) == talkback_input {
+                // Talkback: only ever in feeds with talkback, while pressed.
+                if talkback_on {
+                    talkback_sig = Some(buf.iter().map(|s| s * g).collect());
+                }
+                if post {
+                    tracks.push((i, true, vec![0.0; buf.len()]));
+                }
+                continue;
+            }
             let mut post_buf = if post { vec![0.0f32; buf.len()] } else { Vec::new() };
             let to_rec = inp.shared.to_recording.load(Ordering::Relaxed);
             let to_stream = inp.shared.to_stream.load(Ordering::Relaxed);
@@ -643,15 +743,24 @@ pub fn run_mixer(inputs: Vec<MixInput>, names: Vec<String>, taps: MixTaps, maste
                 }
                 continue;
             }
+            let ducked = inp.shared.duck.load(Ordering::Relaxed);
+            let keep = minus_any & (1u64 << i.min(63)) != 0 && i < 64;
+            let mut mine = if keep { vec![0.0f32; buf.len()] } else { Vec::new() };
+            let frames = buf.len() / 2;
             for (k, f) in buf.chunks_exact(2).enumerate() {
                 if strip.level != strip.target {
                     strip.level = if strip.target > strip.level { (strip.level + strip.step).min(strip.target) } else { (strip.level - strip.step).max(strip.target) };
                 }
-                let gl = g * strip.level;
+                let duck = if ducked { duck_from + (duck_to - duck_from) * (k as f32 / frames as f32) } else { 1.0 };
+                let gl = g * strip.level * duck;
                 let (l, r) = (f[0] * gl, f[1] * gl);
                 if post {
                     post_buf[2 * k] = l;
                     post_buf[2 * k + 1] = r;
+                }
+                if keep {
+                    mine[2 * k] = l;
+                    mine[2 * k + 1] = r;
                 }
                 if to_rec {
                     rec_mix[2 * k] += l;
@@ -665,7 +774,12 @@ pub fn run_mixer(inputs: Vec<MixInput>, names: Vec<String>, taps: MixTaps, maste
             if post {
                 tracks.push((i, true, post_buf));
             }
+            if keep {
+                contrib.push((i, to_rec, to_stream, mine));
+            }
         }
+        // The mixes before their master sections, for feeds that leave someone out.
+        let (rec_raw, stream_raw) = if minus_any != 0 { (rec_mix.clone(), stream_mix.clone()) } else { (Vec::new(), Vec::new()) };
         // Integrated loudness restarts with each take / stream.
         if master.reset_recording.swap(false, Ordering::Relaxed) {
             rec.meter.reset_integrated();
@@ -679,6 +793,7 @@ pub fn run_mixer(inputs: Vec<MixInput>, names: Vec<String>, taps: MixTaps, maste
             leveller.process(&mut stream_mix, f32::from_bits(master.target_lufs.load(Ordering::Relaxed)) as f64);
         }
         stream.finish(&mut stream_mix, &master);
+        let dim = 10f32.powf(f32::from_bits(master.talkback_dim_db.load(Ordering::Relaxed)) / 20.0);
         let rec_block = AudioBlock { pts: t, rate: MIX_RATE, channels: 2, samples: rec_mix };
         let stream_block = AudioBlock { pts: t, rate: MIX_RATE, channels: 2, samples: stream_mix };
         for (_, kind, tap) in taps.lock().unwrap().iter() {
@@ -693,6 +808,30 @@ pub fn run_mixer(inputs: Vec<MixInput>, names: Vec<String>, taps: MixTaps, maste
                     Some((_, _, s)) => AudioBlock { pts: t, rate: MIX_RATE, channels: 2, samples: s.clone() },
                     None => AudioBlock { pts: t, rate: MIX_RATE, channels: 2, samples: vec![0.0; BLOCK * 2] },
                 },
+                MixKind::Feed { stream: is_stream, minus, talkback } => {
+                    let mut out = if *minus == 0 {
+                        if *is_stream { stream_block.samples.clone() } else { rec_block.samples.clone() }
+                    } else {
+                        let mut o = if *is_stream { stream_raw.clone() } else { rec_raw.clone() };
+                        for (i, to_rec, to_stream, c) in &contrib {
+                            if minus & (1u64 << i) != 0 && (if *is_stream { *to_stream } else { *to_rec }) {
+                                for (a, b) in o.iter_mut().zip(c) {
+                                    *a -= b;
+                                }
+                            }
+                        }
+                        feed_limiters.entry((*is_stream, *minus)).or_insert_with(|| Limiter::new(-1.0)).process(&mut o);
+                        o
+                    };
+                    if *talkback {
+                        if let Some(tb) = &talkback_sig {
+                            for (a, b) in out.iter_mut().zip(tb) {
+                                *a = *a * dim + b;
+                            }
+                        }
+                    }
+                    AudioBlock { pts: t, rate: MIX_RATE, channels: 2, samples: out }
+                }
             };
             let _ = tap.try_send(block);
         }
@@ -796,6 +935,81 @@ mod tests {
         eprintln!("44.1k -30ppm: worst error {:.3} ms, beep offset {:.3} ms", err / 1e6, beep_offset as f64 / 1e6);
         assert!(err < 1.0e6, "alignment error {err} ns");
         assert!(beep_offset.abs() < 1_500_000, "beep {beep_offset} ns off");
+    }
+
+    /// Run the mixer on steady inputs (one constant value each, both
+    /// channels) and return the last block each tap got.
+    fn mix(values: &[f32], cfgs: Vec<crate::config::AudioConfig>, kinds: Vec<MixKind>, setup: impl FnOnce(&MixShared)) -> Vec<Vec<f32>> {
+        let now = clock::now();
+        let mut inputs = Vec::new();
+        for (v, cfg) in values.iter().zip(cfgs) {
+            let (tx, rx) = crossbeam_channel::bounded(2000);
+            let mut t = now - 300_000_000;
+            while t < now + 2_500_000_000 {
+                tx.send(AudioBlock { pts: t, rate: MIX_RATE, channels: 2, samples: vec![*v; BLOCK * 2] }).unwrap();
+                t += BLOCK_NS;
+            }
+            inputs.push(MixInput { rx, left: 1, right: 2, delay: 0, shared: InputShared::new(&cfg), gaps_expected: false });
+        }
+        let names = (0..inputs.len()).map(|i| format!("In {i}")).collect();
+        let master = MixShared::new(&crate::config::MixConfig { limiter: false, ..Default::default() });
+        setup(&master);
+        let taps: MixTaps = Arc::new(Mutex::new(Vec::new()));
+        let mut rxs = Vec::new();
+        for (id, k) in kinds.into_iter().enumerate() {
+            let (tx, rx) = crossbeam_channel::unbounded();
+            taps.lock().unwrap().push((id as u64, k, tx));
+            rxs.push(rx);
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let st = Arc::new(Mutex::new(Status::default()));
+        let (s2, m2) = (stop.clone(), master.clone());
+        let th = std::thread::spawn(move || run_mixer(inputs, names, taps, m2, st, s2, 60_000_000));
+        std::thread::sleep(std::time::Duration::from_millis(1200));
+        stop.store(true, Ordering::Relaxed);
+        th.join().unwrap();
+        rxs.iter().map(|r| r.try_iter().last().map(|b| b.samples).unwrap_or_default()).collect()
+    }
+
+    fn input(duck: bool) -> crate::config::AudioConfig {
+        crate::config::AudioConfig { duck, ..Default::default() }
+    }
+
+    #[test]
+    fn mix_minus_leaves_the_caller_out() {
+        let out = mix(&[0.1, 0.2, 0.05], vec![input(false), input(false), input(false)], vec![MixKind::Recording, MixKind::Feed { stream: false, minus: 0b010, talkback: false }], |_| {});
+        let (all, minus) = (out[0][100], out[1][100]);
+        assert!((all - 0.35).abs() < 0.01, "everyone: {all}");
+        assert!((minus - 0.15).abs() < 0.01, "without input 2: {minus}");
+    }
+
+    #[test]
+    fn talkback_reaches_feeds_only() {
+        let feeds = vec![MixKind::Recording, MixKind::Feed { stream: false, minus: 0, talkback: true }, MixKind::Feed { stream: false, minus: 0, talkback: false }];
+        let out = mix(&[0.2, 0.3], vec![input(false), input(false)], feeds.clone(), |m| {
+            m.set_talkback_input(Some(1));
+            m.set_talkback(true);
+        });
+        // The talkback mic is never in the recording; the feed hears it over
+        // the mix dipped by 12 dB.
+        assert!((out[0][100] - 0.2).abs() < 0.01, "recording: {}", out[0][100]);
+        let dipped = 0.2 * 10f32.powf(-12.0 / 20.0);
+        assert!((out[1][100] - (dipped + 0.3)).abs() < 0.01, "talkback feed: {}", out[1][100]);
+        assert!((out[2][100] - 0.2).abs() < 0.01, "no-talkback feed: {}", out[2][100]);
+        // Not pressed: nothing.
+        let out = mix(&[0.2, 0.3], vec![input(false), input(false)], feeds, |m| m.set_talkback_input(Some(1)));
+        assert!((out[1][100] - 0.2).abs() < 0.01);
+    }
+
+    #[test]
+    fn music_ducks_under_voices() {
+        // Music at 0.1 (ducked), a voice at 0.3: the music drops 12 dB.
+        let out = mix(&[0.1, 0.3], vec![input(true), input(false)], vec![MixKind::Recording], |_| {});
+        let want = 0.3 + 0.1 * 10f32.powf(-12.0 / 20.0);
+        assert!((out[0][100] - want).abs() < 0.01, "{} (want {want})", out[0][100]);
+        // Nobody talking (the voice is below the threshold): music stays up.
+        let out = mix(&[0.1, 0.001], vec![input(true), input(false)], vec![MixKind::Recording], |_| {});
+        assert!((out[0][100] - 0.101).abs() < 0.01, "{}", out[0][100]);
     }
 
     #[test]

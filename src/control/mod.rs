@@ -17,6 +17,11 @@
 //! media:Clips:play / pause / toggle / restart / next / previous
 //! source:2                   source 2 full screen (to preview in preview mode)
 //! captions  captions:on  captions:off   live captions on screen
+//! pad:1  pad:Applause        a sound pad (press: plays, or stops if playing)
+//! pad:1:play / stop / release           pads:stop    every pad
+//! talkback  talkback:on  talkback:off   the producer's mic to presenters
+//! syrinscape:2  syrinscape:Tavern       a Syrinscape button (by number or name)
+//! syrinscape:mood:19  syrinscape:element:1541818  syrinscape:stop  syrinscape:volume:0.8
 //! ```
 
 pub mod keys;
@@ -25,6 +30,7 @@ pub mod osc;
 pub mod profiles;
 pub mod remote;
 pub mod state;
+pub mod syrinscape;
 pub mod ws;
 
 use crate::config::{Config, TransitionMode};
@@ -45,7 +51,7 @@ pub enum Target {
 }
 
 impl Target {
-    fn parse(s: &str) -> Target {
+    pub fn parse(s: &str) -> Target {
         match s.trim().parse::<usize>() {
             Ok(n) if n >= 1 => Target::Index(n - 1),
             _ => Target::Name(s.trim().to_string()),
@@ -72,6 +78,16 @@ pub enum MediaCmd {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum PadCmd {
+    /// Like pressing the pad: plays, or stops it if it's playing.
+    Press,
+    /// Let go (hold pads stop).
+    Release,
+    Play,
+    Stop,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     Scene(Target),
     CutTo(Target),
@@ -94,6 +110,12 @@ pub enum Action {
     Source(Target),
     /// Live captions on screen.
     Captions(Toggle),
+    Pad(Target, PadCmd),
+    /// Stop every pad.
+    PadsStop,
+    /// The producer's mic in the presenters' (and guests') ears.
+    Talkback(Toggle),
+    Syrinscape(syrinscape::SyrinCmd),
 }
 
 /// A fader position (0..1) as a level: 0 is silence (-60 dB), 0.79 is
@@ -180,6 +202,27 @@ impl Action {
             }
             "source" | "camera" => Action::Source(Target::parse(need(rest, &verb)?)),
             "captions" | "cc" | "subtitles" => Action::Captions(toggle(rest)?),
+            "pad" | "sound" => {
+                let r = need(rest, &verb)?;
+                let (target, cmd) = match r.rsplit_once(':') {
+                    Some((a, b)) => match b.trim().to_lowercase().as_str() {
+                        "play" | "start" => (a, PadCmd::Play),
+                        "stop" => (a, PadCmd::Stop),
+                        "release" | "up" => (a, PadCmd::Release),
+                        "press" | "toggle" | "down" => (a, PadCmd::Press),
+                        _ => (r, PadCmd::Press),
+                    },
+                    None => (r, PadCmd::Press),
+                };
+                if target.trim().eq_ignore_ascii_case("all") && cmd == PadCmd::Stop {
+                    Action::PadsStop
+                } else {
+                    Action::Pad(Target::parse(target), cmd)
+                }
+            }
+            "pads" if rest.is_some_and(|r| r.trim().eq_ignore_ascii_case("stop")) => Action::PadsStop,
+            "talkback" | "tb" => Action::Talkback(toggle(rest)?),
+            "syrinscape" | "syrin" => Action::Syrinscape(syrinscape::SyrinCmd::parse(need(rest, &verb)?)?),
             other => return Err(format!("unknown command \"{other}\"")),
         })
     }
@@ -227,6 +270,21 @@ pub fn suggestions(cfg: &Config) -> Vec<(String, String)> {
     for (i, s) in cfg.sources.iter().enumerate() {
         v.push((format!("source:{}", i + 1), format!("Source {}: {} full screen", i + 1, s.name)));
     }
+    for (i, p) in cfg.pads.iter().enumerate() {
+        v.push((format!("pad:{}", i + 1), format!("Pad {}: {}", i + 1, p.name)));
+    }
+    if !cfg.pads.is_empty() {
+        v.push(("pads:stop".into(), "Stop every pad".into()));
+    }
+    if cfg.syrinscape.enabled {
+        for (i, b) in cfg.syrinscape.buttons.iter().enumerate() {
+            v.push((format!("syrinscape:{}", i + 1), format!("Syrinscape {}: {}", i + 1, b.name)));
+        }
+        v.push(("syrinscape:stop".into(), "Syrinscape: stop everything".into()));
+    }
+    if !cfg.mix.talkback_input.trim().is_empty() {
+        v.push(("talkback".into(), "Talkback on/off".into()));
+    }
     for s in cfg.sources.iter().filter(|s| s.device.trim().eq_ignore_ascii_case("media")) {
         for (c, l) in [("toggle", "play/pause"), ("restart", "restart"), ("next", "next")] {
             v.push((format!("media:{}:{c}", s.name), format!("{}: {l}", s.name)));
@@ -256,6 +314,12 @@ mod tests {
         assert_eq!(Action::parse("gain:Mic:-6"), Ok(Action::Gain(Target::Name("Mic".into()), -6.0)));
         assert_eq!(Action::parse("source:2"), Ok(Action::Source(Target::Index(1))));
         assert_eq!(Action::parse("cc:off"), Ok(Action::Captions(Toggle::Off)));
+        assert_eq!(Action::parse("pad:2"), Ok(Action::Pad(Target::Index(1), PadCmd::Press)));
+        assert_eq!(Action::parse("pad:Applause:stop"), Ok(Action::Pad(Target::Name("Applause".into()), PadCmd::Stop)));
+        assert_eq!(Action::parse("pad:Ding: dong"), Ok(Action::Pad(Target::Name("Ding: dong".into()), PadCmd::Press)));
+        assert_eq!(Action::parse("pads:stop"), Ok(Action::PadsStop));
+        assert_eq!(Action::parse("pad:all:stop"), Ok(Action::PadsStop));
+        assert_eq!(Action::parse("talkback:on"), Ok(Action::Talkback(Toggle::On)));
         assert!(Action::parse("explode").is_err());
         assert_eq!(fader_db(0.0), -60.0);
         assert!((fader_db(100.0 / 127.0)).abs() < 1e-9);

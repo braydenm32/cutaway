@@ -160,11 +160,11 @@ impl Engine {
         let mut export_files = Vec::new();
 
         // One video file (and its proxy): returns where its frames go.
-        let mut add_video = |label: String, file: String, fps: u32, size: (u32, u32), with_audio: bool, rate: u32, retimer: Option<recorder::Retimer>, queue: usize, tracks: Vec<(String, crate::media::AudioConfig)>| {
+        let mut add_video = |label: String, file: String, fps: u32, size: (u32, u32), with_audio: bool, rate: u32, retimer: Option<recorder::Retimer>, queue: usize, tracks: Vec<(String, crate::media::AudioConfig)>, clips: Option<Arc<super::clips::ClipBuffer>>| {
             let path = folder.join(&file);
             let (mtx, mrx) = unbounded();
             let acfg = if with_audio { audio_cfg.clone() } else { None };
-            writers.push((label.clone(), recorder::spawn_mp4(path.clone(), brand, fps, acfg.clone(), tracks.clone(), mrx, self.status.clone(), label.clone(), opts.clone())));
+            writers.push((label.clone(), recorder::spawn_mp4(path.clone(), brand, fps, acfg.clone(), tracks.clone(), mrx, self.status.clone(), label.clone(), opts.clone(), clips)));
             let mut muxes = vec![mtx.clone()];
             if acfg.is_some() {
                 audio_outs.push(mtx.clone());
@@ -172,7 +172,7 @@ impl Engine {
             let proxy = proxy_backend.map(|backend| {
                 let plabel = format!("{label} proxy");
                 let (ptx, prx) = unbounded();
-                writers.push((plabel.clone(), recorder::spawn_mp4(folder.join("Proxies").join(&file), brand, fps, acfg.clone(), tracks.clone(), prx, self.status.clone(), plabel, opts.clone())));
+                writers.push((plabel.clone(), recorder::spawn_mp4(folder.join("Proxies").join(&file), brand, fps, acfg.clone(), tracks.clone(), prx, self.status.clone(), plabel, opts.clone(), None)));
                 muxes.push(ptx.clone());
                 if acfg.is_some() {
                     audio_outs.push(ptx.clone());
@@ -198,7 +198,8 @@ impl Engine {
         {
             let (cw, ch) = self.info.canvas;
             let rate = encode::record_bitrate_kbps(codec, out.program_bitrate_kbps, cw, ch, fps);
-            let (path, vtx, muxes) = add_video("Program".into(), format!("Program.{ext}"), fps, (cw, ch), true, rate, None, (fps as usize / 2).max(8), track_cfgs.clone());
+            self.clips.start(folder.clone(), fps, brand, audio_cfg.clone(), out.clip_seconds.clamp(5, 600));
+            let (path, vtx, muxes) = add_video("Program".into(), format!("Program.{ext}"), fps, (cw, ch), true, rate, None, (fps as usize / 2).max(8), track_cfgs.clone(), Some(self.clips.clone()));
             export_files.push(ExportFile { path, name: "Program".into(), width: cw, height: ch, fps, has_audio: audio_cfg.is_some(), source: None, tc_frame: tc_for(fps) });
             self.video_taps.lock().unwrap().program = Some(ProgramTap { tx: vtx, from: t0 });
             program_muxes = muxes;
@@ -216,7 +217,7 @@ impl Engine {
             // Short queue: these can be camera buffers, and holding many
             // starves the camera's buffer pool.
             let retimer = Some(recorder::Retimer::new(t0, s.fps, s.slot.delay));
-            let (path, vtx, _) = add_video(label, file, s.fps, s.size, with_audio, rate, retimer, 8, Vec::new());
+            let (path, vtx, _) = add_video(label, file, s.fps, s.size, with_audio, rate, retimer, 8, Vec::new(), None);
             export_files.push(ExportFile { path, name: s.name.clone(), width: s.size.0, height: s.size.1, fps: s.fps, has_audio: with_audio, source: Some(i), tc_frame: tc_for(s.fps) });
             s.slot.start_iso_tap(vtx, t0);
         }
@@ -314,10 +315,35 @@ impl Engine {
         Ok(name)
     }
 
+    /// Save the last `seconds` of the recording (the setting when None) as
+    /// its own file in the take's Clips folder, marked in the take.
+    pub fn save_clip(&self, seconds: Option<u32>) -> Result<String> {
+        let number = self.clips.reserve()?;
+        let seconds = seconds.unwrap_or(self.config().output.clip_seconds).clamp(1, 600);
+        let name = format!("Clip {number}");
+        let _ = self.add_marker(Some(name.clone()));
+        let (clips, status, waker) = (self.clips.clone(), self.status.clone(), self.waker.clone());
+        std::thread::Builder::new().name("save clip".into()).spawn(move || {
+            // Let what's on screen now reach the file first.
+            std::thread::sleep(Duration::from_nanos((VIDEO_LATENCY + 700_000_000) as u64));
+            let msg = match clips.save(seconds, number) {
+                Ok(clip) => {
+                    let file = clip.path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                    (LogLevel::Info, format!("Saved {file} ({:.0} s) in the take's Clips folder", clip.seconds))
+                }
+                Err(e) => (LogLevel::Warning, format!("{name} couldn't be saved: {e:#}")),
+            };
+            status.lock().unwrap().push(msg.0, msg.1);
+            waker();
+        })?;
+        Ok(format!("Clip {number}"))
+    }
+
     /// Stop recording. Files are finalized in the background; watch
     /// `status.rec` (or call `wait_finalized`).
     pub fn stop_recording(&self) {
         let Some(take) = self.take.lock().unwrap().take() else { return };
+        self.clips.stop();
         let fps = self.info.fps;
         let t1 = next_boundary(fps);
         take.t1.store(t1, Ordering::Relaxed);
@@ -517,6 +543,24 @@ impl SideFiles {
         }
         files.push(("Take.txt".into(), take_info(setup, report, &self.markers, self.tc_seconds, cfg, !timelines.is_empty())));
 
+        // Projects for audio software and Resolve.
+        let session = if cfg.output.daw_sessions || cfg.output.resolve_project {
+            let marks: Vec<(f64, String)> = self.markers.iter().map(|m| (m.at as f64 / 1e9, m.name.clone())).collect();
+            super::sessions::Session::from_folder(&self.folder, &marks, cfg.output.timecode.then_some(self.tc_seconds), fps).ok()
+        } else {
+            None
+        };
+        if let Some(s) = &session {
+            if cfg.output.daw_sessions {
+                files.push((format!("{take_name}.rpp"), s.reaper()));
+                extra.push("REAPER and Studio Pro / Bitwig / Cubase sessions".to_string());
+            }
+            if cfg.output.resolve_project {
+                extra.push("the DaVinci Resolve project script's take file".to_string());
+            }
+        }
+        let videos: Vec<String> = self.export_files.iter().filter(|f| written.contains(&f.path)).filter_map(|f| f.path.file_name().map(|n| n.to_string_lossy().to_string())).collect();
+
         for dir in std::iter::once(&self.folder).chain(self.backup.iter()) {
             for (name, text) in &files {
                 let _ = std::fs::write(dir.join(name), text);
@@ -532,6 +576,19 @@ impl SideFiles {
                 let text = if name.ends_with(".fcpxml") { export::fcpxml(&te) } else { export::premiere_xml(&te) };
                 let _ = std::fs::write(dir.join(name), text);
             }
+            if let Some(s) = &session {
+                if cfg.output.daw_sessions {
+                    let _ = s.write_dawproject(&dir.join(format!("{take_name}.dawproject")));
+                }
+                if cfg.output.resolve_project {
+                    let timeline = timelines.iter().find(|t| t.0.ends_with(".fcpxml")).map(|t| t.0.as_str());
+                    let _ = std::fs::write(dir.join(format!("{take_name} (Resolve).lua")), s.resolve_lua(dir, &videos, timeline));
+                }
+            }
+        }
+        // The Resolve script starts at the latest take.
+        if let Some(dir) = crate::config::default_config_path().parent() {
+            let _ = std::fs::write(super::sessions::last_take_file(dir), self.folder.to_string_lossy().as_bytes());
         }
         // The backup copy is only complete once every file arrived there.
         if let Some(b) = &self.backup {

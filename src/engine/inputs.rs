@@ -18,13 +18,13 @@ use std::sync::{Arc, Mutex};
 /// Test pictures and tones never disconnect.
 fn is_generated(device: &str) -> bool {
     let d = device.trim().to_lowercase();
-    d == "test" || d.starts_with("test:")
+    d == "test" || d.starts_with("test:") || d == "pads"
 }
 
 /// Whether opening needs the list of connected devices.
 pub fn needs_device_list(device: &str) -> bool {
     let d = device.trim().to_lowercase();
-    !(is_generated(&d) || d == "screen" || d == "default" || d.is_empty() || d == "media" || d.starts_with("source:") || d.starts_with("ndi:") || d.starts_with("frame:") || super::netsrc::is_network(&d))
+    !(is_generated(&d) || d == "screen" || d == "default" || d.is_empty() || d == "media" || d.starts_with("source:") || d.starts_with("ndi:") || d.starts_with("frame:") || d.starts_with("app:") || d == "pads" || super::netsrc::is_network(&d))
 }
 
 pub struct VideoInput {
@@ -167,6 +167,12 @@ impl AudioInputDev {
     /// (silence between clips is normal, not a fault).
     pub fn from_source(&self) -> bool {
         self.cfg.device.trim().starts_with("source:")
+    }
+
+    /// Quiet spells and gaps are normal: sound from a source or an app.
+    pub fn gaps_expected(&self) -> bool {
+        let d = self.cfg.device.trim();
+        self.from_source() || d.starts_with("app:")
     }
 }
 

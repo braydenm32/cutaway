@@ -28,6 +28,10 @@ pub struct Scene {
     /// Audio inputs this scene turns off.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub audio_off: Vec<String>,
+    /// Commands run when you take this scene: a Syrinscape mood, a sound
+    /// pad, a graphic (e.g. "syrinscape:Tavern", "pad:Whoosh").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cues: Vec<String>,
 }
 
 impl Scene {

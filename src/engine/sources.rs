@@ -6,7 +6,7 @@ use crate::devices::DeviceInfo;
 use crate::media::testsrc::{TestPattern, TestTone, PATTERNS};
 use crate::media::{clock, AudioBlock, Ns, VideoFrame, NS_PER_SEC};
 use crate::platform;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use crossbeam_channel::Sender;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -277,6 +277,16 @@ pub fn start_audio(index: usize, cfg: &AudioConfig, devices: &[DeviceInfo], tx: 
             rate: 48_000,
             channels: 2,
         });
+    }
+    if let Some(app) = cfg.device.trim().strip_prefix("app:") {
+        let sink: platform::AudioSink = Arc::new(move |b| {
+            let _ = tx.send(b);
+        });
+        return platform::app_audio::open(app.trim(), sink);
+    }
+    if lower == "pads" {
+        let bank = hub.pads.lock().unwrap().clone().ok_or_else(|| anyhow!("the sound pads aren't running"))?;
+        return Ok(AudioStarted { running: super::pads::start_strip(bank, tx)?, description: "sound pads".into(), rate: 48_000, channels: 2 });
     }
     if lower == "test" || lower.starts_with("test:") {
         let channels = cfg.channels.clamp(1, 64) as u16;

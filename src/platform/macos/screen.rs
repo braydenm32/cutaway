@@ -20,7 +20,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 /// Carries an Objective-C object out of a completion handler.
-struct SendBox<T>(T);
+pub(super) struct SendBox<T>(pub T);
 unsafe impl<T> Send for SendBox<T> {}
 
 struct Shared {
@@ -92,12 +92,13 @@ impl Drop for ScreenRunning {
     }
 }
 
-fn error_text(err: *mut NSError) -> Option<String> {
+pub(super) fn error_text(err: *mut NSError) -> Option<String> {
     unsafe { err.as_ref() }.map(|e| e.localizedDescription().to_string())
 }
 
-pub fn open_screen(w: u32, h: u32, fps: u32, sink: FrameSink) -> Result<Box<dyn Running>> {
-    // Which displays exist (this is also what asks for permission).
+/// What can be captured: displays, windows and apps. The first call is
+/// also what asks for Screen Recording permission.
+pub(super) fn shareable_content() -> Result<Retained<SCShareableContent>> {
     let (tx, rx) = mpsc::channel();
     let block = RcBlock::new(move |content: *mut SCShareableContent, err: *mut NSError| {
         let r = match unsafe { content.as_ref() } {
@@ -107,11 +108,15 @@ pub fn open_screen(w: u32, h: u32, fps: u32, sink: FrameSink) -> Result<Box<dyn 
         let _ = tx.send(r);
     });
     unsafe { SCShareableContent::getShareableContentWithCompletionHandler(&block) };
-    let content = rx
+    Ok(rx
         .recv_timeout(Duration::from_secs(15))
         .map_err(|_| anyhow!("screen capture didn't answer"))?
         .map_err(|e| anyhow!("screen capture isn't allowed ({e}). Turn on Cutaway in System Settings → Privacy & Security → Screen Recording, then restart it."))?
-        .0;
+        .0)
+}
+
+pub fn open_screen(w: u32, h: u32, fps: u32, sink: FrameSink) -> Result<Box<dyn Running>> {
+    let content = shareable_content()?;
     let display = unsafe { content.displays() }.firstObject().ok_or_else(|| anyhow!("no display found"))?;
 
     let filter = unsafe { SCContentFilter::initWithDisplay_excludingWindows(SCContentFilter::alloc(), &display, &NSArray::new()) };

@@ -17,7 +17,7 @@ asio = ["cpal/asio"]
 # Windows and Linux: live captions with Whisper (whisper.cpp), on the
 # computer. Building needs CMake and a C++ compiler. (macOS uses Apple's
 # Speech framework instead.)
-whisper = ["dep:whisper-rs", "dep:ureq"]
+whisper = ["dep:whisper-rs"]
 
 [dependencies]
 eframe = "0.37"
@@ -43,6 +43,10 @@ ab_glyph = "0.2"
 libloading = "0.8"
 serde_json = "1"
 epaint_default_fonts = "0.37"
+# Sound pads and stinger sounds: WAV, AIFF, MP3, AAC, FLAC, Ogg, ALAC, CAF.
+symphonia = { version = "0.6.1", features = ["mp3", "aac", "isomp4", "aiff", "alac", "caf"] }
+# HTTPS requests: Syrinscape, speech model and tunnel downloads.
+ureq = { version = "3", default-features = false, features = ["native-tls"] }
 
 # Software encoders: used for development builds on Linux. macOS uses
 # VideoToolbox and AudioToolbox; Windows uses Media Foundation.
@@ -54,7 +58,6 @@ fdk-aac = "0.8"
 # ONNX Runtime, loaded at run time (DirectML on Windows). macOS uses Vision.
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 whisper-rs = { version = "0.16", optional = true }
-ureq = { version = "3", default-features = false, features = ["native-tls"], optional = true }
 ort = { version = "=2.0.0-rc.14", default-features = false, features = ["std", "load-dynamic", "api-20"] }
 
 # Audio devices and MIDI controllers.
@@ -76,13 +79,16 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
+    "Win32_Media_Audio",
     "Win32_Media_KernelStreaming",
     "Win32_Media_MediaFoundation",
+    "Win32_Media_Multimedia",
     "Win32_Security",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Console",
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Memory",
     "Win32_System_Ole",
     "Win32_System_Performance",
@@ -105,7 +111,7 @@ dispatch2 = "0.3"
 objc2-foundation = "0.3"
 objc2-core-foundation = "0.3"
 objc2-av-foundation = { version = "0.3", features = ["objc2-core-media"] }
-objc2-core-media = "0.3"
+objc2-core-media = { version = "0.3", features = ["objc2-core-audio-types"] }
 objc2-core-video = "0.3"
 objc2-video-toolbox = "0.3"
 objc2-audio-toolbox = "0.3"

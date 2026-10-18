@@ -1,6 +1,7 @@
 //! Media building blocks that don't depend on any platform: frame and packet
 //! types, the clock, bitstream helpers and the file/stream formats.
 
+pub mod audiofile;
 pub mod clock;
 pub mod demux;
 pub mod flv;

@@ -16,6 +16,8 @@ use std::time::Duration;
 #[derive(Default)]
 pub struct AudioHub {
     map: Mutex<HashMap<String, Sender<AudioBlock>>>,
+    /// The sound pads, for an input set to "pads".
+    pub pads: Mutex<Option<Arc<super::pads::PadBank>>>,
 }
 
 impl AudioHub {
