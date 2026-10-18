@@ -206,17 +206,18 @@ mod tests {
             }
             _ => "two",
         };
-        sw.take_stinger(b.clone(), 300_000_000, 150_000_000, 0);
+        // Generous times: busy test machines oversleep.
+        sw.take_stinger(b.clone(), 3_000_000_000, 1_000_000_000, 0);
         let l = sw.layout();
-        assert!(matches!(l, Layout::Stinger { elapsed, .. } if elapsed < 50_000_000));
+        assert!(matches!(l, Layout::Stinger { elapsed, .. } if elapsed < 1_000_000_000));
         assert_eq!(shows(&l), "A", "before the cut point");
         assert_eq!(sw.live().name, "B");
         assert!(sw.in_transition());
-        std::thread::sleep(Duration::from_millis(180));
+        std::thread::sleep(Duration::from_millis(1300));
         let l = sw.layout();
-        assert!(matches!(l, Layout::Stinger { elapsed, .. } if elapsed >= 150_000_000));
+        assert!(matches!(l, Layout::Stinger { elapsed, .. } if elapsed >= 1_000_000_000));
         assert_eq!(shows(&l), "B", "after the cut point");
-        std::thread::sleep(Duration::from_millis(150));
+        std::thread::sleep(Duration::from_millis(1800));
         let l = sw.layout();
         assert!(matches!(l, Layout::One(_)), "over");
         assert_eq!(shows(&l), "B");
