@@ -57,7 +57,10 @@ def problems(lines: list[str]) -> list[tuple[str, str]]:
             j = i + 1
             while j < len(lines) and j < i + 30 and not lines[j].startswith("test ") and not lines[j].startswith("note: run with"):
                 j += 1
-            found.append((f"Panic in {m.group(1)}", "\n".join(lines[i:j])))
+            block = lines[i:j]
+            # A test that expects a panic (it still passed).
+            if "ok" not in (l.strip() for l in block):
+                found.append((f"Panic in {m.group(1)}", "\n".join(block)))
             i = j
             continue
         i += 1

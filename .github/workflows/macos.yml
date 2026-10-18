@@ -36,6 +36,9 @@ jobs:
           # the process, the report can say which one.
           cargo test --release -- --test-threads=1 --nocapture 2>&1 | tee ci-logs/1-tests.log
 
+      - name: Unit tests again, all at once (catches threads getting in each other's way)
+        run: cargo test --release 2>&1 | tee ci-logs/1b-tests-together.log
+
       - name: Build Cutaway.app
         run: ./macos/bundle.sh 2>&1 | tee ci-logs/2-bundle.log
 

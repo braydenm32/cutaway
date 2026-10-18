@@ -227,11 +227,16 @@ impl Transform {
         self.refresh_stream_info();
         self.drained = false;
         self.need_input = 0;
+        // Hints for synchronous transforms (Microsoft's H.264 encoder fails
+        // them with E_FAIL), but asynchronous ones only start on
+        // START_OF_STREAM.
         // SAFETY: plain calls.
         unsafe {
-            self.mft.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
-            self.mft.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
-            self.mft.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
+            let _ = self.mft.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
+            let started = self.mft.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
+            if self.events.is_some() {
+                started.map_err(|e| explain(&e, "Starting the encoder"))?;
+            }
         }
         Ok(())
     }
