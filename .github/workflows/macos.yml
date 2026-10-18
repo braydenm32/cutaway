@@ -6,10 +6,18 @@ on:
   push:
   workflow_dispatch:
 
+# A newer push replaces a run still going on the same branch.
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   macos:
     runs-on: macos-latest
     timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -18,27 +26,34 @@ jobs:
           targets: aarch64-apple-darwin
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
 
       - name: Unit tests
-        run: cargo test --release -- --nocapture
+        run: |
+          mkdir -p ci-logs
+          cargo test --release 2>&1 | tee ci-logs/1-tests.log
 
       - name: Build Cutaway.app
-        run: ./macos/bundle.sh
+        run: ./macos/bundle.sh 2>&1 | tee ci-logs/2-bundle.log
 
       # Bundling the camera needs a paid Apple Developer signature, so here
       # it's only compiled, to catch mistakes in the Swift code.
       - name: The virtual camera compiles
         run: |
           mkdir -p target/virtualcam-check
-          swiftc -O -target arm64-apple-macos13.0 -o target/virtualcam-check/camera macos/virtualcam/CameraExtension.swift
-          swiftc -O -target arm64-apple-macos13.0 -o target/virtualcam-check/installer macos/virtualcam/Installer.swift
+          {
+            swiftc -O -target arm64-apple-macos13.0 -o target/virtualcam-check/camera macos/virtualcam/CameraExtension.swift
+            swiftc -O -target arm64-apple-macos13.0 -o target/virtualcam-check/installer macos/virtualcam/Installer.swift
+          } 2>&1 | tee ci-logs/3-virtualcam.log
 
       - name: A test recording (test pictures and tone, Apple's encoders)
         run: |
           status=0
-          target/Cutaway.app/Contents/MacOS/Cutaway --demo 2 --headless --seconds 8 || status=$?
-          tail -40 ~/Library/Logs/Cutaway/Cutaway.log || true
-          ls -laR ~/Movies/Cutaway || true
+          target/Cutaway.app/Contents/MacOS/Cutaway --demo 2 --headless --seconds 8 > ci-logs/4-recording.log 2>&1 || status=$?
+          tail -60 ~/Library/Logs/Cutaway/Cutaway.log >> ci-logs/4-recording.log 2>&1 || true
+          ls -laR ~/Movies/Cutaway >> ci-logs/4-recording.log 2>&1 || true
+          cat ci-logs/4-recording.log
           exit $status
 
       - name: Zip the app
@@ -51,3 +66,7 @@ jobs:
         with:
           name: Cutaway-macos-arm64
           path: dist/*.zip
+
+      - name: Report what failed
+        if: failure()
+        run: python3 .github/ci-report.py ci-logs

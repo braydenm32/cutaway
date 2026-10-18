@@ -6,10 +6,18 @@ on:
   push:
   workflow_dispatch:
 
+# A newer push replaces a run still going on the same branch.
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   windows:
     runs-on: windows-latest
     timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -17,6 +25,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
+          cache-on-failure: true
           workspaces: |
             .
             windows/vcam
@@ -28,24 +37,31 @@ jobs:
           if ($f -and -not $f.Installed) { Install-WindowsFeature Server-Media-Foundation | Out-Host }
 
       - name: Unit tests (including Media Foundation encode and decode)
-        run: cargo test --release -- --nocapture
+        run: |
+          mkdir -p ci-logs
+          cargo test --release 2>&1 | tee ci-logs/1-tests.log
 
       - name: Virtual camera tests
-        run: cargo test --release --manifest-path windows/vcam/Cargo.toml
+        run: cargo test --release --manifest-path windows/vcam/Cargo.toml 2>&1 | tee ci-logs/2-vcam-tests.log
 
       - name: Build and package
-        shell: pwsh
-        run: powershell -ExecutionPolicy Bypass -File windows\build.ps1 -NoAsio
+        run: powershell.exe -ExecutionPolicy Bypass -File windows/build.ps1 -NoAsio 2>&1 | tee ci-logs/3-build.log
 
       - name: A test recording (test pictures and tone, Windows encoders)
         shell: pwsh
         run: |
           $p = Start-Process -FilePath dist\Cutaway\Cutaway.exe -ArgumentList "--demo","2","--headless","--seconds","8" -Wait -PassThru -NoNewWindow
-          Get-Content "$env:LOCALAPPDATA\Cutaway\Logs\Cutaway.log" -Tail 40 -ErrorAction SilentlyContinue
+          $out = @("exit code $($p.ExitCode)")
+          $out += Get-Content "$env:LOCALAPPDATA\Cutaway\Logs\Cutaway.log" -Tail 60 -ErrorAction SilentlyContinue
+          $out += Get-ChildItem -Recurse "$env:USERPROFILE\Videos\Cutaway" -ErrorAction SilentlyContinue | ForEach-Object { "$($_.FullName) $($_.Length)" }
+          $out | Tee-Object -FilePath ci-logs\4-recording.log
           if ($p.ExitCode -ne 0) { throw "the test recording failed ($($p.ExitCode))" }
-          Get-ChildItem -Recurse "$env:USERPROFILE\Videos\Cutaway" | Select-Object FullName, Length | Format-Table -AutoSize
 
       - uses: actions/upload-artifact@v4
         with:
           name: Cutaway-windows-x64
           path: dist/*.zip
+
+      - name: Report what failed
+        if: failure()
+        run: python .github/ci-report.py ci-logs
