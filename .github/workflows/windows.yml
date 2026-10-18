@@ -1,0 +1,51 @@
+# Builds and tests Cutaway on Windows (GitHub's Windows machines), and
+# keeps the Windows zip as a download on each run.
+name: Windows
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            windows/vcam
+
+      - name: Media Foundation (an optional feature on Windows Server)
+        shell: pwsh
+        run: |
+          $f = Get-WindowsFeature -Name Server-Media-Foundation -ErrorAction SilentlyContinue
+          if ($f -and -not $f.Installed) { Install-WindowsFeature Server-Media-Foundation | Out-Host }
+
+      - name: Unit tests (including Media Foundation encode and decode)
+        run: cargo test --release -- --nocapture
+
+      - name: Virtual camera tests
+        run: cargo test --release --manifest-path windows/vcam/Cargo.toml
+
+      - name: Build and package
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File windows\build.ps1 -NoAsio
+
+      - name: A test recording (test pictures and tone, Windows encoders)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist\Cutaway\Cutaway.exe -ArgumentList "--demo","2","--headless","--seconds","8" -Wait -PassThru -NoNewWindow
+          Get-Content "$env:LOCALAPPDATA\Cutaway\Logs\Cutaway.log" -Tail 40 -ErrorAction SilentlyContinue
+          if ($p.ExitCode -ne 0) { throw "the test recording failed ($($p.ExitCode))" }
+          Get-ChildItem -Recurse "$env:USERPROFILE\Videos\Cutaway" | Select-Object FullName, Length | Format-Table -AutoSize
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Cutaway-windows-x64
+          path: dist/*.zip

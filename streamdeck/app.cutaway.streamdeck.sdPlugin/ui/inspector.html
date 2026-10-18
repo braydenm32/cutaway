@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cutaway</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 4px 8px 12px; background: #2d2d2d; color: #d8d8d8; font: 9pt -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+  .row { display: flex; align-items: center; min-height: 26px; margin: 4px 0; }
+  .row > label { flex: 0 0 96px; color: #969696; text-align: right; padding-right: 10px; }
+  .row > .field { flex: 1; min-width: 0; }
+  input[type=text], input[type=password], select {
+    width: 100%; box-sizing: border-box; height: 24px; padding: 0 6px; border: none; border-radius: 3px;
+    background: #3d3d3d; color: #d8d8d8; font: inherit; outline: none;
+  }
+  input:focus, select:focus { box-shadow: 0 0 0 1px #6e6e6e; }
+  .check { display: flex; align-items: center; gap: 6px; }
+  h4 { margin: 14px 0 4px 106px; font-size: 9pt; font-weight: 600; color: #b0b0b0; }
+  .status { margin: 2px 0 0 106px; font-size: 8.5pt; }
+  .ok { color: #57c26a; }
+  .bad { color: #f2a516; }
+  .hint { margin: 2px 0 6px 106px; color: #8a8a8a; font-size: 8.5pt; line-height: 1.35; }
+  code { color: #c8c8c8; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+  <!-- Per action (shown for the action being edited). -->
+  <div data-for="scene">
+    <div class="row"><label for="scene">Scene</label><div class="field"><select id="scene" data-setting="scene" data-list="scenes"></select></div></div>
+    <div class="row"><label for="press">When pressed</label><div class="field"><select id="press" data-setting="press">
+      <option value="take">Take it (with the transition)</option>
+      <option value="preview">Put it in preview</option>
+      <option value="cut">Cut to it</option>
+    </select></div></div>
+  </div>
+  <div data-for="source">
+    <div class="row"><label for="source">Source</label><div class="field"><select id="source" data-setting="source" data-list="sources"></select></div></div>
+    <div class="hint">Shows the source full screen, like clicking it in Cutaway's multiview.</div>
+  </div>
+  <div data-for="take">
+    <div class="row"><label for="how">Button</label><div class="field"><select id="how" data-setting="how">
+      <option value="take">Take (with the transition)</option>
+      <option value="cut">Cut (instantly)</option>
+    </select></div></div>
+  </div>
+  <div data-for="transition">
+    <div class="row"><label for="style">Transition</label><div class="field"><select id="style" data-setting="style">
+      <option value="cut">Cut</option><option value="mix">Mix</option><option value="wipe">Wipe</option><option value="push">Push</option><option value="dip">Dip</option>
+    </select></div></div>
+  </div>
+  <div data-for="record">
+    <div class="row"><label></label><div class="field check"><input type="checkbox" id="holdToStop" data-setting="holdToStop" data-default="true"><label for="holdToStop">Hold for a second to stop</label></div></div>
+  </div>
+  <div data-for="live">
+    <div class="row"><label></label><div class="field check"><input type="checkbox" id="holdToStart" data-setting="holdToStart" data-default="true"><label for="holdToStart">Hold for a second to go live</label></div></div>
+    <div class="row"><label></label><div class="field check"><input type="checkbox" id="holdToEnd" data-setting="holdToEnd" data-default="true"><label for="holdToEnd">Hold for a second to end</label></div></div>
+  </div>
+  <div data-for="marker">
+    <div class="row"><label for="mlabel">Label</label><div class="field"><input type="text" id="mlabel" data-setting="label" placeholder="optional, e.g. Guest arrives"></div></div>
+  </div>
+  <div data-for="graphic">
+    <div class="row"><label for="graphic">Graphic</label><div class="field"><select id="graphic" data-setting="graphic" data-list="graphics"></select></div></div>
+  </div>
+  <div data-for="audio">
+    <div class="row"><label for="input">Input</label><div class="field"><select id="input" data-setting="input" data-list="inputs"></select></div></div>
+    <div class="row"><label for="step">Dial step</label><div class="field"><select id="step" data-setting="step">
+      <option value="0.5">0.5 dB</option><option value="1" selected>1 dB</option><option value="2">2 dB</option>
+    </select></div></div>
+    <div class="hint">On a key: on/off, with a level meter. On a Stream Deck+ dial: turn for level, press or tap for on/off.</div>
+  </div>
+  <div data-for="media">
+    <div class="row"><label for="player">Player</label><div class="field"><select id="player" data-setting="player" data-list="players"></select></div></div>
+    <div class="row"><label for="button">Button</label><div class="field"><select id="button" data-setting="button">
+      <option value="toggle">Play / pause</option><option value="next">Next</option><option value="restart">From the start</option><option value="previous">Previous</option>
+    </select></div></div>
+  </div>
+  <div data-for="command">
+    <div class="row"><label for="command">Command</label><div class="field"><input type="text" id="command" data-setting="command" placeholder="e.g. preview:2"></div></div>
+    <div class="row"><label for="clabel">Label</label><div class="field"><input type="text" id="clabel" data-setting="label" placeholder="shown on the key"></div></div>
+    <div class="hint">Examples: <code>scene:Interview</code>, <code>cut:3</code>, <code>graphic:Logo:on</code>, <code>mute:Guest</code>, <code>gain:Mic:-6</code>, <code>media:Clips:next</code>, <code>marker:Applause</code>. The full list is in Cutaway's README.</div>
+  </div>
+
+  <!-- Connection (shared by every key). -->
+  <h4>Cutaway</h4>
+  <div class="row"><label for="address">Address</label><div class="field"><input type="text" id="address" data-global="address" placeholder="127.0.0.1:8790"></div></div>
+  <div class="row"><label for="pin">PIN</label><div class="field"><input type="password" id="pin" data-global="pin" placeholder="as set in Cutaway"></div></div>
+  <div class="row"><label for="thumbnails">Live pictures</label><div class="field"><select id="thumbnails" data-global="thumbnails">
+    <option value="250">Smooth (4 a second)</option>
+    <option value="1000">Normal (1 a second)</option>
+    <option value="3000">Slow (every 3 seconds)</option>
+    <option value="off">Off (names only)</option>
+  </select></div></div>
+  <div class="status" id="status">Connecting…</div>
+  <div class="hint">In Cutaway: Settings → Remote &amp; MIDI → turn on remote control. Use 127.0.0.1 on the same computer, or that computer's address from another one.</div>
+
+<script>
+  let ws = null, uuid = null, action = null, settings = {}, global = {}, lists = null;
+
+  const kind = () => (action || "").replace("app.cutaway.streamdeck.", "");
+  const send = (obj) => ws && ws.readyState === 1 && ws.send(JSON.stringify(obj));
+
+  function fillLists() {
+    document.querySelectorAll("select[data-list]").forEach((sel) => {
+      const key = sel.dataset.setting;
+      const want = settings[key] != null && settings[key] !== "" ? String(settings[key]) : "1";
+      const items = (lists && lists[sel.dataset.list]) || [];
+      sel.innerHTML = "";
+      items.forEach((item, i) => {
+        const o = document.createElement("option");
+        // Players are named by their source number.
+        o.value = sel.dataset.list === "players" ? String(item.source) : String(i + 1);
+        o.textContent = sel.dataset.list === "players" ? item.name : `${i + 1}. ${item}`;
+        sel.appendChild(o);
+      });
+      if (![...sel.options].some((o) => o.value === want)) {
+        const o = document.createElement("option");
+        o.value = want;
+        o.textContent = lists && lists.connected ? `${want} (not in Cutaway now)` : want;
+        sel.appendChild(o);
+      }
+      sel.value = want;
+    });
+  }
+
+  function showSettings() {
+    document.querySelectorAll("[data-for]").forEach((el) => (el.hidden = el.dataset.for !== kind()));
+    document.querySelectorAll("[data-setting]").forEach((el) => {
+      if (el.closest("[data-for]").hidden || el.dataset.list) return;
+      const v = settings[el.dataset.setting];
+      if (el.type === "checkbox") el.checked = v === undefined ? el.dataset.default === "true" : !!v;
+      else if (v !== undefined) el.value = v;
+    });
+    fillLists();
+  }
+
+  function showGlobal() {
+    document.querySelectorAll("[data-global]").forEach((el) => {
+      const v = global[el.dataset.global];
+      if (v !== undefined && document.activeElement !== el) el.value = v;
+    });
+  }
+
+  function showStatus() {
+    const s = document.getElementById("status");
+    if (!lists) return;
+    s.textContent = lists.status;
+    s.className = "status " + (lists.connected ? "ok" : "bad");
+  }
+
+  document.querySelectorAll("[data-setting]").forEach((el) =>
+    el.addEventListener(el.tagName === "INPUT" && el.type === "text" ? "input" : "change", () => {
+      settings[el.dataset.setting] = el.type === "checkbox" ? el.checked : el.value;
+      send({ event: "setSettings", context: uuid, payload: settings });
+    })
+  );
+
+  document.querySelectorAll("[data-global]").forEach((el) =>
+    el.addEventListener("change", () => {
+      global[el.dataset.global] = el.value.trim();
+      send({ event: "setGlobalSettings", context: uuid, payload: global });
+      send({ event: "sendToPlugin", action, context: uuid, payload: { kind: "global", settings: global } });
+      document.getElementById("status").textContent = "Connecting…";
+      document.getElementById("status").className = "status";
+      setTimeout(() => send({ event: "sendToPlugin", action, context: uuid, payload: { kind: "lists" } }), 1500);
+    })
+  );
+
+  // Called by the Stream Deck app.
+  function connectElgatoStreamDeckSocket(port, inUUID, registerEvent, info, actionInfo) {
+    uuid = inUUID;
+    const a = JSON.parse(actionInfo || "{}");
+    action = a.action;
+    settings = (a.payload && a.payload.settings) || {};
+    showSettings();
+    ws = new WebSocket("ws://127.0.0.1:" + port);
+    ws.onopen = () => {
+      send({ event: registerEvent, uuid });
+      send({ event: "getGlobalSettings", context: uuid });
+      send({ event: "sendToPlugin", action, context: uuid, payload: { kind: "lists" } });
+    };
+    ws.onmessage = (e) => {
+      const m = JSON.parse(e.data);
+      if (m.event === "didReceiveGlobalSettings") {
+        global = (m.payload && m.payload.settings) || {};
+        showGlobal();
+      } else if (m.event === "didReceiveSettings") {
+        settings = (m.payload && m.payload.settings) || {};
+        showSettings();
+      } else if (m.event === "sendToPropertyInspector" && m.payload && m.payload.kind === "lists") {
+        lists = m.payload;
+        if (!Object.keys(global).length && lists.global) {
+          global = lists.global;
+          showGlobal();
+        }
+        fillLists();
+        showStatus();
+      }
+    };
+  }
+  window.connectElgatoStreamDeckSocket = connectElgatoStreamDeckSocket;
+</script>
+</body>
+</html>

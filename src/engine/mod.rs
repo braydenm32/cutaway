@@ -1,0 +1,1236 @@
+//! The media engine: captures every source, composites the program on the
+//! GPU, mixes audio, and feeds the recorder and the live stream.
+//!
+//! ```text
+//!  camera ─► SourceSlot ─┬─► compositor (GPU) ─┬─► program monitor + multiview
+//!                        │        ▲            ├─► [program file]
+//!                        │   switcher layout   └─► [stream encoder] ─► RTMP / SRT
+//!                        └─► [ISO file]
+//!  audio in ─► mixer (drift-corrected) ─┬─► meters
+//!         │                             ├─► [AAC for every file]
+//!         │                             └─► [stream AAC]
+//!         └─► [WAV file]
+//! ```
+//! Everything is timestamped on one host clock. The compositor renders a
+//! little behind real time (`VIDEO_LATENCY`) so every source's frame for an
+//! instant has arrived; the mixer does the same for audio. Recordings and
+//! streams start and end on the program's frame grid, so all files line up.
+//! Branches in [brackets] are taps that exist only while recording or live.
+
+pub mod audio;
+pub mod autoswitch;
+pub mod captions;
+pub mod compositor;
+pub mod cutout;
+pub mod decode;
+pub mod dsp;
+pub mod encode;
+pub mod export;
+pub mod feed;
+pub mod framing;
+pub mod graphics;
+pub mod health;
+pub mod inputs;
+pub mod lipsync;
+pub mod ndi;
+pub mod netsrc;
+pub mod player;
+pub mod podcast;
+pub mod precheck;
+pub mod recorder;
+pub mod sources;
+pub mod streamer;
+pub mod switcher;
+pub mod take;
+pub mod text;
+pub mod watchdog;
+
+use crate::config::{parse_color, Config, TransitionMode};
+use crate::media::{clock, Ns, VideoFrame, NS_PER_SEC};
+use anyhow::{bail, Context, Result};
+use audio::{InputShared, MixInput, MixShared, MixTaps};
+use compositor::{Compositor, CompositorSettings, Wants};
+use crossbeam_channel::{bounded, Sender};
+use sources::SourceSlot;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+use streamer::{StreamSession, StreamStatus};
+use switcher::Switcher;
+
+pub type Waker = Arc<dyn Fn() + Send + Sync>;
+
+/// How far behind real time the program is rendered, so that every
+/// source's frame for that instant has been delivered.
+pub const VIDEO_LATENCY: Ns = 50_000_000;
+
+// ---------------------------------------------------------------------------
+// Shared state the UI reads
+
+pub struct Frame {
+    pub width: usize,
+    pub height: usize,
+    pub rgba: Vec<u8>,
+}
+
+/// Latest preview picture (program monitor or a multiview tile).
+pub struct FrameSlot {
+    frame: Mutex<Option<Arc<Frame>>>,
+    generation: AtomicU64,
+    last: Mutex<Option<Instant>>,
+}
+
+impl FrameSlot {
+    pub fn new() -> Arc<Self> {
+        Arc::new(FrameSlot { frame: Mutex::new(None), generation: AtomicU64::new(0), last: Mutex::new(None) })
+    }
+    pub(crate) fn put(&self, f: Frame) {
+        *self.frame.lock().unwrap() = Some(Arc::new(f));
+        *self.last.lock().unwrap() = Some(Instant::now());
+        self.generation.fetch_add(1, Ordering::Release);
+    }
+    /// (generation, frame); generation changes whenever a new frame arrives.
+    pub fn latest(&self) -> Option<(u64, Arc<Frame>)> {
+        let f = self.frame.lock().unwrap().clone()?;
+        Some((self.generation.load(Ordering::Acquire), f))
+    }
+    /// True when frames have stopped arriving.
+    pub fn stale(&self, after: Duration) -> bool {
+        self.last.lock().unwrap().map(|t| t.elapsed() > after).unwrap_or(true)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogLevel {
+    Info,
+    Warning,
+    Error,
+}
+
+#[derive(Debug, Clone)]
+pub struct LogLine {
+    pub time: String,
+    pub level: LogLevel,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Meter {
+    pub peak_db: Vec<f32>,
+    pub rms_db: Vec<f32>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub enum RecState {
+    #[default]
+    Idle,
+    Recording {
+        since: Instant,
+        folder: PathBuf,
+    },
+    Finalizing {
+        folder: PathBuf,
+    },
+}
+
+#[derive(Default)]
+pub struct Status {
+    /// Keys: "a0", "a1", ... for inputs, "mix" for the program mix.
+    pub meters: HashMap<String, Meter>,
+    pub log: VecDeque<LogLine>,
+    pub rec: RecState,
+    pub last_take: Option<recorder::TakeReport>,
+    /// Names of sources/inputs that aren't delivering.
+    pub offline: HashSet<String>,
+    /// Set when writing a file fails (e.g. disk full); the take should be stopped.
+    pub rec_failed: Option<String>,
+    /// Unrecoverable engine error.
+    pub fatal: Option<String>,
+    pub stream: StreamStatus,
+    /// Sources, files and inputs keeping up (updated every second).
+    pub health: health::Health,
+    /// Recording drive and backup drive.
+    pub disk: Option<health::DiskStatus>,
+    pub backup_disk: Option<health::DiskStatus>,
+    /// Markers in the take being recorded.
+    pub markers: usize,
+    pub loudness: audio::MixLoudness,
+    pub auto_switch: autoswitch::AutoStatus,
+    /// Work after a take (making the podcast copy): what, and how far (0..1).
+    pub background: Option<(String, f32)>,
+}
+
+impl Status {
+    pub fn push(&mut self, level: LogLevel, text: impl Into<String>) {
+        let text = text.into();
+        if self.log.back().is_some_and(|l| l.text == text) {
+            return;
+        }
+        match level {
+            LogLevel::Error => eprintln!("error: {text}"),
+            LogLevel::Warning => eprintln!("warning: {text}"),
+            LogLevel::Info => eprintln!("{text}"),
+        }
+        self.log.push_back(LogLine { time: chrono::Local::now().format("%H:%M:%S").to_string(), level, text });
+        while self.log.len() > 200 {
+            self.log.pop_front();
+        }
+    }
+}
+
+pub struct SourceHandle {
+    pub name: String,
+    /// Multiview tile.
+    pub preview: Arc<FrameSlot>,
+    pub size: (u32, u32),
+    pub fps: u32,
+    pub record: bool,
+    pub slot: Arc<SourceSlot>,
+    pub input: Arc<inputs::VideoInput>,
+}
+
+impl SourceHandle {
+    pub fn description(&self) -> String {
+        self.input.description()
+    }
+}
+
+pub struct AudioHandle {
+    pub name: String,
+    pub record: bool,
+    pub split: bool,
+    pub shared: Arc<InputShared>,
+    pub input: Arc<inputs::AudioInputDev>,
+}
+
+impl AudioHandle {
+    pub fn description(&self) -> String {
+        self.input.description()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct EngineInfo {
+    pub compositor: String,
+    pub canvas: (u32, u32),
+    pub fps: u32,
+}
+
+/// Consumers of composited video.
+#[derive(Default)]
+pub struct VideoTaps {
+    pub program: Option<ProgramTap>,
+    pub stream: Option<StreamTap>,
+    /// Other consumers of every program frame (the virtual camera).
+    pub listeners: Vec<(u64, Sender<VideoFrame>)>,
+}
+
+pub struct ProgramTap {
+    pub tx: Sender<VideoFrame>,
+    /// First frame time wanted.
+    pub from: Ns,
+}
+
+pub struct StreamTap {
+    pub tx: Sender<VideoFrame>,
+    pub from: Ns,
+    pub size: (u32, u32),
+    pub fps: u32,
+}
+
+/// Time of frame `k` on a frame grid.
+pub fn grid_time(k: i64, fps: u32) -> Ns {
+    (k as i128 * NS_PER_SEC as i128 / fps.max(1) as i128) as Ns
+}
+
+/// Index of the first grid point at or after `t`.
+pub fn grid_index(t: Ns, fps: u32) -> i64 {
+    let mut k = (t as i128 * fps.max(1) as i128 / NS_PER_SEC as i128) as i64;
+    while grid_time(k, fps) < t {
+        k += 1;
+    }
+    k
+}
+
+/// Next program frame time comfortably in the future (start/end of a take
+/// or stream).
+pub fn next_boundary(fps: u32) -> Ns {
+    grid_time(grid_index(clock::now() + 20_000_000, fps), fps)
+}
+
+/// Crop/colour/key per source and the frame style, as the compositor uses them.
+pub struct LookState {
+    pub generation: u64,
+    pub looks: Vec<crate::config::SourceLook>,
+    pub style: crate::config::FrameStyle,
+}
+
+type CaptionsSlot = Arc<Mutex<Option<(u64, Arc<captions::Captions>)>>>;
+
+pub struct Engine {
+    cfg: Arc<Mutex<Config>>,
+    pub info: EngineInfo,
+    pub sources: Vec<SourceHandle>,
+    pub audio: Vec<AudioHandle>,
+    pub program_preview: Arc<FrameSlot>,
+    /// The preview bus (next scene), when preview/program switching is on.
+    pub preview_bus: Arc<FrameSlot>,
+    pub graphics: Arc<graphics::Graphics>,
+    looks: Arc<Mutex<LookState>>,
+    /// Width of the program monitor picture.
+    pub preview_width: Arc<AtomicU32>,
+    pub switcher: Arc<Switcher>,
+    pub status: Arc<Mutex<Status>>,
+    video_taps: Arc<Mutex<VideoTaps>>,
+    mix_taps: MixTaps,
+    tap_ids: AtomicU64,
+    stream: Mutex<Option<StreamSession>>,
+    stream_started: Mutex<Option<Ns>>,
+    take: Mutex<Option<recorder::Take>>,
+    /// Background jobs finishing files/streams; joined on shutdown.
+    finalizers: Mutex<Vec<JoinHandle<()>>>,
+    stop: Arc<AtomicBool>,
+    threads: Vec<JoinHandle<()>>,
+    waker: Waker,
+    audio_latency: Ns,
+    pub mix: Arc<MixShared>,
+    take_monitor: Arc<Mutex<Option<health::TakeMonitor>>>,
+    pub auto: Arc<autoswitch::AutoShared>,
+    /// Headphone output: (device, source, tap id, running output).
+    monitor: Mutex<Option<(String, String, u64, Box<dyn sources::Running>)>>,
+    monitor_volume: Arc<AtomicU32>,
+    /// The virtual camera, while on: (tap id, sender).
+    vcam: Mutex<Option<(u64, Box<dyn sources::Running>)>>,
+    /// Live captions (with the mix tap feeding them) and their settings.
+    captions: CaptionsSlot,
+    captions_cfg: Mutex<Option<crate::config::CaptionsConfig>>,
+    /// Background removal: each source's masks, and what makes them.
+    masks: Vec<Arc<cutout::MaskSlot>>,
+    cutouts: Mutex<Vec<CutoutState>>,
+}
+
+/// Background removal for one source.
+#[derive(Default)]
+enum CutoutState {
+    #[default]
+    Off,
+    On(u8, #[allow(dead_code)] cutout::Cutout), // runs while held
+    /// Couldn't start with this quality (not retried until it changes).
+    Failed(u8),
+}
+
+impl Engine {
+    /// Open every source, start the compositor and mixer. An unexpected
+    /// failure anywhere becomes an error message rather than a crash.
+    pub fn start(cfg: &Config, waker: Waker) -> Result<Engine> {
+        crate::util::guard("Starting the engine", || Self::start_inner(cfg, waker))
+    }
+
+    fn start_inner(cfg: &Config, waker: Waker) -> Result<Engine> {
+        cfg.validate()?;
+        let cfg = &cfg.with_framed_rates();
+        let mut device_cache = inputs::DeviceCache::default();
+        let status = Arc::new(Mutex::new(Status::default()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (cw, ch, fps) = (cfg.program.width, cfg.program.height, cfg.program.fps);
+
+        // ---- compositor ------------------------------------------------------
+        let bg = parse_color(&cfg.program.background_color).unwrap_or(0xff10131a);
+        let background_image = match &cfg.program.background_image {
+            Some(p) if !p.as_os_str().is_empty() => match image::open(p) {
+                Ok(img) => Some(img.to_rgba8()),
+                Err(e) => {
+                    status.lock().unwrap().push(LogLevel::Warning, format!("Background image {}: {e}", p.display()));
+                    None
+                }
+            },
+            _ => None,
+        };
+        let comp_settings = CompositorSettings {
+            canvas: (cw, ch),
+            background_rgb: [(bg >> 16) as u8, (bg >> 8) as u8, bg as u8],
+            background_image,
+            preview_width: cfg.program.preview_width.clamp(160, cw),
+            thumb_width: cfg.program.multiview_width.clamp(64, 1920),
+        };
+        let mut comp = crate::util::guard("The GPU compositor", || Compositor::new(&comp_settings)).context("starting the GPU compositor")?;
+        let compositor_name = comp.adapter_name.clone();
+
+        // ---- video sources -----------------------------------------------------
+        // A device that can't be opened now is retried in the background
+        // (see watchdog), so plugging it in later just works.
+        let hub = feed::AudioHub::new();
+        let mut sources = Vec::new();
+        let mut aspects = Vec::new();
+        // Every source's frames first: an auto-framed source is cut from
+        // another (and keeps that camera's delay).
+        let delay_of = |sc: &crate::config::SourceConfig| {
+            let parent = sc.framed_from().and_then(|from| cfg.sources.iter().find(|p| p.name.trim().eq_ignore_ascii_case(from)));
+            parent.unwrap_or(sc).delay_ms
+        };
+        let slots: Vec<Arc<SourceSlot>> = cfg.sources.iter().enumerate().map(|(i, sc)| SourceSlot::new(i, delay_of(sc), VIDEO_LATENCY)).collect();
+        let peers: Arc<Vec<(String, Arc<SourceSlot>)>> = Arc::new(cfg.sources.iter().zip(&slots).map(|(sc, s)| (sc.name.clone(), s.clone())).collect());
+        for (i, sc) in cfg.sources.iter().enumerate() {
+            let slot = slots[i].clone();
+            let input = inputs::VideoInput::new(i, sc.clone(), slot.clone(), hub.clone(), peers.clone());
+            let devs = device_cache.video(&sc.device).to_vec();
+            match input.open(&devs) {
+                Err(e) => {
+                    let mut st = status.lock().unwrap();
+                    st.push(LogLevel::Error, format!("{}: {e:#}. It will connect automatically when available.", sc.name));
+                    st.offline.insert(sc.name.clone());
+                }
+                Ok(_) => {
+                    if let Some(p) = input.framing().and_then(|f| f.problem.lock().unwrap().clone()) {
+                        status.lock().unwrap().push(LogLevel::Warning, format!("{}: showing the whole picture ({p})", sc.name));
+                    }
+                }
+            }
+            comp.add_source(sc.width, sc.height);
+            aspects.push(sc.look.cropped_aspect(sc.width as f32 / sc.height as f32));
+            sources.push(SourceHandle {
+                name: sc.name.clone(),
+                preview: FrameSlot::new(),
+                size: (sc.width, sc.height),
+                fps: sc.fps,
+                record: sc.record,
+                slot,
+                input,
+            });
+        }
+
+        // ---- audio -------------------------------------------------------------
+        let mut audio = Vec::new();
+        let mut mix_inputs = Vec::new();
+        for (i, ac) in cfg.audio.iter().enumerate() {
+            let (tx, rx) = bounded(1000);
+            let shared = InputShared::new(ac);
+            let input = inputs::AudioInputDev::new(i, ac.clone(), tx, shared.clone(), hub.clone());
+            let devs = device_cache.audio(&ac.device).to_vec();
+            match input.open(&devs) {
+                Ok((_, Some(note))) => status.lock().unwrap().push(LogLevel::Warning, format!("{}: {note}", ac.name)),
+                Ok(_) => {}
+                Err(e) => {
+                    let mut st = status.lock().unwrap();
+                    st.push(LogLevel::Error, format!("{}: {e:#}. It will connect automatically when available.", ac.name));
+                    st.offline.insert(ac.name.clone());
+                }
+            }
+            mix_inputs.push(MixInput {
+                rx,
+                left: ac.program_left,
+                right: ac.program_right,
+                delay: ac.delay_ms as i64 * 1_000_000,
+                shared: shared.clone(),
+                gaps_expected: input.from_source(),
+            });
+            audio.push(AudioHandle { name: ac.name.clone(), record: ac.record, split: ac.split_channels, shared, input });
+        }
+        let max_audio_delay = cfg.audio.iter().map(|a| a.delay_ms).max().unwrap_or(0) as i64 * 1_000_000;
+        let audio_latency = audio::mix_latency(max_audio_delay);
+        let mix_taps: MixTaps = Arc::new(Mutex::new(Vec::new()));
+        let mix = MixShared::new(&cfg.mix);
+
+        let mut threads = Vec::new();
+        {
+            let (taps, status, stop, mix) = (mix_taps.clone(), status.clone(), stop.clone(), mix.clone());
+            let names: Vec<String> = audio.iter().map(|a| a.name.clone()).collect();
+            threads.push(
+                std::thread::Builder::new()
+                    .name("mixer".into())
+                    .spawn(move || audio::run_mixer(mix_inputs, names, taps, mix, status, stop, audio_latency))?,
+            );
+        }
+
+        // ---- switcher + compositor thread --------------------------------------
+        let scenes = cfg.effective_scenes();
+        let sw_sources = sources.len();
+        let mut initial = scenes.first().cloned().unwrap_or_else(|| crate::scene::grid(sources.len()));
+        initial.retain_sources(sources.len());
+        let switcher = Arc::new(Switcher::new((cw, ch), aspects, initial));
+        switcher.set_style(cfg.transition.direction, &cfg.transition.dip_color);
+        let program_preview = FrameSlot::new();
+        let preview_bus = FrameSlot::new();
+        let graphics = graphics::Graphics::new(&cfg.graphics, (cw, ch));
+        let looks = Arc::new(Mutex::new(LookState { generation: 1, looks: cfg.sources.iter().map(|s| s.look.clone()).collect(), style: cfg.style.clone() }));
+        let preview_width = Arc::new(AtomicU32::new(cfg.program.preview_width));
+        let video_taps = Arc::new(Mutex::new(VideoTaps::default()));
+        let compositor_skips = Arc::new(AtomicU64::new(0));
+        let captions_slot: CaptionsSlot = Arc::new(Mutex::new(None));
+        let masks: Vec<Arc<cutout::MaskSlot>> = sources.iter().map(|_| cutout::MaskSlot::new()).collect();
+        {
+            let ctx = CompositorLoop {
+                comp,
+                slots: sources.iter().map(|s| s.slot.clone()).collect(),
+                thumbs: sources.iter().map(|s| s.preview.clone()).collect(),
+                preview: program_preview.clone(),
+                preview_bus: preview_bus.clone(),
+                graphics: graphics.clone(),
+                looks: looks.clone(),
+                looks_generation: 0,
+                preview_width: preview_width.clone(),
+                switcher: switcher.clone(),
+                taps: video_taps.clone(),
+                status: status.clone(),
+                stop: stop.clone(),
+                waker: waker.clone(),
+                fps,
+                skips: compositor_skips.clone(),
+                captions: captions_slot.clone(),
+                masks: masks.clone(),
+            };
+            threads.push(std::thread::Builder::new().name("compositor".into()).spawn(move || ctx.run())?);
+        }
+
+        // ---- watchdog: reconnects devices, keeps health figures current -----------
+        let shared_cfg = Arc::new(Mutex::new(cfg.clone()));
+        let take_monitor = Arc::new(Mutex::new(None));
+        {
+            let mut devices: Vec<Arc<dyn watchdog::Device + Send + Sync>> = Vec::new();
+            for s in &sources {
+                devices.push(s.input.clone());
+            }
+            for a in &audio {
+                devices.push(a.input.clone());
+            }
+            let mut monitor = health::HealthMonitor {
+                cfg: shared_cfg.clone(),
+                status: status.clone(),
+                take: take_monitor.clone(),
+                sources: sources.iter().map(|s| s.input.clone()).collect(),
+                audio: audio.iter().map(|a| a.input.clone()).collect(),
+                compositor_skips: compositor_skips.clone(),
+                last_frames: Vec::new(),
+            };
+            let w = watchdog::Watchdog {
+                devices,
+                status: status.clone(),
+                stop: stop.clone(),
+                waker: waker.clone(),
+                every_second: vec![Box::new(move || monitor.tick())],
+            };
+            threads.push(std::thread::Builder::new().name("watchdog".into()).spawn(move || w.run())?);
+        }
+
+        // ---- automatic switching ----------------------------------------------------
+        let auto = autoswitch::AutoShared::new(cfg.auto_switch.enabled);
+        {
+            let inputs: Vec<(String, Arc<InputShared>)> = audio.iter().map(|a| (a.name.clone(), a.shared.clone())).collect();
+            let (sw, c2, inputs2) = (switcher.clone(), shared_cfg.clone(), inputs.clone());
+            let take = Box::new(move |scene: &crate::scene::Scene| {
+                let t = c2.lock().unwrap().transition.clone();
+                let mut s = scene.clone();
+                s.retain_sources(sw_sources);
+                apply_scene_audio(&inputs2, &s, t.mode, t.duration_ms);
+                sw.take(s, t.mode, t.duration_ms);
+            });
+            let a = autoswitch::AutoSwitcher {
+                shared: auto.clone(),
+                cfg: shared_cfg.clone(),
+                inputs,
+                switcher: switcher.clone(),
+                take,
+                status: status.clone(),
+                stop: stop.clone(),
+                waker: waker.clone(),
+            };
+            threads.push(std::thread::Builder::new().name("auto switch".into()).spawn(move || a.run())?);
+        }
+
+        let codec = cfg.output.codec.video_codec();
+        let encoder = describe_encoder(codec, &cfg.output.encoder);
+        {
+            let mut st = status.lock().unwrap();
+            st.push(LogLevel::Info, format!("Program {cw}×{ch} @ {fps} fps on {compositor_name}"));
+            st.push(LogLevel::Info, format!("Recording with {encoder}"));
+        }
+        Ok(Engine {
+            cfg: shared_cfg,
+            info: EngineInfo { compositor: compositor_name, canvas: (cw, ch), fps },
+            sources,
+            audio,
+            program_preview,
+            preview_bus,
+            graphics,
+            looks,
+            preview_width,
+            switcher,
+            status,
+            video_taps,
+            mix_taps,
+            tap_ids: AtomicU64::new(1),
+            stream: Mutex::new(None),
+            stream_started: Mutex::new(None),
+            take: Mutex::new(None),
+            finalizers: Mutex::new(Vec::new()),
+            stop,
+            threads,
+            waker,
+            audio_latency,
+            mix,
+            take_monitor,
+            auto,
+            monitor: Mutex::new(None),
+            monitor_volume: Arc::new(AtomicU32::new(1.0f32.to_bits())),
+            vcam: Mutex::new(None),
+            captions: captions_slot,
+            captions_cfg: Mutex::new(None),
+            cutouts: Mutex::new(masks.iter().map(|_| CutoutState::Off).collect()),
+            masks,
+        })
+        .map(|e| {
+            e.apply_monitor(&cfg.mix);
+            e.apply_captions(&cfg.captions);
+            e.apply_cutouts(&cfg.sources);
+            e
+        })
+    }
+
+    // ---- background removal ----------------------------------------------------------------
+
+    /// Start or stop background removal to match each source's settings.
+    fn apply_cutouts(&self, sources: &[crate::config::SourceConfig]) {
+        let mut states = self.cutouts.lock().unwrap();
+        for (i, sc) in sources.iter().enumerate() {
+            let (Some(state), Some(handle)) = (states.get_mut(i), self.sources.get(i)) else { continue };
+            let want = sc.look.remove_background.then(|| sc.look.cutout_quality.level());
+            let have = match state {
+                CutoutState::Off => None,
+                CutoutState::On(q, _) | CutoutState::Failed(q) => Some(*q),
+            };
+            if want == have {
+                continue;
+            }
+            *state = CutoutState::Off; // stops the old one first
+            let Some(q) = want else { continue };
+            let (status, waker, name) = (self.status.clone(), self.waker.clone(), sc.name.clone());
+            let failed = move |e: String| {
+                status.lock().unwrap().push(LogLevel::Warning, format!("{name}: background removal stopped working ({e})"));
+                waker();
+            };
+            *state = match cutout::start(&sc.name, handle.slot.clone(), self.masks[i].clone(), q, failed) {
+                Ok(c) => CutoutState::On(q, c),
+                Err(e) => {
+                    self.status.lock().unwrap().push(LogLevel::Warning, format!("{}: background removal isn't available ({e:#})", sc.name));
+                    CutoutState::Failed(q)
+                }
+            };
+        }
+    }
+
+    /// Background removal state of source `i`: masks per second while on.
+    pub fn cutout_rate(&self, i: usize) -> Option<f32> {
+        let m = self.masks.get(i)?;
+        m.on.load(Ordering::Relaxed).then(|| m.rate_x10.load(Ordering::Relaxed) as f32 / 10.0)
+    }
+
+    // ---- live captions -------------------------------------------------------------------
+
+    /// Start, stop or restyle live captions to match the settings.
+    pub fn apply_captions(&self, cfg: &crate::config::CaptionsConfig) {
+        let mut current = self.captions_cfg.lock().unwrap();
+        let same_listening = current.as_ref().is_some_and(|c| c.enabled == cfg.enabled && c.source == cfg.source && c.language == cfg.language && c.model == cfg.model);
+        if same_listening {
+            if let Some((_, c)) = &*self.captions.lock().unwrap() {
+                c.set_style(cfg);
+            }
+            *current = Some(cfg.clone());
+            return;
+        }
+        *current = Some(cfg.clone());
+        drop(current);
+        // Stop what's running.
+        if let Some((id, c)) = self.captions.lock().unwrap().take() {
+            self.mix_taps.lock().unwrap().retain(|t| t.0 != id);
+            drop(c);
+        }
+        if !cfg.enabled {
+            return;
+        }
+        if let Some(p) = crate::platform::speech::problem(&cfg.language, cfg.model) {
+            self.status.lock().unwrap().push(LogLevel::Warning, format!("Live captions: {p}"));
+            return;
+        }
+        let kind = match cfg.source.trim() {
+            "" | "recording" => audio::MixKind::Recording,
+            "stream" => audio::MixKind::Stream,
+            name => match self.audio.iter().position(|a| a.name.eq_ignore_ascii_case(name)) {
+                Some(i) => audio::MixKind::Track { input: i, post_fader: false },
+                None => {
+                    self.status.lock().unwrap().push(LogLevel::Warning, format!("Live captions: there's no audio input called \"{name}\"; listening to the recording mix"));
+                    audio::MixKind::Recording
+                }
+            },
+        };
+        let (tx, rx) = bounded(500);
+        let id = self.tap_ids.fetch_add(1, Ordering::Relaxed);
+        self.mix_taps.lock().unwrap().push((id, kind, tx));
+        let (language, model) = (cfg.language.clone(), cfg.model);
+        let c = captions::Captions::start(cfg, self.info.canvas, rx, Box::new(move || crate::platform::speech::start(&language, model)), self.status.clone(), self.waker.clone());
+        *self.captions.lock().unwrap() = Some((id, Arc::new(c)));
+    }
+
+    pub fn captions(&self) -> Option<Arc<captions::Captions>> {
+        self.captions.lock().unwrap().as_ref().map(|c| c.1.clone())
+    }
+
+    // ---- virtual camera ----------------------------------------------------------------
+
+    pub fn virtual_camera_on(&self) -> bool {
+        self.vcam.lock().unwrap().is_some()
+    }
+
+    /// Send the program to the "Cutaway" camera in video apps.
+    pub fn set_virtual_camera(&self, on: bool) -> Result<()> {
+        let mut v = self.vcam.lock().unwrap();
+        if let Some((id, running)) = v.take() {
+            self.video_taps.lock().unwrap().listeners.retain(|l| l.0 != id);
+            drop(running);
+        }
+        if on {
+            let (tx, rx) = bounded(3);
+            let running = crate::platform::vcam::start(rx)?;
+            let id = self.tap_ids.fetch_add(1, Ordering::Relaxed);
+            self.video_taps.lock().unwrap().listeners.push((id, tx));
+            *v = Some((id, running));
+            self.status.lock().unwrap().push(LogLevel::Info, "Virtual camera on: choose \"Cutaway\" as the camera in your video app");
+        }
+        (self.waker)();
+        Ok(())
+    }
+
+    // ---- headphone monitoring ---------------------------------------------------------
+
+    /// Start, change or stop the monitor output to match the settings.
+    pub fn apply_monitor(&self, mix: &crate::config::MixConfig) {
+        self.monitor_volume.store((10f32.powf(mix.monitor_volume_db.clamp(-60.0, 12.0) / 20.0)).to_bits(), Ordering::Relaxed);
+        let mut m = self.monitor.lock().unwrap();
+        let device = mix.monitor_device.trim().to_string();
+        let source = mix.monitor_source.trim().to_string();
+        if m.as_ref().is_some_and(|(d, s, ..)| *d == device && *s == source) {
+            return;
+        }
+        if let Some((_, _, id, running)) = m.take() {
+            self.mix_taps.lock().unwrap().retain(|(i, ..)| *i != id);
+            drop(running);
+        }
+        if device.is_empty() {
+            return;
+        }
+        let kind = if source.eq_ignore_ascii_case("stream") {
+            audio::MixKind::Stream
+        } else if let Some(i) = self.audio.iter().position(|a| a.name.eq_ignore_ascii_case(&source)) {
+            audio::MixKind::Input(i)
+        } else {
+            audio::MixKind::Recording
+        };
+        let (tx, rx) = bounded(64);
+        match crate::platform::open_audio_output(&device, rx, self.monitor_volume.clone()) {
+            Ok(running) => {
+                let id = self.tap_ids.fetch_add(1, Ordering::Relaxed);
+                self.mix_taps.lock().unwrap().push((id, kind, tx));
+                *m = Some((device, source, id, running));
+            }
+            Err(e) => self.status.lock().unwrap().push(LogLevel::Warning, format!("Headphones: {e:#}")),
+        }
+    }
+
+    // ---- settings ------------------------------------------------------------------
+
+    /// Current settings (as last applied).
+    pub fn config(&self) -> Config {
+        self.cfg.lock().unwrap().clone()
+    }
+
+    /// Apply settings that don't need the engine rebuilt (recording format,
+    /// streaming, naming, ...). Callers check `Config::needs_restart` first.
+    /// Takes effect from the next take / next time you go live.
+    pub fn update_config(&self, new: &Config) -> Result<()> {
+        let old = self.config();
+        if old.output.codec != new.output.codec || old.output.encoder != new.output.encoder {
+            if self.is_recording() {
+                bail!("stop recording before changing the codec or encoder");
+            }
+            encode::resolve_backend(new.output.codec.video_codec(), &new.output.encoder)?;
+        }
+        if old.streaming.encoder != new.streaming.encoder {
+            encode::resolve_backend(crate::media::VideoCodec::H264, &new.streaming.encoder)?;
+        }
+        for (i, a) in new.audio.iter().enumerate() {
+            self.set_gain(i, a.gain_db);
+            if old.audio.get(i).is_none_or(|o| o.in_program != a.in_program) {
+                self.set_in_program(i, a.in_program);
+            }
+            if let Some(h) = self.audio.get(i) {
+                h.shared.set_routing(a.to_recording, a.to_stream);
+                h.shared.set_processing(&a.processing);
+            }
+        }
+        self.mix.apply(&new.mix);
+        self.apply_monitor(&new.mix);
+        if old.transition != new.transition {
+            self.switcher.set_style(new.transition.direction, &new.transition.dip_color);
+        }
+        let new_looks: Vec<crate::config::SourceLook> = new.sources.iter().map(|s| s.look.clone()).collect();
+        let old_looks: Vec<crate::config::SourceLook> = old.sources.iter().map(|s| s.look.clone()).collect();
+        if new_looks != old_looks || old.style != new.style {
+            let aspects = new.sources.iter().map(|s| s.look.cropped_aspect(s.width as f32 / s.height as f32)).collect();
+            self.switcher.set_aspects(aspects);
+            let mut l = self.looks.lock().unwrap();
+            l.generation += 1;
+            l.looks = new_looks;
+            l.style = new.style.clone();
+        }
+        if old.graphics != new.graphics {
+            self.graphics.update(&new.graphics);
+        }
+        self.apply_captions(&new.captions);
+        self.apply_cutouts(&new.sources);
+        // Who auto-framed sources follow, and how.
+        for (i, s) in new.sources.iter().enumerate() {
+            if let (Some(h), Some(o)) = (self.sources.get(i), old.sources.get(i)) {
+                if o.framing != s.framing && o.device == s.device {
+                    if let Some(f) = h.input.framing() {
+                        *f.cfg.lock().unwrap() = s.framing.clone();
+                    }
+                }
+            }
+        }
+        // New playlists go straight to the players.
+        for (i, s) in new.sources.iter().enumerate() {
+            if old.sources.get(i).is_some_and(|o| o.media != s.media) {
+                if let Some(p) = self.player(i) {
+                    p.send(player::PlayerCmd::Playlist(s.media.clone()));
+                }
+            }
+        }
+        *self.cfg.lock().unwrap() = new.clone();
+        Ok(())
+    }
+
+    pub fn encoder_description(&self) -> String {
+        let cfg = self.cfg.lock().unwrap();
+        describe_encoder(cfg.output.codec.video_codec(), &cfg.output.encoder)
+    }
+
+    // ---- streaming ------------------------------------------------------------------
+
+    pub fn is_streaming(&self) -> bool {
+        self.stream.lock().unwrap().is_some()
+    }
+
+    /// Go live to every enabled destination.
+    pub fn start_stream(&self) -> Result<()> {
+        if self.is_streaming() {
+            bail!("already live");
+        }
+        if self.status.lock().unwrap().stream.stopping {
+            bail!("the previous stream is still ending");
+        }
+        let cfg = self.config();
+        let id = self.tap_ids.fetch_add(1, Ordering::Relaxed);
+        let session = StreamSession::start(
+            &cfg.streaming,
+            streamer::Context {
+                video_taps: self.video_taps.clone(),
+                mix_taps: self.mix_taps.clone(),
+                tap_id: id,
+                program_fps: self.info.fps,
+                status: self.status.clone(),
+                waker: self.waker.clone(),
+            },
+        )?;
+        self.mix.reset_stream_loudness();
+        *self.stream_started.lock().unwrap() = Some(clock::now());
+        let names: Vec<String> = cfg.streaming.destinations.iter().filter(|d| d.enabled).map(|d| d.name.clone()).collect();
+        self.status.lock().unwrap().push(LogLevel::Info, format!("Going live to {} ({})", names.join(", "), session.encoder));
+        *self.stream.lock().unwrap() = Some(session);
+        if cfg.streaming.record_when_live && !self.is_recording() {
+            if let Err(e) = self.start_recording() {
+                self.status.lock().unwrap().push(LogLevel::Error, format!("Couldn't start recording: {e:#}"));
+            }
+        }
+        (self.waker)();
+        Ok(())
+    }
+
+    /// End the stream cleanly (in the background; takes a moment).
+    pub fn stop_stream(&self) {
+        let Some(session) = self.stream.lock().unwrap().take() else { return };
+        self.status.lock().unwrap().stream.stopping = true;
+        (self.waker)();
+        let (status, waker) = (self.status.clone(), self.waker.clone());
+        let handle = std::thread::spawn(move || {
+            let since = status.lock().unwrap().stream.since;
+            session.stop();
+            let mut st = status.lock().unwrap();
+            let length = since.map(|s| fmt_duration(s.elapsed())).unwrap_or_default();
+            st.stream = StreamStatus::default();
+            st.push(LogLevel::Info, format!("Stream ended ({length})"));
+            drop(st);
+            waker();
+        });
+        self.finalizers.lock().unwrap().push(handle);
+    }
+
+    // ---- live controls -------------------------------------------------------------
+
+    /// Switch by hand (pauses automatic switching for a moment).
+    pub fn take_scene(&self, scene: &crate::scene::Scene, mode: TransitionMode, duration_ms: u32) {
+        let mut s = scene.clone();
+        s.retain_sources(self.sources.len());
+        self.auto.manual_switch();
+        self.restart_players_going_on_air(&s);
+        let inputs: Vec<(String, Arc<InputShared>)> = self.audio.iter().map(|a| (a.name.clone(), a.shared.clone())).collect();
+        apply_scene_audio(&inputs, &s, mode, duration_ms);
+        self.switcher.take(s, mode, duration_ms);
+        (self.waker)();
+    }
+
+    /// Media players set to "restart when on air" start from the top when
+    /// a scene brings them on.
+    fn restart_players_going_on_air(&self, scene: &crate::scene::Scene) {
+        let live = self.switcher.live().sources();
+        let cfg = self.config();
+        for i in scene.sources() {
+            if !live.contains(&i) && cfg.sources.get(i).is_some_and(|s| s.media.restart_on_air) {
+                if let Some(p) = self.player(i) {
+                    p.send(player::PlayerCmd::Restart);
+                }
+            }
+        }
+    }
+
+    /// Controls of a media player source.
+    pub fn player(&self, source: usize) -> Option<Arc<player::PlayerControl>> {
+        self.sources.get(source)?.input.player.lock().unwrap().clone()
+    }
+
+    pub fn set_auto_switch(&self, on: bool) {
+        self.auto.enabled.store(on, Ordering::Relaxed);
+        if on && self.config().auto_switch.rules.is_empty() {
+            self.status.lock().unwrap().push(LogLevel::Warning, "Auto switching has no rules yet: add them in Settings → Switching.");
+        }
+        (self.waker)();
+    }
+
+    pub fn auto_switch_enabled(&self) -> bool {
+        self.auto.enabled.load(Ordering::Relaxed)
+    }
+
+    /// Whether an input is on air (the scene or the operator may change it).
+    pub fn is_on(&self, input: usize) -> bool {
+        self.audio.get(input).is_some_and(|a| a.shared.is_on())
+    }
+
+    /// Host time the current stream started.
+    pub fn stream_started_at(&self) -> Option<Ns> {
+        if self.is_streaming() {
+            *self.stream_started.lock().unwrap()
+        } else {
+            None
+        }
+    }
+
+    pub fn set_gain(&self, input: usize, db: f64) {
+        if let Some(a) = self.audio.get(input) {
+            a.shared.set_gain_db(db);
+        }
+    }
+
+    pub fn set_in_program(&self, input: usize, on: bool) {
+        if let Some(a) = self.audio.get(input) {
+            a.shared.set_in_program(on);
+        }
+    }
+
+    // ---- recording (see take.rs) ---------------------------------------------------
+
+    pub fn wait_finalized(&self) {
+        let jobs: Vec<JoinHandle<()>> = std::mem::take(&mut *self.finalizers.lock().unwrap());
+        for h in jobs {
+            let _ = h.join();
+        }
+    }
+
+    pub(crate) fn describe_setup(&self) -> String {
+        let mut s = String::new();
+        s += &format!("Program: {}x{} @ {} fps, composited on {}\n", self.info.canvas.0, self.info.canvas.1, self.info.fps, self.info.compositor);
+        s += &format!("Video encoding: {}\n", self.encoder_description());
+        if !self.audio.is_empty() {
+            s += &format!("Audio encoding: AAC {} kbps, 48 kHz stereo\n", self.config().output.audio_bitrate_kbps);
+        }
+        s += "\nSources:\n";
+        for (i, src) in self.sources.iter().enumerate() {
+            s += &format!(
+                "  {}. {} - {} ({}x{} @ {}){}\n",
+                i + 1,
+                src.name,
+                src.description(),
+                src.size.0,
+                src.size.1,
+                src.fps,
+                if src.record { "" } else { " [not recorded]" }
+            );
+        }
+        if !self.audio.is_empty() {
+            s += "\nAudio inputs:\n";
+            for (i, a) in self.audio.iter().enumerate() {
+                s += &format!("  {}. {} - {}\n", i + 1, a.name, a.description());
+            }
+        }
+        s
+    }
+
+    /// Stop everything. Finishes an active recording and stream first.
+    pub fn shutdown(&mut self) {
+        if self.stop.load(Ordering::Relaxed) {
+            return;
+        }
+        self.stop_stream();
+        if self.is_recording() {
+            self.stop_recording();
+        }
+        self.wait_finalized();
+        self.monitor.lock().unwrap().take();
+        if let Some((_, r)) = self.vcam.lock().unwrap().take() {
+            drop(r);
+        }
+        self.stop.store(true, Ordering::Relaxed);
+        for t in self.threads.drain(..) {
+            let _ = t.join();
+        }
+        for s in &self.sources {
+            s.input.close();
+        }
+        for a in &self.audio {
+            a.input.close();
+        }
+    }
+}
+
+impl Drop for Engine {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+/// Scenes can turn audio inputs on or off; the change is timed to land
+/// with the picture change and fades along with a transition.
+fn apply_scene_audio(inputs: &[(String, Arc<InputShared>)], scene: &crate::scene::Scene, mode: TransitionMode, duration_ms: u32) {
+    if scene.audio_on.is_empty() && scene.audio_off.is_empty() {
+        return;
+    }
+    let at = clock::now() - VIDEO_LATENCY;
+    let fade = if mode != TransitionMode::Cut { duration_ms.max(20) as i64 * 1_000_000 } else { 20_000_000 };
+    for (names, on) in [(&scene.audio_on, true), (&scene.audio_off, false)] {
+        for n in names {
+            if let Some((_, a)) = inputs.iter().find(|(name, _)| name.eq_ignore_ascii_case(n.trim())) {
+                if a.is_on() != on {
+                    a.set_on_at(on, at, fade);
+                }
+            }
+        }
+    }
+}
+
+fn describe_encoder(codec: crate::media::VideoCodec, wanted: &str) -> String {
+    match encode::resolve_backend(codec, wanted) {
+        Ok(b) => format!("{} · {}", encode::codec_name(codec), encode::describe_backend(b)),
+        Err(e) => format!("{e}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The compositor thread
+
+struct CompositorLoop {
+    comp: Compositor,
+    slots: Vec<Arc<SourceSlot>>,
+    thumbs: Vec<Arc<FrameSlot>>,
+    preview: Arc<FrameSlot>,
+    preview_bus: Arc<FrameSlot>,
+    graphics: Arc<graphics::Graphics>,
+    looks: Arc<Mutex<LookState>>,
+    looks_generation: u64,
+    preview_width: Arc<AtomicU32>,
+    switcher: Arc<Switcher>,
+    taps: Arc<Mutex<VideoTaps>>,
+    status: Arc<Mutex<Status>>,
+    stop: Arc<AtomicBool>,
+    waker: Waker,
+    fps: u32,
+    skips: Arc<AtomicU64>,
+    captions: CaptionsSlot,
+    masks: Vec<Arc<cutout::MaskSlot>>,
+}
+
+impl CompositorLoop {
+    fn run(mut self) {
+        let fps = self.fps;
+        let frame_ns = NS_PER_SEC / fps as i64;
+        let preview_every = fps.div_ceil(30).max(1) as i64;
+        let thumb_every = fps.div_ceil(15).max(1) as i64;
+        let mut k = grid_index(clock::now() - VIDEO_LATENCY, fps);
+        let mut stream_grid: Option<(Ns, i64)> = None; // (from, next stream frame index)
+        let mut warned_program = false;
+        let mut warned_stream = false;
+        let mut last_behind: Option<Instant> = None;
+        let mut serial = 0u64;
+        while !self.stop.load(Ordering::Relaxed) {
+            let t = grid_time(k, fps);
+            clock::sleep_until(t + VIDEO_LATENCY);
+            {
+                let l = self.looks.lock().unwrap();
+                if l.generation != self.looks_generation {
+                    self.looks_generation = l.generation;
+                    self.comp.set_looks(&l.looks, &l.style);
+                }
+            }
+            let pw = self.preview_width.load(Ordering::Relaxed);
+            if pw != self.comp.preview_width() {
+                self.comp.set_preview_width(pw);
+            }
+            for (i, slot) in self.slots.iter().enumerate() {
+                if let Some(f) = slot.pick(t) {
+                    self.comp.upload(i, &f);
+                    // Background removal: the mask made from this picture.
+                    match self.masks.get(i).filter(|m| m.on.load(Ordering::Relaxed)).and_then(|m| m.pick(f.pts)) {
+                        Some((pts, mask)) => self.comp.upload_mask(i, pts, &mask),
+                        None => self.comp.clear_mask(i),
+                    }
+                }
+            }
+
+            // Who wants this frame?
+            let (program_tx, stream, listeners) = {
+                let taps = self.taps.lock().unwrap();
+                (
+                    taps.program.as_ref().filter(|p| t >= p.from).map(|p| p.tx.clone()),
+                    taps.stream.as_ref().map(|s| (s.tx.clone(), s.from, s.size, s.fps.min(fps).max(1))),
+                    taps.listeners.iter().map(|l| l.1.clone()).collect::<Vec<_>>(),
+                )
+            };
+            let mut stream_now = None;
+            match stream {
+                Some((tx, from, size, sfps)) => {
+                    if stream_grid.is_none_or(|g| g.0 != from) {
+                        stream_grid = Some((from, 0));
+                    }
+                    let (from, next) = stream_grid.unwrap();
+                    if t >= from + grid_time(next, sfps) {
+                        stream_now = Some((tx, size));
+                        stream_grid = Some((from, grid_index(t - from + 1, sfps)));
+                    }
+                }
+                None => stream_grid = None,
+            }
+            let canvas = self.comp.canvas_size();
+            let stream_is_program = stream_now.as_ref().is_some_and(|(_, s)| *s == canvas);
+            let thumbs: Vec<usize> = if k % thumb_every == 0 {
+                (0..self.slots.len()).filter(|&i| !self.slots[i].stale(1.0)).collect()
+            } else {
+                Vec::new()
+            };
+            let preview_now = k % preview_every == 0;
+            let bus = if preview_now { self.switcher.preview_states() } else { None };
+            let wants = Wants {
+                program: program_tx.is_some() || stream_is_program || !listeners.is_empty(),
+                stream: stream_now.as_ref().filter(|_| !stream_is_program).map(|(_, s)| *s),
+                preview: preview_now,
+                preview_bus: bus.is_some(),
+                thumbs,
+            };
+            if wants.program || wants.stream.is_some() || wants.preview || !wants.thumbs.is_empty() {
+                let layout = self.switcher.layout();
+                let mut graphics = self.graphics.layers(t);
+                if let Some((_, c)) = &*self.captions.lock().unwrap() {
+                    graphics.extend(c.layer());
+                }
+                serial += 1;
+                match self.comp.render(&layout, bus.as_deref(), &graphics, t, serial, &wants) {
+                    Ok(r) => {
+                        let mut stream_frame = r.stream;
+                        if let Some(p) = r.program {
+                            if stream_is_program {
+                                stream_frame = Some(p.clone());
+                            }
+                            for l in &listeners {
+                                let _ = l.try_send(p.clone());
+                            }
+                            if let Some(tx) = program_tx {
+                                if tx.try_send(p).is_err() && !warned_program {
+                                    warned_program = true;
+                                    self.status.lock().unwrap().push(
+                                        LogLevel::Warning,
+                                        "Program: the encoder can't keep up, frames are being repeated. Lower the resolution or bitrate.",
+                                    );
+                                }
+                            }
+                        }
+                        if let (Some(f), Some((tx, _))) = (stream_frame, stream_now) {
+                            if tx.try_send(f).is_err() && !warned_stream {
+                                warned_stream = true;
+                                self.status.lock().unwrap().push(LogLevel::Warning, "Stream: the encoder can't keep up, frames are being dropped.");
+                            }
+                        }
+                        let fresh = r.preview.is_some() || !r.thumbs.is_empty();
+                        if let Some((w, h, rgba)) = r.preview {
+                            self.preview.put(Frame { width: w as usize, height: h as usize, rgba });
+                        }
+                        if let Some((w, h, rgba)) = r.preview_bus {
+                            self.preview_bus.put(Frame { width: w as usize, height: h as usize, rgba });
+                        }
+                        for (i, w, h, rgba) in r.thumbs {
+                            self.thumbs[i].put(Frame { width: w as usize, height: h as usize, rgba });
+                        }
+                        if fresh {
+                            (self.waker)();
+                        }
+                    }
+                    Err(e) => {
+                        let mut st = self.status.lock().unwrap();
+                        st.push(LogLevel::Error, format!("Compositor: {e:#}"));
+                        st.fatal = Some(format!("the GPU compositor stopped: {e:#}"));
+                        drop(st);
+                        (self.waker)();
+                        std::thread::sleep(Duration::from_secs(1));
+                    }
+                }
+            }
+            k += 1;
+            let now = clock::now();
+            if now > grid_time(k, fps) + VIDEO_LATENCY + 4 * frame_ns {
+                let jump = grid_index(now - VIDEO_LATENCY, fps);
+                self.skips.fetch_add((jump - k).max(0) as u64, Ordering::Relaxed);
+                k = jump;
+                if last_behind.is_none_or(|l| l.elapsed() > Duration::from_secs(30)) {
+                    last_behind = Some(Instant::now());
+                    self.status.lock().unwrap().push(LogLevel::Warning, "The compositor fell behind and skipped frames (is the computer overloaded?)");
+                }
+            }
+        }
+    }
+}
+
+pub fn fmt_duration(d: Duration) -> String {
+    let s = d.as_secs();
+    format!("{:02}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grid() {
+        assert_eq!(grid_time(3, 30), 100_000_000);
+        assert_eq!(grid_index(100_000_000, 30), 3);
+        assert_eq!(grid_index(100_000_001, 30), 4);
+        let k = grid_index(1_234_567_890_123, 60);
+        assert!(grid_time(k, 60) >= 1_234_567_890_123 && grid_time(k - 1, 60) < 1_234_567_890_123);
+    }
+}

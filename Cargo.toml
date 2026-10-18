@@ -1,0 +1,126 @@
+[package]
+name = "cutaway"
+version = "0.5.0"
+edition = "2021"
+description = "Multi-camera ISO recorder, live switcher and streamer (software take on a hardware video production console)"
+license = "MIT"
+
+[features]
+default = ["objc-exceptions", "whisper"]
+# Turn Objective-C exceptions (e.g. a camera refusing a setting) into normal
+# errors instead of crashing the app. Needs the Xcode command line tools.
+objc-exceptions = ["objc2/catch-all"]
+# Windows: ASIO audio interfaces (all channels, low latency). Building needs
+# Steinberg's free ASIO SDK (CPAL_ASIO_DIR) and LLVM; windows/build.ps1
+# sets both up.
+asio = ["cpal/asio"]
+# Windows and Linux: live captions with Whisper (whisper.cpp), on the
+# computer. Building needs CMake and a C++ compiler. (macOS uses Apple's
+# Speech framework instead.)
+whisper = ["dep:whisper-rs", "dep:ureq"]
+
+[dependencies]
+eframe = "0.37"
+wgpu = "30"
+pollster = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+clap = { version = "4", features = ["derive"] }
+rfd = "0.17"
+crossbeam-channel = "0.5"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+rubato = "5"
+libc = "0.2"
+native-tls = "0.2"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync", "macros"] }
+srt-tokio = "0.4"
+futures = "0.3"
+bytes = "1"
+ab_glyph = "0.2"
+libloading = "0.8"
+serde_json = "1"
+epaint_default_fonts = "0.37"
+
+# Software encoders: used for development builds on Linux. macOS uses
+# VideoToolbox and AudioToolbox; Windows uses Media Foundation.
+[target.'cfg(not(any(target_os = "macos", windows)))'.dependencies]
+openh264 = "0.9"
+fdk-aac = "0.8"
+
+# Finding people (auto-framing, background removal) on Windows and Linux:
+# ONNX Runtime, loaded at run time (DirectML on Windows). macOS uses Vision.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+whisper-rs = { version = "0.16", optional = true }
+ureq = { version = "3", default-features = false, features = ["native-tls"], optional = true }
+ort = { version = "=2.0.0-rc.14", default-features = false, features = ["std", "load-dynamic", "api-20"] }
+
+# Audio devices and MIDI controllers.
+[target.'cfg(any(target_os = "macos", windows))'.dependencies]
+cpal = "0.18"
+midir = "0.11"
+
+[target.'cfg(windows)'.dependencies]
+ort = { version = "=2.0.0-rc.14", default-features = false, features = ["std", "load-dynamic", "api-20", "directml"] }
+windows-core = "0.62"
+windows = { version = "0.62", features = [
+    "Foundation",
+    "Graphics_Capture",
+    "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11",
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_Media_KernelStreaming",
+    "Win32_Media_MediaFoundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Console",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_Performance",
+    "Win32_System_Registry",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+dispatch2 = "0.3"
+objc2-foundation = "0.3"
+objc2-core-foundation = "0.3"
+objc2-av-foundation = { version = "0.3", features = ["objc2-core-media"] }
+objc2-core-media = "0.3"
+objc2-core-video = "0.3"
+objc2-video-toolbox = "0.3"
+objc2-audio-toolbox = "0.3"
+objc2-core-audio-types = "0.3"
+objc2-screen-capture-kit = "0.3"
+objc2-speech = "0.3"
+objc2-avf-audio = "0.3"
+objc2-vision = "0.3"
+
+[build-dependencies]
+embed-resource = "3"
+
+[profile.release]
+opt-level = 3
+debug = false
+
+[profile.dev.package."*"]
+opt-level = 2

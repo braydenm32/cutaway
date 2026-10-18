@@ -1,0 +1,11 @@
+target/
+*.mp4
+*.mov
+*.mkv
+*.wav
+dist/
+windows/deps/
+windows/vcam/target/
+__pycache__/
+node_modules/
+.DS_Store

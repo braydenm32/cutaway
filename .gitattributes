@@ -1,0 +1,7 @@
+# The same line endings on every machine (GitHub's Windows machines would
+# otherwise check text out with CRLF).
+* text=auto eol=lf
+*.onnx binary
+*.png binary
+*.ico binary
+*.streamDeckPlugin binary

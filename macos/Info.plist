@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Cutaway</string>
+    <key>CFBundleDisplayName</key>
+    <string>Cutaway</string>
+    <key>CFBundleIdentifier</key>
+    <string>app.cutaway.Cutaway</string>
+    <key>CFBundleExecutable</key>
+    <string>Cutaway</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>__VERSION__</string>
+    <key>CFBundleVersion</key>
+    <string>__VERSION__</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.video</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSCameraUsageDescription</key>
+    <string>Cutaway records and switches your cameras and capture cards.</string>
+    <key>NSCameraUseContinuityCameraDeviceType</key>
+    <true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Cutaway records audio from your interface or microphone.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Cutaway turns speech into live captions and transcripts, on this Mac.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Cutaway receives network video sources (RTMP, SRT, NDI), sends streams to servers on your network, and serves the phone remote.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_ndi._tcp</string>
+    </array>
+</dict>
+</plist>

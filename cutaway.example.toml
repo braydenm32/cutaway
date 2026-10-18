@@ -1,0 +1,385 @@
+# Cutaway settings — example.
+#
+# The app creates its own settings file on first run (with whatever cameras and
+# audio inputs it finds) and everything here can be changed in Settings.
+# Run `cutaway --list-devices` to see the exact device names.
+#
+#   ~/Library/Application Support/Cutaway/config.toml   (macOS)
+#   %APPDATA%\Cutaway\config.toml                       (Windows)
+#   or pass --config path/to/file.toml
+#
+# Saved shows (Settings → General & shows) are complete copies of this file in
+# the "profiles" folder next to it.
+
+[output]
+folder = "/Users/you/Movies/Cutaway"   # each take gets its own dated folder in here (Windows: "C:\\Users\\you\\Videos\\Cutaway")
+take_prefix = "Take"        # folders are named <prefix>_<date>_<time>
+container = "mp4"           # mp4 | mov  (both crash-safe; ProRes is always mov)
+codec = "h264"              # h264 | h265 | prores_proxy | prores_lt | prores | prores_hq
+encoder = "auto"            # "auto" = the hardware encoder (Mac: VideoToolbox; Windows: nvenc | amf | qsv | mf-sw)
+iso_bitrate_kbps = 0        # 0 = automatic (≈12 Mbps 1080p30 … ≈100 Mbps 4K60 for H.264); ignored for ProRes
+program_bitrate_kbps = 0
+audio_bitrate_kbps = 256
+iso_audio = true            # put the recording mix into each camera file
+wav_bit_depth = 24          # 16 | 24 | 32 (float)
+# backup_folder = "/Volumes/Backup/Cutaway"   # a second copy of every file, as it records
+timecode = true             # time-of-day timecode in every file (and BWF time in the WAVs)
+export_timelines = true     # Final Cut / Resolve (.fcpxml) and Premiere (.xml) timelines with each take
+proxies = false             # small H.264 copies of every video file, in "Proxies"
+proxy_width = 960           # proxy width at most (height follows)
+input_tracks = false        # every audio input on its own track in Program (after the mix), to re-balance in an editor
+input_tracks_post_fader = false   # those tracks as heard in the mix, instead of before the fader
+mix_wav = false             # the recording mix as Mix.wav too
+
+# A podcast episode from each take: Mix.wav levelled to the target loudness,
+# as an M4A with the markers as chapters, made when the take ends.
+[podcast]
+enabled = false
+target_lufs = -16.0         # Apple Podcasts and Spotify: -16
+mono = false
+bitrate_kbps = 128
+title = ""                  # "" = the show name and date
+show = ""                   # the podcast's name ("" = the show name)
+author = ""
+
+[program]
+width = 1920
+height = 1080
+fps = 30
+background_color = "#10131a"
+# background_image = "/Users/you/Pictures/show-background.png"
+preview_width = 960         # program monitor size in the app (not the recording)
+multiview_width = 480       # each source tile in the app
+
+# Rounded corners, borders and shadows on framed sources (not full-screen ones).
+[style]
+corner_radius = 0.0         # pixels of the program picture
+border_width = 0.0          # pixels; 0 = none
+border_color = "#ffffff"
+shadow = 0.0                # 0 … 1
+
+[transition]
+mode = "mix"                # cut | mix (frames glide + fade) | wipe | push | dip
+duration_ms = 400
+direction = "right"         # wipes and pushes: left | right | up | down
+dip_color = "#000000"       # dip through this colour
+preview_mode = false        # true = pick in preview, then Take (Space) / Cut (Enter)
+
+# ---- video sources: every one is recorded to its own file ------------------
+#
+# device can be:
+#   a camera or capture card (part of its name is fine; "#2" = 2nd device)
+#   "screen"                  the main display
+#   "test", "test:smpte" …    a test picture
+#   "media"                   the media player (files in [sources.media])
+#   "rtmp-in:1935/key"        Cutaway's RTMP server: OBS/Larix/encoders publish here
+#   "srt-in:9000"             wait for an SRT sender on port 9000
+#   "srt://10.0.0.5:9000"     pull from an SRT listener
+#   "ndi:Studio PC (OBS)"     an NDI source (needs the free NDI Tools)
+#   "frame:Wide"              an auto-framed close-up cut from the "Wide" source,
+#                             following the people in it ([sources.framing])
+# The device is set to this size/rate if it has it, otherwise scaled.
+
+[[sources]]
+name = "Wide"
+device = "Cam Link 4K"
+width = 3840
+height = 2160
+fps = 30
+
+[[sources]]
+name = "Host"
+device = "#2"
+width = 1920
+height = 1080
+fps = 30
+
+# Picture fixes for one source (all optional).
+[sources.look]
+crop_left = 0.0             # percent of the picture
+crop_right = 0.0
+crop_top = 0.0
+crop_bottom = 0.0
+mirror = false
+brightness = 0.0            # -1 … 1
+contrast = 1.0
+saturation = 1.0
+chroma_key = false          # green screen
+key_color = "#00d040"
+key_similarity = 0.4
+key_smoothness = 0.08
+key_spill = 0.1
+remove_background = false   # cut the people out without a green screen (macOS: Vision)
+cutout_quality = "balanced" # fast | balanced | best
+
+[[sources]]
+name = "Guest"
+device = "#3"
+width = 1920
+height = 1080
+fps = 30
+delay_ms = 0                # hold this camera back to match slower ones
+
+# A second camera without a camera operator: a close-up cut from the 4K wide
+# shot that follows whoever is on the left. Runs at the wide camera's rate
+# and delay, and is recorded like any source.
+[[sources]]
+name = "Host close-up"
+device = "frame:Wide"
+width = 1920
+height = 1080
+[sources.framing]
+follow = "left"             # everyone | largest (closest person) | left | middle | right
+shot = "close_up"           # close_up (head and shoulders) | medium | wide
+reframe_seconds = 1.0       # how long a move takes
+max_zoom = 1.5              # never enlarge the wide picture more than this
+
+[[sources]]
+name = "Remote guest"
+device = "rtmp-in:1935/guest"
+width = 1920
+height = 1080
+fps = 30
+network_latency_ms = 300    # buffer: more rides out network hiccups, less is closer to live
+
+[[sources]]
+name = "Clips"
+device = "media"
+width = 1920
+height = 1080
+fps = 30
+[sources.media]
+files = ["/Users/you/Movies/Intro.mp4", "/Users/you/Pictures/Be right back.png"]
+loop_playlist = true
+autoplay = true
+restart_on_air = false      # start the current item from the top when it goes on air
+image_seconds = 5.0         # how long still images stay up
+
+[[sources]]
+name = "Screen"
+device = "screen"
+width = 1920
+height = 1080
+fps = 30
+record = true
+
+# ---- audio inputs --------------------------------------------------------------
+
+# Your DAW's output, arriving on inputs 3-4 of an 8-channel interface.
+# All 8 channels go into the WAV; channels 3+4 feed the mixes.
+# device: an interface name, "default", "test" (a tone), or
+# "source:<video source name>" for the sound of a network source or the media player.
+# On Windows, ASIO drivers are listed as "ASIO: <driver name>".
+[[audio]]
+name = "DAW"
+device = "Scarlett 18i20"
+channels = 8
+program_left = 3
+program_right = 4
+gain_db = 0.0
+in_program = true           # the ON button
+to_recording = true         # heard in the recording mix
+to_stream = true            # heard in the stream mix
+record = true               # its own WAV
+split_channels = false      # true = one mono WAV per channel
+delay_ms = 0                # e.g. 80 if the audio is ahead of the cameras
+
+[[audio]]
+name = "Host mic"
+device = "Scarlett 18i20"
+channels = 1
+program_left = 1
+program_right = 1
+
+# Voice processing (in this order). All optional.
+[audio.processing]
+enabled = true
+high_pass_hz = 80.0         # 0 = off
+gate = false
+gate_threshold_db = -50.0
+eq = false
+eq_low_db = 0.0
+eq_mid_db = 0.0
+eq_mid_hz = 2500.0
+eq_high_db = 0.0
+compressor = true
+comp_threshold_db = -20.0
+comp_ratio = 3.0
+comp_makeup_db = 4.0
+de_esser = false
+de_esser_threshold_db = -30.0
+
+[[audio]]
+name = "Remote guest"
+device = "source:Remote guest"
+
+# ---- the mixes and headphones ----------------------------------------------------
+
+[mix]
+limiter = true              # keep both mixes from clipping
+limiter_ceiling_db = -1.0
+stream_levelling = false    # slowly bring the stream mix to the target loudness
+stream_target_lufs = -14.0
+monitor_device = ""         # headphone output device ("" = off)
+monitor_source = "program"  # program (recording mix) | stream | an input's name (solo)
+monitor_volume_db = 0.0
+
+# ---- live captions and transcripts (macOS: on-device speech recognition) -------------
+
+[captions]
+enabled = false             # listen and caption (needed for transcripts too)
+show = true                 # on screen at start (the CC button / C key turn them on and off)
+on_recording = false        # also burn them into the recording (otherwise the stream only)
+source = "recording"        # recording (the mix) | stream | an input's name
+language = ""               # e.g. "en-AU"; "" = the computer's language
+size = 0.045                # text height, fraction of the picture
+lines = 2
+place = "bottom"            # bottom | top
+transcript = true           # Transcript.txt, Captions.srt and Captions.vtt with each take
+model = "fast"              # Windows (Whisper): fast (57 MB) | accurate (181 MB); downloaded from Settings
+
+# ---- automatic switching ------------------------------------------------------------
+
+[auto_switch]
+enabled = false             # on at start (the AUTO button / A key turn it on and off)
+threshold_db = -40.0        # counts as talking above this
+hold_ms = 500               # talking for at least this long
+min_shot_s = 3.0            # shortest shot
+wide_scene = "Wide"         # "" = none
+wide_on_crosstalk = true    # several talking at once → the wide shot (otherwise the loudest)
+max_shot_s = 0.0            # after one person this long, show the wide shot (0 = never)
+wide_for_s = 4.0
+manual_pause_s = 8.0        # after you switch by hand, wait this long
+rules = [
+  { input = "Host mic", channel = 0, scene = "Host" },     # channel 0 = all channels
+  { input = "Remote guest", channel = 0, scene = "Remote guest" },
+]
+
+# ---- graphics ---------------------------------------------------------------------
+# Drawn above every scene. Positions and width are fractions of the picture.
+
+[[graphics]]
+name = "Logo"
+kind = "image"
+image = "/Users/you/Pictures/logo.png"   # a PNG with transparency works best
+x = 0.85
+y = 0.04
+width = 0.11
+opacity = 1.0
+fade_ms = 300
+visible = true              # showing at start
+
+[[graphics]]
+name = "Host title"
+kind = "title"              # a name title (lower third)
+title = "Your Name"
+subtitle = "Host"
+x = 0.04
+y = 0.78
+width = 0.4
+text_color = "#ffffff"
+box_color = "#101820"
+box_opacity = 0.75
+# font = "/Library/Fonts/YourFont.ttf"   # default: built in
+
+# ---- live streaming ------------------------------------------------------------
+# The program is encoded once (H.264 + AAC, constant bitrate, keyframe every
+# 2 s) and sent to every enabled destination at the same time.
+
+[streaming]
+width = 1920
+height = 1080
+fps = 30
+video_bitrate_kbps = 6000
+audio_bitrate_kbps = 160
+encoder = "auto"            # always H.264, on the hardware encoder
+auto_reconnect = true       # a dropped destination reconnects on its own
+max_retries = 0             # 0 = keep trying
+record_when_live = false    # also start recording when you go live
+
+[[streaming.destinations]]
+name = "YouTube"
+service = "youtube"         # youtube | twitch | facebook | kick | custom_rtmp | srt
+server = "rtmp://a.rtmp.youtube.com/live2"
+key = "xxxx-xxxx-xxxx-xxxx-xxxx"
+enabled = true
+
+[[streaming.destinations]]
+name = "Twitch"
+service = "twitch"
+server = "rtmp://live.twitch.tv/app"
+key = "live_000000000_xxxxxxxxxxxx"
+enabled = true
+
+[[streaming.destinations]]
+name = "Edit suite (SRT)"
+service = "srt"
+server = "srt://192.168.1.50:9000"
+key = ""                    # optional SRT stream ID
+enabled = false
+
+# ---- other screens -------------------------------------------------------------------
+
+[display]
+output = "off"              # off | program | multiview — on another screen
+fullscreen = true
+virtual_camera = false      # turn the "Cutaway" webcam on at start (macOS, see README)
+
+# ---- remote control ------------------------------------------------------------------
+
+[remote]
+enabled = false             # phone/tablet remote, Stream Deck and Companion over the network
+port = 8790
+pin = "4821"                # "" = no PIN (anyone on the network can control the show)
+
+# OSC from show-control software (QLab, Companion, TouchOSC, lighting desks):
+# /cutaway/scene/2, /cutaway/take, /cutaway/record 1, /cutaway/fader/Mic 0.8 …
+[osc]
+enabled = false
+port = 8791                 # UDP
+feedback_host = ""          # send state (tally, record, live…) here ("" = nowhere)
+feedback_port = 9001
+
+[midi]
+enabled = false
+device = ""                 # "" = all connected controllers
+feedback = true             # light up pads
+mappings = [
+  { message = "note 36", action = "scene:1" },
+  { message = "note 37", action = "scene:2" },
+  { message = "note 38", action = "take" },
+  { message = "note 39", action = "record" },
+  { message = "note 40", action = "marker" },
+  { message = "cc 20", action = "fader:Host mic" },
+]
+
+# ---- interface -----------------------------------------------------------------
+
+[ui]
+scale = 1.0                 # interface size
+confirm_stop_recording = false
+confirm_end_stream = true
+check_before_start = false  # run the pre-show check before recording / going live
+profile = ""                # the show these settings belong to
+
+# ---- scenes (optional) ---------------------------------------------------------
+# Leave these out to get presets: each source full screen, side by side,
+# picture-in-picture and a grid. Coordinates are fractions of the canvas;
+# later layers are drawn on top. Editing layouts in the app writes these.
+
+# [[scenes]]
+# name = "Interview"
+# audio_on = ["Host mic", "Remote guest"]   # inputs this scene turns on…
+# audio_off = ["Clips"]                     # …and off, when it's taken
+# [[scenes.layers]]
+# source = 1
+# x = 0.02
+# y = 0.25
+# w = 0.47
+# h = 0.47
+# [[scenes.layers]]
+# source = 4                  # Remote guest
+# x = 0.51
+# y = 0.25
+# w = 0.47
+# h = 0.47

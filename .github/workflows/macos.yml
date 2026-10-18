@@ -1,0 +1,53 @@
+# Builds and tests Cutaway on Apple Silicon (GitHub's Mac machines), and
+# keeps Cutaway.app (zipped) as a download on each run.
+name: macOS
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Unit tests
+        run: cargo test --release -- --nocapture
+
+      - name: Build Cutaway.app
+        run: ./macos/bundle.sh
+
+      # Bundling the camera needs a paid Apple Developer signature, so here
+      # it's only compiled, to catch mistakes in the Swift code.
+      - name: The virtual camera compiles
+        run: |
+          mkdir -p target/virtualcam-check
+          swiftc -O -target arm64-apple-macos13.0 -o target/virtualcam-check/camera macos/virtualcam/CameraExtension.swift
+          swiftc -O -target arm64-apple-macos13.0 -o target/virtualcam-check/installer macos/virtualcam/Installer.swift
+
+      - name: A test recording (test pictures and tone, Apple's encoders)
+        run: |
+          status=0
+          target/Cutaway.app/Contents/MacOS/Cutaway --demo 2 --headless --seconds 8 || status=$?
+          tail -40 ~/Library/Logs/Cutaway/Cutaway.log || true
+          ls -laR ~/Movies/Cutaway || true
+          exit $status
+
+      - name: Zip the app
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          mkdir -p dist
+          ditto -c -k --keepParent target/Cutaway.app "dist/Cutaway-$version-macos-arm64.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Cutaway-macos-arm64
+          path: dist/*.zip

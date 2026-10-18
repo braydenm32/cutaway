@@ -1,0 +1,141 @@
+//! Settings → Switching: transitions, preview/program, automatic switching.
+
+use super::*;
+use crate::config::{AutoRule, Direction, TransitionMode};
+
+impl SettingsUi {
+    pub(super) fn switching(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
+        title(ui, "Switching", "How scenes change, and automatic switching from the microphones.");
+        let t = &mut self.draft.transition;
+        subtitle(ui, "Transitions");
+        egui::Grid::new("transitions").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            label(ui, "Transition");
+            ui.horizontal(|ui| {
+                for m in TransitionMode::ALL {
+                    ui.selectable_value(&mut t.mode, m, m.label());
+                }
+            });
+            ui.end_row();
+            label(ui, "Length");
+            ui.add(egui::DragValue::new(&mut t.duration_ms).range(0..=3000).speed(10).suffix(" ms"));
+            ui.end_row();
+            label(ui, "Wipes and pushes go");
+            ui.horizontal(|ui| {
+                for d in Direction::ALL {
+                    ui.selectable_value(&mut t.direction, d, d.label());
+                }
+            });
+            ui.end_row();
+            label(ui, "Dip through");
+            ui.horizontal(|ui| {
+                let mut rgb = crate::config::parse_color(&t.dip_color).map(|c| [(c >> 16) as u8, (c >> 8) as u8, c as u8]).unwrap_or([0, 0, 0]);
+                if ui.color_edit_button_srgb(&mut rgb).changed() {
+                    t.dip_color = format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]);
+                }
+                if ui.small_button("Black").clicked() {
+                    t.dip_color = "#000000".into();
+                }
+                if ui.small_button("White").clicked() {
+                    t.dip_color = "#ffffff".into();
+                }
+            });
+            ui.end_row();
+            label(ui, "Preview, then take");
+            ui.checkbox(&mut t.preview_mode, "pick the next scene in a preview monitor, then press Take (Space) or Cut (Enter)");
+            ui.end_row();
+        });
+        hint(ui, "Mix glides frames to their new places and cross-fades; wipe, push and dip change the whole picture. Without preview, clicking a scene takes it straight to air.");
+
+        ui.add_space(16.0);
+        subtitle(ui, "Automatic switching");
+        let scenes: Vec<String> = self.draft.effective_scenes().iter().map(|s| s.name.clone()).collect();
+        let inputs: Vec<(String, u32)> = self.draft.audio.iter().map(|a| (a.name.clone(), a.channels)).collect();
+        let a = &mut self.draft.auto_switch;
+        ui.checkbox(&mut a.enabled, "On when Cutaway starts (the AUTO button and the A key turn it on and off)");
+        ui.add_space(6.0);
+        ui.label(RichText::new("When this mic talks, show this scene:").strong());
+        let mut remove = None;
+        egui::Grid::new("rules").num_columns(5).spacing([10.0, 6.0]).show(ui, |ui| {
+            for (i, r) in a.rules.iter_mut().enumerate() {
+                egui::ComboBox::from_id_salt(("rule_in", i)).selected_text(if r.input.is_empty() { "input…" } else { &r.input }).width(150.0).show_ui(ui, |ui| {
+                    for (n, _) in &inputs {
+                        ui.selectable_value(&mut r.input, n.clone(), n);
+                    }
+                });
+                let chans = inputs.iter().find(|x| x.0 == r.input).map(|x| x.1).unwrap_or(2);
+                egui::ComboBox::from_id_salt(("rule_ch", i)).selected_text(if r.channel == 0 { "all channels".to_string() } else { format!("channel {}", r.channel) }).width(110.0).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut r.channel, 0, "all channels");
+                    for c in 1..=chans {
+                        ui.selectable_value(&mut r.channel, c, format!("channel {c}"));
+                    }
+                });
+                ui.label("→");
+                egui::ComboBox::from_id_salt(("rule_scene", i)).selected_text(if r.scene.is_empty() { "scene…" } else { &r.scene }).width(170.0).show_ui(ui, |ui| {
+                    for s in &scenes {
+                        ui.selectable_value(&mut r.scene, s.clone(), s);
+                    }
+                });
+                // Live level, to help set the threshold.
+                let level = inputs
+                    .iter()
+                    .position(|x| x.0 == r.input)
+                    .and_then(|ii| info.input_levels.get(ii))
+                    .map(|lv| if r.channel == 0 { lv.iter().copied().fold(-120.0, f32::max) } else { lv.get(r.channel as usize - 1).copied().unwrap_or(-120.0) });
+                ui.horizontal(|ui| {
+                    if let Some(l) = level {
+                        let talking = l >= a.threshold_db;
+                        ui.label(RichText::new(format!("{:>4.0} dB", l.max(-99.0))).monospace().color(if talking { GREEN } else { TEXT_DIM }));
+                    }
+                    if ui.small_button("✕").clicked() {
+                        remove = Some(i);
+                    }
+                });
+                ui.end_row();
+            }
+        });
+        if let Some(i) = remove {
+            a.rules.remove(i);
+        }
+        if ui.button("＋ Add a rule").clicked() {
+            a.rules.push(AutoRule { input: inputs.first().map(|x| x.0.clone()).unwrap_or_default(), channel: 0, scene: scenes.first().cloned().unwrap_or_default() });
+        }
+        ui.add_space(8.0);
+        egui::Grid::new("auto").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            label(ui, "Counts as talking above");
+            ui.add(egui::Slider::new(&mut a.threshold_db, -70.0..=-10.0).suffix(" dB"));
+            ui.end_row();
+            label(ui, "Talking for at least");
+            ui.add(egui::DragValue::new(&mut a.hold_ms).range(100..=3000).speed(10).suffix(" ms"));
+            ui.end_row();
+            label(ui, "Shortest shot");
+            ui.add(egui::DragValue::new(&mut a.min_shot_s).range(0.5..=30.0).speed(0.1).suffix(" s"));
+            ui.end_row();
+            label(ui, "Wide shot");
+            egui::ComboBox::from_id_salt("wide").selected_text(if a.wide_scene.is_empty() { "none" } else { &a.wide_scene }).width(200.0).show_ui(ui, |ui| {
+                ui.selectable_value(&mut a.wide_scene, String::new(), "none");
+                for s in &scenes {
+                    ui.selectable_value(&mut a.wide_scene, s.clone(), s);
+                }
+            });
+            ui.end_row();
+            label(ui, "When several talk at once");
+            ui.checkbox(&mut a.wide_on_crosstalk, "go to the wide shot (otherwise: the loudest)");
+            ui.end_row();
+            label(ui, "After one person for");
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(&mut a.max_shot_s).range(0.0..=600.0).speed(0.5).custom_formatter(|v, _| if v == 0.0 { "never".into() } else { format!("{v:.0} s") }));
+                ui.label("show the wide shot for");
+                ui.add(egui::DragValue::new(&mut a.wide_for_s).range(1.0..=60.0).speed(0.1).suffix(" s"));
+            });
+            ui.end_row();
+            label(ui, "After you switch by hand");
+            ui.horizontal(|ui| {
+                ui.label("wait");
+                ui.add(egui::DragValue::new(&mut a.manual_pause_s).range(0.0..=120.0).speed(0.1).suffix(" s"));
+                hint(ui, "before switching automatically again");
+            });
+            ui.end_row();
+        });
+        hint(ui, "Give each person their own mic channel. Set the threshold just above the level each mic shows when that person is quiet (the numbers next to the rules are live).");
+    }
+}

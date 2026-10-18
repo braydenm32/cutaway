@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0e1014">
+<title>Cutaway Remote</title>
+<style>
+  :root { --bg:#0e1014; --panel:#16191f; --raised:#22262e; --line:#343944; --text:#e8eaf0; --dim:#8c93a0;
+          --red:#e83440; --green:#3ac470; --amber:#f5a623; --live:#d62878; --accent:#5aa0ff; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { margin:0; background:var(--bg); color:var(--text); font:15px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  body { padding:12px max(12px,env(safe-area-inset-right)) 24px max(12px,env(safe-area-inset-left)); }
+  header { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .brand { font-weight:700; letter-spacing:3px; font-size:15px; margin-right:auto; }
+  button { font:inherit; color:var(--text); background:var(--raised); border:1px solid var(--line); border-radius:12px; padding:12px 14px; min-height:48px; cursor:pointer; }
+  button:active { transform:scale(.98); }
+  .pill { border-radius:24px; font-weight:700; min-width:118px; }
+  .rec.on { background:var(--red); border-color:var(--red); }
+  .live.on { background:var(--live); border-color:var(--live); }
+  .monitor { margin:12px 0; position:relative; background:#000; border-radius:10px; overflow:hidden; aspect-ratio:16/9; border:2px solid #401018; }
+  .monitor img { width:100%; height:100%; object-fit:contain; display:block; }
+  .monitor .tag { position:absolute; left:8px; top:8px; background:var(--red); border-radius:4px; padding:2px 8px; font-size:12px; font-weight:700; }
+  .monitor .name { position:absolute; left:84px; top:8px; background:#000a; border-radius:4px; padding:2px 8px; font-size:13px; }
+  h2 { font-size:11px; letter-spacing:1.5px; color:var(--dim); font-weight:600; margin:18px 0 8px; text-transform:uppercase; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(132px,1fr)); gap:8px; }
+  .scene { min-height:72px; text-align:left; display:flex; flex-direction:column; justify-content:space-between; }
+  .scene small { color:var(--dim); font-size:12px; }
+  .scene.program { background:var(--red); border-color:var(--red); }
+  .scene.program small, .scene.preview small { color:#fffc; }
+  .scene.preview { background:#1e7a45; border-color:var(--green); }
+  .row { display:flex; gap:8px; flex-wrap:wrap; }
+  .toggle.on { background:var(--green); color:#000; border-color:var(--green); font-weight:600; }
+  .take { background:var(--red); border-color:var(--red); font-weight:700; flex:1; }
+  .cut { flex:1; font-weight:700; }
+  .status { color:var(--dim); font-size:13px; margin-top:6px; min-height:18px; }
+  .warn { color:var(--amber); }
+  #pin { position:fixed; inset:0; background:var(--bg); display:none; align-items:center; justify-content:center; flex-direction:column; gap:12px; padding:24px; text-align:center; }
+  #pin input { font-size:28px; text-align:center; width:180px; padding:10px; border-radius:12px; border:1px solid var(--line); background:var(--raised); color:var(--text); letter-spacing:8px; }
+  .tally { position:fixed; inset:0; display:none; align-items:center; justify-content:center; flex-direction:column; font-size:9vw; font-weight:800; }
+  a { color:var(--accent); }
+  .monitor .cc { position:absolute; left:10%; right:10%; bottom:8%; text-align:center; font-size:13px; white-space:pre-line; }
+  .monitor .cc span { background:#000c; padding:2px 6px; border-radius:4px; }
+  .meter { height:6px; border-radius:3px; background:#08090c; overflow:hidden; margin-top:6px; }
+  .meter i { display:block; height:100%; background:var(--green); width:0; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">CUTAWAY</div>
+  <button class="pill rec" id="rec" onclick="act('record')">● RECORD</button>
+  <button class="pill live" id="live" onclick="act('live')">◉ GO LIVE</button>
+  <button id="marker" onclick="act('marker')">＋ Marker</button>
+</header>
+<div class="status" id="status"></div>
+<div class="monitor"><img id="program" alt=""><div class="tag">PROGRAM</div><div class="name" id="pname"></div><div class="cc" id="cc"></div></div>
+<div class="row" id="takerow" style="display:none">
+  <button class="cut" onclick="act('cut')">CUT</button>
+  <button class="take" onclick="act('take')">TAKE</button>
+</div>
+<h2 id="sceneshead">Scenes</h2>
+<div class="grid" id="scenes"></div>
+<h2>Switching</h2>
+<div class="row" id="switching"></div>
+<div id="gfxwrap"><h2>Graphics</h2><div class="grid" id="graphics"></div></div>
+<div id="audiowrap"><h2>Audio</h2><div class="grid" id="audio"></div></div>
+<div id="mediawrap"><h2>Media</h2><div id="media"></div></div>
+<h2>Tally lights</h2>
+<div class="row" id="tallies"></div>
+<p class="status">Open a tally link on a phone mounted on each camera. Stream Deck and Companion: use <code>/api/action?do=scene:1</code> (see the README).</p>
+
+<div id="pin"><div style="font-size:20px">Enter the remote PIN</div><div class="status">It's shown in Cutaway under Settings → Remote &amp; MIDI.</div>
+  <input id="pinbox" inputmode="numeric" autocomplete="off" maxlength="12"><button onclick="savePin()">Connect</button></div>
+<div class="tally" id="tally"><div id="tname"></div><div id="tstate" style="font-size:4vw;opacity:.85"></div></div>
+
+<script>
+const q = new URLSearchParams(location.search);
+let pin = q.get('pin') || localStorage.getItem('cutaway_pin') || '';
+const tallySource = q.get('tally');
+let state = null, imgBusy = false;
+
+function api(path) { return path + (path.includes('?') ? '&' : '?') + 'pin=' + encodeURIComponent(pin); }
+function savePin() { pin = document.getElementById('pinbox').value.trim(); localStorage.setItem('cutaway_pin', pin); document.getElementById('pin').style.display = 'none'; poll(); }
+async function act(cmd) {
+  try {
+    const r = await fetch(api('/api/action?do=' + encodeURIComponent(cmd)), { method: 'POST' });
+    const t = await r.text();
+    if (!r.ok) flash(t, true);
+    if (!wsLive) poll();
+  } catch (e) { flash('Cutaway isn\'t answering', true); }
+}
+function flash(text, bad) { const s = document.getElementById('status'); s.textContent = text; s.className = 'status' + (bad ? ' warn' : ''); }
+function el(tag, cls, text, onclick) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; if (onclick) e.onclick = onclick; return e; }
+function clock(s) { s = Math.floor(s); return [s / 3600, s / 60 % 60, s % 60].map(v => String(Math.floor(v)).padStart(2, '0')).join(':'); }
+
+function render() {
+  const s = state;
+  if (tallySource !== null) return renderTally();
+  const rec = document.getElementById('rec'), live = document.getElementById('live');
+  rec.className = 'pill rec' + (s.recording ? ' on' : '');
+  rec.textContent = s.recording ? '■ REC ' + clock(s.rec_seconds) : '● RECORD';
+  live.className = 'pill live' + (s.live ? ' on' : '');
+  live.textContent = s.live ? '◉ LIVE ' + clock(s.live_seconds) : '◉ GO LIVE';
+  document.getElementById('marker').style.display = s.recording ? '' : 'none';
+  document.getElementById('pname').textContent = s.program || '';
+  const cc = document.getElementById('cc'); cc.innerHTML = '';
+  if (s.captions && s.caption_text) cc.append(el('span', '', s.caption_text));
+  document.getElementById('takerow').style.display = s.preview_mode ? 'flex' : 'none';
+  document.getElementById('sceneshead').textContent = s.preview_mode ? 'Scenes (tap to preview)' : 'Scenes (tap to take)';
+  const notes = [];
+  if (s.disk) notes.push(s.disk);
+  if (s.problems && s.problems.length) notes.push('⚠ ' + s.problems.join(' · '));
+  flash(notes.join('   '), s.problems && s.problems.length);
+
+  const scenes = document.getElementById('scenes'); scenes.innerHTML = '';
+  s.scenes.forEach((sc, i) => {
+    const b = el('button', 'scene' + (sc.program ? ' program' : sc.preview ? ' preview' : ''), undefined, () => act((s.preview_mode ? 'preview:' : 'scene:') + (i + 1)));
+    b.append(el('span', '', sc.name), el('small', '', sc.program ? 'ON AIR' : sc.preview ? 'PREVIEW' : String(i + 1)));
+    scenes.append(b);
+  });
+  const sw = document.getElementById('switching'); sw.innerHTML = '';
+  sw.append(el('button', 'toggle' + (s.auto ? ' on' : ''), 'Auto switching', () => act('auto')));
+  if (s.captions_available) sw.append(el('button', 'toggle' + (s.captions ? ' on' : ''), 'CC', () => act('captions')));
+  ['cut', 'mix', 'wipe', 'push', 'dip'].forEach(t => sw.append(el('button', 'toggle' + (s.transition === t ? ' on' : ''), t[0].toUpperCase() + t.slice(1), () => act('transition:' + t))));
+
+  const gfx = document.getElementById('graphics'); gfx.innerHTML = '';
+  document.getElementById('gfxwrap').style.display = s.graphics.length ? '' : 'none';
+  s.graphics.forEach((g, i) => gfx.append(el('button', 'toggle' + (g.on ? ' on' : ''), g.name, () => act('graphic:' + (i + 1)))));
+  const au = document.getElementById('audio'); au.innerHTML = '';
+  document.getElementById('audiowrap').style.display = s.inputs.length ? '' : 'none';
+  s.inputs.forEach((a, i) => {
+    const b = el('button', 'toggle' + (a.on ? ' on' : ''), undefined, () => act('audio:' + (i + 1)));
+    b.append(el('div', '', a.name));
+    const m = el('div', 'meter'); const bar = el('i'); bar.style.width = Math.max(0, Math.min(100, (a.level + 60) / 60 * 100)) + '%'; m.append(bar); b.append(m);
+    au.append(b);
+  });
+  const md = document.getElementById('media'); md.innerHTML = '';
+  document.getElementById('mediawrap').style.display = s.players.length ? '' : 'none';
+  s.players.forEach(p => {
+    const r = el('div', 'row'); r.style.marginBottom = '8px';
+    r.append(el('div', '', p.name + (p.item ? ' — ' + p.item : '')));
+    r.firstChild.style.cssText = 'flex-basis:100%;color:var(--dim);font-size:13px';
+    r.append(el('button', '', '⏮', () => act('media:' + p.name + ':previous')), el('button', p.playing ? 'toggle on' : '', p.playing ? '⏸ Pause' : '▶ Play', () => act('media:' + p.name + ':toggle')),
+             el('button', '', '⟲ Restart', () => act('media:' + p.name + ':restart')), el('button', '', '⏭', () => act('media:' + p.name + ':next')));
+    md.append(r);
+  });
+  const t = document.getElementById('tallies'); t.innerHTML = '';
+  s.sources.forEach((src, i) => { const a = el('a', '', src.name); a.href = '/?tally=' + (i + 1) + (pin ? '&pin=' + encodeURIComponent(pin) : ''); a.style.marginRight = '14px'; t.append(a); });
+}
+
+function renderTally() {
+  document.querySelectorAll('body > :not(#tally)').forEach(e => e.style.display = 'none');
+  const t = document.getElementById('tally'); t.style.display = 'flex';
+  const src = state.sources[parseInt(tallySource) - 1];
+  if (!src) { document.getElementById('tname').textContent = 'No source ' + tallySource; return; }
+  t.style.background = src.tally === 'program' ? '#e01020' : src.tally === 'preview' ? '#10a040' : '#111';
+  document.getElementById('tname').textContent = src.name;
+  document.getElementById('tstate').textContent = src.tally === 'program' ? 'ON AIR' : src.tally === 'preview' ? 'PREVIEW' : '';
+}
+
+async function poll() {
+  try {
+    const r = await fetch(api('/api/state'));
+    if (r.status === 401) { document.getElementById('pin').style.display = 'flex'; return; }
+    state = await r.json();
+    render();
+  } catch (e) { flash('Cutaway isn\'t answering…', true); }
+}
+function refreshImage() {
+  if (tallySource !== null || imgBusy || document.hidden) return;
+  imgBusy = true;
+  const img = document.getElementById('program');
+  const next = new Image();
+  next.onload = () => { img.src = next.src; imgBusy = false; };
+  next.onerror = () => { imgBusy = false; };
+  next.src = api('/api/program.jpg?t=' + Date.now());
+}
+// Live updates over WebSocket; polling while it isn't connected.
+let wsLive = false;
+function connectWs() {
+  let ws;
+  try { ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/ws?pin=' + encodeURIComponent(pin)); }
+  catch (e) { return; }
+  ws.onmessage = ev => {
+    const m = JSON.parse(ev.data);
+    if (m.type === 'state') { state = m.state; wsLive = true; render(); }
+    else if (m.type === 'reply' && !m.ok) flash(m.message, true);
+  };
+  ws.onclose = () => { wsLive = false; setTimeout(connectWs, 3000); };
+}
+poll(); connectWs();
+setInterval(() => { if (!wsLive) poll(); }, 500);
+setInterval(refreshImage, 700);
+</script>
+</body>
+</html>
