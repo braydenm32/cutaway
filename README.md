@@ -38,6 +38,12 @@ on three destinations.*
     runtime is installed (see [NDI](#ndi)).
   - Each network source has a fixed latency buffer so its picture and sound
     stay in step with your cameras.
+- **Remote guests by link.** Send a guest a link; they open it in their
+  browser (computer, tablet or phone), allow the camera and mic, and join —
+  no app, no account. Each guest spot is a source and an audio input. They
+  hear the show without their own voice (mix-minus, plus talkback) and can
+  watch the program. Cutaway reaches them through a free Cloudflare tunnel,
+  so there's no router setup (see [Remote guests](#remote-guests)).
 - **Media player.** A source that plays a playlist of video files and still
   images, with sound: intros, stings, holding slides, B-roll. Play, pause,
   next and restart from its tile, the remote or MIDI; optionally restart when
@@ -76,6 +82,18 @@ on three destinations.*
 - **Every input on its own track:** optionally, the Program file carries
   each audio input as its own (disabled) track after the mix, so an editor
   can re-balance the show without the WAVs.
+- **Instant clips:** press **✂ Clip** (or `K`, a Stream Deck key, the
+  remote) to save the last 30 seconds (your choice) of the program as its
+  own file in the take's `Clips` folder, while the recording carries on —
+  for social media, a highlight or a blooper reel.
+- **Audio sessions:** every take also comes with a **REAPER** session and a
+  **DAWproject** (opens in **Fender Studio Pro**/Studio One, Bitwig and
+  Cubase) with every WAV on its own track, lined up, with the markers.
+- **DaVinci Resolve project in one click:** install Cutaway's Resolve script
+  (Settings → Recording) and run **Workspace → Scripts → Cutaway - Build
+  project from a take**: a new project at the take's frame rate, with bins
+  for the cameras and the audio, proxies linked and the live edit as a
+  timeline.
 - **Podcast episode:** optionally, each take also gives an M4A of the mix,
   levelled to −16 LUFS (or your target) with a look-ahead limiter, tagged,
   with the markers as chapters — ready to upload.
@@ -103,7 +121,11 @@ Take_2026-10-16_19-30-02/
   Take_… (Podcast).m4a               the levelled episode with chapters (if turned on)
   Transcript.txt, Captions.srt/.vtt  what was said (with captions on)
   Proxies/                           small copies (if turned on)
+  Clips/Clip 01 (12m30s).mp4         instant clips
   Take_2026-10-16_19-30-02.fcpxml    the live edit for Final Cut Pro / Resolve
+  Take_2026-10-16_19-30-02.rpp       REAPER session (every WAV on a track)
+  Take_2026-10-16_19-30-02.dawproject  Fender Studio Pro, Bitwig, Cubase
+  Take_… (Resolve).lua               what the Resolve script builds the project from
   Take_2026-10-16_19-30-02 (Premiere).xml
   Chapters.txt                       markers as a YouTube chapter list
   Switches.csv                       timecode, scene, transition for every switch
@@ -117,6 +139,11 @@ Take_2026-10-16_19-30-02/
   save them.
 - **Transitions:** Cut, Mix (shared frames glide to their new places while
   others fade), Wipe, Push and Dip to a colour, with a direction and length.
+- **Stinger transitions:** a short video (a logo sweep, a burst of colour)
+  plays over the program and the scenes change underneath at its cut point,
+  with its sound. Use a stinger with a track matte (most stinger packs
+  include one — it works with any H.264 file), one where black is
+  see-through, or a solid one.
 - **Preview/program:** optionally pick the next scene in a preview monitor
   first, then **Take** (Space) or **Cut** (Enter), like a hardware switcher.
 - **Automatic switching:** follows whoever is talking, from each person's mic
@@ -127,6 +154,17 @@ Take_2026-10-16_19-30-02/
 - **Graphics:** logos/watermarks (PNG with transparency) and name titles
   (lower thirds) above every scene, each with its own button and fade. Title
   text can be changed live between guests.
+- **Clocks and countdowns:** clock graphics show the time of day, a
+  countdown to a time ("Starting in 4:59"), a countdown or stopwatch you
+  start from a button, key or cue, or the time left in the rundown segment
+  (red when it runs over). The second screen can also show the time and the
+  segment clock just for the presenters.
+- **Rundown:** the show's running order — each segment with a planned
+  length, a scene and cues (graphics, pads, Syrinscape moods, timers) — that
+  you step through with **Next** (`N`), the Stream Deck or the remote. It
+  shows the time left in each segment, what's next, and how far over or
+  under the show is running, and marks each segment in the recording as a
+  chapter.
 - **Tally:** red for on air, green for preview, in the multiview, on the
   phone remote and on MIDI pads.
 
@@ -147,6 +185,22 @@ Take_2026-10-16_19-30-02/
   picture.
 - **Headphones:** listen to either mix, or solo any input, on any output
   device, in sync with the program picture.
+- **More outputs and mix-minus:** feed presenters' headphones, or a caller
+  on a phone hybrid or video call a mix with their own voice left out, on
+  any output channels.
+- **Talkback:** hold **TALK** (or `B`, or a Stream Deck key) and your mic
+  goes to the presenters' headphones and the guests — never the recording or
+  stream — with the rest dipped while you talk.
+- **Auto-ducking:** music, pads and ambience marked to duck dip smoothly
+  under the voices and come back up after a pause.
+- **Sound pads:** jingles, stings, applause and music beds on buttons,
+  F1–F12, the Stream Deck, MIDI pads and the remote: play once, loop, or
+  play while held, each with its level and fade. They play through their
+  own input strip, so they're recorded and can duck.
+- **Syrinscape:** start your Syrinscape Online moods and sounds from
+  Cutaway's sound panel, scenes, the rundown, the Stream Deck and MIDI. Its
+  sound comes in through a virtual cable or Cutaway's **Sound from an app**
+  input (captures one app's audio, on Mac and Windows).
 - **Automatic lip sync:** clap once where every camera can see it; Cutaway
   finds the clap in every picture and every input and sets each delay (or
   set the delays by hand).
@@ -176,7 +230,9 @@ Take_2026-10-16_19-30-02/
 - **Stream Deck plugin:** keys with live pictures of every scene and source,
   red and green tally, take/cut, transitions, record and go live (hold to
   confirm), markers, graphics, audio inputs with level meters (and Stream
-  Deck+ dials for levels), auto-switching, captions and media players.
+  Deck+ dials for levels), auto-switching, captions, media players, sound
+  pads (with their progress), Syrinscape, talkback, instant clips, timers,
+  the rundown (with the time left) and remote guests.
 - **Show-control software:** OSC from QLab, Bitfocus Companion, TouchOSC or
   a lighting desk, with state sent back; a WebSocket API that pushes every
   change; and every action is also a plain web address.
@@ -360,6 +416,11 @@ Video Extensions** on some PCs.
 | Captions on screen | **CC** or `C` |
 | Who an auto-framed source follows | Right-click its tile: follow and shot size |
 | Marker | `M`, or **◆ Marker** while recording |
+| Save a clip | `K`, or **✂ Clip** while recording (the last 30 seconds, or as set) |
+| Sound pads 1–12 | F1–F12, or the pad buttons in the sound panel (hold for "while held" pads) |
+| Talkback | Hold `B`, or hold **TALK** in the sound panel |
+| Next rundown segment | `N` (Shift+N goes back), or **Next ▶** in the rundown panel |
+| Timers | Right-click a countdown or stopwatch's graphic button: start, pause, reset |
 | Graphics 1–9 | Alt/Option + number, or the graphic buttons; ✎ edits a title's text live |
 | Media player | ⟲ ⏯ ⏭ on its tile; right-click the tile for the playlist |
 | Record / stop | ⌘R, or the record button |
@@ -502,11 +563,73 @@ for button feedback.
 | `media:Clips:play` | Media player: `play`, `pause`, `toggle`, `restart`, `next`, `previous` |
 | `source:2` | A source full screen (like clicking it in the multiview) |
 | `captions`, `captions:on`, `captions:off` | Captions on screen |
+| `transition:stinger` | Use the stinger (set in Settings → Switching) |
+| `pad:1`, `pad:Applause`, `pad:1:stop`, `pads:stop` | Sound pads (press: play, or stop if playing; `play`, `stop`, `release`) |
+| `talkback`, `talkback:on`, `talkback:off` | Talkback |
+| `syrinscape:2`, `syrinscape:Tavern`, `syrinscape:stop`, `syrinscape:volume:0.8` | Syrinscape buttons (by number or name); `syrinscape:mood:19` and `syrinscape:element:1541818` start any by its number |
+| `clip`, `clip:45` | Save the last 30 (or 45) seconds as a clip |
+| `timer:Back in:start` | A countdown or stopwatch: `start`, `pause`, `toggle`, `reset`, `stop` |
+| `rundown:next`, `rundown:previous`, `rundown:3`, `rundown:Interview`, `rundown:stop` | The rundown |
+
+Scenes and rundown segments can run commands as **cues** when they start
+(Edit layout → Scene cues; Settings → Rundown), e.g. a break scene that
+starts a Syrinscape mood and a "Back in" countdown.
 
 **MIDI** (macOS and Windows): pick the controller, then **＋ Add a mapping**, press
 **Learn** and hit the pad, key or fader. Pads can run any command above;
 faders (CC) can set an input's level. Pads light up for the scene on air, the
 one in preview, recording, live, auto, graphics and inputs that are on.
+
+## Remote guests
+
+1. **Settings → Remote guests:** tick **let guests join by link** and press
+   **＋ Guest spot** for each guest. A spot is a video source and an audio
+   input of the same name, so it can go in scenes, be recorded and be mixed
+   like any camera and mic. Apply.
+2. **Send the link:** the guests panel (and the settings) show each spot's
+   link — **Copy link** and send it by message or email. The first time,
+   Cutaway downloads Cloudflare's small tunnel program (or uses `cloudflared`
+   if it's installed); the address is new each time Cutaway starts, so send
+   links on the day.
+3. **The guest** opens the link in Chrome, Edge, Safari or Firefox, checks
+   their camera and mic, types their name and presses **Join**. Their spot
+   turns green with their name. They hear the show without their own voice,
+   your talkback, and see the program.
+4. **During the show:** take their spot like any camera; their level is on
+   their audio strip; **✕** disconnects them. If they reload the page they
+   simply rejoin.
+
+- **Firewalls:** guests connect directly to Cutaway (WebRTC), which works on
+  almost every home and mobile network. A few office, school and hotel
+  networks block that; set a TURN server (Cloudflare Calls, Twilio, your own
+  coturn) under **Strict networks** to relay for them.
+- **Your own address:** instead of the tunnel, choose **my own https://
+  address** and forward it to the guest port (8792); browsers only allow the
+  camera on https pages.
+- **Echo:** ask guests to wear headphones; their browser's echo cancellation
+  handles the rest.
+
+## Sound pads, Syrinscape and talkback
+
+- **Sound pads:** **Settings → Sound pads → ＋ Add sounds…** (WAV, AIFF,
+  MP3, AAC/M4A, FLAC, Ogg or CAF). Each pad has a name, colour, how it plays
+  (once, loop, or while held), a level and a fade-out. Cutaway adds a **Sound
+  pads** audio input for them, with its own fader, meter and WAV file. Tick
+  **Duck under voices** on it to keep beds below the talking.
+- **Syrinscape:** **Settings → Syrinscape:** paste your auth token (from
+  syrinscape.com/account/auth-token), press **Test**, then **Load my
+  soundsets** and **＋ Add** the moods and sounds you want as buttons (or
+  paste a remote-control link). Keep the Syrinscape Online player open. To
+  hear it in Cutaway, add an audio input set to **Sound from an app** → your
+  browser or the Syrinscape app (on a Mac, allow Screen Recording when
+  asked), or route the player to a virtual cable.
+- **Talkback:** **Settings → Mixing & headphones → Talkback:** choose your
+  mic. Add the presenters' headphones under **More outputs** (tick
+  **Talkback**). Hold **TALK** or `B` to speak to them; guests hear it too
+  unless you untick it.
+- **Mix-minus for callers:** **More outputs → ＋ Mix-minus for a caller:**
+  pick the output channels that go to the phone hybrid or call app, and tick
+  the caller's input under **Leave out**.
 
 ## Getting your DAW's audio in
 
@@ -579,7 +702,16 @@ close-up of the person on the left, cut from the same camera.*
   multicam clip of every recorded angle (and the program), and a project cut
   as you switched it live, with the markers. Switch angles in the angle
   viewer to change any cut.
-- **DaVinci Resolve:** File → Import → Timeline, and pick the `.fcpxml`.
+- **DaVinci Resolve:** File → Import → Timeline, and pick the `.fcpxml`. Or,
+  for the whole project in one go, press **Install the Resolve script** in
+  Settings → Recording once, then in Resolve choose **Workspace → Scripts →
+  Cutaway - Build project from a take** and pick the take: you get a project
+  named after it with bins for the cameras and the audio, proxies linked and
+  the live edit as a timeline with the markers.
+- **REAPER:** open the take's `.rpp`: every WAV is on its own track, lined
+  up, with the markers.
+- **Fender Studio Pro (Studio One), Bitwig, Cubase:** open (or import) the
+  take's `.dawproject`.
 - **Premiere Pro:** File → Import, and pick the `(Premiere).xml`. The live
   edit is on V1, with every angle on its own track above, ready to swap in.
 - **Composite scenes** (side by side, picture-in-picture) cut to the
@@ -722,13 +854,27 @@ and a software GPU:
   line everything up to within a frame.
 - **Interface:** the main window, preview/program, the second screen, the
   pre-show check, health and settings, under a virtual display.
+- **Remote guests:** a WebRTC client standing in for a browser joined by
+  link, sending H.264 and Opus; its picture reached the guest's source and
+  its voice the mixer. A real (Chromium) browser joined through the guest
+  page and heard the show's mix back. (Chromium's open-source build has no
+  H.264, so its picture wasn't tested; Chrome, Edge and Safari have it.) The
+  Cloudflare tunnel couldn't be reached from the test machine.
+- **Stingers:** a track-matte stinger over the program, with the scenes
+  changing at its cut point; the matte, black-is-see-through and solid kinds
+  checked pixel by pixel.
+- **Instant clips, sound pads, ducking, mix-minus, talkback, timers and the
+  rundown:** their own tests, and the Stream Deck stand-in pressing each new
+  key against a running Cutaway.
+- **Session files:** the DAWproject checked against the official schema;
+  the Resolve script run against a stand-in for Resolve's scripting API.
 - **Finding people with ONNX Runtime** (the Windows way), on Linux with ONNX
   Runtime 1.31: faces found in photos, and a person cut out over slides
   through the whole app.
 - **Whisper captions:** the streaming logic (partial and settled words,
   timing, long speech) with a stand-in recogniser, and whisper.cpp itself
   loading and running a model.
-- **Unit tests:** `cargo test` (113 tests, plus Windows-only ones that run there), including the compositor's
+- **Unit tests:** `cargo test` (143 tests, plus Windows-only ones that run there), including the compositor's
   styling, keying, person masks, transitions and graphics, the voice
   processing, loudness, limiters and leveller, automatic switching,
   auto-framing, captions, lip sync, the podcast, OSC, the WebSocket, the

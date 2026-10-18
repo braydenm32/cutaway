@@ -1375,7 +1375,7 @@ impl Default for GuestsConfig {
     fn default() -> Self {
         GuestsConfig {
             enabled: false,
-            port: 8791,
+            port: 8792,
             access: GuestAccess::Tunnel,
             public_url: String::new(),
             return_video: true,

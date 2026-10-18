@@ -178,8 +178,10 @@ fn run_once(port: u16, child_slot: &Arc<Mutex<Option<Child>>>, stop: &std::sync:
                 set(TunnelState::Up(a));
                 continue;
             }
-            if line.contains("ERR") {
-                last = line.split("ERR").nth(1).unwrap_or("").trim().to_string();
+            if line.contains(" ERR ") {
+                last = line.split(" ERR ").nth(1).unwrap_or("").trim().to_string();
+            } else if line.starts_with("failed") {
+                last = line.trim().to_string();
             }
         }
     }
@@ -187,6 +189,9 @@ fn run_once(port: u16, child_slot: &Arc<Mutex<Option<Child>>>, stop: &std::sync:
     kill(child_slot);
     if stop.load(std::sync::atomic::Ordering::Relaxed) {
         return Ok(());
+    }
+    if last.contains("no such host") || last.contains("lookup") {
+        bail!("couldn't reach Cloudflare (is this computer online?): {last}");
     }
     bail!("the tunnel closed{}", if last.is_empty() { String::new() } else { format!(": {last}") })
 }
