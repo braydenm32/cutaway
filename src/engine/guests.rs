@@ -12,11 +12,18 @@
 //! The hub lives for the whole app, so links and connected guests survive
 //! the engine restarting; the engine lends it its mixes and program while
 //! it runs.
+//!
+//! A phone camera is a spot of the same kind ("phone:ID"): the phone opens
+//! its link from a QR code and sends its camera only, at up to 1080p.
+//!
+//! Backup recordings: while the show records, each guest's browser also
+//! records them as captured and uploads it in pieces into the take's
+//! Guests folder, so a bad connection doesn't spoil the recording.
 
 use super::audio::{MixKind, MixTaps};
 use super::feed::{AudioHub, Feeder};
 use super::sources::{Running, SourceSlot};
-use super::{LogLevel, Status, VideoTaps, Waker};
+use super::{LogLevel, RecState, Status, VideoTaps, Waker};
 use crate::config::{Config, GuestAccess, GuestsConfig, SourceConfig};
 use crate::media::{clock, h264, AudioBlock, Ns, VideoCodec, VideoFrame, NS_PER_SEC};
 use crate::net::tunnel::{Tunnel, TunnelState};
@@ -47,6 +54,9 @@ use webrtc::peer_connection::{PeerConnection, PeerConnectionBuilder, PeerConnect
 use webrtc::rtp_transceiver::RtpSender;
 
 const PAGE: &str = include_str!("guest.html");
+const PHONE_PAGE: &str = include_str!("phone.html");
+/// The largest backup piece taken in one request.
+const MAX_PIECE: usize = 32 * 1024 * 1024;
 const STUN: [&str; 2] = ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"];
 /// The program as guests see it.
 const RETURN_SIZE: (u32, u32) = (640, 360);
@@ -65,6 +75,31 @@ pub struct GuestInfo {
     /// The name the guest typed.
     pub guest_name: String,
     pub since: Option<Instant>,
+    /// A phone camera rather than a guest.
+    pub camera: bool,
+    /// Their backup recording (the latest), if one's coming in.
+    pub backup: Option<BackupInfo>,
+}
+
+/// A guest's backup recording as it arrives.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BackupInfo {
+    pub bytes: u64,
+    /// All of it is in.
+    pub done: bool,
+    /// Still recording (the show is), rather than catching up.
+    pub recording: bool,
+    pub file: std::path::PathBuf,
+}
+
+/// One backup recording being written.
+struct BackupFile {
+    id: String,
+    path: std::path::PathBuf,
+    next: u64,
+    bytes: u64,
+    done: bool,
+    take: String,
 }
 
 /// What the engine lends the hub while it runs.
@@ -80,6 +115,8 @@ pub struct EngineLink {
 /// A guest source while the engine runs.
 struct Slot {
     source: String,
+    /// A phone camera (picture only, nothing sent back).
+    camera: bool,
     feeder: Arc<Mutex<Feeder>>,
     /// Ask the browser for a fresh keyframe (a new decoder needs one).
     want_key: Arc<AtomicBool>,
@@ -121,6 +158,10 @@ struct Inner {
     server_problem: Option<String>,
     tunnel: Option<(u16, Tunnel)>,
     program_feed: Option<Arc<AtomicBool>>,
+    /// Recent takes guests may upload to: (token, folder).
+    takes: Vec<(String, std::path::PathBuf)>,
+    /// Backup recordings by (link id, take, part).
+    backups: HashMap<(String, String, String), BackupFile>,
 }
 
 pub struct GuestHub {
@@ -283,6 +324,8 @@ impl GuestHub {
                     connecting: c.is_some_and(|c| !c.connected),
                     guest_name: c.map(|c| c.guest_name.clone()).unwrap_or_default(),
                     since: c.and_then(|c| c.since),
+                    camera: s.camera,
+                    backup: Self::backup_of(&inner, id),
                 }
             })
             .collect();
@@ -290,14 +333,151 @@ impl GuestHub {
         v
     }
 
+    /// The take being recorded now: (token, folder, how long ago it started).
+    fn recording(inner: &mut Inner) -> Option<(String, std::path::PathBuf, Duration)> {
+        let (since, folder) = match &inner.engine.as_ref()?.status.lock().unwrap().rec {
+            RecState::Recording { since, folder } => (*since, folder.clone()),
+            _ => return None,
+        };
+        let token = match inner.takes.iter().find(|t| t.1 == folder) {
+            Some(t) => t.0.clone(),
+            None => {
+                let t = new_id();
+                inner.takes.push((t.clone(), folder.clone()));
+                if inner.takes.len() > 8 {
+                    inner.takes.remove(0);
+                }
+                t
+            }
+        };
+        Some((token, folder, since.elapsed()))
+    }
+
+    fn backup_of(inner: &Inner, id: &str) -> Option<BackupInfo> {
+        let current = inner.engine.as_ref().and_then(|e| match &e.status.lock().unwrap().rec {
+            RecState::Recording { folder, .. } => Some(folder.clone()),
+            _ => None,
+        });
+        // The latest take's, the part still coming in first.
+        let mine: Vec<&BackupFile> = inner.backups.values().filter(|b| b.id == id).collect();
+        let latest = inner.takes.iter().rev().find(|t| mine.iter().any(|b| b.take == t.0))?;
+        let parts: Vec<&&BackupFile> = mine.iter().filter(|b| b.take == latest.0).collect();
+        let open = parts.iter().find(|b| !b.done).or(parts.last())?;
+        Some(BackupInfo {
+            bytes: parts.iter().map(|b| b.bytes).sum(),
+            done: parts.iter().all(|b| b.done),
+            recording: current.as_ref() == Some(&latest.1),
+            file: open.path.clone(),
+        })
+    }
+
+    /// What the guest's page needs to know while they're on: whether the
+    /// show is recording (and so whether to record a backup).
+    fn state_json(&self, id: &str) -> Option<String> {
+        let mut inner = self.inner.lock().unwrap();
+        if !inner.cfg.enabled {
+            return None;
+        }
+        let camera = inner.slots.get(id)?.camera;
+        let backup = inner.cfg.backup && !camera;
+        let rec = if backup { Self::recording(&mut inner) } else { None };
+        Some(match rec {
+            Some((take, _, elapsed)) => serde_json::json!({ "backup": true, "recording": true, "take": take, "elapsedMs": elapsed.as_millis() as u64 }),
+            None => serde_json::json!({ "backup": backup, "recording": false }),
+        }
+        .to_string())
+    }
+
+    /// A piece of a guest's backup recording. `at_ms`: when (after the
+    /// take began) their recording started, with the first piece.
+    #[allow(clippy::too_many_arguments)]
+    fn backup_piece(&self, id: &str, take: &str, part: &str, seq: u64, ext: &str, at_ms: Option<f64>, last: bool, data: &[u8]) -> std::result::Result<(), (&'static str, String)> {
+        let ok_id = |s: &str| !s.is_empty() && s.len() <= 32 && s.chars().all(|c| c.is_ascii_alphanumeric());
+        if !ok_id(take) || !ok_id(part) || !matches!(ext, "webm" | "mp4") {
+            return Err(("400 Bad Request", "bad request".into()));
+        }
+        let key = (id.to_string(), take.to_string(), part.to_string());
+        let (path, next, fresh, source) = {
+            let mut inner = self.inner.lock().unwrap();
+            if !inner.cfg.enabled || !inner.cfg.backup {
+                return Err(("403 Forbidden", "backup recordings are off".into()));
+            }
+            let Some(slot) = inner.slots.get(id).filter(|s| !s.camera) else {
+                return Err(("404 Not Found", "this link isn't active".into()));
+            };
+            let source = slot.source.clone();
+            let Some(folder) = inner.takes.iter().find(|t| t.0 == take).map(|t| t.1.clone()) else {
+                return Err(("404 Not Found", "that recording has gone".into()));
+            };
+            match inner.backups.get(&key) {
+                Some(b) => (b.path.clone(), b.next, false, source),
+                None => {
+                    if seq != 0 {
+                        return Err(("409 Conflict", "expected piece 0".into()));
+                    }
+                    let dir = folder.join("Guests");
+                    std::fs::create_dir_all(&dir).map_err(|e| ("500 Error", format!("can't make {}: {e}", dir.display())))?;
+                    let base = crate::util::safe_file_name(&source);
+                    let taken: Vec<std::path::PathBuf> = inner.backups.values().map(|b| b.path.clone()).collect();
+                    let path = (1..)
+                        .map(|n| dir.join(if n == 1 { format!("{base}_backup.{ext}") } else { format!("{base}_backup_{n}.{ext}") }))
+                        // (Numbered whatever the kind of file, so parts read in order.)
+                        .find(|p| ["webm", "mp4"].iter().all(|e| !p.with_extension(e).exists() && !taken.contains(&p.with_extension(e))))
+                        .unwrap();
+                    inner.backups.insert(key.clone(), BackupFile { id: id.to_string(), path: path.clone(), next: 0, bytes: 0, done: false, take: take.to_string() });
+                    (path, 0, true, source)
+                }
+            }
+        };
+        if seq < next {
+            return Ok(()); // sent again: already have it
+        }
+        if seq > next {
+            return Err(("409 Conflict", format!("expected piece {next}")));
+        }
+        let write = || -> std::io::Result<()> {
+            let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
+            f.write_all(data)?;
+            f.flush()
+        };
+        write().map_err(|e| ("500 Error", format!("can't write {}: {e}", path.display())))?;
+        if fresh {
+            if let Some(at) = at_ms {
+                let note = format!(
+                    "{} — {}'s own recording, uploaded from their browser.\nIt starts {:.2} s after the take's recording (line them up by the sound if it matters).\n",
+                    path.file_name().unwrap_or_default().to_string_lossy(),
+                    source,
+                    at / 1000.0
+                );
+                let _ = std::fs::write(path.with_extension("txt"), note);
+            }
+        }
+        let (done_now, bytes) = {
+            let mut inner = self.inner.lock().unwrap();
+            let Some(b) = inner.backups.get_mut(&key) else { return Ok(()) };
+            b.next += 1;
+            b.bytes += data.len() as u64;
+            let done_now = last && !b.done;
+            b.done |= last;
+            (done_now, b.bytes)
+        };
+        if done_now {
+            let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            self.log(LogLevel::Info, format!("{source}'s backup recording is in: Guests/{name} ({:.1} MB)", bytes as f64 / 1e6));
+        }
+        self.wake();
+        Ok(())
+    }
+
     /// Disconnect a guest (or they left).
     pub fn kick(&self, id: &str) {
         let mut inner = self.inner.lock().unwrap();
         let source = inner.slots.get(id).map(|s| s.source.clone()).unwrap_or_default();
+        let camera = inner.slots.get(id).is_some_and(|s| s.camera);
         let c = inner.conns.remove(id);
         drop(inner);
         if let Some(c) = c {
-            let who = if c.guest_name.is_empty() { "The guest".to_string() } else { c.guest_name.clone() };
+            let who = if camera { "The phone".to_string() } else if c.guest_name.is_empty() { "The guest".to_string() } else { c.guest_name.clone() };
             let was_on = c.connected;
             self.close_conn(c);
             if was_on {
@@ -377,7 +557,9 @@ impl GuestHub {
             return None;
         }
         let slot = inner.slots.get(id)?;
-        let (show, rv) = (inner.show.clone(), inner.cfg.return_video);
+        let camera = slot.camera;
+        let (show, rv) = (inner.show.clone(), inner.cfg.return_video && !camera);
+        let backup = inner.cfg.backup && !camera;
         let source = slot.source.clone();
         drop(inner);
         let ice: Vec<serde_json::Value> = self
@@ -385,19 +567,19 @@ impl GuestHub {
             .into_iter()
             .map(|s| if s.username.is_empty() { serde_json::json!({ "urls": s.urls }) } else { serde_json::json!({ "urls": s.urls, "username": s.username, "credential": s.credential }) })
             .collect();
-        Some(serde_json::json!({ "show": show, "slot": source, "returnVideo": rv, "iceServers": ice }).to_string())
+        Some(serde_json::json!({ "show": show, "slot": source, "returnVideo": rv, "camera": camera, "backup": backup, "iceServers": ice }).to_string())
     }
 
     // ---- connecting --------------------------------------------------------------------
 
     /// A guest's offer in, Cutaway's answer out.
     async fn negotiate(self: Arc<Self>, id: String, offer: String, guest_name: String) -> Result<String> {
-        let return_video = {
+        let (return_video, camera) = {
             let inner = self.inner.lock().unwrap();
-            if !inner.cfg.enabled || !inner.slots.contains_key(&id) {
+            let Some(slot) = inner.slots.get(&id).filter(|_| inner.cfg.enabled) else {
                 bail!("this link isn't active");
-            }
-            inner.cfg.return_video
+            };
+            (inner.cfg.return_video && !slot.camera, slot.camera)
         };
         // A guest joining again (reloading the page) replaces their old connection.
         let old = self.inner.lock().unwrap().conns.remove(&id);
@@ -451,8 +633,14 @@ impl GuestHub {
                 ),
             )?))
         };
-        let audio = track(RtpCodecKind::Audio, opus, "audio")?;
-        let audio_sender = pc.add_track(audio.clone() as Arc<dyn TrackLocal>).await?;
+        // (A phone camera gets nothing back.)
+        let audio = if camera {
+            None
+        } else {
+            let a = track(RtpCodecKind::Audio, opus, "audio")?;
+            let s = pc.add_track(a.clone() as Arc<dyn TrackLocal>).await?;
+            Some((a, s))
+        };
         // (A browser without H.264 gets no picture back, but can still join.)
         let video = if return_video {
             let v = track(RtpCodecKind::Video, h264("42e01f"), "program")?;
@@ -474,19 +662,19 @@ impl GuestHub {
         let sdp = pc.local_description().await.ok_or_else(|| anyhow!("no answer was made"))?.sdp;
 
         // Senders for the return feeds.
-        let (atx, arx) = tokio::sync::mpsc::channel::<bytes::Bytes>(100);
-        self.rt.spawn(write_samples(audio, audio_sender, arx, Duration::from_millis(20)));
+        let stop = Arc::new(AtomicBool::new(false));
+        if let Some((audio, audio_sender)) = audio {
+            let (atx, arx) = tokio::sync::mpsc::channel::<bytes::Bytes>(100);
+            self.rt.spawn(write_samples(audio, audio_sender, arx, Duration::from_millis(20)));
+            let hub = self.clone();
+            let (id, stop) = (id.clone(), stop.clone());
+            std::thread::Builder::new().name("guest return".into()).spawn(move || return_audio(hub, id, atx, stop))?;
+        }
         let video_out = video.map(|(track, sender)| {
             let (vtx, vrx) = tokio::sync::mpsc::channel::<bytes::Bytes>(30);
             self.rt.spawn(write_samples(track, sender, vrx, Duration::from_nanos((NS_PER_SEC / RETURN_FPS as i64) as u64)));
             vtx
         });
-        let stop = Arc::new(AtomicBool::new(false));
-        {
-            let hub = self.clone();
-            let (id, stop) = (id.clone(), stop.clone());
-            std::thread::Builder::new().name("guest return".into()).spawn(move || return_audio(hub, id, atx, stop))?;
-        }
         let name = guest_name.trim().chars().take(40).collect::<String>();
         self.inner.lock().unwrap().conns.insert(id, Conn { gen, pc, guest_name: name, connected: false, since: None, video_out, stop });
         if return_video {
@@ -527,13 +715,14 @@ impl GuestHub {
                 c.connected = true;
                 c.since.get_or_insert_with(Instant::now);
                 let who = if c.guest_name.is_empty() { "A guest".to_string() } else { c.guest_name.clone() };
+                let camera = inner.slots.get(id).is_some_and(|s| s.camera);
                 if let Some(s) = inner.slots.get(id) {
                     s.want_key.store(true, Ordering::Relaxed);
                 }
                 drop(inner);
                 self.keyframe.store(true, Ordering::Relaxed);
                 if first {
-                    self.log(LogLevel::Info, format!("{who} joined as {source}"));
+                    self.log(LogLevel::Info, if camera { format!("A phone is connected as {source}") } else { format!("{who} joined as {source}") });
                 }
             }
             RTCPeerConnectionState::Disconnected => {
@@ -542,7 +731,8 @@ impl GuestHub {
             RTCPeerConnectionState::Failed | RTCPeerConnectionState::Closed => {
                 let c = inner.conns.remove(id).unwrap();
                 let was = c.connected || c.since.is_some();
-                let who = if c.guest_name.is_empty() { "The guest".to_string() } else { c.guest_name.clone() };
+                let camera = inner.slots.get(id).is_some_and(|s| s.camera);
+                let who = if camera { "The phone".to_string() } else if c.guest_name.is_empty() { "The guest".to_string() } else { c.guest_name.clone() };
                 drop(inner);
                 self.close_conn(c);
                 if was {
@@ -865,6 +1055,7 @@ fn handle(mut conn: TcpStream, hub: &Arc<GuestHub>) -> std::io::Result<()> {
     let method = first.next().unwrap_or("GET").to_string();
     let target = first.next().unwrap_or("/").to_string();
     let path = target.split('?').next().unwrap_or("/");
+    let query: HashMap<&str, &str> = target.split_once('?').map(|(_, q)| q.split('&').filter_map(|kv| kv.split_once('=')).collect()).unwrap_or_default();
     let length: usize = lines.find_map(|l| l.to_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse().unwrap_or(0))).unwrap_or(0);
     let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
     if parts.first() != Some(&"g") || parts.len() < 2 || !parts[1].chars().all(|c| c.is_ascii_alphanumeric()) {
@@ -872,7 +1063,38 @@ fn handle(mut conn: TcpStream, hub: &Arc<GuestHub>) -> std::io::Result<()> {
     }
     let id = parts[1].to_string();
     match (method.as_str(), parts.get(2).copied()) {
-        ("GET", None) => respond(&mut conn, "200 OK", "text/html; charset=utf-8", PAGE.as_bytes()),
+        ("GET", None) => {
+            let camera = hub.with_slot(&id, |s| s.camera).unwrap_or(false);
+            respond(&mut conn, "200 OK", "text/html; charset=utf-8", if camera { PHONE_PAGE } else { PAGE }.as_bytes())
+        }
+        ("GET", Some("state")) => match hub.state_json(&id) {
+            Some(j) => respond(&mut conn, "200 OK", "application/json", j.as_bytes()),
+            None => respond(&mut conn, "404 Not Found", "text/plain", b"this link isn't active"),
+        },
+        ("POST", Some("backup")) => {
+            if length > MAX_PIECE {
+                return respond(&mut conn, "413 Too Large", "text/plain", b"too large");
+            }
+            conn.set_read_timeout(Some(Duration::from_secs(60)))?;
+            let mut body = buf[head_end..].to_vec();
+            body.reserve(length.saturating_sub(body.len()));
+            let mut big = vec![0u8; 256 * 1024];
+            while body.len() < length {
+                let n = conn.read(&mut big)?;
+                if n == 0 {
+                    return Ok(()); // they went away mid-piece; it'll come again
+                }
+                body.extend_from_slice(&big[..n]);
+            }
+            body.truncate(length);
+            let q = |k: &str| query.get(k).copied().unwrap_or("");
+            let seq = q("seq").parse::<u64>().unwrap_or(u64::MAX);
+            let at = q("at").parse::<f64>().ok();
+            match hub.backup_piece(&id, q("take"), q("part"), seq, q("ext"), at, q("last") == "1", &body) {
+                Ok(()) => respond(&mut conn, "204 No Content", "text/plain", b""),
+                Err((status, msg)) => respond(&mut conn, status, "text/plain", msg.as_bytes()),
+            }
+        }
         ("GET", Some("info")) => match hub.info_json(&id) {
             Some(j) => respond(&mut conn, "200 OK", "application/json", j.as_bytes()),
             None => respond(&mut conn, "404 Not Found", "text/plain", b"this link isn't active"),
@@ -948,14 +1170,15 @@ fn slate(cfg: &SourceConfig, line: &str) -> VideoFrame {
 
 /// Start a guest source ("guest:ID").
 pub fn start_source(cfg: &SourceConfig, slot: Arc<SourceSlot>, audio: Arc<AudioHub>) -> Result<Box<dyn Running>> {
-    let id = cfg.guest_id().ok_or_else(|| anyhow!("{}: the guest link id is missing", cfg.name))?.to_string();
+    let (id, camera) = cfg.link_id().ok_or_else(|| anyhow!("{}: the link id is missing", cfg.name))?;
+    let id = id.to_string();
     let stop = Arc::new(AtomicBool::new(false));
     let latency = if cfg.network_latency_ms == 0 { 250 } else { cfg.network_latency_ms };
     let feeder = Feeder::new(&cfg.name, slot.clone(), audio, (cfg.width, cfg.height), latency, stop.clone());
     let want_key = Arc::new(AtomicBool::new(true));
     let last_video = Arc::new(Mutex::new(None));
     let h = hub();
-    h.inner.lock().unwrap().slots.insert(id.clone(), Slot { source: cfg.name.clone(), feeder: Arc::new(Mutex::new(feeder)), want_key, last_video: last_video.clone() });
+    h.inner.lock().unwrap().slots.insert(id.clone(), Slot { source: cfg.name.clone(), camera, feeder: Arc::new(Mutex::new(feeder)), want_key, last_video: last_video.clone() });
     h.wake();
     // The slate, until (and whenever) no pictures come.
     let (c2, s2, id2) = (cfg.clone(), stop.clone(), id.clone());
@@ -967,8 +1190,10 @@ pub fn start_source(cfg: &SourceConfig, slot: Arc<SourceSlot>, audio: Arc<AudioH
                 let h = hub();
                 let state = h.guests().into_iter().find(|g| g.id == id2);
                 let line = match state {
+                    Some(g) if g.connected && camera => "Connected — waiting for the picture".to_string(),
                     Some(g) if g.connected => format!("{} — waiting for their camera", if g.guest_name.is_empty() { "Connected" } else { &g.guest_name }),
                     Some(g) if g.connecting => "Joining…".to_string(),
+                    _ if camera => "Scan the QR code with a phone to connect it".to_string(),
                     _ => "Waiting for the guest to join".to_string(),
                 };
                 if shown.as_ref().is_none_or(|(l, _)| *l != line) {
@@ -989,6 +1214,37 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
 
+    /// The hub is the app's one hub: its tests take turns.
+    static TURN: Mutex<()> = Mutex::new(());
+
+    fn turn() -> std::sync::MutexGuard<'static, ()> {
+        TURN.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn get(port: u16, path: &str) -> String {
+        let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(c, "GET {path} HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+        let mut s = String::new();
+        c.read_to_string(&mut s).unwrap();
+        s
+    }
+
+    fn post(port: u16, path: &str, body: &[u8]) -> String {
+        let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(c, "POST {path} HTTP/1.1\r\nHost: x\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n", body.len()).unwrap();
+        c.write_all(body).unwrap();
+        let mut s = String::new();
+        c.read_to_string(&mut s).unwrap();
+        s
+    }
+
+    fn guests_on(port: u16, backup: bool) -> Config {
+        let mut cfg = Config::default();
+        cfg.guests = GuestsConfig { enabled: true, port, access: GuestAccess::Custom, public_url: format!("http://127.0.0.1:{port}"), return_video: false, backup, ..Default::default() };
+        hub().apply(&cfg, Arc::new(|| {}));
+        cfg
+    }
+
     #[test]
     fn ids_and_clocks() {
         let a = new_id();
@@ -1002,11 +1258,146 @@ mod tests {
         assert_eq!(c.host(0xFFFF_0000u32.wrapping_add(45_000)) - t0, NS_PER_SEC / 2, "a late packet");
     }
 
-    /// A guest from a WebRTC client (standing in for a browser) sending
-    /// H.264 and Opus: the picture reaches the source, the voice the mixer.
+    /// Join as a browser would (a WebRTC client standing in for one) and
+    /// send three seconds of H.264 and, unless it's a phone camera, Opus.
+    /// Returns Cutaway's answer.
+    async fn join_and_send(port: u16, id: &str, sound: bool) -> Result<String> {
+        use crate::media::testsrc::TestPattern;
+        let mut me = MediaEngine::default();
+        let opus = RTCRtpCodec { mime_type: MIME_TYPE_OPUS.to_owned(), clock_rate: 48_000, channels: 2, sdp_fmtp_line: "minptime=10;useinbandfec=1".into(), rtcp_feedback: vec![] };
+        let h264 = RTCRtpCodec { mime_type: MIME_TYPE_H264.to_owned(), clock_rate: 90_000, channels: 0, sdp_fmtp_line: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f".into(), rtcp_feedback: vec![] };
+        me.register_codec(RTCRtpCodecParameters { rtp_codec: opus.clone(), payload_type: 111 }, RtpCodecKind::Audio)?;
+        me.register_codec(RTCRtpCodecParameters { rtp_codec: h264.clone(), payload_type: 102 }, RtpCodecKind::Video)?;
+        let registry = register_default_interceptors(rtc::interceptor::Registry::new(), &mut me)?;
+        struct Client {
+            gathered: webrtc::runtime::Sender<()>,
+            connected: webrtc::runtime::Sender<()>,
+        }
+        #[async_trait::async_trait]
+        impl PeerConnectionEventHandler for Client {
+            async fn on_ice_gathering_state_change(&self, state: RTCIceGatheringState) {
+                if state == RTCIceGatheringState::Complete {
+                    let _ = self.gathered.try_send(());
+                }
+            }
+            async fn on_connection_state_change(&self, state: RTCPeerConnectionState) {
+                if state == RTCPeerConnectionState::Connected {
+                    let _ = self.connected.try_send(());
+                }
+            }
+        }
+        let (gtx, mut grx) = webrtc::runtime::channel::<()>(1);
+        let (ctx, mut crx) = webrtc::runtime::channel::<()>(1);
+        let pc = PeerConnectionBuilder::new()
+            .with_configuration(RTCConfigurationBuilder::new().build())
+            .with_media_engine(me)
+            .with_interceptor_registry(registry)
+            .with_handler(Arc::new(Client { gathered: gtx, connected: ctx }))
+            .with_runtime(webrtc::runtime::default_runtime().unwrap())
+            .with_udp_addrs(vec!["0.0.0.0:0"])
+            .build()
+            .await?;
+        let mk = |kind, codec: RTCRtpCodec| {
+            Arc::new(
+                TrackLocalStaticSample::new(
+                    Instant::now(),
+                    MediaStreamTrack::new("guest".into(), format!("guest-{kind:?}"), "guest".into(), kind, vec![RTCRtpEncodingParameters { rtp_coding_parameters: RTCRtpCodingParameters { ssrc: Some(rand_u32()), ..Default::default() }, codec, ..Default::default() }]),
+                )
+                .unwrap(),
+            )
+        };
+        let vtrack = mk(RtpCodecKind::Video, h264);
+        let vs = pc.add_track(vtrack.clone() as Arc<dyn TrackLocal>).await?;
+        let audio = if sound {
+            let atrack = mk(RtpCodecKind::Audio, opus);
+            let asnd = pc.add_track(atrack.clone() as Arc<dyn TrackLocal>).await?;
+            Some((atrack, asnd))
+        } else {
+            None
+        };
+        let offer = pc.create_offer(None).await?;
+        pc.set_local_description(offer).await?;
+        let _ = tokio::time::timeout(Duration::from_secs(4), grx.recv()).await;
+        let sdp = pc.local_description().await.unwrap().sdp;
+        // Join, as the page does.
+        let body = serde_json::json!({ "sdp": sdp, "name": "Robo Guest" }).to_string();
+        let path = format!("/g/{id}/offer");
+        let answer = tokio::task::spawn_blocking(move || {
+            let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            write!(c, "POST {path} HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len()).unwrap();
+            let mut s = String::new();
+            c.read_to_string(&mut s).unwrap();
+            s
+        })
+        .await
+        .unwrap();
+        let json = answer.split("\r\n\r\n").nth(1).unwrap_or("");
+        let v: serde_json::Value = serde_json::from_str(json).map_err(|e| anyhow!("{e}: {answer}"))?;
+        let sdp = v["sdp"].as_str().ok_or_else(|| anyhow!("no answer: {answer}"))?.to_string();
+        pc.set_remote_description(RTCSessionDescription::answer(sdp.clone())?).await?;
+        let answer_sdp = sdp;
+        tokio::time::timeout(Duration::from_secs(10), crx.recv()).await.map_err(|_| anyhow!("never connected"))?;
+
+        // Three seconds of picture (and sound).
+        let vpt = vs.get_parameters().await?.rtp_parameters.codecs[0].payload_type;
+        let vssrc = *vtrack.ssrcs().await.first().unwrap();
+        let mut asend = None;
+        if let Some((atrack, asnd)) = &audio {
+            asend = Some((asnd.get_parameters().await?.rtp_parameters.codecs[0].payload_type, *atrack.ssrcs().await.first().unwrap(), atrack.clone()));
+        }
+        let (ptx, prx) = crossbeam_channel::unbounded();
+        let settings = super::super::encode::VideoSettings { codec: VideoCodec::H264, width: 320, height: 180, fps: 30, bitrate_kbps: 600, purpose: super::super::encode::Purpose::Stream, backend: "auto".into() };
+        let mut enc = super::super::encode::create_video(&settings, Arc::new(move |p| {
+            let _ = ptx.send(p);
+        }))?;
+        let mut tp = TestPattern::new("colors", 320, 180);
+        let mut opus_enc = super::super::opus::Encoder::new(64_000)?;
+        for i in 0..90i64 {
+            let pts = i * NS_PER_SEC / 30;
+            let img = tp.render(pts, 30);
+            enc.encode(&VideoFrame::new_nv12(320, 180, pts, img.y, img.uv, i as u64), pts, i == 0)?;
+            while let Ok(p) = prx.try_recv() {
+                let sample = Sample { data: bytes::Bytes::from(annexb(&p)), duration: Duration::from_millis(33), ..Sample::new(Instant::now()) };
+                vtrack.sample_writer(vssrc, vpt).write_sample(&sample).await?;
+            }
+            if let Some((apt, assrc, atrack)) = &asend {
+                // 33 ms of a 440 Hz tone.
+                let tone: Vec<f32> = (0..1600)
+                    .flat_map(|k| {
+                        let t = (i * 1600 + k) as f32 / 48_000.0;
+                        let v = (t * 440.0 * std::f32::consts::TAU).sin() * 0.5;
+                        [v, v]
+                    })
+                    .collect();
+                for p in opus_enc.push(&tone) {
+                    let sample = Sample { data: bytes::Bytes::from(p), duration: Duration::from_millis(20), ..Sample::new(Instant::now()) };
+                    atrack.sample_writer(*assrc, *apt).write_sample(&sample).await?;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(33)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        let _ = pc.close().await;
+        Ok(answer_sdp)
+    }
+
+    fn not_the_slate(slot: &SourceSlot, w: u32, h: u32) -> usize {
+        let last = slot.pick(clock::now() + NS_PER_SEC).unwrap();
+        assert_eq!((last.width, last.height), (w, h));
+        last.pixels.with_planes(|p| {
+            let mut seen = std::collections::HashSet::new();
+            for x in (0..w as usize).step_by(16) {
+                seen.insert(p.y[(h as usize / 2) * p.y_stride + x] / 16);
+            }
+            seen.len()
+        })
+    }
+
+    /// A guest sending picture and sound: the picture reaches the source,
+    /// the voice the mixer.
     #[test]
     fn a_guest_joins_with_picture_and_sound() {
-        use crate::media::testsrc::TestPattern;
+        let _turn = turn();
         let port = 18_791;
         let id = "e2etestguest";
         // The guest spot, as the engine would start it.
@@ -1016,145 +1407,25 @@ mod tests {
         audio.register("Guest E2E", atx);
         let src = SourceConfig { name: "Guest E2E".into(), device: format!("guest:{id}"), width: 320, height: 180, fps: 30, network_latency_ms: 100, ..Default::default() };
         let running = start_source(&src, slot.clone(), audio.clone()).unwrap();
-        let mut cfg = Config::default();
-        cfg.guests = GuestsConfig { enabled: true, port, access: GuestAccess::Custom, public_url: format!("http://127.0.0.1:{port}"), return_video: false, ..Default::default() };
+        let mut cfg = guests_on(port, false);
         let h = hub();
-        h.apply(&cfg, Arc::new(|| {}));
         assert_eq!(h.link(id).as_deref(), Some(format!("http://127.0.0.1:{port}/g/{id}").as_str()));
         // The page and its settings.
-        let get = |path: &str| -> String {
-            let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
-            write!(c, "GET {path} HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
-            let mut s = String::new();
-            c.read_to_string(&mut s).unwrap();
-            s
-        };
-        assert!(get(&format!("/g/{id}")).contains("Join the show"));
-        assert!(get(&format!("/g/{id}/info")).contains("\"slot\":\"Guest E2E\""));
-        assert!(get("/g/nosuchguest/info").starts_with("HTTP/1.1 404"));
-        assert!(get("/").starts_with("HTTP/1.1 404"), "only guest pages are served");
+        assert!(get(port, &format!("/g/{id}")).contains("Join the show"));
+        let info = get(port, &format!("/g/{id}/info"));
+        assert!(info.contains("\"slot\":\"Guest E2E\"") && info.contains("\"camera\":false"), "{info}");
+        assert!(get(port, "/g/nosuchguest/info").starts_with("HTTP/1.1 404"));
+        assert!(get(port, "/").starts_with("HTTP/1.1 404"), "only guest pages are served");
 
         let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
         let frames_before = slot.frames();
-        let result: Result<()> = rt.block_on(async {
-            let mut me = MediaEngine::default();
-            let opus = RTCRtpCodec { mime_type: MIME_TYPE_OPUS.to_owned(), clock_rate: 48_000, channels: 2, sdp_fmtp_line: "minptime=10;useinbandfec=1".into(), rtcp_feedback: vec![] };
-            let h264 = RTCRtpCodec { mime_type: MIME_TYPE_H264.to_owned(), clock_rate: 90_000, channels: 0, sdp_fmtp_line: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f".into(), rtcp_feedback: vec![] };
-            me.register_codec(RTCRtpCodecParameters { rtp_codec: opus.clone(), payload_type: 111 }, RtpCodecKind::Audio)?;
-            me.register_codec(RTCRtpCodecParameters { rtp_codec: h264.clone(), payload_type: 102 }, RtpCodecKind::Video)?;
-            let registry = register_default_interceptors(rtc::interceptor::Registry::new(), &mut me)?;
-            struct Client {
-                gathered: webrtc::runtime::Sender<()>,
-                connected: webrtc::runtime::Sender<()>,
-            }
-            #[async_trait::async_trait]
-            impl PeerConnectionEventHandler for Client {
-                async fn on_ice_gathering_state_change(&self, state: RTCIceGatheringState) {
-                    if state == RTCIceGatheringState::Complete {
-                        let _ = self.gathered.try_send(());
-                    }
-                }
-                async fn on_connection_state_change(&self, state: RTCPeerConnectionState) {
-                    if state == RTCPeerConnectionState::Connected {
-                        let _ = self.connected.try_send(());
-                    }
-                }
-            }
-            let (gtx, mut grx) = webrtc::runtime::channel::<()>(1);
-            let (ctx, mut crx) = webrtc::runtime::channel::<()>(1);
-            let pc = PeerConnectionBuilder::new()
-                .with_configuration(RTCConfigurationBuilder::new().build())
-                .with_media_engine(me)
-                .with_interceptor_registry(registry)
-                .with_handler(Arc::new(Client { gathered: gtx, connected: ctx }))
-                .with_runtime(webrtc::runtime::default_runtime().unwrap())
-                .with_udp_addrs(vec!["0.0.0.0:0"])
-                .build()
-                .await?;
-            let mk = |kind, codec: RTCRtpCodec| {
-                Arc::new(
-                    TrackLocalStaticSample::new(
-                        Instant::now(),
-                        MediaStreamTrack::new("guest".into(), format!("guest-{kind:?}"), "guest".into(), kind, vec![RTCRtpEncodingParameters { rtp_coding_parameters: RTCRtpCodingParameters { ssrc: Some(rand_u32()), ..Default::default() }, codec, ..Default::default() }]),
-                    )
-                    .unwrap(),
-                )
-            };
-            let vtrack = mk(RtpCodecKind::Video, h264);
-            let atrack = mk(RtpCodecKind::Audio, opus);
-            let vs = pc.add_track(vtrack.clone() as Arc<dyn TrackLocal>).await?;
-            let asnd = pc.add_track(atrack.clone() as Arc<dyn TrackLocal>).await?;
-            let offer = pc.create_offer(None).await?;
-            pc.set_local_description(offer).await?;
-            let _ = tokio::time::timeout(Duration::from_secs(4), grx.recv()).await;
-            let sdp = pc.local_description().await.unwrap().sdp;
-            // Join, as the page does.
-            let body = serde_json::json!({ "sdp": sdp, "name": "Robo Guest" }).to_string();
-            let answer = tokio::task::spawn_blocking(move || {
-                let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
-                write!(c, "POST /g/{id}/offer HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len()).unwrap();
-                let mut s = String::new();
-                c.read_to_string(&mut s).unwrap();
-                s
-            })
-            .await
-            .unwrap();
-            let json = answer.split("\r\n\r\n").nth(1).unwrap_or("");
-            let v: serde_json::Value = serde_json::from_str(json).map_err(|e| anyhow!("{e}: {answer}"))?;
-            let sdp = v["sdp"].as_str().ok_or_else(|| anyhow!("no answer: {answer}"))?.to_string();
-            pc.set_remote_description(RTCSessionDescription::answer(sdp)?).await?;
-            tokio::time::timeout(Duration::from_secs(10), crx.recv()).await.map_err(|_| anyhow!("never connected"))?;
-
-            // Three seconds of picture and sound.
-            let vpt = vs.get_parameters().await?.rtp_parameters.codecs[0].payload_type;
-            let apt = asnd.get_parameters().await?.rtp_parameters.codecs[0].payload_type;
-            let vssrc = *vtrack.ssrcs().await.first().unwrap();
-            let assrc = *atrack.ssrcs().await.first().unwrap();
-            let (ptx, prx) = crossbeam_channel::unbounded();
-            let settings = super::super::encode::VideoSettings { codec: VideoCodec::H264, width: 320, height: 180, fps: 30, bitrate_kbps: 600, purpose: super::super::encode::Purpose::Stream, backend: "auto".into() };
-            let mut enc = super::super::encode::create_video(&settings, Arc::new(move |p| {
-                let _ = ptx.send(p);
-            }))?;
-            let mut tp = TestPattern::new("colors", 320, 180);
-            let mut opus_enc = super::super::opus::Encoder::new(64_000)?;
-            for i in 0..90i64 {
-                let pts = i * NS_PER_SEC / 30;
-                let img = tp.render(pts, 30);
-                enc.encode(&VideoFrame::new_nv12(320, 180, pts, img.y, img.uv, i as u64), pts, i == 0)?;
-                while let Ok(p) = prx.try_recv() {
-                    let sample = Sample { data: bytes::Bytes::from(annexb(&p)), duration: Duration::from_millis(33), ..Sample::new(Instant::now()) };
-                    vtrack.sample_writer(vssrc, vpt).write_sample(&sample).await?;
-                }
-                // 33 ms of a 440 Hz tone.
-                let tone: Vec<f32> = (0..1600).flat_map(|k| {
-                    let t = (i * 1600 + k) as f32 / 48_000.0;
-                    let v = (t * 440.0 * std::f32::consts::TAU).sin() * 0.5;
-                    [v, v]
-                }).collect();
-                for p in opus_enc.push(&tone) {
-                    let sample = Sample { data: bytes::Bytes::from(p), duration: Duration::from_millis(20), ..Sample::new(Instant::now()) };
-                    atrack.sample_writer(assrc, apt).write_sample(&sample).await?;
-                }
-                tokio::time::sleep(Duration::from_millis(33)).await;
-            }
-            tokio::time::sleep(Duration::from_millis(800)).await;
-            let _ = pc.close().await;
-            Ok(())
-        });
-        result.unwrap();
+        let answer = rt.block_on(join_and_send(port, id, true)).unwrap();
+        assert!(answer.contains("a=sendrecv"), "they hear the show");
         let g = h.guests().into_iter().find(|g| g.id == id);
         // The picture: far more frames than the slate's few, and not the slate.
         let frames = slot.frames() - frames_before;
         assert!(frames > 40, "only {frames} pictures arrived");
-        let last = slot.pick(clock::now() + NS_PER_SEC).unwrap();
-        assert_eq!((last.width, last.height), (320, 180));
-        let distinct = last.pixels.with_planes(|p| {
-            let mut seen = std::collections::HashSet::new();
-            for x in (0..320).step_by(16) {
-                seen.insert(p.y[90 * p.y_stride + x] / 16);
-            }
-            seen.len()
-        });
+        let distinct = not_the_slate(&slot, 320, 180);
         assert!(distinct >= 4, "the test pattern, not the slate ({distinct} levels)");
         // The voice, in the mixer's input.
         let blocks: Vec<AudioBlock> = arx.try_iter().collect();
@@ -1164,5 +1435,106 @@ mod tests {
         cfg.guests.enabled = false;
         h.apply(&cfg, Arc::new(|| {}));
         drop(running);
+    }
+
+    /// A phone camera: its own page, picture only, nothing sent back.
+    #[test]
+    fn a_phone_camera_sends_pictures() {
+        let _turn = turn();
+        let port = 18_792;
+        let id = "e2etestphone";
+        let slot = SourceSlot::new(0, 0, 0);
+        let src = SourceConfig { name: "Phone E2E".into(), device: format!("phone:{id}"), width: 320, height: 180, fps: 30, network_latency_ms: 100, ..Default::default() };
+        assert_eq!(src.link_id(), Some((id, true)));
+        let running = start_source(&src, slot.clone(), AudioHub::new()).unwrap();
+        let mut cfg = guests_on(port, true);
+        let h = hub();
+        let page = get(port, &format!("/g/{id}"));
+        assert!(page.contains("Phone camera") && !page.contains("Join the show"), "the phone's page");
+        let info = get(port, &format!("/g/{id}/info"));
+        assert!(info.contains("\"camera\":true") && info.contains("\"backup\":false") && info.contains("\"returnVideo\":false"), "{info}");
+        assert!(get(port, &format!("/g/{id}/state")).contains("\"backup\":false"), "phones don't record backups");
+
+        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+        let before = slot.frames();
+        let answer = rt.block_on(join_and_send(port, id, false)).unwrap();
+        assert!(answer.contains("a=recvonly") && !answer.contains("a=sendrecv") && !answer.contains("m=audio"), "nothing goes back to a phone: {answer}");
+        let frames = slot.frames() - before;
+        assert!(frames > 40, "only {frames} pictures arrived");
+        assert!(not_the_slate(&slot, 320, 180) >= 4, "the phone's picture");
+        let g = h.guests().into_iter().find(|g| g.id == id).unwrap();
+        assert!(g.camera);
+        cfg.guests.enabled = false;
+        h.apply(&cfg, Arc::new(|| {}));
+        drop(running);
+    }
+
+    /// Backup recordings: pieces arrive in order into the take's Guests
+    /// folder, repeats are ignored, and it's only taken while it should be.
+    #[test]
+    fn guest_backups_land_in_the_take() {
+        let _turn = turn();
+        let port = 18_793;
+        let id = "backuptester";
+        let dir = std::env::temp_dir().join(format!("cutaway-backup-{}", std::process::id()));
+        let take = dir.join("Take 1");
+        std::fs::create_dir_all(&take).unwrap();
+        let slot = SourceSlot::new(0, 0, 0);
+        let src = SourceConfig { name: "Guest B".into(), device: format!("guest:{id}"), width: 320, height: 180, fps: 30, ..Default::default() };
+        let running = start_source(&src, slot, AudioHub::new()).unwrap();
+        let phone = SourceConfig { name: "Phone B".into(), device: "phone:backupphone1".into(), width: 320, height: 180, fps: 30, ..Default::default() };
+        let phone_running = start_source(&phone, SourceSlot::new(0, 0, 0), AudioHub::new()).unwrap();
+        let mut cfg = guests_on(port, true);
+        let h = hub();
+        let status = Arc::new(Mutex::new(Status::default()));
+        h.attach_engine(EngineLink { mix_taps: Arc::new(Mutex::new(Vec::new())), video_taps: Arc::new(Mutex::new(VideoTaps::default())), inputs: Vec::new(), status: status.clone(), waker: Arc::new(|| {}) });
+
+        let state = |who: &str| -> serde_json::Value { serde_json::from_str(get(port, &format!("/g/{who}/state")).split("\r\n\r\n").nth(1).unwrap()).unwrap() };
+        assert_eq!(state(id)["recording"], false, "not recording yet");
+        assert!(post(port, &format!("/g/{id}/backup?take=nosuchtake&part=a1&seq=0&ext=webm"), b"x").starts_with("HTTP/1.1 404"));
+
+        status.lock().unwrap().rec = RecState::Recording { since: Instant::now() - Duration::from_secs(3), folder: take.clone() };
+        let s = state(id);
+        assert_eq!(s["recording"], true);
+        let token = s["take"].as_str().unwrap().to_string();
+        assert!(s["elapsedMs"].as_u64().unwrap() >= 3000);
+        assert_eq!(state(id)["take"], token.as_str(), "the same take, the same token");
+        assert_eq!(state("backupphone1")["recording"], false, "phones don't record backups");
+        assert!(post(port, &format!("/g/backupphone1/backup?take={token}&part=p1&seq=0&ext=webm"), b"x").starts_with("HTTP/1.1 404"));
+
+        let piece = |seq: u64, extra: &str, body: &[u8]| post(port, &format!("/g/{id}/backup?take={token}&part=partone&seq={seq}&ext=webm{extra}"), body);
+        assert!(piece(1, "", b"BBB").starts_with("HTTP/1.1 409"), "the first piece comes first");
+        assert!(piece(0, "&at=3250", b"AAA").starts_with("HTTP/1.1 204"));
+        assert!(piece(0, "&at=3250", b"AAA").starts_with("HTTP/1.1 204"), "a repeat is fine");
+        assert!(piece(2, "", b"CCC").starts_with("HTTP/1.1 409"), "no skipping");
+        let g = h.guests().into_iter().find(|g| g.id == id).unwrap();
+        let b = g.backup.clone().unwrap();
+        assert!(b.recording && !b.done && b.bytes == 3, "{b:?}");
+        assert!(piece(1, "", b"BBB").starts_with("HTTP/1.1 204"));
+        // The show stops recording; the last pieces still come in.
+        status.lock().unwrap().rec = RecState::Idle;
+        assert_eq!(state(id)["recording"], false);
+        assert!(piece(2, "&last=1", b"").starts_with("HTTP/1.1 204"));
+        let file = take.join("Guests").join("Guest_B_backup.webm");
+        assert_eq!(std::fs::read(&file).unwrap(), b"AAABBB");
+        let note = std::fs::read_to_string(file.with_extension("txt")).unwrap();
+        assert!(note.contains("3.25 s after"), "{note}");
+        let b = h.guests().into_iter().find(|g| g.id == id).unwrap().backup.unwrap();
+        assert!(b.done && !b.recording && b.bytes == 6, "{b:?}");
+        // A second part (they changed camera, or rejoined) is a second file.
+        assert!(post(port, &format!("/g/{id}/backup?take={token}&part=parttwo&seq=0&ext=mp4"), b"MP4").starts_with("HTTP/1.1 204"));
+        assert!(take.join("Guests").join("Guest_B_backup_2.mp4").exists());
+        assert!(post(port, &format!("/g/{id}/backup?take={token}&part=bad!&seq=0&ext=exe"), b"x").starts_with("HTTP/1.1 400"));
+        // Off: nothing's taken.
+        cfg.guests.backup = false;
+        h.apply(&cfg, Arc::new(|| {}));
+        assert!(post(port, &format!("/g/{id}/backup?take={token}&part=partthree&seq=0&ext=webm"), b"x").starts_with("HTTP/1.1 403"));
+
+        h.detach_engine();
+        cfg.guests.enabled = false;
+        h.apply(&cfg, Arc::new(|| {}));
+        drop(running);
+        drop(phone_running);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

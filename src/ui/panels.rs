@@ -151,7 +151,9 @@ impl App {
             return;
         }
         ui.add_space(4.0);
-        self.section_heading(ui, "GUESTS", Section::Guests);
+        let phones = guests.iter().filter(|g| g.camera).count();
+        let heading = if phones == 0 { "GUESTS" } else if phones == guests.len() { "PHONE CAMERAS" } else { "GUESTS & PHONES" };
+        self.section_heading(ui, heading, Section::Guests);
         let reach = hub.reach();
         match &reach {
             crate::net::tunnel::TunnelState::Up(_) => {}
@@ -166,34 +168,70 @@ impl App {
         }
         let mut kick = None;
         let mut copied = None;
+        let mut qr = None;
         for g in &guests {
             ui.horizontal(|ui| {
                 let (dot, color) = if g.connected { ("●", GREEN) } else if g.connecting { ("●", AMBER) } else { ("○", TEXT_DIM) };
                 ui.label(RichText::new(dot).color(color));
                 ui.label(RichText::new(&g.source).strong());
-                let detail = if g.connected {
+                let mut detail = if g.connected && g.camera {
+                    "phone on".to_string()
+                } else if g.connected {
                     let t = g.since.map(|s| crate::engine::timers::fmt_span(s.elapsed(), false)).unwrap_or_default();
                     format!("{} {t}", if g.guest_name.is_empty() { "on".to_string() } else { g.guest_name.clone() })
                 } else if g.connecting {
-                    "joining…".into()
+                    if g.camera { "connecting…" } else { "joining…" }.into()
+                } else if g.camera {
+                    "no phone yet".into()
                 } else {
                     "waiting".into()
                 };
-                ui.add(egui::Label::new(RichText::new(detail).color(TEXT_DIM).size(12.0)).truncate());
+                if let Some(b) = &g.backup {
+                    let mb = format!("{:.0} MB", b.bytes as f64 / 1e6);
+                    detail.push_str(&if b.done { format!(" · backup ✓ {mb}") } else if b.recording { format!(" · backup {mb}") } else { format!(" · backup coming {mb}") });
+                }
+                let r = ui.add(egui::Label::new(RichText::new(detail).color(TEXT_DIM).size(12.0)).truncate());
+                if let Some(b) = &g.backup {
+                    r.on_hover_text(format!("Their backup recording: {}", b.file.display()));
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if g.connected || g.connecting {
-                        if ui.small_button("✕").on_hover_text("Disconnect them").clicked() {
+                        if ui.small_button("✕").on_hover_text(if g.camera { "Disconnect the phone" } else { "Disconnect them" }).clicked() {
                             kick = Some(g.id.clone());
                         }
                     }
                     if let Some(link) = hub.link(&g.id) {
-                        if ui.small_button("Copy link").on_hover_text(&link).clicked() {
+                        if g.camera {
+                            if ui.small_button("QR").on_hover_text("Show the code to scan with the phone").clicked() {
+                                qr = Some(g.id.clone());
+                            }
+                        } else if ui.small_button("Copy link").on_hover_text(&link).clicked() {
                             ui.ctx().copy_text(link);
                             copied = Some(g.source.clone());
                         }
                     }
                 });
             });
+        }
+        if let Some(id) = qr {
+            self.qr_for = if self.qr_for.as_deref() == Some(id.as_str()) { None } else { Some(id) };
+        }
+        if let Some(id) = self.qr_for.clone() {
+            let name = guests.iter().find(|g| g.id == id).map(|g| g.source.clone()).unwrap_or_default();
+            let mut open = true;
+            match hub.link(&id) {
+                Some(link) => {
+                    egui::Window::new(format!("{name}: scan with the phone")).id(egui::Id::unique("phone_qr")).open(&mut open).collapsible(false).resizable(false).show(ui.ctx(), |ui| {
+                        crate::settings::qr_code(ui, &link, 260.0);
+                        ui.label(RichText::new(&link).monospace().size(11.0).color(TEXT_DIM));
+                        ui.label(RichText::new("Open it in the phone's camera app, allow the camera and hold the phone sideways.").size(12.0).color(TEXT_DIM));
+                    });
+                }
+                None => open = false,
+            }
+            if !open || guests.iter().any(|g| g.id == id && g.connected) {
+                self.qr_for = None;
+            }
         }
         if guests.iter().any(|g| g.connected) {
             ui.ctx().request_repaint_after(Duration::from_secs(1));

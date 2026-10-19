@@ -18,10 +18,13 @@ enum SourceKind {
     Ndi,
     Framed,
     VirtualPtz,
+    Phone,
+    /// Made in Remote guests (with its audio input), so not offered here.
+    Guest,
 }
 
 impl SourceKind {
-    const ALL: [SourceKind; 10] = [
+    const ALL: [SourceKind; 11] = [
         SourceKind::Device,
         SourceKind::Screen,
         SourceKind::Test,
@@ -32,6 +35,7 @@ impl SourceKind {
         SourceKind::Ndi,
         SourceKind::Framed,
         SourceKind::VirtualPtz,
+        SourceKind::Phone,
     ];
 
     fn of(device: &str) -> SourceKind {
@@ -48,6 +52,10 @@ impl SourceKind {
             SourceKind::Framed
         } else if d.starts_with("vptz:") {
             SourceKind::VirtualPtz
+        } else if d.starts_with("phone:") {
+            SourceKind::Phone
+        } else if d.starts_with("guest:") {
+            SourceKind::Guest
         } else {
             match netsrc::parse_spec(device) {
                 Some(NetSpec::SrtListen { .. }) => SourceKind::SrtListen,
@@ -70,6 +78,8 @@ impl SourceKind {
             SourceKind::Ndi => "NDI",
             SourceKind::Framed => "Auto-framed close-up (from another source)",
             SourceKind::VirtualPtz => "Virtual PTZ camera (pan, tilt and zoom in another source)",
+            SourceKind::Phone => "Phone camera (scan a QR code)",
+            SourceKind::Guest => "Remote guest (set up in Remote guests)",
         }
     }
 
@@ -85,6 +95,8 @@ impl SourceKind {
             SourceKind::Ndi => "ndi:".into(),
             SourceKind::Framed => "frame:".into(),
             SourceKind::VirtualPtz => "vptz:".into(),
+            SourceKind::Phone => format!("phone:{}", crate::engine::guests::new_id()),
+            SourceKind::Guest => format!("guest:{}", crate::engine::guests::new_id()),
         }
     }
 }
@@ -95,7 +107,7 @@ fn random_key() -> String {
 }
 
 impl SettingsUi {
-    pub(super) fn sources(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn sources(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
         title(ui, "Video sources", "Every source is shown in the multiview and can be recorded to its own file.");
         ui.horizontal(|ui| {
             if ui.button("Rescan devices").clicked() {
@@ -150,11 +162,13 @@ impl SettingsUi {
                 });
             });
             ui.add_space(14.0);
-            ui.vertical(|ui| self.source_detail(ui));
+            ui.vertical(|ui| self.source_detail(ui, info));
         });
     }
 
-    fn source_detail(&mut self, ui: &mut egui::Ui) {
+    fn source_detail(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
+        let applied: Vec<String> = self.original.sources.iter().map(|s| s.device.trim().to_string()).collect();
+        let mut guests_on = false;
         let ndi = self.ndi_found.lock().unwrap().clone();
         // Sources a close-up can be cut from: (name, fps).
         let wides: Vec<(String, u32)> = self
@@ -191,8 +205,13 @@ impl SettingsUi {
                             src.device = format!("vptz:{}", wides.first().map(|w| w.0.as_str()).unwrap_or(""));
                             src.ptz = crate::config::PtzConfig::default();
                         }
-                        if k == SourceKind::Media || matches!(k, SourceKind::SrtListen | SourceKind::SrtCall | SourceKind::Rtmp | SourceKind::Ndi) {
+                        if k == SourceKind::Media || matches!(k, SourceKind::SrtListen | SourceKind::SrtCall | SourceKind::Rtmp | SourceKind::Ndi | SourceKind::Phone) {
                             src.record = k != SourceKind::Media;
+                        }
+                        if k == SourceKind::Phone {
+                            let p = super::guests::phone_source(&src.name);
+                            (src.device, src.width, src.height, src.fps, src.network_latency_ms) = (p.device, p.width, p.height, p.fps, p.network_latency_ms);
+                            guests_on = true;
                         }
                     }
                 }
@@ -340,10 +359,10 @@ impl SettingsUi {
                     ui.add(egui::Slider::new(&mut src.ptz.glide_seconds, 0.2..=6.0).step_by(0.1).suffix(" s"));
                     ui.end_row();
                 }
-                SourceKind::Screen | SourceKind::Media => {}
+                SourceKind::Screen | SourceKind::Media | SourceKind::Phone | SourceKind::Guest => {}
             }
 
-            let network = matches!(kind, SourceKind::SrtListen | SourceKind::SrtCall | SourceKind::Rtmp | SourceKind::Ndi);
+            let network = matches!(kind, SourceKind::SrtListen | SourceKind::SrtCall | SourceKind::Rtmp | SourceKind::Ndi | SourceKind::Phone | SourceKind::Guest);
             label(ui, match kind {
                 SourceKind::Device | SourceKind::Screen => "Capture size",
                 SourceKind::Framed | SourceKind::VirtualPtz => "Output size",
@@ -423,6 +442,38 @@ impl SettingsUi {
                 ));
             }
             SourceKind::SrtCall => hint(ui, "Cutaway connects to an SRT listener (a receiver, an encoder or a relay) and pulls its stream."),
+            SourceKind::Phone | SourceKind::Guest => {
+                let id = src.link_id().map(|l| l.0.to_string()).unwrap_or_default();
+                let link = info.guest_base.as_ref().filter(|_| applied.contains(&src.device.trim().to_string())).map(|b| format!("{b}/g/{id}"));
+                if kind == SourceKind::Phone {
+                    match &link {
+                        Some(link) => {
+                            ui.horizontal(|ui| {
+                                qr_code(ui, link, 150.0);
+                                ui.vertical(|ui| {
+                                    ui.label(RichText::new("Scan with the phone's camera app").strong());
+                                    ui.add(egui::Label::new(RichText::new(link).monospace().size(12.0)).truncate());
+                                    if ui.small_button("Copy link").clicked() {
+                                        ui.ctx().copy_text(link.clone());
+                                    }
+                                });
+                            });
+                        }
+                        None => hint(ui, "Its QR code appears here once Remote guests is on and this is applied."),
+                    }
+                    hint(ui, "The phone sends its camera (picture only, up to 1080p) straight over your network and keeps its screen on; hold it sideways. Safari on iPhone, Chrome on Android. The buffer evens out Wi-Fi hiccups.");
+                } else {
+                    if let Some(link) = &link {
+                        ui.horizontal(|ui| {
+                            ui.add(egui::Label::new(RichText::new(link).monospace().size(12.0)).truncate());
+                            if ui.small_button("Copy link").clicked() {
+                                ui.ctx().copy_text(link.clone());
+                            }
+                        });
+                    }
+                    hint(ui, &format!("A guest who joins by link. Their sound arrives as the audio input \"Sound from {}\"; their links, and adding or removing spots, are in Remote guests.", src.name));
+                }
+            }
             SourceKind::Ndi => {
                 if !crate::engine::ndi::available() {
                     ui.label(RichText::new("⚠ NDI isn't installed on this computer. Install the free NDI Tools from ndi.video/tools, then restart Cutaway.").color(AMBER));
@@ -441,6 +492,9 @@ impl SettingsUi {
         egui::CollapsingHeader::new(RichText::new("Picture adjustments: crop, mirror, colour, LUT, background removal, green screen").strong()).id_salt(("look", self.sel_source)).show(ui, |ui| {
             look_editor(ui, &mut src.look, &mut self.lut_check);
         });
+        if guests_on {
+            self.draft.guests.enabled = true;
+        }
         if scan_ndi {
             let out = self.ndi_found.clone();
             *out.lock().unwrap() = None;

@@ -132,6 +132,8 @@ pub struct App {
     ptz_zoom: Option<f32>,
     /// The last replay problem shown.
     replay_problem: Option<String>,
+    /// A phone camera's QR code on show: its link id.
+    qr_for: Option<String>,
     /// The live chat, the comment on screen, and the newest one shown.
     chat: Option<crate::net::chat::Chat>,
     comment_on: Option<u64>,
@@ -181,6 +183,7 @@ impl App {
             ptz_drive: None,
             ptz_zoom: None,
             replay_problem: None,
+            qr_for: None,
             chat: None,
             comment_on: None,
             comment_at: None,

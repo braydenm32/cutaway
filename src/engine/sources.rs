@@ -247,9 +247,9 @@ pub fn start_video(
         let ptz_rx = links.ptz.lock().unwrap().as_ref().and_then(|p| p.ndi_rx.clone());
         return super::ndi::start(name.trim(), cfg, slot, hub.clone(), net.clone(), ptz_rx);
     }
-    if cfg.guest_id().is_some() {
+    if let Some((_, phone)) = cfg.link_id() {
         let r = super::guests::start_source(cfg, slot, hub.clone())?;
-        return Ok((r, "remote guest".into()));
+        return Ok((r, if phone { "phone camera" } else { "remote guest" }.into()));
     }
     let sink: platform::FrameSink = Arc::new(move |f| slot.push(f));
     if lower == "screen" {

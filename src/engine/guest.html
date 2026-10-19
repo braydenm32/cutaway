@@ -51,6 +51,7 @@
     </div>
     <div class="row"><button class="primary" id="join" disabled>Join</button><span id="status" class="note"></span></div>
     <div class="note">Use headphones if you can, so the show's sound doesn't echo back. Keep this page open while you're on.</div>
+    <div class="note" id="bknote" hidden>While the show records, this page also records you (as your camera and microphone capture you) and sends it to the show as a backup, in case the connection has a bad moment.</div>
   </section>
 
   <section id="onair" hidden>
@@ -62,6 +63,7 @@
       <button id="leave">Leave</button>
       <span id="status2" class="note"></span>
     </div>
+    <div id="bkstat" class="note" hidden></div>
     <audio id="ret" autoplay></audio>
   </section>
 </main>
@@ -85,6 +87,7 @@ async function load() {
     return;
   }
   if (info.show) $('title').textContent = 'Join ' + info.show;
+  $('bknote').hidden = !info.backup;
   try { $('name').value = localStorage.getItem('cutaway_guest_name') || ''; } catch (e) {}
   await start();
 }
@@ -111,6 +114,8 @@ async function start() {
 
 async function openMedia() {
   const cam = $('cam').value, mic = $('mic').value;
+  // A backup recording carries on in a new part with the new devices.
+  if (bk) finishBackup();
   if (stream) stream.getTracks().forEach(t => t.stop());
   stream = await navigator.mediaDevices.getUserMedia({
     video: { deviceId: cam ? { exact: cam } : undefined, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
@@ -224,7 +229,93 @@ async function join() {
   $('setup').hidden = true; $('onair').hidden = false;
   $('self').classList.toggle('big', !info.returnVideo);
   if (!info.returnVideo) $('program').hidden = true;
+  if (info.backup) { pollState(); poller = setInterval(pollState, 1500); }
 }
+
+// ---- backup recording ----------------------------------------------------------
+// While the show records, this browser records you too (as your camera and
+// microphone capture you, before the internet gets at it) and uploads it to
+// the show in pieces as it goes.
+let bk = null, poller = null, sending = false, sent = 0, left = false;
+const queue = [];
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+function recType() {
+  if (!window.MediaRecorder) return '';
+  const types = ['video/mp4;codecs=avc1.42E01F,mp4a.40.2', 'video/mp4;codecs=avc1,opus', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
+  return types.find(t => { try { return MediaRecorder.isTypeSupported(t); } catch (e) { return false; } }) || '';
+}
+
+async function pollState() {
+  if (!pc || left) return;
+  try {
+    const t0 = performance.now();
+    const r = await fetch(base + '/state', { cache: 'no-store' });
+    if (!r.ok) return;
+    const s = await r.json();
+    const mid = (t0 + performance.now()) / 2;
+    if (s.recording && bk && bk.take !== s.take) finishBackup();
+    if (s.recording && !bk) startBackup(s.take, s.elapsedMs, mid);
+    if (!s.recording && bk) finishBackup();
+  } catch (e) {}
+}
+
+function startBackup(take, elapsedMs, at) {
+  const type = recType();
+  if (!type || !stream) { showBackup('This browser can\'t record a backup of you; the show still records you as usual.'); return; }
+  let rec;
+  try { rec = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 5000000, audioBitsPerSecond: 160000 }); } catch (e) { showBackup('Couldn\'t start the backup recording (' + e.message + ').'); return; }
+  const part = Array.from(crypto.getRandomValues(new Uint8Array(8)), b => 'abcdefghijkmnpqrstuvwxyz23456789'[b % 32]).join('');
+  const b = { rec, take, part, seq: 0, ext: type.startsWith('video/mp4') ? 'mp4' : 'webm', at: 0 };
+  rec.ondataavailable = (e) => { if (e.data && e.data.size) { queue.push({ b, seq: b.seq++, blob: e.data, last: false }); upload(); } };
+  rec.onstop = () => { queue.push({ b, seq: b.seq++, blob: new Blob([]), last: true }); if (bk === b) bk = null; upload(); };
+  rec.start(2000);
+  b.at = Math.max(0, elapsedMs + (performance.now() - at));
+  bk = b;
+  showBackup();
+}
+
+function finishBackup() {
+  const b = bk;
+  bk = null;
+  if (b && b.rec.state !== 'inactive') b.rec.stop();
+  showBackup();
+}
+
+async function upload() {
+  if (sending) return;
+  sending = true;
+  while (queue.length) {
+    const p = queue[0];
+    const url = base + '/backup?take=' + p.b.take + '&part=' + p.b.part + '&seq=' + p.seq + '&ext=' + p.b.ext + (p.seq === 0 ? '&at=' + Math.round(p.b.at) : '') + (p.last ? '&last=1' : '');
+    try {
+      const r = await fetch(url, { method: 'POST', body: p.blob, headers: { 'Content-Type': 'application/octet-stream' } });
+      if (r.ok) { queue.shift(); sent += p.blob.size; }
+      else if (r.status >= 400 && r.status < 500 && r.status !== 408 && r.status !== 429) { queue.shift(); }
+      else await sleep(2000);
+    } catch (e) { await sleep(2000); }
+    showBackup();
+  }
+  sending = false;
+  showBackup();
+}
+
+function showBackup(problem) {
+  const el = $('bkstat');
+  const waiting = queue.reduce((n, p) => n + p.blob.size, 0);
+  const mb = (n) => (n / 1e6).toFixed(n < 1e7 ? 1 : 0) + ' MB';
+  let t = problem || '';
+  if (!t && bk) t = '● Recording a backup of you for the show' + (sent ? ' (' + mb(sent) + ' sent)' : '') + '.';
+  else if (!t && waiting > 0) t = 'Sending your backup recording: ' + mb(waiting) + ' to go. Keep this page open until it\'s done.';
+  else if (!t && sent > 0) t = '✓ Your backup recording is with the show.';
+  el.textContent = t;
+  el.hidden = !t;
+  el.className = 'note' + (waiting > 2e7 && !bk ? ' warn' : '');
+  if (left) {
+    $('subtitle').textContent = waiting > 0 || bk ? 'Sending your backup recording (' + mb(waiting) + ' to go): keep this page open until it\'s done.' : 'You can close this page.';
+  }
+}
+window.addEventListener('beforeunload', (e) => { if (queue.length || bk) { e.preventDefault(); e.returnValue = ''; } });
 $('join').onclick = join;
 
 $('mute').onclick = () => {
@@ -237,10 +328,14 @@ $('camoff').onclick = () => {
 };
 $('leave').onclick = () => {
   fetch(base + '/leave', { method: 'POST' }).catch(() => {});
+  left = true;
+  clearInterval(poller);
+  finishBackup();
   if (pc) pc.close(); pc = null;
   if (stream) stream.getTracks().forEach(t => t.stop());
   $('onair').hidden = true; $('setup').hidden = true;
   $('title').textContent = 'Thanks for joining!'; $('subtitle').textContent = 'You can close this page.';
+  showBackup();
 };
 window.addEventListener('pagehide', () => { if (pc) navigator.sendBeacon(base + '/leave'); });
 load();

@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<meta name="robots" content="noindex">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Phone camera</title>
+<style>
+  :root { --raised:#22262ecc; --line:#ffffff33; --text:#eef0f5; --dim:#a3a9b5; --green:#3ac470; --amber:#f5a623; --red:#e83440; --accent:#5aa0ff; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { margin:0; height:100%; background:#000; color:var(--text); font:16px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; overflow:hidden; }
+  video { position:fixed; inset:0; width:100%; height:100%; object-fit:contain; background:#000; }
+  #top { position:fixed; left:0; right:0; top:0; display:flex; align-items:center; gap:10px; padding:calc(10px + env(safe-area-inset-top)) 14px 10px; background:linear-gradient(#000c,#0000); }
+  #name { font-weight:700; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pill { padding:4px 10px; border-radius:20px; font-size:13px; font-weight:700; background:#000a; border:1px solid var(--line); white-space:nowrap; }
+  .pill.on { background:var(--green); color:#04140a; border-color:var(--green); }
+  .pill.warn { background:var(--amber); color:#1d1300; border-color:var(--amber); }
+  #bar { position:fixed; left:0; right:0; bottom:0; display:flex; gap:8px; flex-wrap:wrap; justify-content:center; align-items:center; padding:12px 12px calc(12px + env(safe-area-inset-bottom)); background:linear-gradient(#0000,#000c); transition:opacity .4s; }
+  #bar.hide, #top.hide { opacity:0; pointer-events:none; }
+  button, select { font:inherit; color:var(--text); background:var(--raised); border:1px solid var(--line); border-radius:22px; padding:10px 16px; min-height:44px; }
+  select { max-width:44vw; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#071225; font-weight:700; }
+  button.stop { background:var(--red); border-color:var(--red); }
+  #turn { position:fixed; left:50%; top:50%; transform:translate(-50%,-50%); width:min(86vw,360px); text-align:center; padding:18px; border-radius:14px; background:#000c; border:1px solid var(--line); }
+  #turn b { display:block; font-size:20px; margin-bottom:6px; }
+  #msg { position:fixed; left:0; right:0; top:calc(52px + env(safe-area-inset-top)); text-align:center; padding:0 16px; color:var(--amber); font-size:14px; text-shadow:0 1px 3px #000; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<video id="view" autoplay playsinline muted></video>
+<div id="top"><span id="name">Phone camera</span><span class="pill" id="state">Starting…</span></div>
+<div id="msg"></div>
+<div id="turn" hidden><b>Turn the phone sideways</b>The show's picture is wide (16:9). If it doesn't turn, switch off the phone's rotation lock.</div>
+<div id="bar">
+  <select id="cam" aria-label="Camera"></select>
+  <button id="flip" title="Front or back camera">⟲ Flip</button>
+  <select id="quality" aria-label="Quality"><option value="1080">1080p</option><option value="720">720p</option></select>
+  <button id="go" class="stop">Stop</button>
+</div>
+<script>
+"use strict";
+// A phone as a camera for Cutaway: it sends its camera (no sound, nothing
+// back) straight to the computer over the network, and keeps the screen on.
+const id = location.pathname.split('/').filter(Boolean)[1];
+const base = '/g/' + id;
+const $ = (x) => document.getElementById(x);
+let info = { iceServers: [] }, stream = null, pc = null, wanted = true, retry = null, lock = null, facing = 'environment';
+
+function say(t) { $('msg').textContent = t || ''; }
+function pill(t, cls) { $('state').textContent = t; $('state').className = 'pill' + (cls ? ' ' + cls : ''); }
+
+async function load() {
+  try {
+    const r = await fetch(base + '/info');
+    if (!r.ok) throw new Error(await r.text());
+    info = await r.json();
+  } catch (e) {
+    pill('Not active', 'warn');
+    say('This link isn\'t active. Check that Cutaway is running with guests on, and scan the code again.');
+    return;
+  }
+  $('name').textContent = info.slot || 'Phone camera';
+  document.title = (info.slot || 'Phone camera') + ' · Cutaway';
+  try { $('quality').value = localStorage.getItem('cutaway_phone_quality') || '1080'; } catch (e) {}
+  if (!navigator.mediaDevices || !window.RTCPeerConnection) { pill('Can\'t send', 'warn'); say('This browser can\'t send video. Use Safari on iPhone or Chrome on Android.'); return; }
+  try { await openCamera(); } catch (e) { pill('No camera', 'warn'); say('Allow the camera to use this phone (' + e.message + ').'); return; }
+  await listCameras();
+  // Cutaway takes H.264 (Safari, and Chrome on phones, send it).
+  let h264 = true;
+  try { h264 = RTCRtpSender.getCapabilities('video').codecs.some(c => c.mimeType.toLowerCase() === 'video/h264'); } catch (e) {}
+  if (!h264) { cantSend(); return; }
+  connect();
+}
+
+function cantSend() {
+  wanted = false;
+  pill('Can\'t send', 'warn');
+  say('This browser can\'t send the kind of video Cutaway takes (H.264). Use Safari on iPhone, or Chrome on Android.');
+  $('go').hidden = true;
+}
+
+async function openCamera() {
+  const q = $('quality').value === '720' ? [1280, 720] : [1920, 1080];
+  const dev = $('cam').value;
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = await navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: Object.assign({ width: { ideal: q[0] }, height: { ideal: q[1] }, frameRate: { ideal: 30 } }, dev ? { deviceId: { exact: dev } } : { facingMode: { ideal: facing } }),
+  });
+  const t = stream.getVideoTracks()[0];
+  try { t.contentHint = 'motion'; } catch (e) {}
+  $('view').srcObject = stream;
+  $('view').style.transform = (t.getSettings().facingMode === 'user') ? 'scaleX(-1)' : 'none';
+  if (pc) {
+    const s = pc.getSenders()[0];
+    if (s) { await s.replaceTrack(t); tune(s); }
+  }
+  orientation();
+}
+
+async function listCameras() {
+  const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+  const cur = stream && stream.getVideoTracks()[0].getSettings().deviceId;
+  const sel = $('cam');
+  sel.innerHTML = '';
+  devs.forEach((d, i) => { const o = document.createElement('option'); o.value = d.deviceId; o.textContent = d.label || ('Camera ' + (i + 1)); sel.appendChild(o); });
+  if (cur) sel.value = cur;
+  sel.hidden = devs.length < 2;
+  $('flip').hidden = devs.length < 2;
+}
+
+function tune(sender) {
+  try {
+    const p = sender.getParameters();
+    if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+    const big = $('quality').value !== '720';
+    p.encodings[0].maxBitrate = big ? 8000000 : 4000000;
+    p.encodings[0].maxFramerate = 30;
+    p.degradationPreference = 'maintain-resolution';
+    sender.setParameters(p).catch(() => {});
+  } catch (e) {}
+}
+
+async function connect() {
+  clearTimeout(retry);
+  if (!wanted || !stream) return;
+  if (pc) { try { pc.close(); } catch (e) {} pc = null; }
+  pill('Connecting…');
+  const mine = new RTCPeerConnection({ iceServers: info.iceServers });
+  pc = mine;
+  const t = stream.getVideoTracks()[0];
+  const big = $('quality').value !== '720';
+  const tr = mine.addTransceiver(t, { direction: 'sendonly', streams: [stream], sendEncodings: [{ maxBitrate: big ? 8000000 : 4000000, maxFramerate: 30 }] });
+  try {
+    const caps = RTCRtpReceiver.getCapabilities('video').codecs;
+    const h264 = caps.filter(c => c.mimeType.toLowerCase() === 'video/h264' && /packetization-mode=1/.test(c.sdpFmtpLine || ''));
+    h264.sort((a, b) => (/42e01f/.test(b.sdpFmtpLine) ? 1 : 0) - (/42e01f/.test(a.sdpFmtpLine) ? 1 : 0));
+    if (h264.length && tr.setCodecPreferences) tr.setCodecPreferences(h264);
+  } catch (e) {}
+  mine.onconnectionstatechange = () => {
+    if (pc !== mine) return;
+    const s = mine.connectionState;
+    if (s === 'connected') { pill('● Sending', 'on'); say(''); tune(tr.sender); keepAwake(); }
+    if (s === 'disconnected') { pill('Reconnecting…', 'warn'); retry = setTimeout(() => { if (pc === mine && mine.connectionState !== 'connected') connect(); }, 5000); }
+    if (s === 'failed') { pill('Reconnecting…', 'warn'); retry = setTimeout(connect, 2000); }
+  };
+  try {
+    const offer = await mine.createOffer();
+    await mine.setLocalDescription(offer);
+    await new Promise((done) => {
+      if (mine.iceGatheringState === 'complete') return done();
+      const tm = setTimeout(done, 2500);
+      mine.onicegatheringstatechange = () => { if (mine.iceGatheringState === 'complete') { clearTimeout(tm); done(); } };
+    });
+    const r = await fetch(base + '/offer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sdp: mine.localDescription.sdp, name: '' }) });
+    const body = await r.json().catch(() => ({ error: 'no answer from Cutaway' }));
+    if (!r.ok || !body.sdp) throw new Error(body.error || ('HTTP ' + r.status));
+    if (pc !== mine) return;
+    await mine.setRemoteDescription({ type: 'answer', sdp: body.sdp });
+    if (/^m=video 0 /m.test(body.sdp)) { mine.close(); pc = null; cantSend(); }
+  } catch (e) {
+    if (pc !== mine) return;
+    pill('Not connected', 'warn');
+    say('Couldn\'t reach Cutaway (' + e.message + '). Trying again…');
+    retry = setTimeout(connect, 4000);
+  }
+}
+
+function stop() {
+  wanted = false;
+  clearTimeout(retry);
+  fetch(base + '/leave', { method: 'POST' }).catch(() => {});
+  if (pc) { pc.close(); pc = null; }
+  pill('Stopped');
+  $('go').textContent = 'Start'; $('go').className = 'primary';
+  if (lock) { lock.release().catch(() => {}); lock = null; }
+}
+
+async function keepAwake() {
+  try { if ('wakeLock' in navigator && !lock && document.visibilityState === 'visible') { lock = await navigator.wakeLock.request('screen'); lock.addEventListener('release', () => { lock = null; }); } } catch (e) {}
+}
+
+function orientation() {
+  const t = stream && stream.getVideoTracks()[0];
+  const s = t ? t.getSettings() : {};
+  const tall = s.width && s.height ? s.height > s.width : innerHeight > innerWidth;
+  $('turn').hidden = !tall;
+}
+
+let hideAt = null;
+function showBar() {
+  $('bar').classList.remove('hide'); $('top').classList.remove('hide');
+  clearTimeout(hideAt);
+  hideAt = setTimeout(() => { if (pc && pc.connectionState === 'connected') { $('bar').classList.add('hide'); $('top').classList.add('hide'); } }, 5000);
+}
+
+$('view').onclick = showBar;
+$('go').onclick = () => {
+  if (wanted) { stop(); return; }
+  wanted = true; $('go').textContent = 'Stop'; $('go').className = 'stop';
+  (stream && stream.getVideoTracks()[0].readyState === 'live' ? Promise.resolve() : openCamera()).then(connect).catch(e => say(e.message));
+};
+$('cam').onchange = () => openCamera().catch(e => say(e.message));
+$('flip').onclick = () => {
+  const s = stream && stream.getVideoTracks()[0].getSettings();
+  facing = (s && s.facingMode === 'user') ? 'environment' : 'user';
+  $('cam').value = '';
+  openCamera().then(listCameras).catch(e => say(e.message));
+};
+$('quality').onchange = () => {
+  try { localStorage.setItem('cutaway_phone_quality', $('quality').value); } catch (e) {}
+  openCamera().catch(e => say(e.message));
+};
+addEventListener('resize', () => setTimeout(orientation, 300));
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    keepAwake();
+    // Some phones stop the camera in the background.
+    if (wanted && stream && stream.getVideoTracks()[0].readyState !== 'live') openCamera().catch(e => say(e.message));
+  }
+});
+addEventListener('pagehide', () => { if (pc) navigator.sendBeacon(base + '/leave'); });
+showBar();
+load();
+</script>
+</body>
+</html>

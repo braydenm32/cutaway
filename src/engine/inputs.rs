@@ -24,7 +24,7 @@ fn is_generated(device: &str) -> bool {
 /// Whether opening needs the list of connected devices.
 pub fn needs_device_list(device: &str) -> bool {
     let d = device.trim().to_lowercase();
-    !(is_generated(&d) || d == "screen" || d == "default" || d.is_empty() || d == "media" || d.starts_with("source:") || d.starts_with("ndi:") || d.starts_with("frame:") || d.starts_with("vptz:") || d.starts_with("app:") || d == "pads" || d.starts_with("guest:") || super::netsrc::is_network(&d))
+    !(is_generated(&d) || d == "screen" || d == "default" || d.is_empty() || d == "media" || d.starts_with("source:") || d.starts_with("ndi:") || d.starts_with("frame:") || d.starts_with("vptz:") || d.starts_with("app:") || d == "pads" || d.starts_with("guest:") || d.starts_with("phone:") || super::netsrc::is_network(&d))
 }
 
 pub struct VideoInput {
@@ -103,7 +103,7 @@ impl VideoInput {
     /// follow their camera); the watchdog only reports them.
     pub fn self_managed(&self) -> bool {
         let d = self.cfg.device.trim().to_lowercase();
-        super::netsrc::is_network(&d) || d.starts_with("ndi:") || d == "media" || d.starts_with("frame:") || d.starts_with("guest:")
+        super::netsrc::is_network(&d) || d.starts_with("ndi:") || d == "media" || d.starts_with("frame:") || d.starts_with("guest:") || d.starts_with("phone:")
     }
 
     pub fn close(&self) {

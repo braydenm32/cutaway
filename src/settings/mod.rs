@@ -322,7 +322,7 @@ impl SettingsUi {
                                 ui.add_space(4.0);
                                 match self.section {
                                     Section::General => self.general(ui, info),
-                                    Section::Sources => self.sources(ui),
+                                    Section::Sources => self.sources(ui, info),
                                     Section::Audio => self.audio_inputs(ui),
                                     Section::Mixing => self.mixing(ui),
                                     Section::Pads => self.pads(ui),
@@ -1317,6 +1317,9 @@ pub(super) fn short_device(device: &str) -> String {
         d if d.starts_with("app:") => format!("Sound from {}", d[4..].trim()),
         d if d.starts_with("ndi:") => format!("NDI {}", d[4..].trim()),
         d if d.starts_with("frame:") => format!("Auto-framed from {}", d[6..].trim()),
+        d if d.starts_with("vptz:") => format!("Virtual PTZ in {}", d[5..].trim()),
+        d if d.starts_with("guest:") => "Remote guest (link)".into(),
+        d if d.starts_with("phone:") => "Phone camera".into(),
         d if d.starts_with("srt-in:") => format!("SRT input :{}", &d[7..]),
         d if d.starts_with("rtmp-in:") => format!("RTMP input :{}", d[8..].split('/').next().unwrap_or("")),
         d => d.chars().take(28).collect(),
@@ -1539,4 +1542,37 @@ fn shortcuts(ui: &mut egui::Ui) {
     });
     ui.add_space(8.0);
     hint(ui, "Going live is mouse-only on purpose, so a stray key can't start or end a broadcast.");
+}
+
+/// A QR code for `text`, `size` points across, on a white card (phones
+/// scan it from the screen).
+pub fn qr_code(ui: &mut egui::Ui, text: &str, size: f32) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(size, size), egui::Sense::hover());
+    let Ok(code) = qrcode::QrCode::new(text.as_bytes()) else {
+        ui.painter().rect_filled(rect, 4.0, egui::Color32::from_gray(40));
+        return resp;
+    };
+    let n = code.width();
+    let quiet = 2.0;
+    let cell = size / (n as f32 + quiet * 2.0);
+    let p = ui.painter_at(rect);
+    p.rect_filled(rect, 6.0, egui::Color32::WHITE);
+    let colors = code.to_colors();
+    for y in 0..n {
+        let mut x = 0;
+        while x < n {
+            if colors[y * n + x] == qrcode::Color::Dark {
+                // A run of dark cells as one rectangle (no seams).
+                let start = x;
+                while x < n && colors[y * n + x] == qrcode::Color::Dark {
+                    x += 1;
+                }
+                let min = rect.min + vec2((start as f32 + quiet) * cell, (y as f32 + quiet) * cell);
+                p.rect_filled(egui::Rect::from_min_size(min, vec2((x - start) as f32 * cell, cell)).expand(0.25), 0.0, egui::Color32::BLACK);
+            } else {
+                x += 1;
+            }
+        }
+    }
+    resp
 }

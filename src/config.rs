@@ -1525,6 +1525,10 @@ pub struct GuestsConfig {
     pub public_url: String,
     /// Send the program picture back so guests can see the show.
     pub return_video: bool,
+    /// Guests' browsers also record them (picture and sound as captured,
+    /// before the internet gets at it) while the show records, and upload
+    /// it into the take's Guests folder as they go.
+    pub backup: bool,
     /// A TURN server for guests behind strict firewalls ("" = none).
     pub turn_url: String,
     pub turn_username: String,
@@ -1539,6 +1543,7 @@ impl Default for GuestsConfig {
             access: GuestAccess::Tunnel,
             public_url: String::new(),
             return_video: false,
+            backup: false,
             turn_url: String::new(),
             turn_username: String::new(),
             turn_password: String::new(),
@@ -1550,6 +1555,17 @@ impl SourceConfig {
     /// A remote guest's link id, for a "guest:ID" source.
     pub fn guest_id(&self) -> Option<&str> {
         self.device.trim().strip_prefix("guest:").map(str::trim).filter(|s| !s.is_empty())
+    }
+
+    /// A phone camera's link id, for a "phone:ID" source (a phone joins by
+    /// scanning a QR code, and sends its camera only).
+    pub fn phone_id(&self) -> Option<&str> {
+        self.device.trim().strip_prefix("phone:").map(str::trim).filter(|s| !s.is_empty())
+    }
+
+    /// Either kind of link: (id, whether it's a phone camera).
+    pub fn link_id(&self) -> Option<(&str, bool)> {
+        self.guest_id().map(|i| (i, false)).or_else(|| self.phone_id().map(|i| (i, true)))
     }
 }
 
