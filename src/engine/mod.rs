@@ -55,7 +55,7 @@ pub mod timers;
 pub mod watchdog;
 
 use crate::config::{parse_color, Config, TransitionMode};
-use crate::media::{clock, Ns, VideoFrame, NS_PER_SEC};
+use crate::media::{clock, AudioBlock, Ns, VideoFrame, NS_PER_SEC};
 use anyhow::{bail, Context, Result};
 use audio::{InputShared, MixInput, MixShared, MixTaps};
 use compositor::{Compositor, CompositorSettings, Wants};
@@ -228,6 +228,16 @@ pub struct EngineInfo {
     pub fps: u32,
 }
 
+/// Running NDI outputs.
+pub struct NdiOutputs {
+    stop: Arc<AtomicBool>,
+    threads: Vec<JoinHandle<()>>,
+    video_tap: Option<u64>,
+    mix_tap: Option<u64>,
+    watchers: Vec<(Arc<SourceSlot>, u64)>,
+    connections: Arc<AtomicU32>,
+}
+
 /// Consumers of composited video.
 #[derive(Default)]
 pub struct VideoTaps {
@@ -321,6 +331,8 @@ pub struct Engine {
     /// Instant replays.
     pub replay: Arc<replay::ReplayPlayer>,
     replay_label: Arc<AtomicBool>,
+    /// NDI outputs, and what they were started for.
+    ndi_out: Mutex<Option<(crate::config::NdiOutConfig, NdiOutputs)>>,
     monitor_volume: Arc<AtomicU32>,
     /// The virtual camera, while on: (tap id, sender).
     vcam: Mutex<Option<(u64, Box<dyn sources::Running>)>>,
@@ -639,6 +651,7 @@ impl Engine {
             stinger,
             replay,
             replay_label,
+            ndi_out: Mutex::new(None),
             monitor_volume: Arc::new(AtomicU32::new(1.0f32.to_bits())),
             vcam: Mutex::new(None),
             captions: captions_slot,
@@ -650,6 +663,7 @@ impl Engine {
             e.apply_monitor(&cfg.mix);
             e.apply_outputs(&cfg.mix);
             e.apply_captions(&cfg.captions);
+            e.apply_ndi_out(&cfg.ndi_out);
             e.apply_cutouts(&cfg.sources);
             e
         })
@@ -741,6 +755,109 @@ impl Engine {
 
     pub fn captions(&self) -> Option<Arc<captions::Captions>> {
         self.captions.lock().unwrap().as_ref().map(|c| c.1.clone())
+    }
+
+    // ---- NDI output -----------------------------------------------------------------------
+
+    /// Start, change or stop the NDI outputs to match the settings.
+    pub fn apply_ndi_out(&self, cfg: &crate::config::NdiOutConfig) {
+        let mut cur = self.ndi_out.lock().unwrap();
+        if cur.as_ref().map(|c| &c.0) == Some(cfg) {
+            return;
+        }
+        if let Some((_, old)) = cur.take() {
+            self.stop_ndi_outputs(old);
+        }
+        if !cfg.program && !cfg.sources {
+            return;
+        }
+        if let Err(e) = ndi::api_ready() {
+            self.status.lock().unwrap().push(LogLevel::Warning, format!("NDI output: {e:#}"));
+            return;
+        }
+        let mut outs = NdiOutputs { stop: Arc::new(AtomicBool::new(false)), threads: Vec::new(), video_tap: None, mix_tap: None, watchers: Vec::new(), connections: Arc::new(AtomicU32::new(0)) };
+        let name = if cfg.name.trim().is_empty() { "Cutaway".to_string() } else { cfg.name.trim().to_string() };
+        let fps = self.info.fps;
+        if cfg.program {
+            match ndi::NdiSender::new(&name) {
+                Ok(mut sender) => {
+                    let full = Some(sender.source().0).filter(|n| !n.is_empty()).unwrap_or_else(|| name.clone());
+                    let (vtx, vrx) = bounded::<VideoFrame>(4);
+                    let (atx, arx) = bounded::<AudioBlock>(200);
+                    let vid = self.tap_ids.fetch_add(1, Ordering::Relaxed);
+                    let aid = self.tap_ids.fetch_add(1, Ordering::Relaxed);
+                    self.video_taps.lock().unwrap().listeners.push((vid, vtx));
+                    self.mix_taps.lock().unwrap().push((aid, audio::MixKind::Recording, atx));
+                    outs.video_tap = Some(vid);
+                    outs.mix_tap = Some(aid);
+                    let (stop, conns) = (outs.stop.clone(), outs.connections.clone());
+                    if let Ok(t) = std::thread::Builder::new().name("ndi out".into()).spawn(move || {
+                        let mut last_check = Instant::now();
+                        while !stop.load(Ordering::Relaxed) {
+                            crossbeam_channel::select! {
+                                recv(vrx) -> f => match f { Ok(f) => sender.video(&f, fps), Err(_) => break },
+                                recv(arx) -> b => match b { Ok(b) => sender.audio(&b), Err(_) => break },
+                                default(Duration::from_millis(200)) => {}
+                            }
+                            if last_check.elapsed() > Duration::from_secs(1) {
+                                last_check = Instant::now();
+                                conns.store(sender.connections().max(0) as u32, Ordering::Relaxed);
+                            }
+                        }
+                    }) {
+                        outs.threads.push(t);
+                    }
+                    self.status.lock().unwrap().push(LogLevel::Info, format!("NDI output: the program is on the network as \"{full}\""));
+                }
+                Err(e) => self.status.lock().unwrap().push(LogLevel::Warning, format!("NDI output: {e:#}")),
+            }
+        }
+        if cfg.sources {
+            for s in &self.sources {
+                let Ok(mut sender) = ndi::NdiSender::new(&format!("{name} - {}", s.name)) else { continue };
+                let (tx, rx) = bounded::<VideoFrame>(3);
+                let wid = (1u64 << 50) + self.tap_ids.fetch_add(1, Ordering::Relaxed);
+                s.slot.add_watcher(wid, tx);
+                outs.watchers.push((s.slot.clone(), wid));
+                let (stop, sfps) = (outs.stop.clone(), s.fps);
+                if let Ok(t) = std::thread::Builder::new().name(format!("ndi out {}", s.name)).spawn(move || {
+                    while !stop.load(Ordering::Relaxed) {
+                        match rx.recv_timeout(Duration::from_millis(200)) {
+                            Ok(f) => sender.video(&f, sfps),
+                            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+                            Err(_) => break,
+                        }
+                    }
+                }) {
+                    outs.threads.push(t);
+                }
+            }
+        }
+        *cur = Some((cfg.clone(), outs));
+        (self.waker)();
+    }
+
+    fn stop_ndi_outputs(&self, mut outs: NdiOutputs) {
+        outs.stop.store(true, Ordering::Relaxed);
+        if let Some(id) = outs.video_tap {
+            self.video_taps.lock().unwrap().listeners.retain(|l| l.0 != id);
+        }
+        if let Some(id) = outs.mix_tap {
+            self.mix_taps.lock().unwrap().retain(|(i, ..)| *i != id);
+        }
+        for (slot, id) in &outs.watchers {
+            slot.remove_watcher(*id);
+        }
+        for t in outs.threads.drain(..) {
+            let _ = t.join();
+        }
+    }
+
+    /// NDI receivers watching the program (None when it isn't being sent).
+    pub fn ndi_watchers(&self) -> Option<u32> {
+        let cur = self.ndi_out.lock().unwrap();
+        let (cfg, outs) = cur.as_ref()?;
+        cfg.program.then(|| outs.connections.load(Ordering::Relaxed))
     }
 
     // ---- virtual camera ----------------------------------------------------------------
@@ -922,6 +1039,7 @@ impl Engine {
         }
         self.apply_captions(&new.captions);
         self.apply_cutouts(&new.sources);
+        self.apply_ndi_out(&new.ndi_out);
         // Who auto-framed sources follow, and how.
         for (i, s) in new.sources.iter().enumerate() {
             if let (Some(h), Some(o)) = (self.sources.get(i), old.sources.get(i)) {
@@ -1196,6 +1314,9 @@ impl Engine {
         }
         self.wait_finalized();
         guests::hub().detach_engine();
+        if let Some((_, outs)) = self.ndi_out.lock().unwrap().take() {
+            self.stop_ndi_outputs(outs);
+        }
         self.monitor.lock().unwrap().take();
         self.outputs.lock().unwrap().clear();
         if let Some((_, r)) = self.vcam.lock().unwrap().take() {

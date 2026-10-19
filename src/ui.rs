@@ -3129,6 +3129,7 @@ impl App {
             guest_reach: crate::engine::guests::hub().reach(),
             guest_base: crate::engine::guests::hub().base_url(),
             guest_status: crate::engine::guests::hub().guests(),
+            ndi_watchers: self.engine.as_ref().and_then(|e| e.ndi_watchers()),
         }
     }
 

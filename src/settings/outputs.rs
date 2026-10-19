@@ -6,7 +6,7 @@ use crate::config::DisplayOutput;
 
 impl SettingsUi {
     pub(super) fn outputs(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
-        title(ui, "Screens & webcam", "Show the program on another screen, or use it as a camera in Zoom, Teams, Meet, FaceTime and others.");
+        title(ui, "Screens & webcam", "Show the program on another screen, send it to other computers as NDI, or use it as a camera in Zoom, Teams, Meet, FaceTime and others.");
         let d = &mut self.draft.display;
         subtitle(ui, "Second screen");
         egui::Grid::new("display").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
@@ -26,6 +26,28 @@ impl SettingsUi {
             ui.end_row();
         });
         hint(ui, "A window opens with the picture. Drag it to the projector, TV or confidence monitor, then double-click it (or press F) to fill that screen; Esc leaves full screen. The header's Screen button turns it on and off.");
+
+        ui.add_space(16.0);
+        subtitle(ui, "NDI output");
+        let n = &mut self.draft.ndi_out;
+        egui::Grid::new("ndi_out").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            label(ui, "Program");
+            ui.checkbox(&mut n.program, "send the program, with the recording mix");
+            ui.end_row();
+            label(ui, "Name");
+            ui.add(egui::TextEdit::singleline(&mut n.name).desired_width(200.0));
+            ui.end_row();
+            label(ui, "Sources");
+            ui.checkbox(&mut n.sources, &format!("send every source too, as \"{} - Cam 1\"…", if n.name.trim().is_empty() { "Cutaway" } else { n.name.trim() }));
+            ui.end_row();
+        });
+        if (n.program || n.sources) && !crate::engine::ndi::available() {
+            ui.label(RichText::new("⚠ NDI isn't installed on this computer. Install the free NDI Tools from ndi.video/tools, then restart Cutaway.").color(AMBER));
+        }
+        match info.ndi_watchers {
+            Some(k) => hint(ui, &format!("On the network now; {k} receiver{} watching.", if k == 1 { "" } else { "s" })),
+            None => hint(ui, "Other computers, OBS, vMix, NDI Studio Monitor and NDI recorders see it on the same network (NDI adds this computer's name)."),
+        }
 
         ui.add_space(16.0);
         subtitle(ui, "Virtual camera");

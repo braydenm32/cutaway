@@ -46,6 +46,8 @@ pub struct Config {
     pub prompter: PrompterConfig,
     /// Viewer comments from the live chat, shown on screen.
     pub comments: CommentsConfig,
+    /// The program (and sources) as NDI on the network.
+    pub ndi_out: NdiOutConfig,
 }
 
 /// Syrinscape Online: moods and sounds started from Cutaway's buttons,
@@ -1574,18 +1576,12 @@ impl Default for Segment {
 }
 
 /// The running order.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct RundownConfig {
     pub segments: Vec<Segment>,
     /// Put a marker (and a chapter) in the recording as each segment starts.
     pub markers: bool,
-}
-
-impl Default for RundownConfig {
-    fn default() -> Self {
-        RundownConfig { segments: Vec::new(), markers: false }
-    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -2040,5 +2036,24 @@ impl Default for CommentsConfig {
 impl CommentsConfig {
     pub fn enabled(&self) -> bool {
         !self.twitch_channel.trim().is_empty() || (!self.youtube.trim().is_empty() && !self.youtube_api_key.trim().is_empty())
+    }
+}
+
+/// NDI output: the program, and optionally each source, as NDI sources on
+/// the network (for other computers, OBS, vMix, recorders, monitors).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct NdiOutConfig {
+    /// Send the program (with the recording mix).
+    pub program: bool,
+    /// Its name on the network (NDI adds the computer's name).
+    pub name: String,
+    /// Send every source too, as "<name> - <source>".
+    pub sources: bool,
+}
+
+impl Default for NdiOutConfig {
+    fn default() -> Self {
+        NdiOutConfig { program: false, name: "Cutaway".into(), sources: false }
     }
 }

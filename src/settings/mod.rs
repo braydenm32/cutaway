@@ -144,6 +144,8 @@ pub struct SettingsContext {
     pub guest_reach: crate::net::tunnel::TunnelState,
     pub guest_base: Option<String>,
     pub guest_status: Vec<crate::engine::guests::GuestInfo>,
+    /// NDI receivers watching the program (None: not sending).
+    pub ndi_watchers: Option<u32>,
 }
 
 type EncoderLists = (Vec<String>, Vec<String>);
@@ -463,7 +465,7 @@ impl SettingsUi {
             Section::Captions => a.captions != b.captions,
             Section::Recording => a.output != b.output || a.podcast != b.podcast,
             Section::Streaming => a.streaming != b.streaming,
-            Section::Outputs => a.display != b.display,
+            Section::Outputs => a.display != b.display || a.ndi_out != b.ndi_out,
             Section::Control => a.remote != b.remote || a.midi != b.midi || a.osc != b.osc,
             _ => false,
         }

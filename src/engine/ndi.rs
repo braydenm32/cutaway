@@ -1,6 +1,6 @@
-//! NDI input. NDI's licence doesn't allow bundling its library, so this
-//! uses the free NDI runtime (installed with NDI Tools) when it's present
-//! and explains how to get it when it isn't.
+//! NDI input and output. NDI's licence doesn't allow bundling its library,
+//! so this uses the free NDI runtime (installed with NDI Tools) when it's
+//! present and explains how to get it when it isn't.
 
 use super::feed::{AudioHub, Feeder};
 use super::netsrc::{NetState, NetStatus};
@@ -35,6 +35,14 @@ struct RecvCreate {
     bandwidth: i32,
     allow_video_fields: bool,
     name: *const c_char,
+}
+
+#[repr(C)]
+struct SendCreate {
+    name: *const c_char,
+    groups: *const c_char,
+    clock_video: bool,
+    clock_audio: bool,
 }
 
 #[repr(C)]
@@ -88,6 +96,18 @@ struct Api {
     free_video: unsafe extern "C" fn(*mut c_void, *const VideoFrameV2),
     free_audio: unsafe extern "C" fn(*mut c_void, *const AudioFrameV2),
     ptz: Option<PtzApi>,
+    send: Option<SendApi>,
+}
+
+/// NDI's sending side.
+#[derive(Clone, Copy)]
+struct SendApi {
+    create: unsafe extern "C" fn(*const SendCreate) -> *mut c_void,
+    destroy: unsafe extern "C" fn(*mut c_void),
+    video: unsafe extern "C" fn(*mut c_void, *const VideoFrameV2),
+    audio: unsafe extern "C" fn(*mut c_void, *const AudioFrameV2),
+    connections: unsafe extern "C" fn(*mut c_void, u32) -> i32,
+    source: unsafe extern "C" fn(*mut c_void) -> *const Source,
 }
 
 /// NDI's PTZ controls (in every runtime since NDI 3).
@@ -159,6 +179,17 @@ fn load() -> Result<Api, String> {
                         })
                     })()
                     .ok(),
+                    send: (|| -> Result<SendApi, libloading::Error> {
+                        Ok(SendApi {
+                            create: *lib.get(b"NDIlib_send_create\0")?,
+                            destroy: *lib.get(b"NDIlib_send_destroy\0")?,
+                            video: *lib.get(b"NDIlib_send_send_video_v2\0")?,
+                            audio: *lib.get(b"NDIlib_send_send_audio_v2\0")?,
+                            connections: *lib.get(b"NDIlib_send_get_no_connections\0")?,
+                            source: *lib.get(b"NDIlib_send_get_source_name\0")?,
+                        })
+                    })()
+                    .ok(),
                     _lib: lib,
                 })
             }
@@ -177,6 +208,11 @@ fn api() -> Result<&'static Api> {
 
 pub fn available() -> bool {
     api().is_ok()
+}
+
+/// The runtime, or why it can't be used.
+pub fn api_ready() -> Result<()> {
+    api().map(|_| ())
 }
 
 /// NDI sources on the network (waits up to `ms` for them to show up).
@@ -200,6 +236,127 @@ pub fn find_sources(ms: u32) -> Result<Vec<String>> {
         }
         (api.find_destroy)(f);
         Ok(out)
+    }
+}
+
+const FRAME_PROGRESSIVE: i32 = 1;
+
+/// An NDI source that Cutaway sends: the program, or one of its sources.
+pub struct NdiSender {
+    inst: *mut c_void,
+    send: SendApi,
+    /// Reused for NV12 pictures with one stride, and planar audio.
+    buf: Vec<u8>,
+    planar: Vec<f32>,
+}
+
+// The NDI sender may be used from any one thread at a time.
+unsafe impl Send for NdiSender {}
+
+impl NdiSender {
+    /// Appear on the network as `name` (NDI adds this computer's name).
+    pub fn new(name: &str) -> Result<NdiSender> {
+        let api = api()?;
+        let send = api.send.ok_or_else(|| anyhow!("this NDI runtime can't send; update NDI Tools"))?;
+        let cname = CString::new(name).unwrap_or_default();
+        let settings = SendCreate { name: cname.as_ptr(), groups: std::ptr::null(), clock_video: false, clock_audio: false };
+        let inst = unsafe { (send.create)(&settings) };
+        if inst.is_null() {
+            bail!("NDI couldn't create the source \"{name}\" (is the name already in use?)");
+        }
+        Ok(NdiSender { inst, send, buf: Vec::new(), planar: Vec::new() })
+    }
+
+    /// Send a picture (NV12), with its time for the receivers to line up
+    /// sound and picture.
+    pub fn video(&mut self, frame: &VideoFrame, fps: u32) {
+        let (w, h) = (frame.width as usize & !1, frame.height as usize & !1);
+        if w < 2 || h < 2 {
+            return;
+        }
+        // NDI wants the two planes one after the other, with one stride.
+        self.buf.clear();
+        self.buf.reserve(w * h * 3 / 2);
+        let ok = frame.pixels.with_planes(|p| {
+            if p.y.len() < p.y_stride * (h - 1) + w || p.uv.len() < p.uv_stride * (h / 2 - 1) + w {
+                return false;
+            }
+            for r in 0..h {
+                self.buf.extend_from_slice(&p.y[r * p.y_stride..r * p.y_stride + w]);
+            }
+            for r in 0..h / 2 {
+                self.buf.extend_from_slice(&p.uv[r * p.uv_stride..r * p.uv_stride + w]);
+            }
+            true
+        });
+        if !ok {
+            return;
+        }
+        let v = VideoFrameV2 {
+            xres: w as i32,
+            yres: h as i32,
+            fourcc: fourcc(b"NV12"),
+            frame_rate_n: fps.max(1) as i32,
+            frame_rate_d: 1,
+            aspect: w as f32 / h as f32,
+            format_type: FRAME_PROGRESSIVE,
+            timecode: frame.pts / 100,
+            data: self.buf.as_mut_ptr(),
+            stride: w as i32,
+            metadata: std::ptr::null(),
+            timestamp: 0,
+        };
+        unsafe { (self.send.video)(self.inst, &v) };
+    }
+
+    /// Send sound (interleaved, from the mixer).
+    pub fn audio(&mut self, block: &crate::media::AudioBlock) {
+        let ch = block.channels.max(1) as usize;
+        let n = block.samples.len() / ch;
+        if n == 0 {
+            return;
+        }
+        self.planar.clear();
+        self.planar.resize(n * ch, 0.0);
+        for (i, f) in block.samples.chunks_exact(ch).enumerate() {
+            for c in 0..ch {
+                self.planar[c * n + i] = f[c];
+            }
+        }
+        let a = AudioFrameV2 {
+            sample_rate: block.rate as i32,
+            channels: ch as i32,
+            samples: n as i32,
+            timecode: block.pts / 100,
+            data: self.planar.as_mut_ptr(),
+            channel_stride: (n * 4) as i32,
+            metadata: std::ptr::null(),
+            timestamp: 0,
+        };
+        unsafe { (self.send.audio)(self.inst, &a) };
+    }
+
+    /// Receivers watching now.
+    pub fn connections(&self) -> i32 {
+        unsafe { (self.send.connections)(self.inst, 0) }
+    }
+
+    /// Its full name on the network and its address.
+    pub fn source(&self) -> (String, String) {
+        unsafe {
+            let s = (self.send.source)(self.inst);
+            if s.is_null() {
+                return Default::default();
+            }
+            let text = |p: *const c_char| if p.is_null() { String::new() } else { CStr::from_ptr(p).to_string_lossy().to_string() };
+            (text((*s).name), text((*s).url))
+        }
+    }
+}
+
+impl Drop for NdiSender {
+    fn drop(&mut self) {
+        unsafe { (self.send.destroy)(self.inst) };
     }
 }
 
@@ -308,9 +465,13 @@ pub fn start(
     *state.lock().unwrap() = NetState { connected: false, detail: "looking for the NDI source".into() };
     let s2 = stop.clone();
     let thread = std::thread::Builder::new().name(format!("ndi {}", cfg.name)).spawn(move || unsafe {
-        let name = CString::new(wanted.clone()).unwrap_or_default();
+        // A name ("STUDIO (Camera 1)"), or an address ("192.168.1.20:5961")
+        // where NDI's discovery can't reach.
+        let by_address = wanted.parse::<std::net::SocketAddr>().is_ok();
+        let name = CString::new(if by_address { String::new() } else { wanted.clone() }).unwrap_or_default();
+        let url = CString::new(wanted.clone()).unwrap_or_default();
         let settings = RecvCreate {
-            source: Source { name: name.as_ptr(), url: std::ptr::null() },
+            source: Source { name: name.as_ptr(), url: if by_address { url.as_ptr() } else { std::ptr::null() } },
             color_format: COLOR_UYVY_BGRA,
             bandwidth: BANDWIDTH_HIGHEST,
             allow_video_fields: false,
@@ -413,5 +574,62 @@ mod tests {
         if !available() {
             assert!(find_sources(10).unwrap_err().to_string().contains("NDI Tools"));
         }
+    }
+
+    /// Send a picture and sound as NDI, and receive it again (needs the NDI
+    /// runtime: NDI_RUNTIME_DIR_V6, or NDI Tools installed).
+    #[test]
+    fn sends_and_receives_ndi() {
+        if !available() {
+            eprintln!("no NDI runtime here; skipping");
+            return;
+        }
+        let name = format!("Cutaway Test {}", std::process::id());
+        let mut tx = NdiSender::new(&name).unwrap();
+        let (_, url) = tx.source();
+        eprintln!("sending as {:?}", tx.source());
+        let stop = Arc::new(AtomicBool::new(false));
+        let s2 = stop.clone();
+        let sender = std::thread::spawn(move || {
+            let mut k = 0i64;
+            while !s2.load(Ordering::Relaxed) {
+                let t = clock::now();
+                // Bright top half, dark bottom half.
+                let mut y = vec![40u8; 320 * 180];
+                y[..320 * 90].fill(200);
+                tx.video(&VideoFrame::new_nv12(320, 180, t, y, vec![128; 320 * 90], k as u64), 25);
+                tx.audio(&crate::media::AudioBlock { pts: t, rate: 48_000, channels: 2, samples: vec![0.25; 1920 * 2] });
+                k += 1;
+                std::thread::sleep(std::time::Duration::from_millis(40));
+            }
+        });
+        // Found on the network, or (where discovery can't work) by address.
+        let mut full = find_sources(1500).unwrap_or_default().into_iter().find(|n| n.contains(&name));
+        if full.is_none() {
+            full = Some(url).filter(|u| u.parse::<std::net::SocketAddr>().is_ok());
+        }
+        let Some(full) = full else {
+            stop.store(true, Ordering::Relaxed);
+            let _ = sender.join();
+            eprintln!("NDI can't be reached on this machine; skipping");
+            return;
+        };
+        let slot = SourceSlot::new(0, 0, 500_000_000);
+        let hub = AudioHub::new();
+        let state: NetStatus = Default::default();
+        let cfg = SourceConfig { name: "In".into(), width: 320, height: 180, fps: 25, network_latency_ms: 100, ..Default::default() };
+        let (_rx, _) = start(&full, &cfg, slot.clone(), hub, state.clone(), None).unwrap();
+        let t0 = std::time::Instant::now();
+        while slot.frames() < 10 && t0.elapsed().as_secs() < 10 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        stop.store(true, Ordering::Relaxed);
+        let _ = sender.join();
+        assert!(slot.frames() >= 10, "pictures arrived: {}", slot.frames());
+        assert!(state.lock().unwrap().connected);
+        let f = slot.pick(clock::now() + 1_000_000_000).unwrap();
+        assert_eq!((f.width, f.height), (320, 180));
+        let (top, bottom) = f.pixels.with_planes(|p| (p.y[p.y_stride * 20 + 100], p.y[p.y_stride * 160 + 100]));
+        assert!((top as i32 - 200).abs() < 12 && (bottom as i32 - 40).abs() < 12, "picture: top {top}, bottom {bottom}");
     }
 }
