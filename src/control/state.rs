@@ -49,6 +49,24 @@ pub struct ShowState {
     pub black: bool,
     /// Macro buttons.
     pub macros: Vec<MacroInfo>,
+    /// The teleprompter (when it has a script).
+    pub prompter: Option<PrompterState>,
+}
+
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+pub struct PrompterState {
+    /// Changes with the script (fetch /api/prompter).
+    pub version: u64,
+    pub playing: bool,
+    /// Characters into the script.
+    pub position: f64,
+    /// Characters a second while playing.
+    pub speed: f64,
+    pub words_per_minute: f32,
+    pub mirror: bool,
+    pub text_size: f32,
+    pub text_color: String,
+    pub background: String,
 }
 
 #[derive(Serialize, Clone, Debug, Default, PartialEq)]

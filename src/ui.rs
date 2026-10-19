@@ -132,6 +132,13 @@ pub struct App {
     ptz_zoom: Option<f32>,
     /// The last replay problem shown.
     replay_problem: Option<String>,
+    /// The live chat, the comment on screen, and the newest one shown.
+    chat: Option<crate::net::chat::Chat>,
+    comment_on: Option<u64>,
+    comment_at: Option<Instant>,
+    comment_cursor: u64,
+    /// The teleprompter.
+    prompter: production::Prompter,
     /// The pad held down with the mouse, and the talkback button.
     pad_held: Option<usize>,
     talk_held: bool,
@@ -174,6 +181,11 @@ impl App {
             ptz_drive: None,
             ptz_zoom: None,
             replay_problem: None,
+            chat: None,
+            comment_on: None,
+            comment_at: None,
+            comment_cursor: 0,
+            prompter: production::Prompter { wpm: cfg.prompter.words_per_minute, ..Default::default() },
             pad_held: None,
             talk_held: false,
             scenes: cfg.effective_scenes(),
@@ -241,6 +253,7 @@ impl App {
     fn apply_control_settings(&mut self) {
         self.syrinscape.set_token(&self.cfg.syrinscape.token);
         crate::engine::guests::hub().apply(&self.cfg, self.waker.clone());
+        self.apply_chat();
         let r = self.cfg.remote.clone();
         *self.remote_shared.pin.lock().unwrap() = r.pin.trim().to_string();
         let running_port = self.remote.as_ref().map(|s| s.port);
@@ -727,6 +740,9 @@ impl App {
             }
         }
         self.run_cues(&seg.cues);
+        if let Some(i) = to {
+            self.prompter_to_segment(i);
+        }
         if self.cfg.rundown.markers && self.engine.as_ref().is_some_and(|e| e.is_recording()) {
             let _ = self.add_marker(Some(seg.name.clone()));
         }
@@ -829,6 +845,18 @@ impl App {
             talkback_available: e.mix.talkback_input().is_some(),
             clip_seconds: self.cfg.output.clip_seconds,
             black: e.is_black(),
+            prompter: (!self.prompter.script.trim().is_empty()).then(|| show::PrompterState {
+                version: self.prompter.version,
+                playing: self.prompter.playing,
+                // Rounded so a rolling prompter doesn't publish every frame.
+                position: (self.prompter.pos * 2.0).round() / 2.0,
+                speed: production::chars_per_second(self.prompter.wpm),
+                words_per_minute: self.prompter.wpm,
+                mirror: self.cfg.prompter.mirror,
+                text_size: self.cfg.prompter.text_size,
+                text_color: self.cfg.prompter.text_color.clone(),
+                background: self.cfg.prompter.background.clone(),
+            }),
             macros: self.cfg.macros.iter().map(|m| show::MacroInfo { name: m.name.clone(), color: m.color.clone() }).collect(),
             guests: if self.cfg.guests.enabled {
                 crate::engine::guests::hub()
@@ -2264,7 +2292,7 @@ impl App {
                 if is_timer {
                     clock_menus.push((r.clone(), i));
                 }
-                let is_title = self.cfg.graphics.get(i).is_some_and(|g| g.kind == crate::config::GraphicKind::Title);
+                let is_title = self.cfg.graphics.get(i).is_some_and(|g| matches!(g.kind, crate::config::GraphicKind::Title | crate::config::GraphicKind::Ticker));
                 if is_title && ui.small_button("✎").on_hover_text("Change the text now").clicked() {
                     edit = Some(i);
                 }
@@ -2289,16 +2317,23 @@ impl App {
 
     fn title_dialog(&mut self, ctx: &egui::Context) {
         let Some((i, mut title, mut subtitle)) = self.title_edit.clone() else { return };
+        let ticker = self.cfg.graphics.get(i).is_some_and(|g| g.kind == crate::config::GraphicKind::Ticker);
         let mut done = false;
         let mut apply = false;
         let r = egui::Modal::new(egui::Id::unique("title_edit")).show(ctx, |ui| {
             ui.set_width(360.0);
-            ui.heading("Title text");
-            ui.add(egui::TextEdit::singleline(&mut title).hint_text("Name").desired_width(340.0));
-            ui.add(egui::TextEdit::singleline(&mut subtitle).hint_text("Second line").desired_width(340.0));
+            if ticker {
+                ui.heading("Ticker text");
+                ui.add(egui::TextEdit::multiline(&mut title).hint_text("One item per line").desired_width(340.0).desired_rows(4));
+            } else {
+                ui.heading("Title text");
+                ui.add(egui::TextEdit::singleline(&mut title).hint_text("Name").desired_width(340.0));
+                ui.add(egui::TextEdit::singleline(&mut subtitle).hint_text("Second line").desired_width(340.0));
+            }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.add(egui::Button::new(RichText::new("Update").color(Color32::WHITE)).fill(ACCENT)).clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
+                let enter = !ticker && ui.input(|i| i.key_pressed(Key::Enter));
+                if ui.add(egui::Button::new(RichText::new("Update").color(Color32::WHITE)).fill(ACCENT)).clicked() || enter {
                     apply = true;
                     done = true;
                 }
@@ -2309,7 +2344,11 @@ impl App {
         });
         if apply {
             if let Some(e) = &self.engine {
-                e.graphics.set_text(i, &title, &subtitle);
+                if ticker {
+                    e.graphics.set_ticker_text(i, &title);
+                } else {
+                    e.graphics.set_text(i, &title, &subtitle);
+                }
             }
             if let Some(g) = self.cfg.graphics.get_mut(i) {
                 g.title = title.clone();
@@ -2866,6 +2905,7 @@ impl App {
         let mut moved = false;
         let mut actual_full = None;
         let multiview = self.cfg.display.output == DisplayOutput::Multiview;
+        let prompter = (self.cfg.display.output == DisplayOutput::Prompter).then(|| (self.cfg.prompter.clone(), self.prompter.script.clone(), self.prompter.pos));
         let mut builder = egui::ViewportBuilder::default().with_title("Cutaway — Output").with_inner_size([960.0, 540.0]).with_fullscreen(self.cfg.display.fullscreen);
         // (The setting only says how it opens: after that, full screen goes on
         // and off by command, following the window's real state.)
@@ -2917,7 +2957,9 @@ impl App {
                     Rect::from_center_size(r.center(), vec2(w, h))
                 };
                 let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-                if !multiview {
+                if let Some((pcfg, script, pos)) = &prompter {
+                    production::draw_prompter(ui, area, pcfg, script, *pos);
+                } else if !multiview {
                     if let Some(t) = program {
                         painter.image(t, fit(area, canvas_aspect), uv, Color32::WHITE);
                     }
@@ -3192,6 +3234,8 @@ impl eframe::App for App {
         if let Some(d) = self.next_queued() {
             ctx.request_repaint_after(d);
         }
+        self.tick_comments(&ctx);
+        self.tick_prompter(&ctx);
         self.handle_keys(&ctx);
         self.poll_status();
         self.run_self_test(&ctx);
@@ -3220,6 +3264,8 @@ impl eframe::App for App {
                 self.rundown_panel(ui);
                 self.guests_panel(ui);
                 self.ptz_panel(ui);
+                self.comments_panel(ui);
+                self.prompter_panel(ui);
                 self.macros_panel(ui);
                 self.graphics_panel(ui);
                 self.sound_panel(ui);

@@ -12,7 +12,7 @@ fn fingerprint(g: &Graphic, canvas: (u32, u32)) -> u64 {
 
 impl SettingsUi {
     pub(super) fn graphics(&mut self, ui: &mut egui::Ui) {
-        title(ui, "Graphics", "Logos, watermarks, name titles and clocks above every scene. Each gets its own button next to the scenes.");
+        title(ui, "Graphics", "Logos, watermarks, name titles, clocks and tickers above every scene. Each gets its own button next to the scenes.");
         let n = self.draft.graphics.len();
         if self.sel_graphic >= n {
             self.sel_graphic = n.saturating_sub(1);
@@ -26,6 +26,7 @@ impl SettingsUi {
                         GraphicKind::Image => "image",
                         GraphicKind::Title => "title",
                         GraphicKind::Clock => "clock",
+                        GraphicKind::Ticker => "ticker",
                     };
                     let b = egui::Button::selectable(self.sel_graphic == i, RichText::new(format!("{}\n{kind}{}", g.name, if i < 9 { format!(" · Alt+{}", i + 1) } else { String::new() })).size(13.0))
                         .min_size(vec2(220.0, 40.0));
@@ -49,7 +50,11 @@ impl SettingsUi {
                         self.sel_graphic = self.draft.graphics.len() - 1;
                     }
                     if ui.button("＋ Clock or countdown").clicked() {
-                        self.draft.graphics.push(Graphic::clock(&unique(names, "Clock"), ClockKind::Time, ""));
+                        self.draft.graphics.push(Graphic::clock(&unique(names.clone(), "Clock"), ClockKind::Time, ""));
+                        self.sel_graphic = self.draft.graphics.len() - 1;
+                    }
+                    if ui.button("＋ Scrolling ticker").clicked() {
+                        self.draft.graphics.push(Graphic::ticker(&unique(names, "Ticker"), "Your first headline\nAnd another", ""));
                         self.sel_graphic = self.draft.graphics.len() - 1;
                     }
                     if ui.add_enabled(n > 0, egui::Button::new("Remove")).clicked() {
@@ -81,6 +86,21 @@ impl SettingsUi {
             ui.add_sized([240.0, 22.0], egui::TextEdit::singleline(&mut g.name));
             ui.end_row();
             match g.kind {
+                GraphicKind::Ticker => {
+                    label(ui, "Text");
+                    ui.vertical(|ui| {
+                        ui.add(egui::TextEdit::multiline(&mut g.title).desired_width(340.0).desired_rows(3).hint_text("one item per line"));
+                        hint(ui, "One item per line; they scroll past in turn, again and again.");
+                    });
+                    ui.end_row();
+                    label(ui, "Label");
+                    ui.add(egui::TextEdit::singleline(&mut g.subtitle).desired_width(160.0).hint_text("e.g. Coming up (optional)"));
+                    ui.end_row();
+                    label(ui, "Speed");
+                    ui.add(egui::Slider::new(&mut g.speed, 1.0..=20.0).step_by(0.5).suffix(" widths a minute"));
+                    ui.end_row();
+                    text_style(ui, g);
+                }
                 GraphicKind::Image => {
                     label(ui, "Image");
                     ui.horizontal(|ui| {
@@ -205,6 +225,16 @@ impl SettingsUi {
                     let (text, over) = crate::engine::timers::clock_text(g, &crate::engine::timers::Timers::default(), chrono::Local::now());
                     Some(crate::engine::graphics::render_clock(g, &text, over, canvas))
                 }
+                GraphicKind::Ticker => {
+                    // The band with the text where it starts.
+                    let mut band = crate::engine::graphics::render_ticker_band(g, canvas);
+                    let (strip, _) = crate::engine::graphics::render_ticker_strip(g, canvas);
+                    let label_w = crate::engine::graphics::ticker_label_width(g, canvas) as u32;
+                    let shown = band.width().saturating_sub(label_w).min(strip.width());
+                    let text = image::imageops::crop_imm(&strip, 0, 0, shown, strip.height()).to_image();
+                    image::imageops::overlay(&mut band, &text, label_w as i64, 0);
+                    Some(band)
+                }
             };
             match img {
                 Some(img) => {
@@ -230,7 +260,9 @@ impl SettingsUi {
         } else if g.kind == GraphicKind::Image {
             ui.label(RichText::new("⚠ Choose a PNG or JPEG image.").color(AMBER));
         }
-        if g.kind == GraphicKind::Clock && g.clock.is_timer() {
+        if g.kind == GraphicKind::Ticker {
+            hint(ui, "A band across the picture with text scrolling through it, like a news ticker. Change the text live from its button in the main window (✎).");
+        } else if g.kind == GraphicKind::Clock && g.clock.is_timer() {
             hint(ui, &format!("Start, pause and reset it from its button in the main window (right-click), a Stream Deck Timer key, or the commands timer:{0}:start, timer:{0}:pause and timer:{0}:reset.", g.name));
         } else if g.kind == GraphicKind::Clock && g.clock == ClockKind::Segment {
             hint(ui, "Counts down the rundown segment that's on (Settings → Rundown), and shows how far over it runs in red.");

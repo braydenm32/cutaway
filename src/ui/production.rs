@@ -319,11 +319,353 @@ impl App {
         }
     }
 
-    pub(super) fn run_prompter(&mut self, _cmd: PrompterCmd) -> Result<String, String> {
-        Err("the prompter isn't ready yet".into())
+    pub(super) fn run_comment(&mut self, cmd: CommentCmd) -> Result<String, String> {
+        match cmd {
+            CommentCmd::Hide => {
+                self.hide_comment();
+                Ok("Comment hidden".into())
+            }
+            CommentCmd::Toggle if self.comment_on.is_some() => {
+                self.hide_comment();
+                Ok("Comment hidden".into())
+            }
+            CommentCmd::Next | CommentCmd::Toggle => {
+                let chat = self.chat.as_ref().ok_or("no live chat is set up (Settings → Viewer comments)")?;
+                let next = chat.messages().into_iter().find(|m| m.id > self.comment_cursor).ok_or("no new comments yet")?;
+                self.show_comment(&next);
+                Ok(format!("Showing {}'s comment", next.author))
+            }
+        }
     }
 
-    pub(super) fn run_comment(&mut self, _cmd: CommentCmd) -> Result<String, String> {
-        Err("comments aren't ready yet".into())
+    fn show_comment(&mut self, m: &crate::net::chat::ChatMessage) {
+        let Some(e) = &self.engine else { return };
+        let c = crate::engine::graphics::Comment { author: m.author.clone(), text: m.text.clone(), color: m.color.clone().unwrap_or_else(|| m.platform.color().to_string()) };
+        e.graphics.set_comment(Some(&c), &self.cfg.comments);
+        self.comment_on = Some(m.id);
+        self.comment_at = Some(Instant::now());
+        self.comment_cursor = self.comment_cursor.max(m.id);
     }
+
+    fn hide_comment(&mut self) {
+        if let Some(e) = &self.engine {
+            e.graphics.set_comment(None, &self.cfg.comments);
+        }
+        self.comment_on = None;
+        self.comment_at = None;
+    }
+
+    /// Start (or restart) reading the live chat when its settings change.
+    pub(super) fn apply_chat(&mut self) {
+        let c = &self.cfg.comments;
+        let wanted = (c.twitch_channel.clone(), c.youtube.clone(), c.youtube_api_key.clone());
+        let same = self.chat.as_ref().is_some_and(|ch| ch.made_for == wanted);
+        if !c.enabled() {
+            self.chat = None;
+        } else if !same {
+            self.chat = Some(crate::net::chat::Chat::start(c, self.waker.clone()));
+        }
+    }
+
+    /// Hide a comment that's been up long enough.
+    pub(super) fn tick_comments(&mut self, ctx: &egui::Context) {
+        let after = self.cfg.comments.hide_after_s;
+        if let (Some(at), true) = (self.comment_at, after > 0) {
+            let left = Duration::from_secs(after as u64).saturating_sub(at.elapsed());
+            if left.is_zero() {
+                self.hide_comment();
+            } else {
+                ctx.request_repaint_after(left);
+            }
+        }
+    }
+
+    /// The live chat: click a comment to show it on screen.
+    pub(super) fn comments_panel(&mut self, ui: &mut egui::Ui) {
+        let Some(chat) = &self.chat else { return };
+        let messages = chat.messages();
+        let (tw, yt) = chat.status();
+        ui.add_space(4.0);
+        self.section_heading(ui, "COMMENTS", Section::Comments);
+        for (p, st) in [("Twitch", tw), ("YouTube", yt)] {
+            if !st.is_empty() {
+                let ok = st.starts_with("reading");
+                ui.label(RichText::new(format!("{p}: {st}")).color(if ok { TEXT_DIM } else { AMBER }).size(11.0));
+            }
+        }
+        let mut pick = None;
+        egui::ScrollArea::vertical().id_salt("comments").max_height(170.0).stick_to_bottom(true).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            if messages.is_empty() {
+                ui.label(RichText::new("No comments yet").color(TEXT_DIM).size(12.0));
+            }
+            for m in messages.iter().rev().take(40).rev() {
+                let showing = self.comment_on == Some(m.id);
+                let color = color_of(m.color.as_deref().unwrap_or(m.platform.color()), 0x9b6bff);
+                let mut job = egui::text::LayoutJob::default();
+                job.append(&m.author, 0.0, egui::TextFormat { color, font_id: egui::FontId::proportional(12.5), ..Default::default() });
+                job.append(&format!("  {}", m.text), 0.0, egui::TextFormat { color: if showing { Color32::BLACK } else { Color32::from_gray(225) }, font_id: egui::FontId::proportional(12.5), ..Default::default() });
+                job.wrap.max_width = ui.available_width() - 8.0;
+                let fill = if showing { AMBER } else if m.id > self.comment_cursor { RAISED } else { Color32::TRANSPARENT };
+                let r = egui::Frame::new().fill(fill).corner_radius(4.0).inner_margin(egui::Margin::symmetric(6, 3)).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.add(egui::Label::new(job).sense(egui::Sense::click()))
+                });
+                let tip = format!("{} · {}", m.platform.name(), if showing { "showing: click to hide" } else { "click to show it on screen" });
+                if r.inner.on_hover_text(tip).clicked() {
+                    pick = Some(if showing { None } else { Some(m.clone()) });
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            if ui.button("Show next").on_hover_text("The oldest comment not shown yet").clicked() {
+                self.act(Action::Comment(CommentCmd::Next));
+            }
+            if self.comment_on.is_some() && ui.button("Hide").clicked() {
+                self.hide_comment();
+            }
+        });
+        match pick {
+            Some(Some(m)) => self.show_comment(&m),
+            Some(None) => self.hide_comment(),
+            None => {}
+        }
+        ui.add_space(4.0);
+        ui.separator();
+    }
+}
+
+// ---- Teleprompter ---------------------------------------------------------------
+
+/// Where the teleprompter is in its script.
+pub(super) struct Prompter {
+    pub playing: bool,
+    /// Characters into the script.
+    pub pos: f64,
+    pub wpm: f32,
+    pub last: Instant,
+    /// The script, where each rundown segment starts in it, and a version.
+    pub script: std::sync::Arc<String>,
+    pub starts: Vec<usize>,
+    pub version: u64,
+}
+
+impl Default for Prompter {
+    fn default() -> Self {
+        Prompter { playing: false, pos: 0.0, wpm: 140.0, last: Instant::now(), script: Default::default(), starts: Vec::new(), version: 0 }
+    }
+}
+
+/// Characters a second at a reading speed (about six to a word, with the space).
+pub(super) fn chars_per_second(wpm: f32) -> f64 {
+    wpm.clamp(20.0, 400.0) as f64 * 6.0 / 60.0
+}
+
+/// The script: the text written, or the rundown's segments and notes.
+/// Returns it and where each segment starts.
+pub(super) fn build_script(cfg: &crate::config::Config) -> (String, Vec<usize>) {
+    let p = &cfg.prompter;
+    if !p.use_rundown || cfg.rundown.segments.is_empty() {
+        return (p.script.clone(), Vec::new());
+    }
+    let mut s = String::new();
+    let mut starts = Vec::new();
+    for seg in &cfg.rundown.segments {
+        starts.push(s.chars().count());
+        s.push_str(&format!("▶ {}\n", seg.name.to_uppercase()));
+        let notes = seg.notes.trim();
+        if !notes.is_empty() {
+            s.push_str(notes);
+            s.push('\n');
+        }
+        s.push('\n');
+    }
+    if !p.script.trim().is_empty() {
+        s.push_str(p.script.trim());
+        s.push('\n');
+    }
+    (s, starts)
+}
+
+/// Where paragraphs start (after a blank line), in characters.
+fn paragraph_starts(text: &str) -> Vec<usize> {
+    let mut out = vec![0];
+    let chars: Vec<char> = text.chars().collect();
+    for i in 1..chars.len() {
+        if chars[i] != '\n' && chars[i - 1] == '\n' && i >= 2 && chars[i - 2] == '\n' {
+            out.push(i);
+        }
+    }
+    out
+}
+
+impl App {
+    /// Keep the script up to date and move it along.
+    pub(super) fn tick_prompter(&mut self, ctx: &egui::Context) {
+        let (script, starts) = build_script(&self.cfg);
+        if *self.prompter.script != script {
+            self.prompter.script = std::sync::Arc::new(script);
+            self.prompter.starts = starts;
+            self.prompter.version += 1;
+            *self.remote_shared.prompter.lock().unwrap() = serde_json::json!({ "version": self.prompter.version, "text": *self.prompter.script, "segments": self.prompter.starts }).to_string();
+        }
+        let now = Instant::now();
+        let dt = now.duration_since(self.prompter.last).as_secs_f64().min(0.5);
+        self.prompter.last = now;
+        if self.prompter.playing {
+            let total = self.prompter.script.chars().count() as f64;
+            self.prompter.pos = (self.prompter.pos + chars_per_second(self.prompter.wpm) * dt).min(total);
+            if self.prompter.pos >= total {
+                self.prompter.playing = false;
+            }
+            ctx.request_repaint_after(Duration::from_millis(33));
+        }
+    }
+
+    /// The rundown moved to a segment: the prompter follows.
+    pub(super) fn prompter_to_segment(&mut self, i: usize) {
+        if self.cfg.prompter.use_rundown {
+            let (_, starts) = build_script(&self.cfg);
+            if let Some(&s) = starts.get(i) {
+                self.prompter.pos = s as f64;
+            }
+        }
+    }
+
+    pub(super) fn run_prompter(&mut self, cmd: PrompterCmd) -> Result<String, String> {
+        if self.prompter.script.trim().is_empty() {
+            return Err("the teleprompter has no script yet (Settings → Teleprompter)".into());
+        }
+        let p = &mut self.prompter;
+        let marks = {
+            let mut m = paragraph_starts(&p.script);
+            m.extend(p.starts.iter().copied());
+            m.sort_unstable();
+            m.dedup();
+            m
+        };
+        match cmd {
+            PrompterCmd::Play => p.playing = true,
+            PrompterCmd::Pause => p.playing = false,
+            PrompterCmd::Toggle => p.playing = !p.playing,
+            PrompterCmd::Faster => p.wpm = (p.wpm + 10.0).min(400.0),
+            PrompterCmd::Slower => p.wpm = (p.wpm - 10.0).max(20.0),
+            PrompterCmd::Top => {
+                p.pos = 0.0;
+                p.playing = false;
+            }
+            PrompterCmd::Back => {
+                // The start of this paragraph, or the one before if just past it.
+                let cur = p.pos as usize;
+                p.pos = marks.iter().rev().find(|&&m| m + 3 < cur).copied().unwrap_or(0) as f64;
+            }
+            PrompterCmd::Forward => {
+                let cur = p.pos as usize;
+                if let Some(&m) = marks.iter().find(|&&m| m > cur) {
+                    p.pos = m as f64;
+                }
+            }
+        }
+        p.last = Instant::now();
+        Ok(format!("Prompter {} · {:.0} words a minute", if p.playing { "rolling" } else { "paused" }, p.wpm))
+    }
+
+    /// Prompter controls in the main window.
+    pub(super) fn prompter_panel(&mut self, ui: &mut egui::Ui) {
+        if self.prompter.script.trim().is_empty() {
+            return;
+        }
+        ui.add_space(4.0);
+        self.section_heading(ui, "PROMPTER", Section::Prompter);
+        let total = self.prompter.script.chars().count().max(1) as f64;
+        let mut cmd = None;
+        ui.horizontal(|ui| {
+            let playing = self.prompter.playing;
+            if ui.add(egui::Button::new(RichText::new(if playing { "⏸" } else { "▶" }).size(15.0)).min_size(vec2(36.0, 28.0))).on_hover_text("Roll / pause").clicked() {
+                cmd = Some(PrompterCmd::Toggle);
+            }
+            if ui.button("⏮").on_hover_text("Back to the top").clicked() {
+                cmd = Some(PrompterCmd::Top);
+            }
+            if ui.button("◀").on_hover_text("Back a paragraph").clicked() {
+                cmd = Some(PrompterCmd::Back);
+            }
+            if ui.button("▶▶").on_hover_text("Forward a paragraph").clicked() {
+                cmd = Some(PrompterCmd::Forward);
+            }
+            ui.separator();
+            if ui.button("−").on_hover_text("Slower").clicked() {
+                cmd = Some(PrompterCmd::Slower);
+            }
+            ui.label(RichText::new(format!("{:.0} wpm", self.prompter.wpm)).monospace());
+            if ui.button("＋").on_hover_text("Faster").clicked() {
+                cmd = Some(PrompterCmd::Faster);
+            }
+        });
+        let mut frac = (self.prompter.pos / total) as f32;
+        let r = ui.add(egui::Slider::new(&mut frac, 0.0..=1.0).show_value(false));
+        if r.changed() {
+            self.prompter.pos = frac as f64 * total;
+        }
+        if let Some(c) = cmd {
+            if let Err(e) = self.run_prompter(c) {
+                self.toast(e, true);
+            }
+        }
+        ui.add_space(4.0);
+        ui.separator();
+    }
+}
+
+/// Draw the teleprompter into `area`: the script, the line being read a
+/// third of the way down, mirrored for prompter glass if asked.
+pub(super) fn draw_prompter(ui: &egui::Ui, area: egui::Rect, cfg: &crate::config::PrompterConfig, text: &str, pos: f64) {
+    let painter = ui.painter_at(area);
+    let bg = color_of(&cfg.background, 0x000000);
+    let fg = color_of(&cfg.text_color, 0xffffff);
+    painter.rect_filled(area, 0.0, bg);
+    if text.trim().is_empty() {
+        painter.text(area.center(), egui::Align2::CENTER_CENTER, "No script (Settings → Teleprompter)", egui::FontId::proportional(24.0), Color32::from_gray(120));
+        return;
+    }
+    let size = (area.height() * cfg.text_size.clamp(0.02, 0.2)).max(10.0);
+    let margin = area.width() * 0.08;
+    let wrap = area.width() - margin * 2.0;
+    let galley = painter.layout(text.to_string(), egui::FontId::proportional(size), fg, wrap);
+    // Where the reading position is in the laid-out text.
+    let n = text.chars().count();
+    let i = (pos.floor() as usize).min(n);
+    let frac = (pos - pos.floor()) as f32;
+    let here = galley.pos_from_cursor(egui::text::CCursor::new(i));
+    let next = galley.pos_from_cursor(egui::text::CCursor::new((i + 1).min(n)));
+    let y = here.top() + (next.top() - here.top()) * frac;
+    let reading = area.top() + area.height() * 0.3;
+    let origin = egui::pos2(area.left() + margin, reading - y);
+    if cfg.mirror {
+        // Tessellate, then flip left to right.
+        let shape = egui::Shape::galley(origin, galley, fg);
+        let prims = ui.ctx().tessellate(vec![egui::epaint::ClippedShape { clip_rect: area, shape, transform_after_tessellation: egui::emath::TSTransform::IDENTITY }], ui.ctx().pixels_per_point());
+        let cx = area.center().x;
+        for p in prims {
+            if let egui::epaint::Primitive::Mesh(mut mesh) = p.primitive {
+                for v in &mut mesh.vertices {
+                    v.pos.x = 2.0 * cx - v.pos.x;
+                }
+                // Flipping turns the triangles over; draw them anyway.
+                painter.add(egui::Shape::mesh(mesh));
+            }
+        }
+    } else {
+        painter.galley(origin, galley, fg);
+    }
+    // A marker at the reading line, and shading above it.
+    painter.rect_filled(egui::Rect::from_min_max(area.min, egui::pos2(area.right(), reading - size * 0.9)), 0.0, bg.gamma_multiply(0.55));
+    let arrow_x = if cfg.mirror { area.right() - margin * 0.5 } else { area.left() + margin * 0.5 };
+    let dir = if cfg.mirror { -1.0 } else { 1.0 };
+    let tip = egui::pos2(arrow_x + dir * size * 0.35, reading + size * 0.55);
+    painter.add(egui::Shape::convex_polygon(
+        vec![tip, egui::pos2(arrow_x - dir * size * 0.2, reading + size * 0.2), egui::pos2(arrow_x - dir * size * 0.2, reading + size * 0.9)],
+        AMBER,
+        egui::Stroke::NONE,
+    ));
 }

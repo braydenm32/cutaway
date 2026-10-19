@@ -9,6 +9,8 @@
 //! * `/api/tally/N` — `program`, `preview` or `off`, for DIY tally lights.
 //! * `/api/key/scene/N.png`, `/api/key/source/N.png` — Stream Deck key
 //!   pictures (`?size=144&label=0`).
+//! * `/prompter` — the teleprompter, full screen, for a tablet;
+//!   `/api/prompter` its script.
 //! * `/api/ws` — WebSocket: the state is pushed whenever it changes, and
 //!   commands can be sent as text (`scene:2`) or JSON
 //!   (`{"do":"scene:2","id":1}`, answered with `{"type":"reply","id":1,...}`).
@@ -27,6 +29,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 const PAGE: &str = include_str!("remote.html");
+const PROMPTER_PAGE: &str = include_str!("prompter.html");
 
 /// What the server shares with the app.
 pub struct RemoteShared {
@@ -44,6 +47,8 @@ pub struct RemoteShared {
     changed: Condvar,
     /// What key pictures are drawn from.
     pub keys: Mutex<KeySources>,
+    /// The teleprompter's script as JSON ({version, text, segments}).
+    pub prompter: Mutex<String>,
 }
 
 impl RemoteShared {
@@ -59,6 +64,7 @@ impl RemoteShared {
             show: Mutex::new((0, ShowState::default())),
             changed: Condvar::new(),
             keys: Mutex::new(KeySources::default()),
+            prompter: Mutex::new("{}".into()),
         })
     }
 
@@ -256,6 +262,9 @@ fn handle(mut conn: TcpStream, sh: &RemoteShared) -> std::io::Result<()> {
     let pin = sh.pin.lock().unwrap().clone();
     let given = param("pin").or(header_pin).or(cookie_pin).unwrap_or_default();
     let authed = pin.is_empty() || given == pin;
+    if path == "/prompter" {
+        return respond(&mut conn, "200 OK", "text/html; charset=utf-8", PROMPTER_PAGE.as_bytes(), "");
+    }
     if path == "/" || path == "/index.html" {
         let cookie = if authed && !pin.is_empty() { format!("Set-Cookie: cutaway_pin={pin}; Path=/; Max-Age=31536000\r\n") } else { String::new() };
         return respond(&mut conn, "200 OK", "text/html; charset=utf-8", PAGE.as_bytes(), &cookie);
@@ -287,6 +296,10 @@ fn handle(mut conn: TcpStream, sh: &RemoteShared) -> std::io::Result<()> {
     match path {
         "/api/state" => {
             let s = sh.state.lock().unwrap().clone();
+            respond(&mut conn, "200 OK", "application/json", s.as_bytes(), "")
+        }
+        "/api/prompter" => {
+            let s = sh.prompter.lock().unwrap().clone();
             respond(&mut conn, "200 OK", "application/json", s.as_bytes(), "")
         }
         "/api/program.jpg" => match sh.program_jpeg() {

@@ -15,6 +15,7 @@ impl SettingsUi {
                 ui.selectable_value(&mut d.output, DisplayOutput::Off, "Nothing");
                 ui.selectable_value(&mut d.output, DisplayOutput::Program, "The program");
                 ui.selectable_value(&mut d.output, DisplayOutput::Multiview, "The multiview");
+                ui.selectable_value(&mut d.output, DisplayOutput::Prompter, "The teleprompter");
             });
             ui.end_row();
             label(ui, "Full screen");

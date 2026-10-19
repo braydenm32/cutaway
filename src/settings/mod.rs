@@ -3,10 +3,12 @@
 //! video engine rebuilt are flagged, everything else applies live.
 
 mod captions;
+mod comments;
 mod control;
 mod graphics;
 mod guests;
 mod macros;
+mod prompter;
 mod mixing;
 mod outputs;
 mod rundown;
@@ -37,6 +39,8 @@ pub enum Section {
     Graphics,
     Rundown,
     Macros,
+    Prompter,
+    Comments,
     Guests,
     Captions,
     Recording,
@@ -48,7 +52,7 @@ pub enum Section {
 }
 
 impl Section {
-    const ALL: [Section; 19] = [
+    const ALL: [Section; 21] = [
         Section::General,
         Section::Sources,
         Section::Audio,
@@ -60,6 +64,8 @@ impl Section {
         Section::Graphics,
         Section::Rundown,
         Section::Macros,
+        Section::Prompter,
+        Section::Comments,
         Section::Guests,
         Section::Captions,
         Section::Recording,
@@ -87,6 +93,8 @@ impl Section {
             Section::Graphics => "Graphics",
             Section::Rundown => "Rundown",
             Section::Macros => "Macros",
+            Section::Prompter => "Teleprompter",
+            Section::Comments => "Viewer comments",
             Section::Guests => "Remote guests",
             Section::Captions => "Captions",
             Section::Recording => "Recording",
@@ -322,6 +330,8 @@ impl SettingsUi {
                                     Section::Graphics => self.graphics(ui),
                                     Section::Rundown => self.rundown(ui),
                                     Section::Macros => self.macros(ui),
+                                    Section::Prompter => self.prompter(ui),
+                                    Section::Comments => self.comments(ui),
                                     Section::Guests => self.guests(ui, info),
                                     Section::Captions => self.captions(ui, info),
                                     Section::Recording => self.recording(ui),
@@ -444,6 +454,8 @@ impl SettingsUi {
             Section::Syrinscape => a.syrinscape != b.syrinscape,
             Section::Rundown => a.rundown != b.rundown,
             Section::Macros => a.macros != b.macros,
+            Section::Prompter => a.prompter != b.prompter,
+            Section::Comments => a.comments != b.comments,
             Section::Guests => a.guests != b.guests,
             Section::Program => a.program != b.program || a.style != b.style,
             Section::Switching => a.transition != b.transition || a.auto_switch != b.auto_switch || a.replay != b.replay,

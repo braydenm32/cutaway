@@ -22,6 +22,52 @@ pub struct GraphicLayer {
     pub alpha: f32,
     /// Only on the stream, not the recording or monitors (captions).
     pub stream_only: bool,
+    /// The part of the picture shown (u0, v0, u1, v1).
+    pub uv: [f32; 4],
+}
+
+pub const FULL_UV: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+
+/// A viewer comment to show.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Comment {
+    pub author: String,
+    pub text: String,
+    /// "#RRGGBB" for the name (the chat's colour, or the platform's).
+    pub color: String,
+}
+
+/// The comment on screen (or fading out).
+#[derive(Default)]
+struct CommentItem {
+    style: crate::config::CommentsConfig,
+    image: Option<Arc<RgbaImage>>,
+    version: u64,
+    visible: bool,
+    changed_at: Ns,
+    from_alpha: f32,
+}
+
+impl CommentItem {
+    fn alpha_at(&self, t: Ns) -> f32 {
+        let fade = self.style.fade_ms as i64 * 1_000_000;
+        let target = if self.visible { 1.0 } else { 0.0 };
+        if fade <= 0 || t >= self.changed_at + fade {
+            return target;
+        }
+        if t <= self.changed_at {
+            return self.from_alpha;
+        }
+        self.from_alpha + (target - self.from_alpha) * (t - self.changed_at) as f32 / fade as f32
+    }
+}
+
+/// A ticker's text strip, drawn once and slid along.
+struct TickerStrip {
+    image: Arc<RgbaImage>,
+    /// One pass of the text (it repeats), in strip pixels.
+    cycle: f32,
+    version: u64,
 }
 
 struct Item {
@@ -35,6 +81,8 @@ struct Item {
     from_alpha: f32,
     /// Clocks: what's drawn now.
     text: (String, bool),
+    /// Tickers: the moving text.
+    strip: Option<TickerStrip>,
 }
 
 impl Item {
@@ -65,11 +113,16 @@ pub struct Graphics {
     items: Mutex<Vec<Item>>,
     versions: std::sync::atomic::AtomicU64,
     pub timers: Arc<Timers>,
+    comment: Mutex<CommentItem>,
 }
+
+/// Layer keys for things that aren't in the graphics list.
+const COMMENT_KEY: usize = 1 << 20;
+const STRIP_KEY: usize = 1 << 21;
 
 impl Graphics {
     pub fn new(cfgs: &[Graphic], canvas: (u32, u32), timers: Arc<Timers>) -> Arc<Self> {
-        let g = Arc::new(Graphics { canvas, items: Mutex::new(Vec::new()), versions: Default::default(), timers });
+        let g = Arc::new(Graphics { canvas, items: Mutex::new(Vec::new()), versions: Default::default(), timers, comment: Mutex::new(CommentItem::default()) });
         g.update(cfgs);
         for it in g.items.lock().unwrap().iter_mut() {
             it.visible = it.cfg.visible;
@@ -96,11 +149,13 @@ impl Graphics {
                 }
                 Some(p) => {
                     let (image, error, text) = self.render(cfg);
-                    Item { cfg: cfg.clone(), image, error, version: self.next_version(), visible: p.visible, changed_at: p.changed_at, from_alpha: p.from_alpha, text }
+                    let strip = self.render_strip(cfg);
+                    Item { cfg: cfg.clone(), image, error, version: self.next_version(), visible: p.visible, changed_at: p.changed_at, from_alpha: p.from_alpha, text, strip }
                 }
                 None => {
                     let (image, error, text) = self.render(cfg);
-                    Item { cfg: cfg.clone(), image, error, version: self.next_version(), visible: false, changed_at: 0, from_alpha: 0.0, text }
+                    let strip = self.render_strip(cfg);
+                    Item { cfg: cfg.clone(), image, error, version: self.next_version(), visible: false, changed_at: 0, from_alpha: 0.0, text, strip }
                 }
             };
             items.push(item);
@@ -116,11 +171,53 @@ impl Graphics {
                 text = clock_text(cfg, &self.timers, chrono::Local::now());
                 Ok(render_clock(cfg, &text.0, text.1, self.canvas))
             }
+            GraphicKind::Ticker => Ok(render_ticker_band(cfg, self.canvas)),
         };
         match r {
             Ok(img) => (Some(Arc::new(img)), None, text),
             Err(e) => (None, Some(e), text),
         }
+    }
+
+    fn render_strip(&self, cfg: &Graphic) -> Option<TickerStrip> {
+        (cfg.kind == GraphicKind::Ticker).then(|| {
+            let (image, cycle) = render_ticker_strip(cfg, self.canvas);
+            TickerStrip { image: Arc::new(image), cycle, version: self.next_version() }
+        })
+    }
+
+    /// Show a viewer comment (None: hide it).
+    pub fn set_comment(&self, comment: Option<&Comment>, style: &crate::config::CommentsConfig) {
+        let mut c = self.comment.lock().unwrap();
+        let t = clock::now() - VIDEO_LATENCY;
+        c.from_alpha = c.alpha_at(t);
+        c.changed_at = t;
+        c.style = style.clone();
+        match comment {
+            Some(cm) => {
+                c.image = Some(Arc::new(render_comment(cm, style, self.canvas)));
+                c.version = self.next_version();
+                c.visible = true;
+            }
+            None => c.visible = false,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn comment_showing(&self) -> bool {
+        self.comment.lock().unwrap().visible
+    }
+
+    /// Change a ticker's text live.
+    pub fn set_ticker_text(&self, index: usize, text: &str) {
+        let mut items = self.items.lock().unwrap();
+        let Some(it) = items.get_mut(index).filter(|i| i.cfg.kind == GraphicKind::Ticker) else { return };
+        if it.cfg.title == text {
+            return;
+        }
+        it.cfg.title = text.to_string();
+        let (image, cycle) = render_ticker_strip(&it.cfg, self.canvas);
+        it.strip = Some(TickerStrip { image: Arc::new(image), cycle, version: self.versions.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1 });
     }
 
     /// What a clock graphic shows now.
@@ -196,7 +293,28 @@ impl Graphics {
             }
             let w = it.cfg.width.clamp(0.01, 1.0);
             let h = w * cw / ch * img.height() as f32 / img.width() as f32;
-            out.push(GraphicLayer { key: (i, it.version), image: img.clone(), rect: [it.cfg.x, it.cfg.y, w, h], alpha, stream_only: false });
+            out.push(GraphicLayer { key: (i, it.version), image: img.clone(), rect: [it.cfg.x, it.cfg.y, w, h], alpha, stream_only: false, uv: FULL_UV });
+            // A ticker's text slides along inside its band, right of the label.
+            if let Some(strip) = &it.strip {
+                let band_px = w * cw;
+                let label_px = ticker_label_width(&it.cfg, self.canvas);
+                let shown = (band_px - label_px).max(1.0);
+                let sw = strip.image.width() as f32;
+                let speed = it.cfg.speed.clamp(0.5, 60.0) / 60.0 * cw; // pixels a second
+                let phase = ((t as f64 / 1e9 * speed as f64) % strip.cycle.max(1.0) as f64) as f32;
+                let u0 = phase / sw;
+                let u1 = (phase + shown) / sw;
+                let x = it.cfg.x + label_px / cw;
+                out.push(GraphicLayer { key: (STRIP_KEY + i, strip.version), image: strip.image.clone(), rect: [x, it.cfg.y, shown / cw, h], alpha, stream_only: false, uv: [u0, 0.0, u1, 1.0] });
+            }
+        }
+        drop(items);
+        let c = self.comment.lock().unwrap();
+        let alpha = c.alpha_at(t);
+        if let (Some(img), true) = (&c.image, alpha > 0.001) {
+            let w = c.style.width.clamp(0.05, 1.0);
+            let h = w * cw / ch * img.height() as f32 / img.width() as f32;
+            out.push(GraphicLayer { key: (COMMENT_KEY, c.version), image: img.clone(), rect: [c.style.x, c.style.y, w, h], alpha, stream_only: false, uv: FULL_UV });
         }
         out
     }
@@ -286,6 +404,93 @@ pub fn render_clock(cfg: &Graphic, text: &str, over: bool, canvas: (u32, u32)) -
     img
 }
 
+/// Text sizes of a ticker band.
+fn ticker_sizes(canvas: (u32, u32)) -> (f32, f32) {
+    let ch = canvas.1 as f32;
+    let text_px = (ch * 0.036).max(9.0);
+    (text_px, (text_px * 1.9).ceil())
+}
+
+pub fn ticker_label_width(cfg: &Graphic, canvas: (u32, u32)) -> f32 {
+    let label = cfg.subtitle.trim();
+    if label.is_empty() {
+        return 0.0;
+    }
+    let (bold, _) = fonts(&cfg.font);
+    let (text_px, _) = ticker_sizes(canvas);
+    (text_width(&bold, text_px * 0.9, label) + text_px * 1.6).ceil()
+}
+
+/// A ticker's band: the box, and its label at the left in the text
+/// colour's box.
+pub fn render_ticker_band(cfg: &Graphic, canvas: (u32, u32)) -> RgbaImage {
+    let (bold, _) = fonts(&cfg.font);
+    let (text_px, band_h) = ticker_sizes(canvas);
+    let w = (cfg.width.clamp(0.05, 1.0) * canvas.0 as f32).ceil() as u32;
+    let box_rgb = rgb_of(&cfg.box_color, 0x101820);
+    let text_rgb = rgb_of(&cfg.text_color, 0xffffff);
+    let box_a = (cfg.box_opacity.clamp(0.0, 1.0) * 255.0) as u8;
+    let mut img = RgbaImage::from_pixel(w.max(2), band_h as u32, image::Rgba([box_rgb[0], box_rgb[1], box_rgb[2], box_a]));
+    let label = cfg.subtitle.trim();
+    if !label.is_empty() {
+        let lw = ticker_label_width(cfg, canvas) as i32;
+        super::text::fill_rect(&mut img, 0, 0, lw, band_h as i32, [text_rgb[0], text_rgb[1], text_rgb[2], 255]);
+        let size = text_px * 0.9;
+        let tw = text_width(&bold, size, label);
+        let ascent = bold.as_scaled(PxScale::from(size)).ascent();
+        draw_text(&mut img, &bold, size, (lw as f32 - tw) / 2.0, (band_h + ascent * 0.72) / 2.0, &label.to_uppercase(), box_rgb);
+    }
+    img
+}
+
+/// The moving text: every item once, then again (enough to fill the band
+/// at any point in the cycle). Returns the strip and one cycle's width.
+pub fn render_ticker_strip(cfg: &Graphic, canvas: (u32, u32)) -> (RgbaImage, f32) {
+    let (_, regular) = fonts(&cfg.font);
+    let (text_px, band_h) = ticker_sizes(canvas);
+    let items: Vec<&str> = cfg.title.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let joined = if items.is_empty() { " ".to_string() } else { format!("{}     •     ", items.join("     •     ")) };
+    let cycle = text_width(&regular, text_px, &joined).max(1.0).ceil();
+    let band_w = cfg.width.clamp(0.05, 1.0) * canvas.0 as f32;
+    let copies = ((band_w / cycle).ceil() as usize + 1).max(2);
+    let w = ((cycle * copies as f32).ceil() as u32).min(16_384);
+    let text_rgb = rgb_of(&cfg.text_color, 0xffffff);
+    let mut img = RgbaImage::new(w.max(2), band_h as u32);
+    let ascent = regular.as_scaled(PxScale::from(text_px)).ascent();
+    for k in 0..copies {
+        draw_text(&mut img, &regular, text_px, k as f32 * cycle, (band_h + ascent * 0.72) / 2.0, &joined, text_rgb);
+    }
+    (img, cycle)
+}
+
+/// A viewer comment: the name in its colour over the message, in a box.
+pub fn render_comment(c: &Comment, style: &crate::config::CommentsConfig, canvas: (u32, u32)) -> RgbaImage {
+    let (bold, regular) = fonts(Path::new(""));
+    let ch = canvas.1 as f32;
+    let name_px = (ch * 0.03).max(8.0);
+    let text_px = (ch * 0.036).max(9.0);
+    let pad = ch * 0.02;
+    let w = (style.width.clamp(0.05, 1.0) * canvas.0 as f32).ceil();
+    let lines = super::text::wrap(&regular, text_px, &c.text, w - pad * 2.0);
+    let lines: Vec<String> = lines.into_iter().take(4).collect();
+    let h = (pad * 2.0 + name_px * 1.35 + lines.len().max(1) as f32 * text_px * 1.25).ceil() as u32;
+    let box_rgb = rgb_of(&style.box_color, 0x1b1f2a);
+    let text_rgb = rgb_of(&style.text_color, 0xffffff);
+    let box_a = (style.box_opacity.clamp(0.0, 1.0) * 255.0) as u8;
+    let mut img = RgbaImage::from_pixel(w as u32, h.max(2), image::Rgba([box_rgb[0], box_rgb[1], box_rgb[2], box_a]));
+    let name_rgb = rgb_of(&c.color, 0x9b6bff);
+    let bar = (ch * 0.006).max(2.0) as i32;
+    super::text::fill_rect(&mut img, 0, 0, bar, h as i32, [name_rgb[0], name_rgb[1], name_rgb[2], 255]);
+    let name = super::text::ellipsize(&bold, name_px, &c.author, w - pad * 2.0);
+    let a = bold.as_scaled(PxScale::from(name_px)).ascent();
+    draw_text(&mut img, &bold, name_px, pad, pad + a, &name, name_rgb);
+    let a2 = regular.as_scaled(PxScale::from(text_px)).ascent();
+    for (k, l) in lines.iter().enumerate() {
+        draw_text(&mut img, &regular, text_px, pad, pad + name_px * 1.35 + k as f32 * text_px * 1.25 + a2, l, text_rgb);
+    }
+    img
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,5 +537,41 @@ mod tests {
         assert_eq!(g.clock_text(0).unwrap().0, "1:57");
         assert_eq!((next.image.width(), next.image.height()), (first.image.width(), first.image.height()));
         assert!(first.image.pixels().filter(|p| p[0] > 200 && p[1] > 200).count() > 200, "digits drawn");
+    }
+
+    #[test]
+    fn tickers_scroll_and_comments_show() {
+        let mut t = Graphic::ticker("Ticker", "Next week: live from the studio\nFollow us @show", "Coming up");
+        t.fade_ms = 0;
+        t.speed = 6.0;
+        let g = Graphics::new(&[t], (1280, 720), Timers::new());
+        g.set_visible(0, true);
+        let now = clock::now();
+        let a = g.layers(now);
+        assert_eq!(a.len(), 2, "the band and its moving text");
+        let (band, text) = (&a[0], &a[1]);
+        assert_eq!(band.uv, FULL_UV);
+        assert!(text.rect[0] > 0.05, "text starts right of the label: {}", text.rect[0]);
+        assert!((text.rect[0] + text.rect[2] - 1.0).abs() < 1e-3, "and runs to the band's end");
+        // Half a second later it has moved (and the picture is the same).
+        let b = g.layers(now + 500_000_000);
+        assert_eq!(b[1].key, text.key, "no redraw to move");
+        let moved_px = (b[1].uv[0] - text.uv[0]).rem_euclid(1.0) * text.image.width() as f32;
+        assert!((moved_px - 64.0).abs() < 2.0 || moved_px > text.image.width() as f32 / 2.0, "6 widths a minute is 64 px in half a second: {moved_px}");
+        assert!(text.uv[2] <= 1.0 + 1e-4, "never past the strip's end");
+        // New text redraws the strip.
+        g.set_ticker_text(0, "Breaking");
+        assert_ne!(g.layers(now)[1].key, text.key);
+
+        // A comment fades in, then out.
+        let style = crate::config::CommentsConfig { fade_ms: 0, ..Default::default() };
+        g.set_comment(Some(&Comment { author: "viewer42".into(), text: "Loving the show! Where did you get that microphone?".into(), color: "#ff5500".into() }), &style);
+        assert!(g.comment_showing());
+        let l = g.layers(clock::now());
+        let c = l.iter().find(|l| l.key.0 == COMMENT_KEY).expect("the comment");
+        assert!(c.image.pixels().filter(|p| p[0] > 200 && p[1] < 120).count() > 50, "the name in its colour");
+        g.set_comment(None, &style);
+        assert!(!g.comment_showing());
+        assert!(g.layers(clock::now()).iter().all(|l| l.key.0 != COMMENT_KEY));
     }
 }

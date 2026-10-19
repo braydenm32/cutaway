@@ -919,11 +919,15 @@ impl Compositor {
             let alpha = if l.stream_only { l.alpha * (1.0 - black) } else { l.alpha };
             for (buf, target_w) in [(&g.program.0, self.canvas.width), (&g.preview.0, self.preview.0.width)] {
                 let dst = ((w * target_w as f32).max(1.0) as u32, (h * target_w as f32 * self.canvas.height as f32 / self.canvas.width as f32).max(1.0) as u32);
-                let (taps, foot) = reduction(g.size, dst);
+                // Only part of the picture may be shown (a ticker's text).
+                let (uw, vh) = ((l.uv[2] - l.uv[0]).abs().max(1e-4), (l.uv[3] - l.uv[1]).abs().max(1e-4));
+                let win = (((g.size.0 as f32 * uw) as u32).max(1), ((g.size.1 as f32 * vh) as u32).max(1));
+                let (taps, foot) = reduction(win, dst);
+                let foot = [foot[0] * uw, foot[1] * vh];
                 let q = Quad {
                     rect: [x * 2.0 - 1.0, 1.0 - y * 2.0, (x + w) * 2.0 - 1.0, 1.0 - (y + h) * 2.0],
                     params: [alpha, taps, foot[0], foot[1]],
-                    uv: [0.0, 0.0, 1.0, 1.0],
+                    uv: l.uv,
                     ..Default::default()
                 };
                 self.queue.write_buffer(buf, 0, bytemuck::bytes_of(&q));
@@ -1719,13 +1723,13 @@ mod tests {
 
         // A graphic on top, and the preview bus showing another scene.
         let img = image::RgbaImage::from_pixel(32, 16, image::Rgba([255, 0, 255, 255]));
-        let g = GraphicLayer { key: (0, 1), image: Arc::new(img), rect: [0.5, 0.5, 0.25, 0.25], alpha: 1.0, stream_only: false };
+        let g = GraphicLayer { key: (0, 1), image: Arc::new(img), rect: [0.5, 0.5, 0.25, 0.25], alpha: 1.0, stream_only: false, uv: [0.0, 0.0, 1.0, 1.0] };
         let wants = Wants { preview: true, preview_bus: true, ..Default::default() };
         let r = c.render(&Layout::One(vec![full, hidden]), Some(&[hidden, full_b]), std::slice::from_ref(&g), 0, 9, &wants).unwrap();
         assert!(near(rgb(&r, 200, 110), [255, 0, 255]), "graphic: {:?}", rgb(&r, 200, 110));
         // A stream-only graphic (captions): on the stream, not the program.
         let green = image::RgbaImage::from_pixel(32, 16, image::Rgba([0, 255, 0, 255]));
-        let cap = GraphicLayer { key: (9, 1), image: Arc::new(green), rect: [0.0, 0.0, 0.25, 0.25], alpha: 1.0, stream_only: true };
+        let cap = GraphicLayer { key: (9, 1), image: Arc::new(green), rect: [0.0, 0.0, 0.25, 0.25], alpha: 1.0, stream_only: true, uv: [0.0, 0.0, 1.0, 1.0] };
         let wants2 = Wants { program: true, stream: Some((160, 90)), ..Default::default() };
         let r2 = c.render(&Layout::One(vec![full, hidden]), None, std::slice::from_ref(&cap), 0, 10, &wants2).unwrap();
         let luma = |f: &VideoFrame, x: usize, y: usize| f.pixels.with_planes(|p| p.y[y * p.y_stride + x]);

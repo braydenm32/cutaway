@@ -3,6 +3,7 @@
 pub mod rtmp;
 pub mod rtmp_server;
 pub mod srt;
+pub mod chat;
 pub mod tunnel;
 
 #[cfg(all(test, not(target_os = "macos")))]

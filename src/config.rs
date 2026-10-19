@@ -42,6 +42,10 @@ pub struct Config {
     pub macros: Vec<Macro>,
     /// Instant replay.
     pub replay: ReplayConfig,
+    /// The teleprompter.
+    pub prompter: PrompterConfig,
+    /// Viewer comments from the live chat, shown on screen.
+    pub comments: CommentsConfig,
 }
 
 /// Syrinscape Online: moods and sounds started from Cutaway's buttons,
@@ -1377,6 +1381,9 @@ pub enum GraphicKind {
     Title,
     /// A clock, countdown or stopwatch.
     Clock,
+    /// A band with scrolling text (`title`: the items, one per line;
+    /// `subtitle`: a label at the left, "" for none).
+    Ticker,
 }
 
 /// What a clock graphic shows.
@@ -1445,6 +1452,8 @@ pub struct Graphic {
     pub seconds: u32,
     pub clock_24h: bool,
     pub show_seconds: bool,
+    /// Tickers: how fast the text moves, in picture widths per minute.
+    pub speed: f32,
 }
 
 impl Default for Graphic {
@@ -1470,6 +1479,7 @@ impl Default for Graphic {
             seconds: 300,
             clock_24h: false,
             show_seconds: false,
+            speed: 6.0,
         }
     }
 }
@@ -1481,6 +1491,10 @@ impl Graphic {
 
     pub fn clock(name: &str, clock: ClockKind, label: &str) -> Graphic {
         Graphic { name: name.into(), kind: GraphicKind::Clock, clock, title: label.into(), x: 0.80, y: 0.05, width: 0.15, ..Default::default() }
+    }
+
+    pub fn ticker(name: &str, text: &str, label: &str) -> Graphic {
+        Graphic { name: name.into(), kind: GraphicKind::Ticker, title: text.into(), subtitle: label.into(), x: 0.0, y: 0.92, width: 1.0, box_opacity: 0.85, ..Default::default() }
     }
 }
 
@@ -1580,6 +1594,8 @@ pub enum DisplayOutput {
     Off,
     Program,
     Multiview,
+    /// The teleprompter's script.
+    Prompter,
 }
 
 /// A second window for another screen, projector or TV.
@@ -1952,5 +1968,77 @@ pub struct ReplayConfig {
 impl Default for ReplayConfig {
     fn default() -> Self {
         ReplayConfig { seconds: 8.0, slow_speed: 0.5, label: true }
+    }
+}
+
+/// The teleprompter: a script scrolling for the presenters, on the second
+/// screen or a tablet.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct PrompterConfig {
+    /// The script ("" with `use_rundown`: the rundown's segment notes).
+    pub script: String,
+    /// Use the rundown's segment names and notes as the script, and jump to
+    /// each segment as the rundown moves on.
+    pub use_rundown: bool,
+    /// Reading speed, in words per minute.
+    pub words_per_minute: f32,
+    /// Text height as a fraction of the screen's height.
+    pub text_size: f32,
+    /// Flipped left to right, for prompter glass.
+    pub mirror: bool,
+    pub text_color: String,
+    pub background: String,
+}
+
+impl Default for PrompterConfig {
+    fn default() -> Self {
+        PrompterConfig { script: String::new(), use_rundown: false, words_per_minute: 140.0, text_size: 0.075, mirror: false, text_color: "#ffffff".into(), background: "#000000".into() }
+    }
+}
+
+/// Viewer comments from a live chat, picked and shown on screen.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct CommentsConfig {
+    /// A Twitch channel to read the chat of ("" = none).
+    pub twitch_channel: String,
+    /// A YouTube live stream (its address or video ID; "" = none).
+    pub youtube: String,
+    /// A YouTube Data API key (free, from Google Cloud) to read its chat.
+    pub youtube_api_key: String,
+    /// Where the comment goes, as fractions of the picture.
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub text_color: String,
+    pub box_color: String,
+    pub box_opacity: f32,
+    pub fade_ms: u32,
+    /// Hide a comment after this long (0 = until hidden).
+    pub hide_after_s: u32,
+}
+
+impl Default for CommentsConfig {
+    fn default() -> Self {
+        CommentsConfig {
+            twitch_channel: String::new(),
+            youtube: String::new(),
+            youtube_api_key: String::new(),
+            x: 0.05,
+            y: 0.62,
+            width: 0.42,
+            text_color: "#ffffff".into(),
+            box_color: "#1b1f2a".into(),
+            box_opacity: 0.9,
+            fade_ms: 300,
+            hide_after_s: 0,
+        }
+    }
+}
+
+impl CommentsConfig {
+    pub fn enabled(&self) -> bool {
+        !self.twitch_channel.trim().is_empty() || (!self.youtube.trim().is_empty() && !self.youtube_api_key.trim().is_empty())
     }
 }

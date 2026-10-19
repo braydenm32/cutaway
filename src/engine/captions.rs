@@ -6,7 +6,7 @@
 //! request's final result gives each word's time, which becomes cues on the
 //! program clock (the same clock as every file).
 
-use super::graphics::GraphicLayer;
+use super::graphics::{GraphicLayer, FULL_UV};
 use super::text::{ascent, draw_text, system_fonts, text_width, wrap};
 use super::{LogLevel, Status, Waker};
 use crate::config::{CaptionPlace, CaptionsConfig};
@@ -238,7 +238,7 @@ impl Captions {
         let on_recording = self.shared.style.lock().unwrap().on_recording;
         let image = self.shared.image.lock().unwrap();
         let (version, img, rect) = image.as_ref()?;
-        Some(GraphicLayer { key: (CAPTION_KEY, *version), image: img.clone(), rect: *rect, alpha: 1.0, stream_only: !on_recording })
+        Some(GraphicLayer { key: (CAPTION_KEY, *version), image: img.clone(), rect: *rect, alpha: 1.0, stream_only: !on_recording, uv: FULL_UV })
     }
 
     /// Final cues overlapping [from, to].
