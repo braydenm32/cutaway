@@ -114,6 +114,40 @@
     </select></div></div>
     <div class="hint">Green when the guest is on, with the name they gave; the border shows the tally.</div>
   </div>
+  <div data-for="ftb">
+    <div class="hint">Fades the program's picture and sound to black, and back up (Settings → Switching sets how long). Red while black.</div>
+  </div>
+  <div data-for="replay">
+    <div class="row"><label for="rslow">Slow motion</label><div class="field"><input type="checkbox" id="rslow" data-setting="slow" data-default="false"></div></div>
+    <div class="hint">Plays the last few seconds of the program again, over it, while recording (Settings → Switching sets how long). Press again to stop.</div>
+  </div>
+  <div data-for="macro">
+    <div class="row"><label for="mmacro">Macro</label><div class="field"><select id="mmacro" data-setting="macro" data-list="macros"></select></div></div>
+    <div class="hint">Macros are made in Cutaway (Settings → Macros): several commands, with waits between, from one press.</div>
+  </div>
+  <div data-for="ptz">
+    <div class="row"><label for="pcam">Camera</label><div class="field"><select id="pcam" data-setting="camera" data-list="ptz"></select></div></div>
+    <div class="row"><label for="pbutton">Button</label><div class="field"><select id="pbutton" data-setting="button">
+      <option value="preset">Go to a preset</option><option value="home">Home</option><option value="left">Pan left (while held)</option><option value="right">Pan right (while held)</option>
+      <option value="up">Tilt up (while held)</option><option value="down">Tilt down (while held)</option><option value="in">Zoom in (while held)</option><option value="out">Zoom out (while held)</option>
+    </select></div></div>
+    <div class="row"><label for="ppreset">Preset</label><div class="field"><input type="text" id="ppreset" data-setting="preset" placeholder="1"></div></div>
+    <div class="row"><label for="pspeed">Speed</label><div class="field"><select id="pspeed" data-setting="speed">
+      <option value="0.25">Slow</option><option value="0.5" selected>Medium</option><option value="1">Fast</option>
+    </select></div></div>
+    <div class="hint">A PTZ camera or a virtual one (Settings → Video sources). The border shows the camera's tally.</div>
+  </div>
+  <div data-for="prompter">
+    <div class="row"><label for="prbutton">Button</label><div class="field"><select id="prbutton" data-setting="button">
+      <option value="toggle">Roll / pause</option><option value="faster">Faster</option><option value="slower">Slower</option><option value="back">Back a paragraph</option><option value="forward">Forward a paragraph</option><option value="top">Back to the top</option>
+    </select></div></div>
+  </div>
+  <div data-for="comment">
+    <div class="row"><label for="cbutton">Button</label><div class="field"><select id="cbutton" data-setting="button">
+      <option value="toggle">Show the next / hide</option><option value="next">Show the next</option><option value="hide">Hide</option>
+    </select></div></div>
+    <div class="hint">Comments from your Twitch or YouTube chat (Settings → Viewer comments), oldest first.</div>
+  </div>
   <div data-for="command">
     <div class="row"><label for="command">Command</label><div class="field"><input type="text" id="command" data-setting="command" placeholder="e.g. preview:2"></div></div>
     <div class="row"><label for="clabel">Label</label><div class="field"><input type="text" id="clabel" data-setting="label" placeholder="shown on the key"></div></div>

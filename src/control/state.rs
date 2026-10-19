@@ -51,6 +51,29 @@ pub struct ShowState {
     pub macros: Vec<MacroInfo>,
     /// The teleprompter (when it has a script).
     pub prompter: Option<PrompterState>,
+    /// An instant replay is on.
+    pub replaying: bool,
+    /// PTZ cameras (real and virtual) and their presets.
+    pub ptz: Vec<PtzState>,
+    /// Viewer comments, while they're on.
+    pub comments: Option<CommentsState>,
+}
+
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+pub struct PtzState {
+    /// The camera's source name.
+    pub name: String,
+    /// Its source number (from 1).
+    pub source: usize,
+    pub presets: Vec<String>,
+}
+
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+pub struct CommentsState {
+    /// One is on screen.
+    pub showing: bool,
+    /// Comments not shown yet.
+    pub waiting: usize,
 }
 
 #[derive(Serialize, Clone, Debug, Default, PartialEq)]

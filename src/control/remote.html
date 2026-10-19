@@ -55,6 +55,9 @@
   .segment .big { font-size:30px; font-weight:700; font-variant-numeric:tabular-nums; float:right; }
   .segment .big.over { color:var(--red); }
   .clock.running { background:#1e7a45; border-color:var(--green); }
+  .ftb.on { background:#000; border-color:var(--red); color:var(--red); font-weight:700; }
+  .replay.on { background:var(--red); border-color:var(--red); }
+  .macro { min-height:56px; text-align:left; border-left-width:6px; }
 </style>
 </head>
 <body>
@@ -64,6 +67,8 @@
   <button class="pill live" id="live" onclick="act('live')">◉ GO LIVE</button>
   <button id="marker" onclick="act('marker')">＋ Marker</button>
   <button id="clip" onclick="act('clip')">✂ Clip</button>
+  <button class="replay" id="replay" onclick="act('replay')">⟲ Replay</button>
+  <button class="ftb" id="ftb" onclick="act('ftb')">FTB</button>
 </header>
 <div class="status" id="status"></div>
 <div class="monitor"><img id="program" alt=""><div class="tag">PROGRAM</div><div class="name" id="pname"></div><div class="cc" id="cc"></div></div>
@@ -78,6 +83,10 @@
 <h2>Switching</h2>
 <div class="row" id="switching"></div>
 <div id="gfxwrap"><h2>Graphics</h2><div class="grid" id="graphics"></div></div>
+<div id="macrowrap"><h2>Macros</h2><div class="grid" id="macros"></div></div>
+<div id="ptzwrap"><h2>PTZ</h2><div id="ptz"></div></div>
+<div id="prompterwrap"><h2>Teleprompter</h2><div class="row" id="prompter"></div></div>
+<div id="commentwrap"><h2>Viewer comments</h2><div class="row" id="comments"></div></div>
 <div id="clockwrap"><h2>Timers</h2><div id="clocks"></div></div>
 <div id="soundwrap"><h2>Sound</h2><div class="grid" id="pads"></div>
   <div class="row" id="syrin" style="margin-top:8px"></div>
@@ -213,6 +222,56 @@ function render() {
              el('button', '', '⟲ Restart', () => act('media:' + p.name + ':restart')), el('button', '', '⏭', () => act('media:' + p.name + ':next')));
     md.append(r);
   });
+  // Replay (while recording) and fade to black.
+  const rp = document.getElementById('replay');
+  rp.style.display = s.recording || s.replaying ? '' : 'none';
+  rp.className = 'replay' + (s.replaying ? ' on' : '');
+  rp.textContent = s.replaying ? '■ Stop replay' : '⟲ Replay';
+  rp.onclick = () => act(s.replaying ? 'replay:stop' : 'replay');
+  const fb = document.getElementById('ftb');
+  fb.className = 'ftb' + (s.black ? ' on' : '');
+  fb.textContent = s.black ? 'BLACK' : 'FTB';
+  // Macros.
+  const mac = s.macros || [];
+  document.getElementById('macrowrap').style.display = mac.length ? '' : 'none';
+  const mc = document.getElementById('macros'); mc.innerHTML = '';
+  mac.forEach((m, i) => { const b = el('button', 'macro', m.name, () => act('macro:' + (i + 1))); b.style.borderLeftColor = m.color; mc.append(b); });
+  // PTZ: presets, home, and a nudge.
+  const cams = s.ptz || [];
+  document.getElementById('ptzwrap').style.display = cams.length ? '' : 'none';
+  const pz = document.getElementById('ptz'); pz.innerHTML = '';
+  cams.forEach(c => {
+    const r = el('div', 'row'); r.style.marginBottom = '8px';
+    r.append(el('div', '', c.name)); r.firstChild.style.cssText = 'flex-basis:100%;color:var(--dim);font-size:13px';
+    c.presets.forEach((p, k) => r.append(el('button', '', p, () => act('ptz:' + c.source + ':preset:' + (k + 1)))));
+    r.append(el('button', '', '⌂ Home', () => act('ptz:' + c.source + ':home')));
+    [['◀', 'left'], ['▲', 'up'], ['▼', 'down'], ['▶', 'right'], ['＋', 'in'], ['－', 'out']].forEach(([label, dir]) => {
+      const b = el('button', '', label); b.style.touchAction = 'none';
+      b.onpointerdown = e => { e.preventDefault(); hold('ptz:' + c.source + ':' + dir + ':0.5', 'ptz:' + c.source + ':stop'); };
+      r.append(b);
+    });
+    pz.append(r);
+  });
+  // Teleprompter.
+  const pr = s.prompter;
+  document.getElementById('prompterwrap').style.display = pr ? '' : 'none';
+  const pc = document.getElementById('prompter'); pc.innerHTML = '';
+  if (pr) {
+    pc.append(el('button', '', '⏮', () => act('prompter:top')), el('button', '', '◀', () => act('prompter:back')),
+              el('button', 'toggle' + (pr.playing ? ' on' : ''), pr.playing ? '⏸ Pause' : '▶ Roll', () => act('prompter:toggle')),
+              el('button', '', '▶▶', () => act('prompter:forward')), el('button', '', '−', () => act('prompter:slower')),
+              el('div', '', Math.round(pr.words_per_minute) + ' wpm'), el('button', '', '＋', () => act('prompter:faster')));
+    const a = el('a', '', 'Open the prompter on this device'); a.href = '/prompter' + (pin ? '?pin=' + encodeURIComponent(pin) : ''); a.style.cssText = 'flex-basis:100%;margin-top:4px';
+    pc.append(a);
+  }
+  // Viewer comments.
+  const cm = s.comments;
+  document.getElementById('commentwrap').style.display = cm ? '' : 'none';
+  const cr = document.getElementById('comments'); cr.innerHTML = '';
+  if (cm) {
+    cr.append(el('button', '', 'Show next' + (cm.waiting ? ' (' + cm.waiting + ' waiting)' : ''), () => act('comment:next')));
+    if (cm.showing) cr.append(el('button', 'toggle on', 'Hide', () => act('comment:hide')));
+  }
   const t = document.getElementById('tallies'); t.innerHTML = '';
   s.sources.forEach((src, i) => { const a = el('a', '', src.name); a.href = '/?tally=' + (i + 1) + (pin ? '&pin=' + encodeURIComponent(pin) : ''); a.style.marginRight = '14px'; t.append(a); });
 }

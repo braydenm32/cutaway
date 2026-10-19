@@ -2,9 +2,9 @@
   "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
   "UUID": "app.cutaway.streamdeck",
   "Name": "Cutaway",
-  "Version": "0.6.0.0",
+  "Version": "0.7.0.0",
   "Author": "Cutaway",
-  "Description": "Run Cutaway from your Stream Deck: scenes and sources with live pictures and tally colours, take and cut, transitions, record, go live, markers, graphics, audio inputs (with Stream Deck+ dials), auto-switching, captions, media players, sound pads, Syrinscape, talkback, instant clips, timers, the rundown, remote guests and any Cutaway command.",
+  "Description": "Run Cutaway from your Stream Deck: scenes and sources with live pictures and tally colours, take and cut, transitions, record, go live, markers, graphics, audio inputs (with Stream Deck+ dials), auto-switching, captions, media players, sound pads, Syrinscape, talkback, instant clips, timers, the rundown, remote guests, fade to black, instant replay, macros, PTZ cameras, the teleprompter, viewer comments and any Cutaway command.",
   "Category": "Cutaway",
   "CategoryIcon": "imgs/plugin/category",
   "Icon": "imgs/plugin/marketplace",
@@ -302,6 +302,90 @@
       "States": [
         {
           "Image": "imgs/actions/guest/key"
+        }
+      ]
+    },
+    {
+      "UUID": "app.cutaway.streamdeck.ftb",
+      "Name": "Fade to Black",
+      "Tooltip": "Fade the program (picture and sound) to black, and back up; lit while black.",
+      "Icon": "imgs/actions/ftb/icon",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/ftb/key"
+        }
+      ]
+    },
+    {
+      "UUID": "app.cutaway.streamdeck.replay",
+      "Name": "Instant Replay",
+      "Tooltip": "Play the last few seconds again (in slow motion if you like) while recording; press again to stop.",
+      "Icon": "imgs/actions/replay/icon",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/replay/key"
+        }
+      ]
+    },
+    {
+      "UUID": "app.cutaway.streamdeck.macro",
+      "Name": "Macro",
+      "Tooltip": "Run one of Cutaway's macros: several commands with one press.",
+      "Icon": "imgs/actions/macro/icon",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/macro/key"
+        }
+      ]
+    },
+    {
+      "UUID": "app.cutaway.streamdeck.ptz",
+      "Name": "PTZ Camera",
+      "Tooltip": "Recall a PTZ preset, go home, or move while held (real or virtual PTZ cameras).",
+      "Icon": "imgs/actions/ptz/icon",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/ptz/key"
+        }
+      ]
+    },
+    {
+      "UUID": "app.cutaway.streamdeck.prompter",
+      "Name": "Teleprompter",
+      "Tooltip": "Roll or pause the script, change speed, or jump back and forward.",
+      "Icon": "imgs/actions/prompter/icon",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/prompter/key"
+        }
+      ]
+    },
+    {
+      "UUID": "app.cutaway.streamdeck.comment",
+      "Name": "Viewer Comment",
+      "Tooltip": "Show the next comment from the live chat on screen, or hide it.",
+      "Icon": "imgs/actions/comment/icon",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/comment/key"
         }
       ]
     },

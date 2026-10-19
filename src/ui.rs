@@ -885,6 +885,20 @@ impl App {
                 background: self.cfg.prompter.background.clone(),
             }),
             macros: self.cfg.macros.iter().map(|m| show::MacroInfo { name: m.name.clone(), color: m.color.clone() }).collect(),
+            replaying: e.replay.playing(),
+            ptz: self
+                .cfg
+                .sources
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| s.has_ptz())
+                .map(|(i, s)| show::PtzState {
+                    name: s.name.clone(),
+                    source: i + 1,
+                    presets: s.ptz.presets.iter().enumerate().map(|(k, p)| if p.name.trim().is_empty() { format!("Preset {}", k + 1) } else { p.name.clone() }).collect(),
+                })
+                .collect(),
+            comments: self.chat.as_ref().map(|c| show::CommentsState { showing: self.comment_on.is_some(), waiting: c.messages().iter().filter(|m| m.id > self.comment_cursor).count() }),
             guests: if self.cfg.guests.enabled {
                 crate::engine::guests::hub()
                     .guests()

@@ -281,6 +281,51 @@ function check(ok, what) {
     key("keyUp", "k-rec", "record");
     await until("recording to stop", async () => !(await state()).recording, 8000);
 
+    // Fade to black, macros, the teleprompter, PTZ and comments (when the show has them).
+    appear("k-ftb", "ftb", {});
+    key("keyDown", "k-ftb", "ftb");
+    key("keyUp", "k-ftb", "ftb");
+    await until("black", async () => (await state()).black, 8000);
+    await until("the FTB key to say so", () => {
+      const m = last("setImage", "k-ftb");
+      return m && decodeURIComponent(m.payload.image).includes("BLACK");
+    });
+    check(true, "fade-to-black key fades to black, and shows it");
+    key("keyDown", "k-ftb", "ftb");
+    key("keyUp", "k-ftb", "ftb");
+    await until("back up", async () => !(await state()).black, 8000);
+    const sz = await state();
+    if ((sz.macros || []).length) {
+      appear("k-macro", "macro", { macro: "1" });
+      const m = await until("the macro key", () => last("setImage", "k-macro"));
+      check(decodeURIComponent(m.payload.image).includes(sz.macros[0].name.slice(0, 9)), `macro key shows "${sz.macros[0].name}"`);
+    }
+    if (sz.prompter) {
+      appear("k-prompter", "prompter", { button: "toggle" });
+      const was = sz.prompter.playing;
+      key("keyDown", "k-prompter", "prompter", { settings: { button: "toggle" } });
+      key("keyUp", "k-prompter", "prompter", { settings: { button: "toggle" } });
+      await until("the prompter to roll", async () => (await state()).prompter.playing !== was);
+      check(true, "prompter key rolls the script");
+      key("keyDown", "k-prompter", "prompter", { settings: { button: "toggle" } });
+      key("keyUp", "k-prompter", "prompter", { settings: { button: "toggle" } });
+      await until("the prompter to pause", async () => (await state()).prompter.playing === was);
+    }
+    if ((sz.ptz || []).length) {
+      appear("k-ptz", "ptz", { camera: "1", button: "preset", preset: "1" });
+      received.length = 0;
+      key("keyDown", "k-ptz", "ptz", { settings: { camera: "1", button: "preset", preset: "1" } });
+      key("keyUp", "k-ptz", "ptz", { settings: { camera: "1", button: "preset", preset: "1" } });
+      await sleep(500);
+      check(!last("showAlert", "k-ptz"), `PTZ key recalls a preset on "${sz.ptz[0].name}"`);
+      const m = last("setImage", "k-ptz") || (await until("the PTZ key", () => last("setImage", "k-ptz")));
+      check(decodeURIComponent(m.payload.image).includes(sz.ptz[0].presets[0] || "Preset 1"), "PTZ key shows the preset");
+    }
+    received.length = 0;
+    appear("k-comment", "comment", { button: "toggle" });
+    const cm = await until("the comment key", () => last("setImage", "k-comment"));
+    check(decodeURIComponent(cm.payload.image).includes(sz.comments ? "SHOW" : "chat off"), "comment key shows the chat's state");
+
     // Save every key's picture, to look at (DUMP_DIR=folder).
     if (process.env.DUMP_DIR) {
       const fs = require("fs");
@@ -309,7 +354,14 @@ function check(ok, what) {
       key("keyUp", "k-pad", "pad", { settings: { pad: "2" } });
       await until("recording", async () => (await state()).recording, 8000);
       await sleep(600);
-      for (const ctx of ["k-scene", "k-source", "k-take", "k-transition", "k-rec", "k-live", "k-marker", "k-graphic", "k-audio", "k-auto", "k-captions", "k-media", "k-command", "k-pad", "k-syrin", "k-talk", "k-clip", "k-timer", "k-rundown"]) {
+      appear("k-replay", "replay", { slow: true });
+      appear("k-ftb", "ftb", {});
+      appear("k-macro", "macro", { macro: "1" });
+      appear("k-ptz", "ptz", { camera: "1", button: "preset", preset: "1" });
+      appear("k-prompter", "prompter", { button: "toggle" });
+      appear("k-comment", "comment", { button: "toggle" });
+      await sleep(600);
+      for (const ctx of ["k-scene", "k-source", "k-take", "k-transition", "k-rec", "k-live", "k-marker", "k-graphic", "k-audio", "k-auto", "k-captions", "k-media", "k-command", "k-pad", "k-syrin", "k-talk", "k-clip", "k-timer", "k-rundown", "k-ftb", "k-replay", "k-macro", "k-ptz", "k-prompter", "k-comment"]) {
         const m = last("setImage", ctx);
         if (!m) continue;
         const [head, data] = m.payload.image.split(",");

@@ -4,7 +4,8 @@
 // and tally colours, take/cut, transitions, record, go live, markers,
 // graphics, audio inputs (Stream Deck+ dials too), auto-switching,
 // captions, media players, sound pads, Syrinscape, talkback, clips,
-// timers, the rundown and any Cutaway command.
+// timers, the rundown, guests, fade to black, instant replay, macros, PTZ
+// cameras, the teleprompter, viewer comments and any Cutaway command.
 //
 // No dependencies: this speaks the Stream Deck plugin protocol and
 // Cutaway's remote-control API (WebSocket + HTTP) itself, with the small
@@ -496,9 +497,50 @@ function press(ctx) {
       else run(ctx, `${(s.press || "source") === "preview" ? "preview" : "source"}:${g.source}`);
       break;
     }
+    case "ftb":
+      run(ctx, "ftb");
+      break;
+    case "replay":
+      if (st && st.replaying) run(ctx, "replay:stop");
+      else if (!st || !st.recording) sdSend({ event: "showAlert", context: ctx });
+      else run(ctx, s.slow ? "replay:slow" : "replay");
+      break;
+    case "macro":
+      run(ctx, `macro:${target(s.macro)}`);
+      break;
+    case "ptz": {
+      const cam = ptzOf(s.camera);
+      if (!cam) {
+        sdSend({ event: "showAlert", context: ctx });
+        break;
+      }
+      const button = s.button || "preset";
+      if (button === "preset") run(ctx, `ptz:${cam.source}:preset:${Math.max(1, Math.round(Number(s.preset) || 1))}`);
+      else if (button === "home") run(ctx, `ptz:${cam.source}:home`);
+      else {
+        // Moves while held.
+        run(ctx, `ptz:${cam.source}:${button}:${s.speed || "0.5"}`);
+        k.down = `ptz:${cam.source}:stop`;
+      }
+      break;
+    }
+    case "prompter":
+      if (!st || !st.prompter) sdSend({ event: "showAlert", context: ctx });
+      else run(ctx, `prompter:${s.button || "toggle"}`);
+      break;
+    case "comment":
+      if (!st || !st.comments) sdSend({ event: "showAlert", context: ctx });
+      else run(ctx, `comment:${s.button || "toggle"}`);
+      break;
     default:
       break;
   }
+}
+
+/** A PTZ camera setting ("1" = the first PTZ camera, or a name). */
+function ptzOf(v) {
+  const cams = (cutaway.state && cutaway.state.ptz) || [];
+  return cams[indexIn(cams, v)];
 }
 
 /** A clock graphic setting ("2" = the second timer, or a name) as its name. */
@@ -629,6 +671,12 @@ function offline(k) {
     timer: "Timer",
     rundown: "Rundown",
     guest: "Guest",
+    ftb: "FTB",
+    replay: "Replay",
+    macro: "Macro",
+    ptz: "PTZ",
+    prompter: "Prompter",
+    comment: "Comment",
   };
   return svg(label(names[k.kind] || "Cutaway", 66, 22, C.dim) + label("not connected", 96, 15, C.amber, 400));
 }
@@ -785,6 +833,51 @@ function draw(k) {
       const dot = `<circle cx="72" cy="48" r="14" fill="${g.connected ? C.green : g.connecting ? C.amber : C.raised}"/>`;
       return { image: svg(dot + label(fit(g.name, 11), 92, 19) + label(status, 120, 15, g.connected ? C.text : C.dim, 400), { border }), tally };
     }
+    case "ftb":
+      return st.black
+        ? { image: svg(label("BLACK", 66, 30, C.red) + label("fade back up", 98, 15, C.text, 400), { bg: "#000000", border: C.red }) }
+        : { image: svg(label("FTB", 70, 34) + label("fade to black", 100, 15, C.dim, 400)) };
+    case "replay": {
+      if (st.replaying) return { image: svg(label("REPLAY", 66, 28) + label("press to stop", 98, 15, C.text, 400), { bg: C.red }) };
+      const c = st.recording ? C.text : C.dim;
+      const arrow = `<path d="M96 44 a26 26 0 1 0 6 26" fill="none" stroke="${c}" stroke-width="8" stroke-linecap="round"/><polygon points="88,28 112,40 92,56" fill="${c}"/>`;
+      return { image: svg(arrow + label(s.slow ? "SLOW-MO" : "REPLAY", 112, 18, c) + label(st.recording ? "" : "not recording", 130, 13, C.dim, 400)) };
+    }
+    case "macro": {
+      const m = (st.macros || [])[indexIn(st.macros, s.macro)];
+      if (!m) return { image: svg(label("Macro", 66, 22, C.dim) + label("no macro", 96, 14, C.amber, 400)) };
+      const color = /^#[0-9a-f]{6}$/i.test(m.color || "") ? m.color : C.accent;
+      return { image: svg(`<rect x="10" y="112" width="124" height="10" rx="5" fill="${color}"/>` + label(fit(m.name, 10), 66, 22) + label("macro", 94, 14, C.dim, 400), { border: color }) };
+    }
+    case "ptz": {
+      const cam = ptzOf(s.camera);
+      if (!cam) return { image: svg(label("PTZ", 66, 24, C.dim) + label("no PTZ camera", 96, 14, C.amber, 400)) };
+      const src = st.sources[cam.source - 1];
+      const tally = src ? src.tally : "off";
+      const border = tally === "program" ? C.red : tally === "preview" ? C.green : null;
+      const button = s.button || "preset";
+      const n = Math.max(1, Math.round(Number(s.preset) || 1));
+      const words = { preset: cam.presets[n - 1] || `Preset ${n}`, home: "⌂ home", left: "◀ left", right: "right ▶", up: "▲ up", down: "▼ down", in: "zoom in", out: "zoom out" };
+      return { image: svg(label(fit(cam.name, 11), 50, 16, C.dim, 400) + label(fit(words[button] || button, 10), 86, 22), { border }), tally };
+    }
+    case "prompter": {
+      const pr = st.prompter;
+      if (!pr) return { image: svg(label("Prompter", 66, 20, C.dim) + label("no script", 96, 14, C.amber, 400)) };
+      const button = s.button || "toggle";
+      if (button === "toggle") {
+        return { image: svg(label(pr.playing ? "ROLLING" : "PAUSED", 70, 24, pr.playing ? "#111111" : C.text) + label(`${Math.round(pr.words_per_minute)} wpm`, 100, 16, pr.playing ? "#111111" : C.dim, 400), { bg: pr.playing ? C.green : C.bg }) };
+      }
+      const words = { faster: "FASTER", slower: "SLOWER", top: "⏮ TOP", back: "◀ BACK", forward: "AHEAD ▶" };
+      return { image: svg(label(words[button] || button, 70, 22) + label(`${Math.round(pr.words_per_minute)} wpm`, 100, 15, C.dim, 400)) };
+    }
+    case "comment": {
+      const cm = st.comments;
+      if (!cm) return { image: svg(label("Comments", 66, 19, C.dim) + label("chat off", 96, 14, C.amber, 400)) };
+      const button = s.button || "toggle";
+      const hide = button === "hide" || (button === "toggle" && cm.showing);
+      const waiting = cm.waiting ? `${cm.waiting} waiting` : "none waiting";
+      return { image: svg(label(hide ? "HIDE" : "SHOW", 66, 28, cm.showing ? "#111111" : C.text) + label(hide ? "comment" : waiting, 98, 15, cm.showing ? "#111111" : C.dim, 400), { bg: cm.showing ? C.amber : C.bg }) };
+    }
     default:
       return { image: svg(label("Cutaway", 80, 20, C.dim)) };
   }
@@ -910,6 +1003,8 @@ function sendLists(ctx, action) {
       syrinscape: st ? (st.syrinscape || []).map((x) => x.name) : [],
       clocks: st ? (st.clocks || []).filter((x) => x.timer).map((x) => x.name) : [],
       guests: st ? (st.guests || []).map((x) => x.name) : [],
+      macros: st ? (st.macros || []).map((x) => x.name) : [],
+      ptz: st ? (st.ptz || []).map((x) => x.name) : [],
     },
   });
 }

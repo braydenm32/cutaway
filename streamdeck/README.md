@@ -36,6 +36,12 @@ dials and the Stream Deck app's virtual decks).
 | Clip | save the last few seconds as a clip | while recording; the length is Cutaway's setting or the key's own |
 | Timer | start/pause, reset, start, pause or stop a countdown or stopwatch | shows its time |
 | Guest | a remote guest spot: show them full screen or in preview | green with their name when they're on; the border shows the tally |
+| Fade to Black | fade the program (picture and sound) to black, and back | red "BLACK" while it's black |
+| Instant Replay | play the last few seconds again (slow motion if set) while recording | red while it plays; press again to stop |
+| Macro | run one of Cutaway's macros | the macro's colour and name |
+| PTZ Camera | go to a preset, home, or pan/tilt/zoom while held (real or virtual PTZ) | the preset's name; the border shows the camera's tally |
+| Teleprompter | roll/pause, faster, slower, back, forward, top | green while rolling, with the speed |
+| Viewer Comment | show the next chat comment, or hide it | amber while one's on screen, with how many are waiting |
 | Rundown | next segment, previous, or stop | the next key shows this segment's time left (red when over) and what's next |
 | Command | any Cutaway command | e.g. `preview:2`, `graphic:Logo:on`, `gain:Mic:-6` |
 
@@ -61,5 +67,6 @@ node test/mock-streamdeck.js 127.0.0.1:8790 1234       # end-to-end test against
 The test stands in for the Stream Deck app: it takes scene 2, starts a
 recording, checks a short press doesn't stop it but a held one does, turns a
 dial, plays a pad, talks back, steps the rundown, starts a timer, saves a
-clip, and checks the key pictures and the settings panel (the pad, talkback,
-rundown and timer checks run when the show has them).
+clip, fades to black and back, rolls the prompter, recalls a PTZ preset, and
+checks the key pictures and the settings panel (the pad, talkback, rundown,
+timer, macro, prompter and PTZ checks run when the show has them).

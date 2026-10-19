@@ -115,6 +115,31 @@ def glyph(d, kind, box, color, accent=None):
         d.ellipse([p(6.5, 2.5), p(13.5, 9.5)], fill=color)
         d.rounded_rectangle([p(4, 11), p(16, 18)], radius=3 * u, fill=color)
         d.ellipse([p(14.5, 1.5), p(18.5, 5.5)], fill=accent)
+    elif kind == "ftb":
+        d.rounded_rectangle([p(2, 4), p(18, 16)], radius=1.5 * u, outline=color, width=lw)
+        d.polygon([p(4, 14), p(16, 6), p(16, 14)], fill=color)
+    elif kind == "replay":
+        d.arc([p(3, 3), p(17, 17)], 60, 330, fill=color, width=lw)
+        d.polygon([p(15.5, 1.5), p(18.5, 7), p(12.5, 7.5)], fill=color)
+        d.polygon([p(8.5, 7), p(13.5, 10), p(8.5, 13)], fill=accent)
+    elif kind == "macro":
+        for i, y in enumerate((3.5, 8.5, 13.5)):
+            d.rounded_rectangle([p(2 + i * 1.5, y), p(12 + i * 1.5, y + 3)], radius=0.8 * u, fill=color)
+        d.polygon([p(14, 7), p(18.5, 10), p(14, 13)], fill=accent)
+    elif kind == "ptz":
+        d.rounded_rectangle([p(5, 3), p(15, 11)], radius=2 * u, fill=color)
+        d.ellipse([p(8, 5), p(12, 9)], fill=BG)
+        d.rounded_rectangle([p(8.5, 11), p(11.5, 15)], radius=0.6 * u, fill=color)
+        d.rounded_rectangle([p(4, 15), p(16, 17.5)], radius=1 * u, fill=color)
+    elif kind == "prompter":
+        d.rounded_rectangle([p(3, 2), p(17, 18)], radius=1.5 * u, outline=color, width=lw)
+        for y, w in ((6, 10), (9.5, 8), (13, 9)):
+            d.rounded_rectangle([p(5.5, y), p(5.5 + w, y + 1.6)], radius=0.6 * u, fill=color)
+    elif kind == "comment":
+        d.rounded_rectangle([p(2, 3), p(18, 13.5)], radius=2.5 * u, fill=color)
+        d.polygon([p(5, 13), p(10, 13), p(5, 17.5)], fill=color)
+        for x in (6.5, 10, 13.5):
+            d.ellipse([p(x - 1, 7.3), p(x + 1, 9.3)], fill=BG)
     elif kind == "logo":
         # A frame with a diagonal cut through it.
         d.rounded_rectangle([p(2, 4), p(18, 16)], radius=2 * u, outline=color, width=lw)
@@ -177,6 +202,12 @@ ACTIONS = {
     "timer": "Timer",
     "rundown": "Rundown",
     "guest": "Guest",
+    "ftb": "Fade",
+    "replay": "Replay",
+    "macro": "Macro",
+    "ptz": "PTZ",
+    "prompter": "Prompter",
+    "comment": "Comment",
     "command": "Command",
 }
 
