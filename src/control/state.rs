@@ -45,6 +45,17 @@ pub struct ShowState {
     pub rundown: Option<RundownState>,
     /// Remote guest spots.
     pub guests: Vec<GuestState>,
+    /// The program is faded (or fading) to black.
+    pub black: bool,
+    /// Macro buttons.
+    pub macros: Vec<MacroInfo>,
+}
+
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+pub struct MacroInfo {
+    pub name: String,
+    /// "#RRGGBB"
+    pub color: String,
 }
 
 #[derive(Serialize, Clone, Debug, Default, PartialEq)]

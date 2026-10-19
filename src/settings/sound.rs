@@ -9,7 +9,7 @@ fn pads_input() -> AudioConfig {
     AudioConfig { name: "Sound pads".into(), device: "pads".into(), channels: 2, program_left: 1, program_right: 2, record: true, ..Default::default() }
 }
 
-fn color_button(ui: &mut egui::Ui, value: &mut String, fallback: [u8; 3]) {
+pub(super) fn color_button(ui: &mut egui::Ui, value: &mut String, fallback: [u8; 3]) {
     let mut rgb = crate::config::parse_color(value).map(|c| [(c >> 16) as u8, (c >> 8) as u8, c as u8]).unwrap_or(fallback);
     if ui.color_edit_button_srgb(&mut rgb).changed() {
         *value = format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]);

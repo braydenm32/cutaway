@@ -97,6 +97,19 @@ impl SettingsUi {
             hint(ui, "Its sound plays through the Sound pads input (add one in Settings → Sound pads).");
         }
 
+        ui.add_space(14.0);
+        subtitle(ui, "Fade to black");
+        let t = &mut self.draft.transition;
+        egui::Grid::new("ftb").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            label(ui, "Length");
+            ui.add(egui::DragValue::new(&mut t.ftb_ms).range(0..=10_000).speed(20).suffix(" ms"));
+            ui.end_row();
+            label(ui, "Sound");
+            ui.checkbox(&mut t.ftb_audio, "the recording and stream fade with the picture (headphones and callers keep hearing)");
+            ui.end_row();
+        });
+        hint(ui, "FTB in the bottom bar (or ftb on the Stream Deck, MIDI or the remote) fades everything, graphics included, to black; press it again to come back.");
+
         ui.add_space(16.0);
         subtitle(ui, "Automatic switching");
         let scenes: Vec<String> = self.draft.effective_scenes().iter().map(|s| s.name.clone()).collect();

@@ -19,6 +19,7 @@ struct U {
     keyrgb: vec4<f32>, // key colour rgb, unused
     trans: vec4<f32>,  // kind (2 wipe, 3 push, 4 dip), progress 0..1, direction x, y
     dip: vec4<f32>,    // dip colour rgb, unused
+    lut: vec4<f32>,    // strength (0 = none), domain min, domain max, points
 };
 
 @group(0) @binding(0) var<uniform> u: U;
@@ -26,6 +27,7 @@ struct U {
 @group(0) @binding(2) var tex_a: texture_2d<f32>;
 @group(0) @binding(3) var tex_b: texture_2d<f32>;
 @group(0) @binding(4) var tex_mask: texture_2d<f32>;
+@group(0) @binding(5) var tex_lut: texture_3d<f32>;
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
@@ -83,6 +85,14 @@ fn fs_layer(in: VsOut) -> @location(0) vec4<f32> {
     let yy = textureSampleLevel(tex_a, samp, uv, 0.0).r;
     let cc = textureSampleLevel(tex_b, samp, uv, 0.0).rg;
     var rgb = yuv_to_rgb(yy, cc.r, cc.g);
+    // Colour LUT (a camera's log to Rec.709, or a look), sampled at the
+    // table's points.
+    if (u.lut.x > 0.0) {
+        let n = u.lut.w;
+        let p = clamp((rgb - vec3<f32>(u.lut.y)) / max(u.lut.z - u.lut.y, 1e-5), vec3<f32>(0.0), vec3<f32>(1.0));
+        let graded = textureSampleLevel(tex_lut, samp, p * ((n - 1.0) / n) + vec3<f32>(0.5 / n), 0.0).rgb;
+        rgb = mix(rgb, clamp(graded, vec3<f32>(0.0), vec3<f32>(1.0)), u.lut.x);
+    }
     var key_alpha = 1.0;
     if (u.key2.y > 0.5) {
         let dist = distance(cc, u.key.xy);

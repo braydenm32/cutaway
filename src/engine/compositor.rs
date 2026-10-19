@@ -36,6 +36,7 @@ struct Quad {
     keyrgb: [f32; 4],
     trans: [f32; 4],
     dip: [f32; 4],
+    lut: [f32; 4],
 }
 
 impl Quad {
@@ -52,6 +53,7 @@ struct LookGpu {
     key: [f32; 4],
     key2: [f32; 4],
     keyrgb: [f32; 4],
+    lut_strength: f32,
 }
 
 impl Default for LookGpu {
@@ -79,6 +81,7 @@ impl From<&SourceLook> for LookGpu {
             key: [cb, cr, l.key_similarity.clamp(0.0, 1.0) * 0.5, l.key_smoothness.clamp(0.0, 1.0) * 0.5],
             key2: [l.key_spill.clamp(0.0, 1.0), if l.chroma_key { 1.0 } else { 0.0 }, if l.remove_background { 1.0 } else { 0.0 }, 0.0],
             keyrgb: [k[0], k[1], k[2], 0.0],
+            lut_strength: if l.lut.is_some() { l.lut_strength.clamp(0.0, 1.0) } else { 0.0 },
         }
     }
 }
@@ -96,6 +99,15 @@ impl StyleGpu {
     fn from(s: &FrameStyle) -> Self {
         StyleGpu { radius: s.corner_radius.max(0.0), border: s.border_width.max(0.0), border_rgb: rgb01(&s.border_color, 0xffffff), shadow: s.shadow.clamp(0.0, 1.0) }
     }
+}
+
+/// A colour LUT on the GPU (a 3D texture), shared by a source's draws.
+struct LutGpu {
+    path: std::path::PathBuf,
+    _tex: wgpu::Texture,
+    view: wgpu::TextureView,
+    points: f32,
+    domain: [f32; 2],
 }
 
 /// Which copy of a source's uniforms a draw uses (a source can appear in
@@ -193,6 +205,8 @@ struct SourceGpu {
     /// capture time of the mask in it.
     mask: Option<(wgpu::Texture, (u32, u32))>,
     mask_pts: Option<Ns>,
+    /// Colour LUT, if the source has one.
+    lut: Option<Arc<LutGpu>>,
 }
 
 struct GraphicGpu {
@@ -242,6 +256,11 @@ pub struct Compositor {
     sampler: wgpu::Sampler,
     /// 1×1 white (no mask).
     white: wgpu::TextureView,
+    /// 1×1×1 (no LUT).
+    no_lut: wgpu::TextureView,
+    /// Fade to black: how far (0..1), and a black quad to draw it.
+    black: f32,
+    black_bind: (wgpu::Buffer, wgpu::BindGroup),
     yuv_pipe: wgpu::RenderPipeline,
     rgba_pipe: wgpu::RenderPipeline,
     out_y_pipe: wgpu::RenderPipeline,
@@ -351,6 +370,16 @@ impl Compositor {
                 tex_entry(2),
                 tex_entry(3),
                 tex_entry(4),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -417,9 +446,46 @@ impl Compositor {
                 &[255],
             )
             .create_view(&Default::default());
+        let no_lut = Self::tiny_3d(&device, &queue);
+        let black_tex = device.create_texture_with_data(
+            &queue,
+            &wgpu::TextureDescriptor {
+                label: Some("black"),
+                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: rgba,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &[0, 0, 0, 255],
+        );
+        let black_view = black_tex.create_view(&Default::default());
+        let black_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("black"),
+            contents: bytemuck::bytes_of(&Quad::full(0.0, 1.0, [0.0, 0.0])),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let black_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("black"),
+            layout: &layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: black_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&black_view) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&black_view) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&white) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&no_lut) },
+            ],
+        });
         let mut c = Compositor {
             program_out: NvOut::placeholder(&device),
-            preview: (Target::new(&device, "preview", 2, 2, rgba, 4), Self::dummy_bind(&device, &layout, &sampler)),
+            preview: (Target::new(&device, "preview", 2, 2, rgba, 4), Self::dummy_bind(&device, &queue, &layout, &sampler)),
+            black: 0.0,
+            black_bind: (black_buf, black_group),
+            no_lut,
             white,
             device,
             queue,
@@ -476,7 +542,27 @@ impl Compositor {
         Ok(c)
     }
 
-    fn dummy_bind(dev: &wgpu::Device, layout: &wgpu::BindGroupLayout, sampler: &wgpu::Sampler) -> wgpu::BindGroup {
+    /// A 1×1×1 3D texture (where a draw has no LUT).
+    fn tiny_3d(dev: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView {
+        dev.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("no lut"),
+                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D3,
+                format: wgpu::TextureFormat::Rgba16Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            bytemuck::cast_slice(&[0u16; 4]),
+        )
+        .create_view(&Default::default())
+    }
+
+    fn dummy_bind(dev: &wgpu::Device, queue: &wgpu::Queue, layout: &wgpu::BindGroupLayout, sampler: &wgpu::Sampler) -> wgpu::BindGroup {
         let tex = dev.create_texture(&wgpu::TextureDescriptor {
             label: None,
             size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
@@ -502,16 +588,17 @@ impl Compositor {
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&view) },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&view) },
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&Self::tiny_3d(dev, queue)) },
             ],
         })
     }
 
     fn bind(&self, quad: Quad, a: &wgpu::TextureView, b: &wgpu::TextureView) -> (wgpu::Buffer, wgpu::BindGroup) {
-        self.bind_mask(quad, a, b, &self.white)
+        self.bind_mask(quad, a, b, &self.white, &self.no_lut)
     }
 
-    /// Uniforms and textures for one draw, with a mask texture.
-    fn bind_mask(&self, quad: Quad, a: &wgpu::TextureView, b: &wgpu::TextureView, mask: &wgpu::TextureView) -> (wgpu::Buffer, wgpu::BindGroup) {
+    /// Uniforms and textures for one draw, with a mask and a LUT.
+    fn bind_mask(&self, quad: Quad, a: &wgpu::TextureView, b: &wgpu::TextureView, mask: &wgpu::TextureView, lut: &wgpu::TextureView) -> (wgpu::Buffer, wgpu::BindGroup) {
         let buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
             contents: bytemuck::bytes_of(&quad),
@@ -526,9 +613,51 @@ impl Compositor {
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(a) },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(b) },
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(mask) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(lut) },
             ],
         });
         (buf, bind)
+    }
+
+    /// A source's three uniform slots, with its mask and LUT (if any).
+    fn source_slots(&self, y: &wgpu::Texture, uv: &wgpu::Texture, mask: Option<&wgpu::Texture>, lut: Option<&LutGpu>) -> Vec<(wgpu::Buffer, wgpu::BindGroup)> {
+        let (yv, uvv) = (y.create_view(&Default::default()), uv.create_view(&Default::default()));
+        let mv = mask.map(|m| m.create_view(&Default::default()));
+        let mask_view = mv.as_ref().unwrap_or(&self.white);
+        let lut_view = lut.map(|l| &l.view).unwrap_or(&self.no_lut);
+        (0..3).map(|_| self.bind_mask(Quad::full(0.0, 1.0, [0.0, 0.0]), &yv, &uvv, mask_view, lut_view)).collect()
+    }
+
+    /// Load a .cube LUT onto the GPU.
+    fn load_lut(&self, path: &std::path::Path) -> Result<LutGpu> {
+        let lut = crate::media::cube::Lut3d::load(path)?;
+        let n = lut.size;
+        let tex = self.device.create_texture_with_data(
+            &self.queue,
+            &wgpu::TextureDescriptor {
+                label: Some("lut"),
+                size: wgpu::Extent3d { width: n, height: n, depth_or_array_layers: n },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D3,
+                format: wgpu::TextureFormat::Rgba16Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            bytemuck::cast_slice(&lut.rgba_f16()),
+        );
+        let view = tex.create_view(&Default::default());
+        Ok(LutGpu { path: path.to_path_buf(), _tex: tex, view, points: n as f32, domain: [lut.domain_min[0], lut.domain_max[0]] })
+    }
+
+    /// Fade to black: 0 = the program, 1 = black.
+    pub fn set_black(&mut self, amount: f32) {
+        let a = amount.clamp(0.0, 1.0);
+        if (a - self.black).abs() > 1e-4 || (a == 0.0) != (self.black == 0.0) {
+            self.black = a;
+            self.queue.write_buffer(&self.black_bind.0, 0, bytemuck::bytes_of(&Quad::full(a, 1.0, [0.0, 0.0])));
+        }
     }
 
     fn nv_out(&self, w: u32, h: u32) -> NvOut {
@@ -553,12 +682,12 @@ impl Compositor {
 
     /// Register a source (index = order of calls).
     pub fn add_source(&mut self, width: u32, height: u32) -> usize {
-        let s = self.make_source(width, height);
+        let s = self.make_source(width, height, None);
         self.sources.push(s);
         self.sources.len() - 1
     }
 
-    fn make_source(&self, width: u32, height: u32) -> SourceGpu {
+    fn make_source(&self, width: u32, height: u32, lut: Option<Arc<LutGpu>>) -> SourceGpu {
         let (width, height) = (width.max(2) & !1, height.max(2) & !1);
         let mk = |label: &str, w: u32, h: u32, format| {
             self.device.create_texture(&wgpu::TextureDescriptor {
@@ -575,12 +704,12 @@ impl Compositor {
         let y = mk("src y", width, height, wgpu::TextureFormat::R8Unorm);
         let uv = mk("src uv", width / 2, height / 2, wgpu::TextureFormat::Rg8Unorm);
         let (yv, uvv) = (y.create_view(&Default::default()), uv.create_view(&Default::default()));
-        let slots = (0..3).map(|_| self.bind(Quad::full(0.0, 1.0, [0.0, 0.0]), &yv, &uvv)).collect();
+        let slots = self.source_slots(&y, &uv, None, lut.as_deref());
         let tw = self.thumb_width.min(width) & !1;
         let th = ((tw as u64 * height as u64 / width as u64) as u32).max(2) & !1;
         let thumb = Target::new(&self.device, "thumb", tw, th, wgpu::TextureFormat::Rgba8Unorm, 4);
         let (tbuf, tbind) = self.bind(Quad::full(1.0, 1.0, [0.0, 0.0]), &yv, &uvv);
-        SourceGpu { width, height, y, uv, slots, thumb: Some((thumb, tbuf, tbind)), serial: None, mask: None, mask_pts: None }
+        SourceGpu { width, height, y, uv, slots, thumb: Some((thumb, tbuf, tbind)), serial: None, mask: None, mask_pts: None, lut }
     }
 
     /// A person mask for source `index` (from a picture captured at `pts`):
@@ -602,9 +731,7 @@ impl Compositor {
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
-            let mv = tex.create_view(&Default::default());
-            let (yv, uvv) = (s.y.create_view(&Default::default()), s.uv.create_view(&Default::default()));
-            let slots = (0..3).map(|_| self.bind_mask(Quad::full(0.0, 1.0, [0.0, 0.0]), &yv, &uvv, &mv)).collect();
+            let slots = self.source_slots(&s.y, &s.uv, Some(&tex), s.lut.as_deref());
             let s = &mut self.sources[index];
             s.slots = slots;
             s.mask = Some((tex, size));
@@ -629,9 +756,34 @@ impl Compositor {
 
     /// Crop, mirror, colour and key for each source; corners, border and
     /// shadow for frames that don't fill the screen.
-    pub fn set_looks(&mut self, looks: &[SourceLook], style: &FrameStyle) {
+    /// Returns LUTs that couldn't be loaded: (source, why).
+    pub fn set_looks(&mut self, looks: &[SourceLook], style: &FrameStyle) -> Vec<(usize, String)> {
         self.looks = looks.iter().map(LookGpu::from).collect();
         self.style = StyleGpu::from(style);
+        let mut problems = Vec::new();
+        for (i, l) in looks.iter().enumerate() {
+            let Some(s) = self.sources.get(i) else { break };
+            let want = l.lut.as_ref().filter(|p| !p.as_os_str().is_empty());
+            if s.lut.as_ref().map(|g| &g.path) == want {
+                continue;
+            }
+            let lut = match want {
+                Some(p) => match self.load_lut(p) {
+                    Ok(g) => Some(Arc::new(g)),
+                    Err(e) => {
+                        problems.push((i, format!("{e:#}")));
+                        None
+                    }
+                },
+                None => None,
+            };
+            let s = &self.sources[i];
+            let slots = self.source_slots(&s.y, &s.uv, s.mask.as_ref().map(|m| &m.0), lut.as_deref());
+            let s = &mut self.sources[i];
+            s.slots = slots;
+            s.lut = lut;
+        }
+        problems
     }
 
     /// Size of the program monitor picture (bigger when a full-screen
@@ -685,6 +837,10 @@ impl Compositor {
             // Background removal once there's a mask.
             key2: [look.key2[0], look.key2[1], if look.key2[2] > 0.5 && self.sources[i].mask_pts.is_some() { 1.0 } else { 0.0 }, look.key2[3]],
             keyrgb: look.keyrgb,
+            lut: match &self.sources[i].lut {
+                Some(l) if look.lut_strength > 0.0 => [look.lut_strength, l.domain[0], l.domain[1], l.points],
+                _ => [0.0; 4],
+            },
             ..Default::default()
         }
     }
@@ -745,15 +901,19 @@ impl Compositor {
                 let preview = self.bind(Quad::full(0.0, 1.0, [0.0, 0.0]), &view, &view);
                 self.graphics.insert(l.key, GraphicGpu { _tex: tex, size: (img.width(), img.height()), program, preview, used: false });
             }
+            let black = self.black;
             let g = self.graphics.get_mut(&l.key).unwrap();
             g.used = true;
             let [x, y, w, h] = l.rect;
+            // Stream-only graphics (captions) go over the program after it's
+            // faded, so they fade with it.
+            let alpha = if l.stream_only { l.alpha * (1.0 - black) } else { l.alpha };
             for (buf, target_w) in [(&g.program.0, self.canvas.width), (&g.preview.0, self.preview.0.width)] {
                 let dst = ((w * target_w as f32).max(1.0) as u32, (h * target_w as f32 * self.canvas.height as f32 / self.canvas.width as f32).max(1.0) as u32);
                 let (taps, foot) = reduction(g.size, dst);
                 let q = Quad {
                     rect: [x * 2.0 - 1.0, 1.0 - y * 2.0, (x + w) * 2.0 - 1.0, 1.0 - (y + h) * 2.0],
-                    params: [l.alpha, taps, foot[0], foot[1]],
+                    params: [alpha, taps, foot[0], foot[1]],
                     uv: [0.0, 0.0, 1.0, 1.0],
                     ..Default::default()
                 };
@@ -772,7 +932,8 @@ impl Compositor {
         if frame.width & !1 != s.width || frame.height & !1 != s.height {
             // The device delivers a different size than configured (or
             // switched modes): follow it.
-            self.sources[index] = self.make_source(frame.width, frame.height);
+            let lut = self.sources[index].lut.clone();
+            self.sources[index] = self.make_source(frame.width, frame.height, lut);
         }
         let s = &mut self.sources[index];
         s.serial = Some(frame.serial);
@@ -812,7 +973,7 @@ impl Compositor {
         };
         let fits = self.stinger.as_ref().is_some_and(|s| s.width == frame.width & !1 && s.height == frame.height & !1);
         if !fits {
-            self.stinger = Some(self.make_source(frame.width, frame.height));
+            self.stinger = Some(self.make_source(frame.width, frame.height, None));
         }
         let s = self.stinger.as_mut().unwrap();
         if s.serial != Some(frame.serial) {
@@ -983,6 +1144,25 @@ impl Compositor {
                 rp.set_bind_group(0, &s.slots[SLOT_A].1, &[]);
                 rp.draw(0..4, 0..1);
             }
+        }
+        // Fade to black, over everything.
+        if self.black > 0.0 {
+            let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("black"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.canvas.view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            rp.set_pipeline(&self.rgba_pipe);
+            rp.set_bind_group(0, &self.black_bind.1, &[]);
+            rp.draw(0..4, 0..1);
         }
         if want_bus {
             let t = self.preview_bus.as_ref().unwrap();
@@ -1204,6 +1384,68 @@ mod tests {
         assert!(prev[0] > 240 && prev[1] < 15, "preview top-left should be red");
         assert_eq!(r.thumbs.len(), 1);
         assert!(r.thumbs[0].3[0] > 240);
+    }
+
+    #[test]
+    fn colour_luts_and_fade_to_black() {
+        let settings = CompositorSettings { canvas: (320, 180), background_rgb: [0, 0, 0], background_image: None, preview_width: 160, thumb_width: 64 };
+        let mut c = match Compositor::new(&settings) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("skipping GPU test: {e:#}");
+                return;
+            }
+        };
+        let a = c.add_source(64, 36);
+        c.upload(a, &solid(64, 36, (1.0, 0.0, 0.0), 1));
+        // A LUT that swaps red and green.
+        let n = 9;
+        let mut cube = format!("TITLE \"swap\"\nLUT_3D_SIZE {n}\n");
+        for b in 0..n {
+            for g in 0..n {
+                for r in 0..n {
+                    let f = |i: usize| i as f32 / (n - 1) as f32;
+                    cube.push_str(&format!("{} {} {}\n", f(g), f(r), f(b)));
+                }
+            }
+        }
+        let path = std::env::temp_dir().join(format!("cutaway-swap-{}.cube", std::process::id()));
+        std::fs::write(&path, cube).unwrap();
+        let states = [PadState { x: 0, y: 0, w: 320, h: 180, alpha: 1.0, zorder: 1 }];
+        let px = |f: &VideoFrame, x: usize, y: usize| -> (u8, u8, u8) {
+            f.pixels.with_planes(|pl| (pl.y[y * pl.y_stride + x], pl.uv[(y / 2) * pl.uv_stride + (x / 2) * 2], pl.uv[(y / 2) * pl.uv_stride + (x / 2) * 2 + 1]))
+        };
+        let near = |a: (u8, u8, u8), b: (u8, u8, u8), tol: i32| (a.0 as i32 - b.0 as i32).abs() <= tol && (a.1 as i32 - b.1 as i32).abs() <= tol && (a.2 as i32 - b.2 as i32).abs() <= tol;
+        let wants = || Wants { program: true, ..Default::default() };
+        let mut render = |c: &mut Compositor| c.render(&Layout::One(states.to_vec()), None, &[], 0, 0, &wants()).unwrap().program.unwrap();
+
+        let problems = c.set_looks(&[SourceLook { lut: Some(path.clone()), ..Default::default() }], &FrameStyle::default());
+        assert!(problems.is_empty(), "{problems:?}");
+        let p = render(&mut c);
+        assert!(near(px(&p, 100, 100), rgb_to_yuv(0.0, 1.0, 0.0), 4), "red through the LUT is green: {:?}", px(&p, 100, 100));
+        // Half strength: halfway between.
+        c.set_looks(&[SourceLook { lut: Some(path.clone()), lut_strength: 0.5, ..Default::default() }], &FrameStyle::default());
+        let p = render(&mut c);
+        assert!(near(px(&p, 100, 100), rgb_to_yuv(0.5, 0.5, 0.0), 4), "{:?}", px(&p, 100, 100));
+        // A broken LUT is reported, and the picture is untouched.
+        let bad = path.with_extension("bad.cube");
+        std::fs::write(&bad, "LUT_3D_SIZE 4\n0 0 0\n").unwrap();
+        let problems = c.set_looks(&[SourceLook { lut: Some(bad.clone()), ..Default::default() }], &FrameStyle::default());
+        assert_eq!(problems.len(), 1);
+        let p = render(&mut c);
+        assert!(near(px(&p, 100, 100), rgb_to_yuv(1.0, 0.0, 0.0), 4));
+        // Fade to black: halfway, then all the way.
+        c.set_black(0.5);
+        let p = render(&mut c);
+        assert!(near(px(&p, 100, 100), rgb_to_yuv(0.5, 0.0, 0.0), 4), "half black: {:?}", px(&p, 100, 100));
+        c.set_black(1.0);
+        let p = render(&mut c);
+        assert!(near(px(&p, 100, 100), rgb_to_yuv(0.0, 0.0, 0.0), 2), "black: {:?}", px(&p, 100, 100));
+        c.set_black(0.0);
+        let p = render(&mut c);
+        assert!(near(px(&p, 100, 100), rgb_to_yuv(1.0, 0.0, 0.0), 4));
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&bad);
     }
 
     #[test]

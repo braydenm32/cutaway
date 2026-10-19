@@ -5,11 +5,26 @@ use crate::config::Segment;
 
 /// Edit a list of cue commands (for scenes and rundown segments): pick from
 /// what this show has, or type any command.
-fn cues_editor(ui: &mut egui::Ui, id: &str, cues: &mut Vec<String>, suggestions: &[(String, String)]) {
+pub(super) fn cues_editor(ui: &mut egui::Ui, id: &str, cues: &mut Vec<String>, suggestions: &[(String, String)]) {
+    commands_editor(ui, id, cues, suggestions, false);
+}
+
+/// Edit a list of commands; `scenes`: scene changes are allowed (macros).
+pub(super) fn commands_editor(ui: &mut egui::Ui, id: &str, cues: &mut Vec<String>, suggestions: &[(String, String)], scenes: bool) {
     let label_of = |c: &str| suggestions.iter().find(|(cmd, _)| cmd.eq_ignore_ascii_case(c)).map(|(_, l)| l.clone()).or_else(|| crate::control::Action::parse(c).ok().map(|a| a.describe())).unwrap_or_else(|| c.to_string());
     let mut remove = None;
+    let mut swap = None;
+    let n = cues.len();
     for (i, c) in cues.iter_mut().enumerate() {
         ui.horizontal(|ui| {
+            if scenes {
+                if ui.add_enabled(i > 0, egui::Button::new("↑").small()).clicked() {
+                    swap = Some(i - 1);
+                }
+                if ui.add_enabled(i + 1 < n, egui::Button::new("↓").small()).clicked() {
+                    swap = Some(i);
+                }
+            }
             ui.add(egui::TextEdit::singleline(c).desired_width(200.0).font(egui::TextStyle::Monospace));
             let parsed = crate::control::Action::parse(c);
             match parsed {
@@ -28,8 +43,18 @@ fn cues_editor(ui: &mut egui::Ui, id: &str, cues: &mut Vec<String>, suggestions:
     if let Some(i) = remove {
         cues.remove(i);
     }
-    egui::ComboBox::from_id_salt(("add_cue", id)).selected_text("＋ Add a cue…").width(240.0).height(360.0).show_ui(ui, |ui| {
-        let skip = |c: &str| ["scene:", "cut:", "preview:", "source:", "rundown:"].iter().any(|p| c.starts_with(p)) || c == "take" || c == "cut";
+    if let Some(i) = swap {
+        cues.swap(i, i + 1);
+    }
+    let add = if scenes { "＋ Add a step…" } else { "＋ Add a cue…" };
+    egui::ComboBox::from_id_salt(("add_cue", id)).selected_text(add).width(240.0).height(360.0).show_ui(ui, |ui| {
+        let skip = |c: &str| !scenes && (["scene:", "cut:", "preview:", "source:", "rundown:"].iter().any(|p| c.starts_with(p)) || c == "take" || c == "cut");
+        for (secs, l) in [("0.5", "Wait half a second"), ("1", "Wait 1 second"), ("2", "Wait 2 seconds"), ("5", "Wait 5 seconds")] {
+            if ui.selectable_label(false, l).on_hover_text(format!("wait:{secs}")).clicked() {
+                cues.push(format!("wait:{secs}"));
+            }
+        }
+        ui.separator();
         for (cmd, l) in suggestions.iter().filter(|(c, _)| !skip(c)) {
             if ui.selectable_label(false, l).on_hover_text(cmd).clicked() {
                 cues.push(cmd.clone());

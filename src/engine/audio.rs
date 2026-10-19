@@ -428,6 +428,9 @@ pub struct MixShared {
     talkback_input: AtomicI64,
     talkback_on: AtomicBool,
     talkback_dim_db: AtomicU32,
+    /// Fade to black for the recording and stream mixes: (start, length,
+    /// from, to) in mix time.
+    program_fade: Mutex<(Ns, Ns, f32, f32)>,
 }
 
 impl MixShared {
@@ -447,6 +450,7 @@ impl MixShared {
             talkback_input: AtomicI64::new(-1),
             talkback_on: AtomicBool::new(false),
             talkback_dim_db: AtomicU32::new(0),
+            program_fade: Mutex::new((0, 0, 1.0, 1.0)),
         });
         m.apply(cfg);
         m
@@ -477,6 +481,23 @@ impl MixShared {
     pub fn talkback(&self) -> bool {
         self.talkback_on.load(Ordering::Relaxed)
     }
+    /// The recording and stream mixes' level (0..1) at mix time `t`.
+    pub fn program_gain_at(&self, t: Ns) -> f32 {
+        let (at, dur, from, to) = *self.program_fade.lock().unwrap();
+        if t <= at {
+            return from;
+        }
+        let k = ((t - at) as f64 / dur.max(1) as f64).min(1.0) as f32;
+        from + (to - from) * k
+    }
+
+    /// Fade the recording and stream mixes to `to` (0 silent, 1 full),
+    /// starting at mix time `at`, over `dur`.
+    pub fn fade_program(&self, to: f32, at: Ns, dur: Ns) {
+        let from = self.program_gain_at(at);
+        *self.program_fade.lock().unwrap() = (at, dur.max(1), from, to.clamp(0.0, 1.0));
+    }
+
     /// How far the ducked inputs are turned down right now (dB, 0 = not).
     pub fn ducking_db(&self) -> f32 {
         f32::from_bits(self.ducking_db.load(Ordering::Relaxed))
@@ -799,10 +820,27 @@ pub fn run_mixer(inputs: Vec<MixInput>, names: Vec<String>, taps: MixTaps, maste
         let dim = 10f32.powf(f32::from_bits(master.talkback_dim_db.load(Ordering::Relaxed)) / 20.0);
         let rec_block = AudioBlock { pts: t, rate: MIX_RATE, channels: 2, samples: rec_mix };
         let stream_block = AudioBlock { pts: t, rate: MIX_RATE, channels: 2, samples: stream_mix };
+        // Fade to black: what's recorded and streamed fades too (feeds to
+        // headphones and callers don't).
+        let (g0, g1) = (master.program_gain_at(t), master.program_gain_at(t + BLOCK_NS));
+        let faded = |b: &AudioBlock| -> AudioBlock {
+            if g0 >= 1.0 && g1 >= 1.0 {
+                return b.clone();
+            }
+            let n = b.samples.len() / 2;
+            let mut out = b.clone();
+            for (k, f) in out.samples.chunks_exact_mut(2).enumerate() {
+                let g = g0 + (g1 - g0) * (k as f32 / n as f32);
+                f[0] *= g;
+                f[1] *= g;
+            }
+            out
+        };
+        let (rec_out, stream_out) = (faded(&rec_block), faded(&stream_block));
         for (_, kind, tap) in taps.lock().unwrap().iter() {
             let block = match kind {
-                MixKind::Recording => rec_block.clone(),
-                MixKind::Stream => stream_block.clone(),
+                MixKind::Recording => rec_out.clone(),
+                MixKind::Stream => stream_out.clone(),
                 MixKind::Input(i) => match solos.iter().find(|s| s.0 == *i) {
                     Some((_, s)) => AudioBlock { pts: t, rate: MIX_RATE, channels: 2, samples: s.clone() },
                     None => AudioBlock { pts: t, rate: MIX_RATE, channels: 2, samples: vec![0.0; BLOCK * 2] },
@@ -1002,6 +1040,20 @@ mod tests {
         // Not pressed: nothing.
         let out = mix(&[0.2, 0.3], vec![input(false), input(false)], feeds, |m| m.set_talkback_input(Some(1)));
         assert!((out[1][100] - 0.2).abs() < 0.01);
+    }
+
+    #[test]
+    fn fade_to_black_fades_the_program_only() {
+        let kinds = vec![MixKind::Recording, MixKind::Stream, MixKind::Feed { stream: false, minus: 0, talkback: false }];
+        let out = mix(&[0.2], vec![input(false)], kinds, |m| m.fade_program(0.0, 0, 1));
+        assert!(out[0][100].abs() < 1e-6, "recording: {}", out[0][100]);
+        assert!(out[1][100].abs() < 1e-6, "stream: {}", out[1][100]);
+        assert!((out[2][100] - 0.2).abs() < 0.01, "headphones still hear it: {}", out[2][100]);
+        let m = MixShared::new(&Default::default());
+        m.fade_program(0.0, 1_000, 1_000);
+        assert_eq!(m.program_gain_at(500), 1.0);
+        assert!((m.program_gain_at(1_500) - 0.5).abs() < 1e-3);
+        assert_eq!(m.program_gain_at(5_000), 0.0);
     }
 
     #[test]

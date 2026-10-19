@@ -38,6 +38,10 @@ pub struct Config {
     pub rundown: RundownConfig,
     /// Guests joining from a web browser by link.
     pub guests: GuestsConfig,
+    /// Named lists of commands, run with one button.
+    pub macros: Vec<Macro>,
+    /// Instant replay.
+    pub replay: ReplayConfig,
 }
 
 /// Syrinscape Online: moods and sounds started from Cutaway's buttons,
@@ -418,11 +422,24 @@ pub struct TransitionConfig {
     /// Switch through a preview: pick the next scene, then Take.
     pub preview_mode: bool,
     pub stinger: StingerConfig,
+    /// Fade to black: how long the fade takes.
+    pub ftb_ms: u32,
+    /// The recording and stream sound fade with it.
+    pub ftb_audio: bool,
 }
 
 impl Default for TransitionConfig {
     fn default() -> Self {
-        Self { mode: TransitionMode::Mix, duration_ms: 400, direction: Direction::Right, dip_color: "#000000".into(), preview_mode: false, stinger: StingerConfig::default() }
+        Self {
+            mode: TransitionMode::Mix,
+            duration_ms: 400,
+            direction: Direction::Right,
+            dip_color: "#000000".into(),
+            preview_mode: false,
+            stinger: StingerConfig::default(),
+            ftb_ms: 1000,
+            ftb_audio: true,
+        }
     }
 }
 
@@ -636,6 +653,11 @@ pub struct SourceLook {
     /// (what's behind shows the scene's background or the layers below).
     pub remove_background: bool,
     pub cutout_quality: CutoutQuality,
+    /// A colour LUT (.cube), e.g. a camera's log-to-Rec.709 conversion.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lut: Option<PathBuf>,
+    /// How much of the LUT (0..1).
+    pub lut_strength: f32,
 }
 
 /// How carefully people are cut out: finer edges cost more time.
@@ -687,6 +709,8 @@ impl Default for SourceLook {
             key_spill: 0.1,
             remove_background: false,
             cutout_quality: CutoutQuality::Balanced,
+            lut: None,
+            lut_strength: 1.0,
         }
     }
 }
@@ -1782,5 +1806,41 @@ mod tests {
     fn colors() {
         assert_eq!(parse_color("#10131a"), Some(0xff10131a));
         assert_eq!(parse_color("nope"), None);
+    }
+}
+
+/// A button that runs a list of commands one after another; "wait:1.5"
+/// pauses between them.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Macro {
+    pub name: String,
+    pub color: String,
+    pub commands: Vec<String>,
+}
+
+impl Default for Macro {
+    fn default() -> Self {
+        Macro { name: "Macro".into(), color: "#6a4fc9".into(), commands: Vec::new() }
+    }
+}
+
+/// Instant replay: the last few seconds of the program again, on air.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ReplayConfig {
+    /// How much to replay.
+    pub seconds: f32,
+    /// Slow motion speed (0.25–1).
+    pub slow_speed: f32,
+    /// Show "REPLAY" in a corner while it plays.
+    pub label: bool,
+    /// Play the sound too (at normal speed only).
+    pub sound: bool,
+}
+
+impl Default for ReplayConfig {
+    fn default() -> Self {
+        ReplayConfig { seconds: 8.0, slow_speed: 0.5, label: true, sound: false }
     }
 }

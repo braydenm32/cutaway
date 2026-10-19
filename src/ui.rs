@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 mod panels;
+mod production;
 
 pub mod theme {
     use eframe::egui::Color32;
@@ -123,6 +124,8 @@ pub struct App {
     syrinscape: control::syrinscape::Syrinscape,
     /// Where the show is in its running order.
     rundown: control::rundown::Rundown,
+    /// Commands waiting after a "wait" in a macro or cues.
+    queued: Vec<production::Queued>,
     /// The pad held down with the mouse, and the talkback button.
     pad_held: Option<usize>,
     talk_held: bool,
@@ -160,6 +163,7 @@ impl App {
         let mut app = App {
             syrinscape,
             rundown: Default::default(),
+            queued: Vec::new(),
             pad_held: None,
             talk_held: false,
             scenes: cfg.effective_scenes(),
@@ -321,17 +325,7 @@ impl App {
     /// A scene's (or rundown segment's) cues: Syrinscape moods, pads,
     /// graphics… Switching commands are skipped, so one can't set off another.
     fn run_cues(&mut self, cues: &[String]) {
-        for c in cues {
-            match Action::parse(c) {
-                Ok(Action::Scene(_) | Action::CutTo(_) | Action::Preview(_) | Action::Take | Action::Cut | Action::Source(_) | Action::Rundown(_)) => {}
-                Ok(a) => {
-                    if let Err(e) = self.run_action(a) {
-                        self.toast(format!("Scene cue \"{c}\": {e}"), true);
-                    }
-                }
-                Err(e) => self.toast(format!("Scene cue \"{c}\": {e}"), true),
-            }
-        }
+        self.run_sequence("Cue", cues, true);
     }
 
     /// Preview to program; the old program goes to preview.
@@ -676,6 +670,18 @@ impl App {
                 });
                 Ok("OK".into())
             }
+            Action::Ftb(t) => {
+                let e = self.engine.as_ref().ok_or("the engine isn't running")?;
+                let on = toggle(&t, e.is_black());
+                e.fade_to_black(Some(on));
+                Ok(if on { "Fading to black" } else { "Fading up" }.into())
+            }
+            Action::Ptz(cam, cmd) => self.run_ptz(cam, cmd),
+            Action::Replay(cmd) => self.run_replay(cmd),
+            Action::Macro(m) => self.run_macro(m),
+            Action::Wait(s) => Ok(format!("Waited {s} s")),
+            Action::Prompter(cmd) => self.run_prompter(cmd),
+            Action::Comment(cmd) => self.run_comment(cmd),
         }
     }
 
@@ -799,6 +805,8 @@ impl App {
             talkback: e.talkback(),
             talkback_available: e.mix.talkback_input().is_some(),
             clip_seconds: self.cfg.output.clip_seconds,
+            black: e.is_black(),
+            macros: self.cfg.macros.iter().map(|m| show::MacroInfo { name: m.name.clone(), color: m.color.clone() }).collect(),
             guests: if self.cfg.guests.enabled {
                 crate::engine::guests::hub()
                     .guests()
@@ -1925,6 +1933,19 @@ impl App {
                     if mode != self.cfg.transition.mode {
                         self.cfg.transition.mode = mode;
                         self.cfg_dirty = true;
+                    }
+                    ui.add_space(6.0);
+                    // Fade to black: flashes while the program is black.
+                    let black = self.engine.as_ref().is_some_and(|e| e.is_black());
+                    let lit = black && (ui.input(|i| i.time) * 2.0).fract() < 0.5;
+                    let ftb = egui::Button::new(RichText::new("FTB").strong().size(12.0).color(if black { Color32::WHITE } else { TEXT_DIM }))
+                        .fill(if lit { RED } else if black { RED_DIM } else { RAISED })
+                        .min_size(vec2(46.0, 26.0));
+                    if ui.add(ftb).on_hover_text(if black { "Fade back up from black" } else { "Fade to black (picture and sound; the length is in Settings → Switching)" }).clicked() {
+                        self.act(Action::Ftb(Toggle::Toggle));
+                    }
+                    if black {
+                        ui.ctx().request_repaint_after(Duration::from_millis(250));
                     }
                 });
                 ui.horizontal(|ui| {
@@ -3104,6 +3125,10 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.handle_requests();
+        self.run_queued();
+        if let Some(d) = self.next_queued() {
+            ctx.request_repaint_after(d);
+        }
         self.handle_keys(&ctx);
         self.poll_status();
         self.run_self_test(&ctx);
@@ -3131,6 +3156,7 @@ impl eframe::App for App {
                 ui.separator();
                 self.rundown_panel(ui);
                 self.guests_panel(ui);
+                self.macros_panel(ui);
                 self.graphics_panel(ui);
                 self.sound_panel(ui);
             });

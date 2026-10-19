@@ -388,8 +388,8 @@ impl SettingsUi {
             }
         }
         ui.add_space(10.0);
-        egui::CollapsingHeader::new(RichText::new("Picture adjustments: crop, mirror, colour, background removal, green screen").strong()).id_salt(("look", self.sel_source)).show(ui, |ui| {
-            look_editor(ui, &mut src.look);
+        egui::CollapsingHeader::new(RichText::new("Picture adjustments: crop, mirror, colour, LUT, background removal, green screen").strong()).id_salt(("look", self.sel_source)).show(ui, |ui| {
+            look_editor(ui, &mut src.look, &mut self.lut_check);
         });
         if scan_ndi {
             let out = self.ndi_found.clone();
@@ -502,7 +502,7 @@ fn media_editor(ui: &mut egui::Ui, m: &mut MediaConfig) {
     });
 }
 
-fn look_editor(ui: &mut egui::Ui, l: &mut SourceLook) {
+fn look_editor(ui: &mut egui::Ui, l: &mut SourceLook, lut_check: &mut Option<(std::path::PathBuf, Result<String, String>)>) {
     egui::Grid::new("look").num_columns(2).spacing([16.0, 8.0]).show(ui, |ui| {
         label(ui, "Crop left / right");
         ui.horizontal(|ui| {
@@ -527,6 +527,40 @@ fn look_editor(ui: &mut egui::Ui, l: &mut SourceLook) {
         ui.end_row();
         label(ui, "Saturation");
         ui.add(egui::Slider::new(&mut l.saturation, 0.0..=2.0).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
+        ui.end_row();
+        label(ui, "Colour LUT");
+        ui.vertical(|ui| {
+            ui.horizontal(|ui| {
+                let shown = l.lut.as_ref().and_then(|p| p.file_name()).map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| "none".into());
+                ui.label(shown);
+                if ui.button("Choose…").on_hover_text("A .cube file, e.g. your camera's log-to-Rec.709 LUT").clicked() {
+                    if let Some(f) = rfd::FileDialog::new().add_filter("Colour LUT", &["cube", "CUBE"]).pick_file() {
+                        l.lut = Some(f);
+                        l.lut_strength = 1.0;
+                    }
+                }
+                if l.lut.is_some() && ui.small_button("Clear").clicked() {
+                    l.lut = None;
+                }
+            });
+            if let Some(path) = &l.lut {
+                // Checked once, so a bad file shows straight away.
+                if lut_check.as_ref().is_none_or(|(p, _)| p != path) {
+                    *lut_check = Some((path.clone(), crate::media::cube::Lut3d::load(path).map(|l| l.describe()).map_err(|e| format!("{e:#}"))));
+                }
+                match &lut_check.as_ref().unwrap().1 {
+                    Ok(what) => {
+                        ui.add(egui::Slider::new(&mut l.lut_strength, 0.0..=1.0).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)).text("strength"));
+                        hint(ui, what);
+                    }
+                    Err(e) => {
+                        ui.label(RichText::new(format!("⚠ {e}")).color(AMBER));
+                    }
+                }
+            } else {
+                hint(ui, "For cameras that shoot in log (S-Log, V-Log, C-Log, BRAW…), or a look.");
+            }
+        });
         ui.end_row();
         label(ui, "Remove background");
         ui.horizontal(|ui| {

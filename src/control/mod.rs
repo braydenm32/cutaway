@@ -25,6 +25,13 @@
 //! clip  clip:30              save the last 30 seconds of the recording as a clip
 //! timer:Countdown:start / pause / toggle / reset / stop    a clock graphic's timer
 //! rundown:next  rundown:previous  rundown:start  rundown:stop  rundown:3  rundown:Interview
+//! ftb  ftb:on  ftb:off       fade to black (and back)
+//! ptz:Cam 2:preset:3  ptz:Cam 2:preset:Wide  ptz:Cam 2:store:3  ptz:Cam 2:home
+//! ptz:Cam 2:left / right / up / down / in / out (:0.5 = half speed)  ptz:Cam 2:stop
+//! replay  replay:8  replay:8:slow  replay:stop      the last seconds again
+//! macro:Intro  macro:2       run a macro          wait:1.5   (in macros and cues)
+//! prompter:play / pause / toggle / faster / slower / top / back / forward
+//! comment:next  comment:hide  comment:toggle        viewer comments on screen
 //! ```
 
 pub mod keys;
@@ -111,6 +118,49 @@ pub enum TimerCmd {
     Stop,
 }
 
+/// Moving a PTZ camera (real or virtual).
+#[derive(Clone, Debug, PartialEq)]
+pub enum PtzCmd {
+    /// Move at these speeds (-1..1: right and up are positive) until Stop.
+    Drive { pan: f32, tilt: f32 },
+    /// Zoom at this speed (-1 out .. 1 in) until Stop.
+    Zoom(f32),
+    Stop,
+    Home,
+    Recall(Target),
+    Store(Target),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ReplayCmd {
+    /// Play the last `seconds` (None: as set), in slow motion or not.
+    Play { seconds: Option<f32>, slow: bool },
+    Stop,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PrompterCmd {
+    Play,
+    Pause,
+    Toggle,
+    Faster,
+    Slower,
+    /// Back to the start.
+    Top,
+    /// A screenful back / forward.
+    Back,
+    Forward,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum CommentCmd {
+    /// Show the next comment waiting (oldest first).
+    Next,
+    Hide,
+    /// Hide the one showing, or show the next.
+    Toggle,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     Scene(Target),
@@ -145,6 +195,15 @@ pub enum Action {
     /// A clock graphic's countdown or stopwatch.
     Timer(Target, TimerCmd),
     Rundown(rundown::RundownCmd),
+    /// Fade the program to black and back.
+    Ftb(Toggle),
+    Ptz(Target, PtzCmd),
+    Replay(ReplayCmd),
+    Macro(Target),
+    /// Pause a macro or a list of cues (seconds).
+    Wait(f32),
+    Prompter(PrompterCmd),
+    Comment(CommentCmd),
 }
 
 /// A fader position (0..1) as a level: 0 is silence (-60 dB), 0.79 is
@@ -272,6 +331,71 @@ impl Action {
                 Action::Timer(Target::parse(target), cmd)
             }
             "rundown" | "segment" => Action::Rundown(rundown::RundownCmd::parse(rest.unwrap_or("next"))),
+            "ftb" | "black" | "fadetoblack" => Action::Ftb(toggle(rest)?),
+            "ptz" => {
+                let r = need(rest, &verb)?;
+                let parts: Vec<&str> = r.split(':').map(str::trim).collect();
+                let num = |s: Option<&&str>| -> Result<f32, String> {
+                    match s {
+                        None => Ok(1.0),
+                        Some(v) => v.parse::<f32>().map(|x| x.clamp(0.05, 1.0)).map_err(|_| format!("\"{v}\" isn't a speed (0.1 to 1)")),
+                    }
+                };
+                // The camera can have colons in its name: find the command word.
+                let words = ["preset", "recall", "store", "save", "home", "left", "right", "up", "down", "in", "out", "zoomin", "zoomout", "stop"];
+                let k = parts.iter().position(|p| words.contains(&p.to_lowercase().as_str())).filter(|&k| k > 0).ok_or("ptz needs a camera and a move, e.g. ptz:Cam 2:preset:1")?;
+                let cam = Target::parse(&parts[..k].join(":"));
+                let arg = parts.get(k + 1);
+                let cmd = match parts[k].to_lowercase().as_str() {
+                    "preset" | "recall" => PtzCmd::Recall(Target::parse(arg.ok_or("which preset?")?)),
+                    "store" | "save" => PtzCmd::Store(Target::parse(arg.ok_or("which preset?")?)),
+                    "home" => PtzCmd::Home,
+                    "left" => PtzCmd::Drive { pan: -num(arg)?, tilt: 0.0 },
+                    "right" => PtzCmd::Drive { pan: num(arg)?, tilt: 0.0 },
+                    "up" => PtzCmd::Drive { pan: 0.0, tilt: num(arg)? },
+                    "down" => PtzCmd::Drive { pan: 0.0, tilt: -num(arg)? },
+                    "in" | "zoomin" => PtzCmd::Zoom(num(arg)?),
+                    "out" | "zoomout" => PtzCmd::Zoom(-num(arg)?),
+                    _ => PtzCmd::Stop,
+                };
+                Action::Ptz(cam, cmd)
+            }
+            "replay" => {
+                let mut seconds = None;
+                let mut slow = false;
+                for p in rest.unwrap_or("").split(':').map(|p| p.trim().to_lowercase()).filter(|p| !p.is_empty()) {
+                    match p.as_str() {
+                        "stop" | "off" | "end" => return Ok(Action::Replay(ReplayCmd::Stop)),
+                        "slow" | "slowmo" | "slow-mo" => slow = true,
+                        "play" | "normal" => {}
+                        n => seconds = Some(n.trim_end_matches('s').parse::<f32>().map_err(|_| format!("\"{n}\" isn't a number of seconds"))?.clamp(1.0, 60.0)),
+                    }
+                }
+                Action::Replay(ReplayCmd::Play { seconds, slow })
+            }
+            "macro" => Action::Macro(Target::parse(need(rest, &verb)?)),
+            "wait" | "pause" | "delay" => {
+                let r = need(rest, &verb)?.trim();
+                let secs = if let Some(ms) = r.strip_suffix("ms") { ms.trim().parse::<f32>().map(|v| v / 1000.0) } else { r.trim_end_matches('s').trim().parse::<f32>() };
+                Action::Wait(secs.map_err(|_| format!("\"{r}\" isn't a number of seconds"))?.clamp(0.0, 600.0))
+            }
+            "prompter" | "teleprompter" => Action::Prompter(match rest.unwrap_or("toggle").trim().to_lowercase().as_str() {
+                "play" | "start" | "go" => PrompterCmd::Play,
+                "pause" | "stop" | "hold" => PrompterCmd::Pause,
+                "toggle" | "" => PrompterCmd::Toggle,
+                "faster" | "up" | "+" => PrompterCmd::Faster,
+                "slower" | "down" | "-" => PrompterCmd::Slower,
+                "top" | "start-over" | "reset" => PrompterCmd::Top,
+                "back" | "previous" | "prev" => PrompterCmd::Back,
+                "forward" | "next" | "skip" => PrompterCmd::Forward,
+                other => return Err(format!("unknown prompter command \"{other}\"")),
+            }),
+            "comment" | "comments" | "chat" => Action::Comment(match rest.unwrap_or("toggle").trim().to_lowercase().as_str() {
+                "next" | "show" => CommentCmd::Next,
+                "hide" | "off" | "clear" => CommentCmd::Hide,
+                "toggle" | "" => CommentCmd::Toggle,
+                other => return Err(format!("unknown comment command \"{other}\" (next, hide or toggle)")),
+            }),
             other => return Err(format!("unknown command \"{other}\"")),
         })
     }
@@ -327,6 +451,39 @@ impl Action {
                 rundown::RundownCmd::Stop => "Rundown: stop".into(),
                 rundown::RundownCmd::Go(s) => format!("Rundown: go to {s}"),
             },
+            Action::Ftb(x) => t(x, "Fade to black", "Fade up from black", "Fade to black / back"),
+            Action::Ptz(c, cmd) => match cmd {
+                PtzCmd::Recall(p) => format!("{c}: go to preset {p}"),
+                PtzCmd::Store(p) => format!("{c}: save preset {p}"),
+                PtzCmd::Home => format!("{c}: home"),
+                PtzCmd::Stop => format!("{c}: stop moving"),
+                PtzCmd::Zoom(z) => format!("{c}: zoom {}", if *z > 0.0 { "in" } else { "out" }),
+                PtzCmd::Drive { pan, tilt } => format!(
+                    "{c}: move {}",
+                    if pan.abs() >= tilt.abs() {
+                        if *pan > 0.0 { "right" } else { "left" }
+                    } else if *tilt > 0.0 {
+                        "up"
+                    } else {
+                        "down"
+                    }
+                ),
+            },
+            Action::Replay(r) => match r {
+                ReplayCmd::Stop => "Stop the replay".into(),
+                ReplayCmd::Play { seconds, slow } => {
+                    let secs = seconds.map(|s| format!(" the last {s:.0} s")).unwrap_or_default();
+                    format!("Replay{secs}{}", if *slow { " in slow motion" } else { "" })
+                }
+            },
+            Action::Macro(m) => format!("Macro {m}"),
+            Action::Wait(s) => format!("Wait {s} s"),
+            Action::Prompter(p) => format!("Prompter: {}", format!("{p:?}").to_lowercase()),
+            Action::Comment(c) => match c {
+                CommentCmd::Next => "Show the next comment".into(),
+                CommentCmd::Hide => "Hide the comment".into(),
+                CommentCmd::Toggle => "Comment on/off".into(),
+            },
         }
     }
 }
@@ -362,6 +519,9 @@ pub fn suggestions(cfg: &Config) -> Vec<(String, String)> {
             ("transition:wipe", "Transition: wipe"),
             ("transition:push", "Transition: push"),
             ("transition:dip", "Transition: dip"),
+            ("ftb", "Fade to black / back up"),
+            ("replay", "Instant replay"),
+            ("replay:slow", "Instant replay in slow motion"),
         ]
         .map(|(a, b)| (a.to_string(), b.to_string())),
     );
@@ -379,6 +539,9 @@ pub fn suggestions(cfg: &Config) -> Vec<(String, String)> {
         for (i, s) in cfg.rundown.segments.iter().enumerate() {
             v.push((format!("rundown:{}", i + 1), format!("Rundown {}: {}", i + 1, s.name)));
         }
+    }
+    for m in &cfg.macros {
+        v.push((format!("macro:{}", m.name), format!("Macro: {}", m.name)));
     }
     for a in &cfg.audio {
         v.push((format!("audio:{}", a.name), format!("Audio on/off: {}", a.name)));
@@ -448,6 +611,23 @@ mod tests {
         assert_eq!(Action::parse("pad:Applause").unwrap().describe(), "Pad Applause");
         assert_eq!(Action::parse("graphic:2:on").unwrap().describe(), "Show 2");
         assert_eq!(Action::parse("timer:Back in:start").unwrap().describe(), "Back in: start");
+        assert_eq!(Action::parse("ftb"), Ok(Action::Ftb(Toggle::Toggle)));
+        assert_eq!(Action::parse("ftb:on"), Ok(Action::Ftb(Toggle::On)));
+        assert_eq!(Action::parse("ptz:Cam 2:preset:3"), Ok(Action::Ptz(Target::Name("Cam 2".into()), PtzCmd::Recall(Target::Index(2)))));
+        assert_eq!(Action::parse("ptz:2:left:0.5"), Ok(Action::Ptz(Target::Index(1), PtzCmd::Drive { pan: -0.5, tilt: 0.0 })));
+        assert_eq!(Action::parse("ptz:Cam: 1:up"), Ok(Action::Ptz(Target::Name("Cam:1".into()), PtzCmd::Drive { pan: 0.0, tilt: 1.0 })));
+        assert_eq!(Action::parse("ptz:Cam:store:Wide"), Ok(Action::Ptz(Target::Name("Cam".into()), PtzCmd::Store(Target::Name("Wide".into())))));
+        assert_eq!(Action::parse("ptz:Cam:out"), Ok(Action::Ptz(Target::Name("Cam".into()), PtzCmd::Zoom(-1.0))));
+        assert!(Action::parse("ptz:preset:1").is_err());
+        assert_eq!(Action::parse("replay"), Ok(Action::Replay(ReplayCmd::Play { seconds: None, slow: false })));
+        assert_eq!(Action::parse("replay:8:slow"), Ok(Action::Replay(ReplayCmd::Play { seconds: Some(8.0), slow: true })));
+        assert_eq!(Action::parse("replay:stop"), Ok(Action::Replay(ReplayCmd::Stop)));
+        assert_eq!(Action::parse("macro:Intro"), Ok(Action::Macro(Target::Name("Intro".into()))));
+        assert_eq!(Action::parse("wait:1.5"), Ok(Action::Wait(1.5)));
+        assert_eq!(Action::parse("wait:250ms"), Ok(Action::Wait(0.25)));
+        assert_eq!(Action::parse("prompter:faster"), Ok(Action::Prompter(PrompterCmd::Faster)));
+        assert_eq!(Action::parse("comment:next"), Ok(Action::Comment(CommentCmd::Next)));
+        assert_eq!(Action::parse("ptz:Cam 2:preset:Wide").unwrap().describe(), "Cam 2: go to preset Wide");
         assert!(Action::parse("explode").is_err());
         assert_eq!(fader_db(0.0), -60.0);
         assert!((fader_db(100.0 / 127.0)).abs() < 1e-9);

@@ -6,6 +6,7 @@ mod captions;
 mod control;
 mod graphics;
 mod guests;
+mod macros;
 mod mixing;
 mod outputs;
 mod rundown;
@@ -35,6 +36,7 @@ pub enum Section {
     Switching,
     Graphics,
     Rundown,
+    Macros,
     Guests,
     Captions,
     Recording,
@@ -46,7 +48,7 @@ pub enum Section {
 }
 
 impl Section {
-    const ALL: [Section; 18] = [
+    const ALL: [Section; 19] = [
         Section::General,
         Section::Sources,
         Section::Audio,
@@ -57,6 +59,7 @@ impl Section {
         Section::Switching,
         Section::Graphics,
         Section::Rundown,
+        Section::Macros,
         Section::Guests,
         Section::Captions,
         Section::Recording,
@@ -83,6 +86,7 @@ impl Section {
             Section::Switching => "Switching",
             Section::Graphics => "Graphics",
             Section::Rundown => "Rundown",
+            Section::Macros => "Macros",
             Section::Guests => "Remote guests",
             Section::Captions => "Captions",
             Section::Recording => "Recording",
@@ -171,10 +175,13 @@ pub struct SettingsUi {
     syrin_link: String,
     syrin_soundset: Option<String>,
     sel_segment: usize,
+    sel_macro: usize,
     /// Apps that can be listened to (for "Sound from an app").
     apps: Option<Vec<String>>,
     /// Installing the Resolve script: what happened.
     resolve_note: Option<(String, bool)>,
+    /// The LUT picked for a source, checked: (file, description or problem).
+    lut_check: Option<(PathBuf, Result<String, String>)>,
 }
 
 const RESOLUTIONS: &[(u32, u32, &str)] = &[
@@ -224,8 +231,10 @@ impl SettingsUi {
             syrin_link: String::new(),
             syrin_soundset: None,
             sel_segment: 0,
+            sel_macro: 0,
             apps: None,
             resolve_note: None,
+            lut_check: None,
         }
     }
 
@@ -312,6 +321,7 @@ impl SettingsUi {
                                     Section::Switching => self.switching(ui, info),
                                     Section::Graphics => self.graphics(ui),
                                     Section::Rundown => self.rundown(ui),
+                                    Section::Macros => self.macros(ui),
                                     Section::Guests => self.guests(ui, info),
                                     Section::Captions => self.captions(ui, info),
                                     Section::Recording => self.recording(ui),
@@ -433,9 +443,10 @@ impl SettingsUi {
             Section::Pads => a.pads != b.pads,
             Section::Syrinscape => a.syrinscape != b.syrinscape,
             Section::Rundown => a.rundown != b.rundown,
+            Section::Macros => a.macros != b.macros,
             Section::Guests => a.guests != b.guests,
             Section::Program => a.program != b.program || a.style != b.style,
-            Section::Switching => a.transition != b.transition || a.auto_switch != b.auto_switch,
+            Section::Switching => a.transition != b.transition || a.auto_switch != b.auto_switch || a.replay != b.replay,
             Section::Graphics => a.graphics != b.graphics,
             Section::Captions => a.captions != b.captions,
             Section::Recording => a.output != b.output || a.podcast != b.podcast,

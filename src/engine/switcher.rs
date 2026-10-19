@@ -47,10 +47,30 @@ struct State {
     dip: [f32; 3],
 }
 
+/// Fade to black: from one level to another over a time.
+#[derive(Clone, Copy)]
+struct Fade {
+    from: f32,
+    to: f32,
+    start: Instant,
+    dur: Duration,
+}
+
+impl Fade {
+    fn level(&self) -> f32 {
+        if self.dur.is_zero() {
+            return self.to;
+        }
+        let t = Instant::now().saturating_duration_since(self.start).as_secs_f32() / self.dur.as_secs_f32().max(1e-3);
+        self.from + (self.to - self.from) * ease(t)
+    }
+}
+
 pub struct Switcher {
     canvas: (u32, u32),
     state: Mutex<State>,
     events: Mutex<Vec<SwitchEvent>>,
+    black: Mutex<Fade>,
 }
 
 fn ease(t: f32) -> f32 {
@@ -64,7 +84,25 @@ impl Switcher {
             canvas,
             state: Mutex::new(State { current: initial, active: None, preview: None, aspects, direction: Direction::Right, dip: [0.0; 3] }),
             events: Mutex::new(Vec::new()),
+            black: Mutex::new(Fade { from: 0.0, to: 0.0, start: Instant::now(), dur: Duration::ZERO }),
         }
+    }
+
+    /// Fade the program to black (or back up) over `ms`.
+    pub fn fade_to_black(&self, on: bool, ms: u32) {
+        let mut f = self.black.lock().unwrap();
+        let from = f.level();
+        *f = Fade { from, to: if on { 1.0 } else { 0.0 }, start: Instant::now(), dur: Duration::from_millis(ms as u64) };
+    }
+
+    /// How black the program is now (0..1).
+    pub fn black_level(&self) -> f32 {
+        self.black.lock().unwrap().level()
+    }
+
+    /// Faded (or fading) to black.
+    pub fn is_black(&self) -> bool {
+        self.black.lock().unwrap().to > 0.5
     }
 
     /// Direction for wipes/pushes and the colour for dips.
@@ -228,5 +266,21 @@ mod tests {
         // A plain take asking for a stinger mixes instead.
         sw.take(a, TransitionMode::Stinger, 100);
         assert!(matches!(sw.layout(), Layout::One(_)));
+    }
+
+    #[test]
+    fn fades_to_black_and_back() {
+        let scenes = presets(&["A".to_string()]);
+        let sw = Switcher::new((1280, 720), vec![16.0 / 9.0], scenes[0].clone());
+        assert_eq!(sw.black_level(), 0.0);
+        assert!(!sw.is_black());
+        sw.fade_to_black(true, 200);
+        assert!(sw.is_black());
+        let mid = sw.black_level();
+        assert!(mid < 0.5, "starts from the program: {mid}");
+        std::thread::sleep(Duration::from_millis(400));
+        assert_eq!(sw.black_level(), 1.0);
+        sw.fade_to_black(false, 0);
+        assert_eq!(sw.black_level(), 0.0);
     }
 }

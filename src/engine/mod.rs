@@ -1032,6 +1032,26 @@ impl Engine {
         (self.waker)();
     }
 
+    /// Fade the program to black (Some(true)), back up (Some(false)), or
+    /// the other way (None). Returns whether it's going to black.
+    pub fn fade_to_black(&self, on: Option<bool>) -> bool {
+        let on = on.unwrap_or(!self.switcher.is_black());
+        let cfg = self.config();
+        let ms = cfg.transition.ftb_ms.min(10_000);
+        self.switcher.fade_to_black(on, ms);
+        // The sound fades with the picture (same timing as scene audio).
+        let at = clock::now() - VIDEO_LATENCY;
+        if cfg.transition.ftb_audio || !on {
+            self.mix.fade_program(if on { 0.0 } else { 1.0 }, at, ms.max(20) as i64 * 1_000_000);
+        }
+        (self.waker)();
+        on
+    }
+
+    pub fn is_black(&self) -> bool {
+        self.switcher.is_black()
+    }
+
     /// Media players set to "restart when on air" start from the top when
     /// a scene brings them on.
     fn restart_players_going_on_air(&self, scene: &crate::scene::Scene) {
@@ -1236,7 +1256,9 @@ impl CompositorLoop {
                 let l = self.looks.lock().unwrap();
                 if l.generation != self.looks_generation {
                     self.looks_generation = l.generation;
-                    self.comp.set_looks(&l.looks, &l.style);
+                    for (i, why) in self.comp.set_looks(&l.looks, &l.style) {
+                        self.status.lock().unwrap().push(LogLevel::Warning, format!("Source {}: the LUT wasn't used: {why}", i + 1));
+                    }
                 }
             }
             let pw = self.preview_width.load(Ordering::Relaxed);
@@ -1294,6 +1316,7 @@ impl CompositorLoop {
                 thumbs,
             };
             if wants.program || wants.stream.is_some() || wants.preview || !wants.thumbs.is_empty() {
+                self.comp.set_black(self.switcher.black_level());
                 let layout = self.switcher.layout();
                 if let switcher::Layout::Stinger { elapsed, .. } = &layout {
                     let f = self.stinger.frame_at(*elapsed);

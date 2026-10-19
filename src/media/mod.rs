@@ -3,6 +3,7 @@
 
 pub mod audiofile;
 pub mod clock;
+pub mod cube;
 pub mod demux;
 pub mod flv;
 pub mod h264;

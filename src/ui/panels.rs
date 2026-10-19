@@ -39,7 +39,7 @@ pub fn key_up(ctx: &egui::Context, key: Key) -> bool {
 pub const PAD_KEYS: [Key; 12] = [Key::F1, Key::F2, Key::F3, Key::F4, Key::F5, Key::F6, Key::F7, Key::F8, Key::F9, Key::F10, Key::F11, Key::F12];
 
 impl App {
-    fn section_heading(&mut self, ui: &mut egui::Ui, text: &str, section: Section) {
+    pub(super) fn section_heading(&mut self, ui: &mut egui::Ui, text: &str, section: Section) {
         ui.horizontal(|ui| {
             ui.label(RichText::new(text).color(TEXT_DIM).size(11.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -50,7 +50,7 @@ impl App {
         });
     }
 
-    fn act(&mut self, a: Action) {
+    pub(super) fn act(&mut self, a: Action) {
         if let Err(e) = self.run_action(a) {
             self.toast(e, true);
         }
