@@ -23,6 +23,66 @@ mod settings;
 mod ui;
 mod util;
 
+/// Tests on Windows: an access violation takes the whole test run down
+/// without saying which test caused it. libtest names each test's thread
+/// after the test, so a first-chance exception handler can say.
+#[cfg(all(test, windows))]
+mod crash_report {
+    use std::ffi::c_void;
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    #[repr(C)]
+    struct ExceptionRecord {
+        code: u32,
+        flags: u32,
+        next: *mut ExceptionRecord,
+        address: *mut c_void,
+        params: u32,
+        info: [usize; 15],
+    }
+
+    #[repr(C)]
+    struct ExceptionPointers {
+        record: *mut ExceptionRecord,
+        context: *mut c_void,
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn AddVectoredExceptionHandler(first: u32, handler: unsafe extern "system" fn(*mut ExceptionPointers) -> i32) -> *mut c_void;
+    }
+
+    static SEEN: AtomicU32 = AtomicU32::new(0);
+
+    unsafe extern "system" fn handler(p: *mut ExceptionPointers) -> i32 {
+        // SAFETY: Windows passes valid exception pointers to the handler.
+        let rec = unsafe { &*(*p).record };
+        if rec.code == 0xC000_0005 && SEEN.fetch_add(1, Ordering::Relaxed) < 3 {
+            let what = if rec.info[0] == 0 { "reading" } else if rec.info[0] == 1 { "writing" } else { "running" };
+            let thread = std::thread::current();
+            let mut err = std::io::stderr().lock();
+            let _ = writeln!(err, "\n*** crash: access violation {what} {:#x} at {:p}, in test thread {:?}", rec.info[1], rec.address, thread.name());
+            let _ = err.flush();
+            let _ = writeln!(err, "{}", std::backtrace::Backtrace::force_capture());
+            let _ = err.flush();
+        }
+        0 // keep searching: this only reports
+    }
+
+    extern "C" fn install() {
+        // SAFETY: registers a handler that only reads the record and prints.
+        unsafe {
+            AddVectoredExceptionHandler(1, handler);
+        }
+    }
+
+    // Runs when the test program starts, before main.
+    #[used]
+    #[unsafe(link_section = ".CRT$XCU")]
+    static INSTALL: extern "C" fn() = install;
+}
+
 use anyhow::{Context, Result};
 use clap::Parser;
 use config::{AudioConfig, Config, SourceConfig, TransitionMode};

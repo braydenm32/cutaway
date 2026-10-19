@@ -12,7 +12,8 @@ import pathlib
 import re
 import sys
 
-MAX_CHARS = 6000
+# GitHub keeps the first 4096 characters of an annotation.
+MAX_CHARS = 4000
 MAX_NOTES = 9
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
@@ -49,6 +50,13 @@ def problems(lines: list[str]) -> list[tuple[str, str]]:
             while j < len(lines) and not lines[j].startswith("---- ") and lines[j].strip() != "failures:":
                 j += 1
             found.append((f"Test failed: {m.group(1)}", "\n".join(lines[i + 1 : j])))
+            i = j
+            continue
+        # A crash reported by the tests' own handler (Windows), with the
+        # test it happened in and a backtrace.
+        if line.startswith("*** crash:"):
+            j = min(len(lines), i + 60)
+            found.insert(0, ("Crash", "\n".join(lines[i:j])))
             i = j
             continue
         # A panic printed as it happened (tests run with --nocapture).
