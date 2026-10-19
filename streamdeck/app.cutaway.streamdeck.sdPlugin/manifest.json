@@ -1,407 +1,407 @@
 {
-  "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
-  "UUID": "app.cutaway.streamdeck",
-  "Name": "Cutaway",
-  "Version": "0.7.0.0",
-  "Author": "Cutaway",
-  "Description": "Run Cutaway from your Stream Deck: scenes and sources with live pictures and tally colours, take and cut, transitions, record, go live, markers, graphics, audio inputs (with Stream Deck+ dials), auto-switching, captions, media players, sound pads, Syrinscape, talkback, instant clips, timers, the rundown, remote guests, fade to black, instant replay, macros, PTZ cameras, the teleprompter, viewer comments and any Cutaway command.",
-  "Category": "Cutaway",
-  "CategoryIcon": "imgs/plugin/category",
-  "Icon": "imgs/plugin/marketplace",
-  "CodePath": "bin/plugin.js",
-  "PropertyInspectorPath": "ui/inspector.html",
-  "SDKVersion": 2,
-  "Software": {
-    "MinimumVersion": "6.5"
-  },
-  "OS": [
-    {
-      "Platform": "mac",
-      "MinimumVersion": "12"
-    },
-    {
-      "Platform": "windows",
-      "MinimumVersion": "10"
-    }
-  ],
-  "Nodejs": {
-    "Version": "20",
-    "Debug": "disabled"
-  },
-  "Actions": [
-    {
-      "UUID": "app.cutaway.streamdeck.scene",
-      "Name": "Scene",
-      "Tooltip": "Take a scene. Shows its live picture: red on air, green in preview.",
-      "Icon": "imgs/actions/scene/icon",
-      "Controllers": [
-        "Keypad"
-      ],
-      "States": [
-        {
-          "Image": "imgs/actions/scene/key"
-        }
-      ]
-    },
-    {
-      "UUID": "app.cutaway.streamdeck.source",
-      "Name": "Source",
-      "Tooltip": "A source full screen, with its live picture and tally.",
-      "Icon": "imgs/actions/source/icon",
-      "Controllers": [
-        "Keypad"
-      ],
-      "States": [
-        {
-          "Image": "imgs/actions/source/key"
-        }
-      ]
-    },
-    {
-      "UUID": "app.cutaway.streamdeck.take",
-      "Name": "Take / Cut",
-      "Tooltip": "Preview to program, with the transition or instantly.",
-      "Icon": "imgs/actions/take/icon",
-      "Controllers": [
-        "Keypad"
-      ],
-      "States": [
-        {
-          "Image": "imgs/actions/take/key"
-        }
-      ]
-    },
-    {
-      "UUID": "app.cutaway.streamdeck.transition",
-      "Name": "Transition",
-      "Tooltip": "Choose the transition: cut, mix, wipe, push, dip or stinger.",
-      "Icon": "imgs/actions/transition/icon",
-      "Controllers": [
-        "Keypad"
-      ],
-      "States": [
-        {
-          "Image": "imgs/actions/transition/key"
-        }
-      ]
-    },
-    {
-      "UUID": "app.cutaway.streamdeck.record",
-      "Name": "Record",
-      "Tooltip": "Start recording; hold to stop.",
-      "Icon": "imgs/actions/record/icon",
-      "Controllers": [
-        "Keypad"
-      ],
-      "States": [
-        {
-          "Image": "imgs/actions/record/key"
-        }
-      ]
-    },
-    {
-      "UUID": "app.cutaway.streamdeck.live",
-      "Name": "Go Live",
-      "Tooltip": "Hold to go live; hold to end the stream.",
-      "Icon": "imgs/actions/live/icon",
-      "Controllers": [
-        "Keypad"
-      ],
-      "States": [
-        {
-          "Image": "imgs/actions/live/key"
-        }
-      ]
-    },
-    {
-      "UUID": "app.cutaway.streamdeck.marker",
-      "Name": "Marker",
-      "Tooltip": "Drop a marker in the recording.",
-      "Icon": "imgs/actions/marker/icon",
-      "Controllers": [
-        "Keypad"
-      ],
-      "States": [
-        {
-          "Image": "imgs/actions/marker/key"
-        }
-      ]
-    },
-    {
-      "UUID": "app.cutaway.streamdeck.graphic",
-      "Name": "Graphic",
-      "Tooltip": "Show or hide a logo, title or lower third.",
-      "Icon": "imgs/actions/graphic/icon",
-      "Controllers": [
-        "Keypad"
-      ],
-      "States": [
-        {
-          "Image": "imgs/actions/graphic/key"
-        }
-      ]
-    },
-    {
-      "UUID": "app.cutaway.streamdeck.audio",
-      "Name": "Audio Input",
-      "Tooltip": "Turn an input on or off, with a level meter. On a Stream Deck+ dial: turn for level, press for on/off.",
-      "Icon": "imgs/actions/audio/icon",
-      "Controllers": [
-        "Keypad",
-        "Encoder"
-      ],
-      "States": [
-        {
-          "Image": "imgs/actions/audio/key"
-        }
-      ],
-      "Encoder": {
-        "layout": "$B1",
-        "Icon": "imgs/actions/audio/icon",
-        "TriggerDescription": {
-          "Rotate": "Level",
-          "Push": "On / off",
-          "Touch": "On / off"
-        }
-      }
-    },
-    {
-      "UUID": "app.cutaway.streamdeck.auto",
-      "Name": "Auto Switching",
-      "Tooltip": "Turn automatic switching (follows who's talking) on or off.",
-      "Icon": "imgs/actions/auto/icon",
-      "Controllers": [
-        "Keypad"
-      ],
-      "States": [
-        {
-          "Image": "imgs/actions/auto/key"
-        }
-      ]
-    },
-    {
-      "UUID": "app.cutaway.streamdeck.captions",
-      "Name": "Captions",
-      "Tooltip": "Turn live captions on or off.",
-      "Icon": "imgs/actions/captions/icon",
-      "Controllers": [
-        "Keypad"
-      ],
-      "States": [
-        {
-          "Image": "imgs/actions/captions/key"
-        }
-      ]
-    },
-    {
-      "UUID": "app.cutaway.streamdeck.media",
-      "Name": "Media Player",
-      "Tooltip": "Play, pause, next or restart a media player source.",
-      "Icon": "imgs/actions/media/icon",
-      "Controllers": [
-        "Keypad"
-      ],
-      "States": [
-        {
-          "Image": "imgs/actions/media/key"
-        }
-      ]
-    },
-    {
-      "UUID": "app.cutaway.streamdeck.pad",
-      "Name": "Sound Pad",
-      "Tooltip": "Play a sound pad; lit with its progress while it plays.",
-      "Icon": "imgs/actions/pad/icon",
-      "Controllers": [
-        "Keypad"
-      ],
-      "States": [
-        {
-          "Image": "imgs/actions/pad/key"
-        }
-      ]
-    },
-    {
-      "UUID": "app.cutaway.streamdeck.syrinscape",
-      "Name": "Syrinscape",
-      "Tooltip": "Start a Syrinscape mood or sound set up in Cutaway.",
-      "Icon": "imgs/actions/syrinscape/icon",
-      "Controllers": [
-        "Keypad"
-      ],
-      "States": [
-        {
-          "Image": "imgs/actions/syrinscape/key"
-        }
-      ]
-    },
-    {
-      "UUID": "app.cutaway.streamdeck.talkback",
-      "Name": "Talkback",
-      "Tooltip": "Your mic in the presenters' ears while held.",
-      "Icon": "imgs/actions/talkback/icon",
-      "Controllers": [
-        "Keypad"
-      ],
-      "States": [
-        {
-          "Image": "imgs/actions/talkback/key"
-        }
-      ]
-    },
-    {
-      "UUID": "app.cutaway.streamdeck.clip",
-      "Name": "Clip",
-      "Tooltip": "Save the last few seconds of the recording as a clip.",
-      "Icon": "imgs/actions/clip/icon",
-      "Controllers": [
-        "Keypad"
-      ],
-      "States": [
-        {
-          "Image": "imgs/actions/clip/key"
-        }
-      ]
-    },
-    {
-      "UUID": "app.cutaway.streamdeck.timer",
-      "Name": "Timer",
-      "Tooltip": "Start, pause or reset a countdown or stopwatch; shows its time.",
-      "Icon": "imgs/actions/timer/icon",
-      "Controllers": [
-        "Keypad"
-      ],
-      "States": [
-        {
-          "Image": "imgs/actions/timer/key"
-        }
-      ]
-    },
-    {
-      "UUID": "app.cutaway.streamdeck.rundown",
-      "Name": "Rundown",
-      "Tooltip": "Next segment, with the time left in this one.",
-      "Icon": "imgs/actions/rundown/icon",
-      "Controllers": [
-        "Keypad"
-      ],
-      "States": [
-        {
-          "Image": "imgs/actions/rundown/key"
-        }
-      ]
-    },
-    {
-      "UUID": "app.cutaway.streamdeck.guest",
-      "Name": "Guest",
-      "Tooltip": "A remote guest: whether they're on, and a press shows them.",
-      "Icon": "imgs/actions/guest/icon",
-      "Controllers": [
-        "Keypad"
-      ],
-      "States": [
-        {
-          "Image": "imgs/actions/guest/key"
-        }
-      ]
-    },
-    {
-      "UUID": "app.cutaway.streamdeck.ftb",
-      "Name": "Fade to Black",
-      "Tooltip": "Fade the program (picture and sound) to black, and back up; lit while black.",
-      "Icon": "imgs/actions/ftb/icon",
-      "Controllers": [
-        "Keypad"
-      ],
-      "States": [
-        {
-          "Image": "imgs/actions/ftb/key"
-        }
-      ]
-    },
-    {
-      "UUID": "app.cutaway.streamdeck.replay",
-      "Name": "Instant Replay",
-      "Tooltip": "Play the last few seconds again (in slow motion if you like) while recording; press again to stop.",
-      "Icon": "imgs/actions/replay/icon",
-      "Controllers": [
-        "Keypad"
-      ],
-      "States": [
-        {
-          "Image": "imgs/actions/replay/key"
-        }
-      ]
-    },
-    {
-      "UUID": "app.cutaway.streamdeck.macro",
-      "Name": "Macro",
-      "Tooltip": "Run one of Cutaway's macros: several commands with one press.",
-      "Icon": "imgs/actions/macro/icon",
-      "Controllers": [
-        "Keypad"
-      ],
-      "States": [
-        {
-          "Image": "imgs/actions/macro/key"
-        }
-      ]
-    },
-    {
-      "UUID": "app.cutaway.streamdeck.ptz",
-      "Name": "PTZ Camera",
-      "Tooltip": "Recall a PTZ preset, go home, or move while held (real or virtual PTZ cameras).",
-      "Icon": "imgs/actions/ptz/icon",
-      "Controllers": [
-        "Keypad"
-      ],
-      "States": [
-        {
-          "Image": "imgs/actions/ptz/key"
-        }
-      ]
-    },
-    {
-      "UUID": "app.cutaway.streamdeck.prompter",
-      "Name": "Teleprompter",
-      "Tooltip": "Roll or pause the script, change speed, or jump back and forward.",
-      "Icon": "imgs/actions/prompter/icon",
-      "Controllers": [
-        "Keypad"
-      ],
-      "States": [
-        {
-          "Image": "imgs/actions/prompter/key"
-        }
-      ]
-    },
-    {
-      "UUID": "app.cutaway.streamdeck.comment",
-      "Name": "Viewer Comment",
-      "Tooltip": "Show the next comment from the live chat on screen, or hide it.",
-      "Icon": "imgs/actions/comment/icon",
-      "Controllers": [
-        "Keypad"
-      ],
-      "States": [
-        {
-          "Image": "imgs/actions/comment/key"
-        }
-      ]
-    },
-    {
-      "UUID": "app.cutaway.streamdeck.command",
-      "Name": "Command",
-      "Tooltip": "Any Cutaway command, e.g. preview:2, graphic:Logo:on, gain:Mic:-6.",
-      "Icon": "imgs/actions/command/icon",
-      "Controllers": [
-        "Keypad"
-      ],
-      "States": [
-        {
-          "Image": "imgs/actions/command/key"
-        }
-      ]
-    }
-  ]
+	"$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
+	"UUID": "app.cutaway.streamdeck",
+	"Name": "Cutaway",
+	"Version": "0.7.0.0",
+	"Author": "Cutaway",
+	"Description": "Run Cutaway from your Stream Deck: scenes and sources with live pictures and tally colours, take and cut, transitions, record, go live, markers, graphics, audio inputs (with Stream Deck+ dials), auto-switching, captions, media players, sound pads, Syrinscape, talkback, instant clips, timers, the rundown, remote guests, fade to black, instant replay, macros, PTZ cameras, the teleprompter, viewer comments and any Cutaway command.",
+	"Category": "Cutaway",
+	"CategoryIcon": "imgs/plugin/category",
+	"Icon": "imgs/plugin/marketplace",
+	"CodePath": "bin/plugin.js",
+	"PropertyInspectorPath": "ui/inspector.html",
+	"SDKVersion": 2,
+	"Software": {
+		"MinimumVersion": "6.5"
+	},
+	"OS": [
+		{
+			"Platform": "mac",
+			"MinimumVersion": "12"
+		},
+		{
+			"Platform": "windows",
+			"MinimumVersion": "10"
+		}
+	],
+	"Nodejs": {
+		"Version": "20",
+		"Debug": "disabled"
+	},
+	"Actions": [
+		{
+			"UUID": "app.cutaway.streamdeck.scene",
+			"Name": "Scene",
+			"Tooltip": "Take a scene. Shows its live picture: red on air, green in preview.",
+			"Icon": "imgs/actions/scene/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/scene/key"
+				}
+			]
+		},
+		{
+			"UUID": "app.cutaway.streamdeck.source",
+			"Name": "Source",
+			"Tooltip": "A source full screen, with its live picture and tally.",
+			"Icon": "imgs/actions/source/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/source/key"
+				}
+			]
+		},
+		{
+			"UUID": "app.cutaway.streamdeck.take",
+			"Name": "Take / Cut",
+			"Tooltip": "Preview to program, with the transition or instantly.",
+			"Icon": "imgs/actions/take/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/take/key"
+				}
+			]
+		},
+		{
+			"UUID": "app.cutaway.streamdeck.transition",
+			"Name": "Transition",
+			"Tooltip": "Choose the transition: cut, mix, wipe, push, dip or stinger.",
+			"Icon": "imgs/actions/transition/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/transition/key"
+				}
+			]
+		},
+		{
+			"UUID": "app.cutaway.streamdeck.record",
+			"Name": "Record",
+			"Tooltip": "Start recording; hold to stop.",
+			"Icon": "imgs/actions/record/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/record/key"
+				}
+			]
+		},
+		{
+			"UUID": "app.cutaway.streamdeck.live",
+			"Name": "Go Live",
+			"Tooltip": "Hold to go live; hold to end the stream.",
+			"Icon": "imgs/actions/live/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/live/key"
+				}
+			]
+		},
+		{
+			"UUID": "app.cutaway.streamdeck.marker",
+			"Name": "Marker",
+			"Tooltip": "Drop a marker in the recording.",
+			"Icon": "imgs/actions/marker/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/marker/key"
+				}
+			]
+		},
+		{
+			"UUID": "app.cutaway.streamdeck.graphic",
+			"Name": "Graphic",
+			"Tooltip": "Show or hide a logo, title or lower third.",
+			"Icon": "imgs/actions/graphic/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/graphic/key"
+				}
+			]
+		},
+		{
+			"UUID": "app.cutaway.streamdeck.audio",
+			"Name": "Audio Input",
+			"Tooltip": "Turn an input on or off, with a level meter. On a Stream Deck+ dial: turn for level, press for on/off.",
+			"Icon": "imgs/actions/audio/icon",
+			"Controllers": [
+				"Keypad",
+				"Encoder"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/audio/key"
+				}
+			],
+			"Encoder": {
+				"layout": "$B1",
+				"Icon": "imgs/actions/audio/icon",
+				"TriggerDescription": {
+					"Rotate": "Level",
+					"Push": "On / off",
+					"Touch": "On / off"
+				}
+			}
+		},
+		{
+			"UUID": "app.cutaway.streamdeck.auto",
+			"Name": "Auto Switching",
+			"Tooltip": "Turn automatic switching (follows who's talking) on or off.",
+			"Icon": "imgs/actions/auto/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/auto/key"
+				}
+			]
+		},
+		{
+			"UUID": "app.cutaway.streamdeck.captions",
+			"Name": "Captions",
+			"Tooltip": "Turn live captions on or off.",
+			"Icon": "imgs/actions/captions/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/captions/key"
+				}
+			]
+		},
+		{
+			"UUID": "app.cutaway.streamdeck.media",
+			"Name": "Media Player",
+			"Tooltip": "Play, pause, next or restart a media player source.",
+			"Icon": "imgs/actions/media/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/media/key"
+				}
+			]
+		},
+		{
+			"UUID": "app.cutaway.streamdeck.pad",
+			"Name": "Sound Pad",
+			"Tooltip": "Play a sound pad; lit with its progress while it plays.",
+			"Icon": "imgs/actions/pad/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/pad/key"
+				}
+			]
+		},
+		{
+			"UUID": "app.cutaway.streamdeck.syrinscape",
+			"Name": "Syrinscape",
+			"Tooltip": "Start a Syrinscape mood or sound set up in Cutaway.",
+			"Icon": "imgs/actions/syrinscape/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/syrinscape/key"
+				}
+			]
+		},
+		{
+			"UUID": "app.cutaway.streamdeck.talkback",
+			"Name": "Talkback",
+			"Tooltip": "Your mic in the presenters' ears while held.",
+			"Icon": "imgs/actions/talkback/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/talkback/key"
+				}
+			]
+		},
+		{
+			"UUID": "app.cutaway.streamdeck.clip",
+			"Name": "Clip",
+			"Tooltip": "Save the last few seconds of the recording as a clip.",
+			"Icon": "imgs/actions/clip/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/clip/key"
+				}
+			]
+		},
+		{
+			"UUID": "app.cutaway.streamdeck.timer",
+			"Name": "Timer",
+			"Tooltip": "Start, pause or reset a countdown or stopwatch; shows its time.",
+			"Icon": "imgs/actions/timer/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/timer/key"
+				}
+			]
+		},
+		{
+			"UUID": "app.cutaway.streamdeck.rundown",
+			"Name": "Rundown",
+			"Tooltip": "Next segment, with the time left in this one.",
+			"Icon": "imgs/actions/rundown/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/rundown/key"
+				}
+			]
+		},
+		{
+			"UUID": "app.cutaway.streamdeck.guest",
+			"Name": "Guest",
+			"Tooltip": "A remote guest: whether they're on, and a press shows them.",
+			"Icon": "imgs/actions/guest/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/guest/key"
+				}
+			]
+		},
+		{
+			"UUID": "app.cutaway.streamdeck.ftb",
+			"Name": "Fade to Black",
+			"Tooltip": "Fade the program (picture and sound) to black, and back up; lit while black.",
+			"Icon": "imgs/actions/ftb/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/ftb/key"
+				}
+			]
+		},
+		{
+			"UUID": "app.cutaway.streamdeck.replay",
+			"Name": "Instant Replay",
+			"Tooltip": "Play the last few seconds again (in slow motion if you like) while recording; press again to stop.",
+			"Icon": "imgs/actions/replay/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/replay/key"
+				}
+			]
+		},
+		{
+			"UUID": "app.cutaway.streamdeck.macro",
+			"Name": "Macro",
+			"Tooltip": "Run one of Cutaway's macros: several commands with one press.",
+			"Icon": "imgs/actions/macro/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/macro/key"
+				}
+			]
+		},
+		{
+			"UUID": "app.cutaway.streamdeck.ptz",
+			"Name": "PTZ Camera",
+			"Tooltip": "Recall a PTZ preset, go home, or move while held (real or virtual PTZ cameras).",
+			"Icon": "imgs/actions/ptz/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/ptz/key"
+				}
+			]
+		},
+		{
+			"UUID": "app.cutaway.streamdeck.prompter",
+			"Name": "Teleprompter",
+			"Tooltip": "Roll or pause the script, change speed, or jump back and forward.",
+			"Icon": "imgs/actions/prompter/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/prompter/key"
+				}
+			]
+		},
+		{
+			"UUID": "app.cutaway.streamdeck.comment",
+			"Name": "Viewer Comment",
+			"Tooltip": "Show the next comment from the live chat on screen, or hide it.",
+			"Icon": "imgs/actions/comment/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/comment/key"
+				}
+			]
+		},
+		{
+			"UUID": "app.cutaway.streamdeck.command",
+			"Name": "Command",
+			"Tooltip": "Any Cutaway command, e.g. preview:2, graphic:Logo:on, gain:Mic:-6.",
+			"Icon": "imgs/actions/command/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/command/key"
+				}
+			]
+		}
+	]
 }

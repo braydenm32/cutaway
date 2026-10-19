@@ -4,7 +4,10 @@ name: macOS
 
 on:
   push:
+    branches: ["**"]
   workflow_dispatch:
+  # The release workflow builds with this too.
+  workflow_call:
 
 # A newer push replaces a run still going on the same branch.
 concurrency:

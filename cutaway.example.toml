@@ -78,6 +78,9 @@ preview_mode = false        # true = pick in preview, then Take (Space) / Cut (E
 #   "ndi:Studio PC (OBS)"     an NDI source (needs the free NDI Tools)
 #   "frame:Wide"              an auto-framed close-up cut from the "Wide" source,
 #                             following the people in it ([sources.framing])
+#   "vptz:Wide"               a virtual PTZ camera inside the "Wide" source
+#   "guest:<id>"              a remote guest spot (made in Settings → Remote guests)
+#   "phone:<id>"              a phone camera, joined by QR code
 # The device is set to this size/rate if it has it, otherwise scaled.
 
 [[sources]]
@@ -111,6 +114,15 @@ key_smoothness = 0.08
 key_spill = 0.1
 remove_background = false   # cut the people out without a green screen (macOS: Vision)
 cutout_quality = "balanced" # fast | balanced | best
+# lut = "/Users/you/LUTs/Camera log to Rec709.cube"   # a .cube colour LUT
+lut_strength = 1.0          # 0 … 1
+
+# A PTZ camera's controls (optional): none | visca_ip | visca_tcp | visca_udp | ndi
+[sources.ptz]
+control = "none"
+address = "192.168.1.60"    # VISCA: the camera's address (":port" if not the usual one)
+speed = 0.6                 # joystick and key moves, 0 … 1
+presets = [{ name = "Host", x = 0.5, y = 0.5, zoom = 1.0 }]   # x/y/zoom are for virtual PTZ
 
 [[sources]]
 name = "Guest"
@@ -195,6 +207,8 @@ program_right = 1
 [audio.processing]
 enabled = true
 high_pass_hz = 80.0         # 0 = off
+noise_reduction = false     # RNNoise: fans, hum and room noise down, voices kept
+noise_amount = 1.0          # 0 … 1
 gate = false
 gate_threshold_db = -50.0
 eq = false
@@ -223,6 +237,8 @@ stream_target_lufs = -14.0
 monitor_device = ""         # headphone output device ("" = off)
 monitor_source = "program"  # program (recording mix) | stream | an input's name (solo)
 monitor_volume_db = 0.0
+ducking = false             # inputs marked duck = true dip under the voices
+talkback_to_guests = false  # remote guests hear your talkback too
 
 # ---- live captions and transcripts (macOS: on-device speech recognition) -------------
 
@@ -282,6 +298,16 @@ box_color = "#101820"
 box_opacity = 0.75
 # font = "/Library/Fonts/YourFont.ttf"   # default: built in
 
+# A news-style ticker: the items one per line in `title`, a label in `subtitle`.
+[[graphics]]
+name = "Ticker"
+kind = "ticker"
+title = "Tonight: cameras, microphones and everything in between\nFollow us for the next show"
+subtitle = "LIVE"
+y = 0.92
+speed = 6.0                 # picture widths a minute
+visible = false
+
 # ---- live streaming ------------------------------------------------------------
 # The program is encoded once (H.264 + AAC, constant bitrate, keyframe every
 # 2 s) and sent to every enabled destination at the same time.
@@ -296,6 +322,7 @@ encoder = "auto"            # always H.264, on the hardware encoder
 auto_reconnect = true       # a dropped destination reconnects on its own
 max_retries = 0             # 0 = keep trying
 record_when_live = false    # also start recording when you go live
+adaptive_bitrate = true     # ease the bitrate off while a connection can't keep up
 
 [[streaming.destinations]]
 name = "YouTube"
@@ -318,10 +345,18 @@ server = "srt://192.168.1.50:9000"
 key = ""                    # optional SRT stream ID
 enabled = false
 
+[[streaming.destinations]]
+name = "TikTok"
+service = "custom_rtmp"
+server = "rtmp://push.tiktok.example/live"
+key = ""
+enabled = false
+vertical = true             # gets the vertical (9:16) version instead of the program
+
 # ---- other screens -------------------------------------------------------------------
 
 [display]
-output = "off"              # off | program | multiview — on another screen
+output = "off"              # off | program | multiview | prompter — on another screen
 fullscreen = true
 virtual_camera = false      # turn the "Cutaway" webcam on at start (macOS, see README)
 
@@ -361,6 +396,83 @@ confirm_stop_recording = false
 confirm_end_stream = true
 check_before_start = false  # run the pre-show check before recording / going live
 profile = ""                # the show these settings belong to
+check_updates = true        # ask GitHub for a newer Cutaway when it starts
+
+# ---- fade to black and instant replay -------------------------------------------
+# (in [transition]: ftb_ms = 1000, ftb_audio = true — the sound fades too)
+
+[replay]
+seconds = 8.0               # how much the Replay button plays again
+slow_speed = 0.5            # slow motion: half speed
+label = true                # "REPLAY" in the corner
+
+# ---- macros: several commands from one button ----------------------------------
+
+[[macros]]
+name = "Open the show"
+color = "#c94f6a"
+commands = ["scene:Wide", "pad:Intro", "wait:3", "graphic:Host title:on", "wait:6", "graphic:Host title:off"]
+
+# ---- the teleprompter -----------------------------------------------------------
+
+[prompter]
+script = ""                 # the text ("" with use_rundown: the rundown's notes)
+use_rundown = false
+words_per_minute = 140
+text_size = 0.075           # fraction of the screen's height
+mirror = false              # for a glass (beam-splitter) prompter
+text_color = "#ffffff"
+background = "#000000"
+
+# ---- viewer comments from the live chat ----------------------------------------
+
+[comments]
+twitch_channel = ""         # read anonymously, no sign-in
+youtube = ""                # a live video's address or id…
+youtube_api_key = ""        # …with a YouTube Data API key
+hide_after_s = 0            # 0 = until you hide it
+
+# ---- remote guests and phone cameras -----------------------------------------------
+
+[guests]
+enabled = false
+access = "tunnel"           # tunnel (a free Cloudflare address) | custom
+port = 8792
+return_video = false        # guests see the program
+backup = false              # guests' browsers record them too, into the take's Guests folder
+
+# ---- NDI output ----------------------------------------------------------------
+
+[ndi_out]
+program = false             # the program (with the recording mix) as NDI
+name = "Cutaway"
+sources = false             # every source too, as "Cutaway - <source>"
+
+# ---- the vertical (9:16) version ------------------------------------------------
+
+[vertical]
+enabled = false
+width = 1080
+height = 1920
+record = true               # Program_Vertical in each take
+graphics = true             # the program's graphics, across its width
+layouts = [{ scene = "Interview", mode = "stack" }]          # auto | stack | one (with source = "…")
+framing = [{ source = "Wide", x = 0.35, y = 0.5, zoom = 1.2 }]  # which part fills a tall frame
+
+# ---- upload after the show (your own Google OAuth "Desktop app" client) -----------
+
+[upload]
+client_id = ""
+client_secret = ""
+youtube = false
+youtube_privacy = "private" # private | unlisted | public
+youtube_title = ""          # "" = the show's name and date; {show} and {date} work
+youtube_chapters = true     # the markers as chapters
+drive = false
+drive_folder = "Cutaway"
+drive_files = "program"     # program | program_and_mix | everything
+automatic = false           # upload as each take is saved (otherwise an Upload button)
+# (refresh_token, account and granted are filled in by signing in.)
 
 # ---- scenes (optional) ---------------------------------------------------------
 # Leave these out to get presets: each source full screen, side by side,

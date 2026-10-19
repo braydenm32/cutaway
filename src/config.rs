@@ -1899,6 +1899,21 @@ mod tests {
         assert_eq!(cfg.auto_switch.rules.len(), 2);
         assert_eq!(cfg.midi.mappings.len(), 6);
         assert_eq!(cfg.transition.mode, TransitionMode::Mix);
+        // 0.6's settings are read as written.
+        assert_eq!(cfg.sources[1].look.lut_strength, 1.0);
+        assert_eq!(cfg.sources[1].ptz.presets.len(), 1);
+        assert_eq!(cfg.graphics[2].kind, GraphicKind::Ticker);
+        assert!(cfg.streaming.adaptive_bitrate && cfg.streaming.destinations[3].vertical);
+        assert_eq!(cfg.vertical.layouts[0].mode, VerticalMode::Stack);
+        assert_eq!(cfg.vertical.framing[0].zoom, 1.2);
+        assert_eq!(cfg.upload.drive_files, DriveFiles::Program);
+        assert_eq!(cfg.macros[0].commands.len(), 6);
+        assert!(cfg.ui.check_updates && !cfg.mix.ducking && !cfg.guests.backup);
+        for m in &cfg.macros {
+            for c in &m.commands {
+                assert!(crate::control::Action::parse(c).is_ok(), "{c}");
+            }
+        }
         // Every MIDI command in the example is one Cutaway understands.
         for m in &cfg.midi.mappings {
             assert!(crate::control::midi::Msg::parse(&m.message).is_some(), "{}", m.message);
