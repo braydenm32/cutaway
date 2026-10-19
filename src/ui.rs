@@ -2243,6 +2243,10 @@ impl App {
             }
             return;
         }
+        if let Some(kbps) = stream.lowered_kbps {
+            ui.label(RichText::new(format!("⚠ bitrate lowered to {:.1} Mbps while the connection catches up", kbps as f64 / 1000.0)).size(11.0).color(AMBER))
+                .on_hover_text(format!("Set: {:.1} Mbps. It comes back by itself once every destination keeps up.", self.cfg.streaming.video_bitrate_kbps as f64 / 1000.0));
+        }
         for d in &stream.destinations {
             if d.state == DestState::Off {
                 continue;

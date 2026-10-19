@@ -1132,6 +1132,9 @@ pub struct StreamingConfig {
     pub max_retries: u32,
     /// Start recording automatically when going live.
     pub record_when_live: bool,
+    /// Lower the video bitrate while a connection can't keep up (and bring
+    /// it back once it can).
+    pub adaptive_bitrate: bool,
     pub destinations: Vec<StreamDestination>,
 }
 
@@ -1147,6 +1150,7 @@ impl Default for StreamingConfig {
             auto_reconnect: true,
             max_retries: 0,
             record_when_live: false,
+            adaptive_bitrate: true,
             destinations: Vec::new(),
         }
     }

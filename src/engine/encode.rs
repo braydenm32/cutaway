@@ -38,6 +38,11 @@ pub trait VideoEncoder: Send {
     fn encode(&mut self, frame: &VideoFrame, pts: Ns, force_keyframe: bool) -> Result<()>;
     /// Flush; every packet has been delivered to the sink when this returns.
     fn finish(&mut self) -> Result<()>;
+    /// Change the bitrate from the next frame on (streaming, when the
+    /// connection struggles). False if this encoder can't.
+    fn set_bitrate(&mut self, _kbps: u32) -> bool {
+        false
+    }
 }
 
 pub trait AudioEncoder: Send {
@@ -218,6 +223,20 @@ mod software {
         fn finish(&mut self) -> Result<()> {
             Ok(())
         }
+
+        fn set_bitrate(&mut self, kbps: u32) -> bool {
+            // ENCODER_OPTION_BITRATE with an SBitrateInfo for every layer.
+            #[repr(C)]
+            struct BitrateInfo {
+                layer: std::os::raw::c_int,
+                bitrate: std::os::raw::c_int,
+            }
+            const ENCODER_OPTION_BITRATE: std::os::raw::c_int = 5;
+            const SPATIAL_LAYER_ALL: std::os::raw::c_int = 4;
+            let mut info = BitrateInfo { layer: SPATIAL_LAYER_ALL, bitrate: (kbps.saturating_mul(1000)).min(i32::MAX as u32) as i32 };
+            // SAFETY: the option and its struct are as OpenH264's headers define them.
+            unsafe { self.enc.raw_api().set_option(ENCODER_OPTION_BITRATE, &mut info as *mut BitrateInfo as *mut std::ffi::c_void) == 0 }
+        }
     }
 
     pub struct FdkAac {
@@ -306,6 +325,39 @@ mod tests {
     use crate::media::mp4::{Brand, Mp4Writer};
     use crate::media::testsrc::{TestPattern, TestTone};
     use std::sync::Mutex;
+
+    /// The stream's encoder can ease off mid-stream (adaptive bitrate).
+    #[test]
+    fn bitrate_changes_while_encoding() {
+        let sizes = Arc::new(Mutex::new(Vec::<usize>::new()));
+        let s2 = sizes.clone();
+        let s = VideoSettings { codec: VideoCodec::H264, width: 320, height: 180, fps: 30, bitrate_kbps: 3000, purpose: Purpose::Stream, backend: "auto".into() };
+        let mut enc = create_video(&s, Arc::new(move |p| s2.lock().unwrap().push(p.data.len()))).unwrap();
+        // A noisy picture, so the bitrate is what limits it.
+        let mut seed = 1u32;
+        let mut noise = |n: usize| -> Vec<u8> {
+            (0..n)
+                .map(|i| {
+                    seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    // Detail everywhere: a gradient with grain.
+                    ((i % 256) as u8 / 2).wrapping_add((seed >> 27) as u8)
+                })
+                .collect()
+        };
+        let mut run = |enc: &mut Box<dyn VideoEncoder>, from: i64| {
+            for i in from..from + 60 {
+                let pts = i * 1_000_000_000 / 30;
+                let f = VideoFrame::new_nv12(320, 180, pts, noise(320 * 180), noise(320 * 90), i as u64);
+                enc.encode(&f, pts, false).unwrap_or_else(|e| panic!("frame {i}: {e:#}"));
+            }
+        };
+        run(&mut enc, 0);
+        let before: usize = sizes.lock().unwrap().drain(..).skip(30).sum();
+        assert!(enc.set_bitrate(500), "this encoder takes a new bitrate");
+        run(&mut enc, 60);
+        let after: usize = sizes.lock().unwrap().drain(..).skip(30).sum();
+        assert!(after * 3 < before, "much less after lowering it: {before} → {after} bytes");
+    }
 
     #[test]
     fn encode_real_file() {

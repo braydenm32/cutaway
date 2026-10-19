@@ -236,6 +236,19 @@ impl VideoEncoder for VtEncoder {
         Ok(())
     }
 
+    fn set_bitrate(&mut self, kbps: u32) -> bool {
+        let bitrate = CFNumber::new_i32((kbps.saturating_mul(1000)).min(i32::MAX as u32) as i32);
+        let bytes = CFNumber::new_i64(kbps as i64 * 1000 / 8 * 3 / 2);
+        let secs = CFNumber::new_f64(1.0);
+        let limits = CFArray::<CFType>::from_objects(&[cf(&*bytes), cf(&*secs)]);
+        // SAFETY: properties set on our own live session, as at start.
+        unsafe {
+            let a = VTSessionSetProperty(&self.session, kVTCompressionPropertyKey_AverageBitRate, Some(cf(&*bitrate)));
+            let _ = VTSessionSetProperty(&self.session, kVTCompressionPropertyKey_DataRateLimits, Some(cf(&*limits)));
+            a == 0
+        }
+    }
+
     fn finish(&mut self) -> Result<()> {
         if !self.finished {
             self.finished = true;

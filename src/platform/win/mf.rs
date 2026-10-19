@@ -522,6 +522,13 @@ impl VideoEncoder for MfVideoEncoder {
         self.t.input(&sample, &mut |t, o| deliver(t, o, codec, size, header, config, &sink))
     }
 
+    fn set_bitrate(&mut self, kbps: u32) -> bool {
+        let Some(api) = &self.api else { return false };
+        // SAFETY: a codec property on our own encoder (most hardware
+        // encoders take a new mean bitrate while running).
+        unsafe { api.SetValue(&CODECAPI_AVEncCommonMeanBitRate, &variant_u32(kbps.saturating_mul(1000))).is_ok() }
+    }
+
     fn finish(&mut self) -> Result<()> {
         let (codec, size, sink) = (self.codec, (self.width, self.height), self.sink.clone());
         let (header, config) = (&mut self.header, &mut self.config);

@@ -1200,6 +1200,9 @@ impl SettingsUi {
             label(ui, "When going live");
             ui.checkbox(&mut s.record_when_live, "also start recording");
             ui.end_row();
+            label(ui, "Slow connection");
+            ui.checkbox(&mut s.adaptive_bitrate, "lower the video bitrate while it can't keep up, and bring it back after (adaptive bitrate)");
+            ui.end_row();
         });
         ui.add_space(8.0);
         hint(ui, "A destination that fails never affects the others, the program or your recordings. Stream keys are stored in the settings file — keep it private.");

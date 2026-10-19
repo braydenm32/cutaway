@@ -62,6 +62,8 @@ pub struct StreamStatus {
     pub destinations: Vec<DestStatus>,
     /// Set when the whole stream had to stop.
     pub error: Option<String>,
+    /// The video bitrate, while it's lowered for a struggling connection.
+    pub lowered_kbps: Option<u32>,
 }
 
 /// Readable name for a destination's state.
@@ -121,6 +123,15 @@ struct Fanout {
 }
 
 impl Fanout {
+    /// How full the fullest connected destination's queue is (0..1).
+    fn backlog(&self) -> f32 {
+        self.dests
+            .iter()
+            .filter(|(_, d)| d.connected.load(Ordering::Relaxed))
+            .map(|(tx, _)| tx.len() as f32 / tx.capacity().unwrap_or(1).max(1) as f32)
+            .fold(0.0, f32::max)
+    }
+
     fn video(&self, p: &VideoPacket) {
         for (tx, d) in &self.dests {
             if !d.connected.load(Ordering::Relaxed) {
@@ -153,6 +164,55 @@ impl Fanout {
                 d.congested.store(true, Ordering::Relaxed);
             }
         }
+    }
+}
+
+/// Adaptive bitrate: steps the bitrate down by a quarter while a
+/// destination's queue is backing up (at most every 2 s, never below a
+/// quarter of the target), and back up a little at a time once every queue
+/// has been clear for 15 s.
+struct Adapt {
+    target: u32,
+    current: u32,
+    last_change: Instant,
+    calm_since: Instant,
+    /// The encoder can't change bitrate.
+    disabled: bool,
+}
+
+impl Adapt {
+    fn new(target: u32, now: Instant) -> Adapt {
+        Adapt { target, current: target, last_change: now, calm_since: now, disabled: false }
+    }
+
+    fn floor(&self) -> u32 {
+        (self.target / 4).max(400).min(self.target)
+    }
+
+    /// A new bitrate, when it should change.
+    fn step(&mut self, backlog: f32, now: Instant) -> Option<u32> {
+        if self.disabled {
+            return None;
+        }
+        if backlog > 0.3 {
+            self.calm_since = now;
+            if self.current > self.floor() && now.duration_since(self.last_change) >= Duration::from_secs(2) {
+                self.current = (self.current * 3 / 4).max(self.floor());
+                self.last_change = now;
+                return Some(self.current);
+            }
+            return None;
+        }
+        if backlog > 0.05 {
+            self.calm_since = now;
+            return None;
+        }
+        if self.current < self.target && now.duration_since(self.calm_since) >= Duration::from_secs(15) && now.duration_since(self.last_change) >= Duration::from_secs(10) {
+            self.current = (self.current + (self.target / 10).max(100)).min(self.target);
+            self.last_change = now;
+            return Some(self.current);
+        }
+        None
     }
 }
 
@@ -214,6 +274,7 @@ impl StreamSession {
                     })
                     .collect(),
                 error: None,
+                lowered_kbps: None,
             };
         }
 
@@ -265,9 +326,12 @@ impl StreamSession {
                 purpose: Purpose::Stream,
                 backend: backend.to_string(),
             };
+            let adaptive = cfg.adaptive_bitrate;
             let job = std::thread::Builder::new().name(name.into()).spawn(move || {
                 let mut retimer = Retimer::new(s0, fps, 0);
                 let mut enc: Option<Box<dyn encode::VideoEncoder>> = None;
+                let mut adapt = Adapt::new(settings.bitrate_kbps, Instant::now());
+                let mut last_check = Instant::now();
                 let result = (|| -> Result<()> {
                     for frame in vrx.iter() {
                         for (pts, f) in retimer.push(frame) {
@@ -278,6 +342,28 @@ impl StreamSession {
                                 enc = Some(encode::create_video(&settings, Arc::new(move |p| fan.video(&p)))?);
                             }
                             enc.as_mut().unwrap().encode(&f, pts, force_key.swap(false, Ordering::Relaxed))?;
+                        }
+                        // Ease off while a connection can't keep up.
+                        if adaptive && last_check.elapsed() >= Duration::from_millis(500) {
+                            last_check = Instant::now();
+                            if let (Some(kbps), Some(e)) = (adapt.step(fan.backlog(), Instant::now()), enc.as_mut()) {
+                                if e.set_bitrate(kbps) {
+                                    let mut st = status.lock().unwrap();
+                                    st.stream.lowered_kbps = (kbps < adapt.target).then_some(kbps);
+                                    st.push(
+                                        LogLevel::Info,
+                                        if kbps < adapt.target {
+                                            format!("Stream: the connection is struggling, so the video bitrate is down to {kbps} kbps")
+                                        } else {
+                                            format!("Stream: the connection has caught up; the video bitrate is back to {kbps} kbps")
+                                        },
+                                    );
+                                    drop(st);
+                                    waker();
+                                } else {
+                                    adapt.disabled = true;
+                                }
+                            }
                         }
                     }
                     if let Some(e) = enc.as_mut() {
@@ -735,6 +821,36 @@ mod tests {
     }
     fn a(t: Ns) -> Pkt {
         Pkt::Audio(t, Arc::new(vec![]))
+    }
+
+    #[test]
+    fn bitrate_eases_off_and_comes_back() {
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        let mut a = Adapt::new(6000, t0);
+        assert_eq!(a.step(0.0, at(1)), None, "all clear: as set");
+        assert_eq!(a.step(0.5, at(3)), Some(4500), "backing up: down a quarter");
+        assert_eq!(a.step(0.5, at(4)), None, "not again straight away");
+        assert_eq!(a.step(0.5, at(5)), Some(3375));
+        for s in 7..30 {
+            a.step(0.9, at(s));
+        }
+        assert_eq!(a.current, 1500, "never below a quarter");
+        // Clear again: nothing for 15 s, then back up a step at a time.
+        assert_eq!(a.step(0.0, at(40)), None);
+        assert_eq!(a.step(0.0, at(43)), None);
+        assert_eq!(a.step(0.0, at(44)), Some(2100), "15 s after the last backlog");
+        assert_eq!(a.step(0.0, at(50)), None, "steps are spaced out");
+        assert_eq!(a.step(0.1, at(57)), None, "a little backlog holds it");
+        let mut s = 57;
+        while a.current < 6000 {
+            s += 1;
+            a.step(0.0, at(s));
+            assert!(s < 400);
+        }
+        assert_eq!(a.current, 6000, "back to what was set, no further");
+        a.disabled = true;
+        assert_eq!(a.step(0.9, at(s + 10)), None);
     }
 
     #[test]
