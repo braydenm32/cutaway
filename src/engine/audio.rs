@@ -418,6 +418,7 @@ pub struct MixShared {
     target_lufs: AtomicU32,
     reset_recording: AtomicBool,
     reset_stream: AtomicBool,
+    ducking: AtomicBool,
     duck_db: AtomicU32,
     duck_threshold_db: AtomicU32,
     duck_release_ms: AtomicU32,
@@ -438,6 +439,7 @@ impl MixShared {
             target_lufs: AtomicU32::new(0),
             reset_recording: AtomicBool::new(false),
             reset_stream: AtomicBool::new(false),
+            ducking: AtomicBool::new(false),
             duck_db: AtomicU32::new(0),
             duck_threshold_db: AtomicU32::new(0),
             duck_release_ms: AtomicU32::new(800),
@@ -454,6 +456,7 @@ impl MixShared {
         self.ceiling_db.store(cfg.limiter_ceiling_db.clamp(-12.0, 0.0).to_bits(), Ordering::Relaxed);
         self.levelling.store(cfg.stream_levelling, Ordering::Relaxed);
         self.target_lufs.store(cfg.stream_target_lufs.clamp(-30.0, -8.0).to_bits(), Ordering::Relaxed);
+        self.ducking.store(cfg.ducking, Ordering::Relaxed);
         self.duck_db.store(cfg.duck_db.clamp(-40.0, 0.0).to_bits(), Ordering::Relaxed);
         self.duck_threshold_db.store(cfg.duck_threshold_db.clamp(-70.0, -10.0).to_bits(), Ordering::Relaxed);
         self.duck_release_ms.store(cfg.duck_release_ms.clamp(50, 10_000), Ordering::Relaxed);
@@ -698,7 +701,7 @@ pub fn run_mixer(inputs: Vec<MixInput>, names: Vec<String>, taps: MixTaps, maste
             duck_until = t + master.duck_release_ms.load(Ordering::Relaxed) as i64 * 1_000_000;
         }
         let duck_db = f32::from_bits(master.duck_db.load(Ordering::Relaxed));
-        let duck_target = if t < duck_until { duck_db } else { 0.0 };
+        let duck_target = if t < duck_until && master.ducking.load(Ordering::Relaxed) { duck_db } else { 0.0 };
         let duck_prev = duck_now_db;
         // Down in about 150 ms, back up in about 600 ms.
         let (down, up) = (duck_db.abs() / 15.0, duck_db.abs() / 60.0);
@@ -952,7 +955,7 @@ mod tests {
             inputs.push(MixInput { rx, left: 1, right: 2, delay: 0, shared: InputShared::new(&cfg), gaps_expected: false });
         }
         let names = (0..inputs.len()).map(|i| format!("In {i}")).collect();
-        let master = MixShared::new(&crate::config::MixConfig { limiter: false, ..Default::default() });
+        let master = MixShared::new(&crate::config::MixConfig { limiter: false, ducking: true, ..Default::default() });
         setup(&master);
         let taps: MixTaps = Arc::new(Mutex::new(Vec::new()));
         let mut rxs = Vec::new();
@@ -1010,6 +1013,9 @@ mod tests {
         // Nobody talking (the voice is below the threshold): music stays up.
         let out = mix(&[0.1, 0.001], vec![input(true), input(false)], vec![MixKind::Recording], |_| {});
         assert!((out[0][100] - 0.101).abs() < 0.01, "{}", out[0][100]);
+        // Ducking switched off: the music stays up while the voice talks.
+        let out = mix(&[0.1, 0.3], vec![input(true), input(false)], vec![MixKind::Recording], |m| m.apply(&crate::config::MixConfig { limiter: false, ducking: false, ..Default::default() }));
+        assert!((out[0][100] - 0.4).abs() < 0.01, "{}", out[0][100]);
     }
 
     #[test]

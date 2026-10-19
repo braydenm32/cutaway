@@ -210,8 +210,8 @@ impl Default for OutputConfig {
             input_tracks: false,
             input_tracks_post_fader: false,
             mix_wav: false,
-            daw_sessions: true,
-            resolve_project: true,
+            daw_sessions: false,
+            resolve_project: false,
             clip_seconds: 30,
         }
     }
@@ -780,6 +780,11 @@ pub struct VoiceProcessing {
     /// Tames harsh "s" sounds.
     pub de_esser: bool,
     pub de_esser_threshold_db: f32,
+    /// Turns down everything that isn't a voice (RNNoise): fans, hum,
+    /// traffic, keyboards.
+    pub noise_reduction: bool,
+    /// How much (0–1): less keeps some room sound and is gentler on voices.
+    pub noise_amount: f32,
 }
 
 impl Default for VoiceProcessing {
@@ -800,6 +805,8 @@ impl Default for VoiceProcessing {
             comp_makeup_db: 4.0,
             de_esser: false,
             de_esser_threshold_db: -30.0,
+            noise_reduction: false,
+            noise_amount: 1.0,
         }
     }
 }
@@ -1053,6 +1060,8 @@ pub struct MixConfig {
     /// "program", "stream", or an input's name (solo).
     pub monitor_source: String,
     pub monitor_volume_db: f32,
+    /// Ducking on: inputs marked to duck go down while others talk.
+    pub ducking: bool,
     /// Ducking: inputs marked to duck go down by this much while others talk.
     pub duck_db: f32,
     /// What counts as talking (the loudest other input, after its fader).
@@ -1160,13 +1169,14 @@ impl Default for MixConfig {
             monitor_device: String::new(),
             monitor_source: "program".into(),
             monitor_volume_db: 0.0,
+            ducking: false,
             duck_db: -12.0,
             duck_threshold_db: -40.0,
             duck_release_ms: 800,
             outputs: Vec::new(),
             talkback_input: String::new(),
             talkback_dim_db: -12.0,
-            talkback_to_guests: true,
+            talkback_to_guests: false,
         }
     }
 }
@@ -1378,7 +1388,7 @@ impl Default for GuestsConfig {
             port: 8792,
             access: GuestAccess::Tunnel,
             public_url: String::new(),
-            return_video: true,
+            return_video: false,
             turn_url: String::new(),
             turn_username: String::new(),
             turn_password: String::new(),
@@ -1426,7 +1436,7 @@ pub struct RundownConfig {
 
 impl Default for RundownConfig {
     fn default() -> Self {
-        RundownConfig { segments: Vec::new(), markers: true }
+        RundownConfig { segments: Vec::new(), markers: false }
     }
 }
 

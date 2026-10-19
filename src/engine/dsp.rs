@@ -4,6 +4,7 @@
 //! stereo at 48 kHz, one 10 ms block at a time, with no added latency.
 
 use crate::config::VoiceProcessing;
+use std::collections::VecDeque;
 
 const FS: f64 = 48_000.0;
 
@@ -242,9 +243,90 @@ impl DeEsser {
     }
 }
 
+/// Noise reduction with RNNoise: a small neural network trained on speech
+/// that turns down everything that isn't a voice. It works on 10 ms frames
+/// at 48 kHz (stereo: each side on its own; a mono mic on both sides is
+/// cleaned once) and delays the input by 10 ms.
+pub struct Denoiser {
+    states: [Box<nnnoiseless::DenoiseState<'static>>; 2],
+    amount: f32,
+    /// Waiting for a whole frame (interleaved stereo).
+    pending: Vec<f32>,
+    /// Cleaned, waiting to go out (interleaved stereo).
+    ready: VecDeque<f32>,
+    /// The untouched input, delayed to line up with the cleaned one.
+    dry: VecDeque<f32>,
+    primed: bool,
+}
+
+const NR_FRAME: usize = nnnoiseless::DenoiseState::FRAME_SIZE;
+
+impl Denoiser {
+    pub fn new(amount: f32) -> Self {
+        Denoiser {
+            states: [nnnoiseless::DenoiseState::new(), nnnoiseless::DenoiseState::new()],
+            amount: amount.clamp(0.0, 1.0),
+            pending: Vec::with_capacity(NR_FRAME * 4),
+            ready: VecDeque::with_capacity(NR_FRAME * 4),
+            dry: VecDeque::with_capacity(NR_FRAME * 6),
+            primed: false,
+        }
+    }
+
+    /// One 10 ms frame of each side through RNNoise.
+    fn frame(&mut self, l: &[f32], r: &[f32]) -> (Vec<f32>, Vec<f32>) {
+        let scale = |v: &[f32]| -> Vec<f32> { v.iter().map(|x| x * 32767.0).collect() };
+        let mut out_l = vec![0f32; NR_FRAME];
+        self.states[0].process_frame(&mut out_l, &scale(l));
+        let out_r = if l == r {
+            // Keep the second state in step for when the sides differ.
+            let mut o = vec![0f32; NR_FRAME];
+            self.states[1].process_frame(&mut o, &scale(r));
+            out_l.clone()
+        } else {
+            let mut o = vec![0f32; NR_FRAME];
+            self.states[1].process_frame(&mut o, &scale(r));
+            o
+        };
+        (out_l.iter().map(|v| v / 32767.0).collect(), out_r.iter().map(|v| v / 32767.0).collect())
+    }
+
+    /// Clean an interleaved stereo buffer in place.
+    pub fn process(&mut self, buf: &mut [f32]) {
+        if !self.primed {
+            self.primed = true;
+            // Blocks that aren't whole frames wait for one: start a frame
+            // behind so there's always output. RNNoise itself is a frame
+            // behind, so the dry side waits for that too.
+            let extra = if (buf.len() / 2) % NR_FRAME == 0 { 0 } else { NR_FRAME };
+            self.ready.extend(std::iter::repeat_n(0.0, extra * 2));
+            self.dry.extend(std::iter::repeat_n(0.0, (extra + NR_FRAME) * 2));
+        }
+        self.pending.extend_from_slice(buf);
+        self.dry.extend(buf.iter().copied());
+        while self.pending.len() >= NR_FRAME * 2 {
+            let l: Vec<f32> = self.pending[..NR_FRAME * 2].iter().step_by(2).copied().collect();
+            let r: Vec<f32> = self.pending[1..NR_FRAME * 2].iter().step_by(2).copied().collect();
+            self.pending.drain(..NR_FRAME * 2);
+            let (cl, cr) = self.frame(&l, &r);
+            for k in 0..NR_FRAME {
+                self.ready.push_back(cl[k]);
+                self.ready.push_back(cr[k]);
+            }
+        }
+        let wet = self.amount;
+        for v in buf.iter_mut() {
+            let w = self.ready.pop_front().unwrap_or(0.0);
+            let d = self.dry.pop_front().unwrap_or(0.0);
+            *v = w * wet + d * (1.0 - wet);
+        }
+    }
+}
+
 /// One input's processing chain, built from its settings.
 pub struct VoiceChain {
     hpf: Option<Biquad>,
+    denoise: Option<Denoiser>,
     gate: Option<Gate>,
     eq: Vec<Biquad>,
     comp: Option<Compressor>,
@@ -271,6 +353,7 @@ impl VoiceChain {
         }
         Some(VoiceChain {
             hpf: (p.high_pass_hz >= 20.0).then(|| Biquad::highpass((p.high_pass_hz as f64).min(400.0), std::f64::consts::FRAC_1_SQRT_2)),
+            denoise: p.noise_reduction.then(|| Denoiser::new(p.noise_amount)),
             gate: p.gate.then(|| Gate::new(p.gate_threshold_db as f64)),
             eq,
             comp: p.compressor.then(|| Compressor::new(p.comp_threshold_db as f64, p.comp_ratio as f64, p.comp_makeup_db as f64)),
@@ -281,6 +364,9 @@ impl VoiceChain {
     pub fn process(&mut self, buf: &mut [f32]) {
         if let Some(h) = &mut self.hpf {
             h.process(buf);
+        }
+        if let Some(d) = &mut self.denoise {
+            d.process(buf);
         }
         if let Some(g) = &mut self.gate {
             g.process(buf);
@@ -623,6 +709,54 @@ mod tests {
         assert!(hi - lo < 0.01 && (lo - 0.594).abs() < 0.01, "{lo} {hi}");
         // The quiet part before the burst is untouched (allowing for the delay).
         assert!((y[2000 + d] - x[2000]).abs() < 1e-6);
+    }
+
+    /// Pink-ish noise (a fan or air conditioner), stereo.
+    fn fan_noise(frames: usize, amp: f32) -> Vec<f32> {
+        let mut seed = 12345u32;
+        let (mut b0, mut b1, mut b2) = (0f32, 0f32, 0f32);
+        let mut out = Vec::with_capacity(frames * 2);
+        for _ in 0..frames {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            let w = (seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5;
+            b0 = 0.99765 * b0 + w * 0.0990460;
+            b1 = 0.96300 * b1 + w * 0.2965164;
+            b2 = 0.57000 * b2 + w * 1.0526913;
+            let v = (b0 + b1 + b2 + w * 0.1848) * amp;
+            out.push(v);
+            out.push(v);
+        }
+        out
+    }
+
+    #[test]
+    fn noise_reduction_turns_down_a_fan() {
+        let noise = fan_noise(48_000 * 2, 0.1);
+        let rms = |s: &[f32]| (s.iter().map(|v| v * v).sum::<f32>() / s.len() as f32).sqrt();
+        for (amount, want_below_db) in [(1.0f32, -6.0f32), (0.0, 0.5)] {
+            let mut d = Denoiser::new(amount);
+            let mut out = Vec::new();
+            for block in noise.chunks(480 * 2) {
+                let mut b = block.to_vec();
+                d.process(&mut b);
+                assert_eq!(b.len(), block.len());
+                out.extend(b);
+            }
+            // After the first second (it settles), compare levels.
+            let before = rms(&noise[48_000 * 2..]);
+            let after = rms(&out[48_000 * 2..]);
+            let db = 20.0 * (after / before).log10();
+            assert!(db < want_below_db, "amount {amount}: {db:.1} dB");
+            if amount == 0.0 {
+                // Untouched, 10 ms late.
+                assert!((out[60_000 * 2] - noise[(60_000 - 480) * 2]).abs() < 1e-6);
+            }
+        }
+        // Blocks that aren't 10 ms work too (and keep their length).
+        let mut d = Denoiser::new(1.0);
+        let mut b = noise[..700 * 2].to_vec();
+        d.process(&mut b);
+        assert_eq!(b.len(), 1400);
     }
 
     #[test]

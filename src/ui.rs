@@ -2315,7 +2315,7 @@ impl App {
                                 } else if !ac.to_stream {
                                     tags.push_str("R");
                                 }
-                                if ac.duck {
+                                if ac.duck && self.cfg.mix.ducking {
                                     tags.push_str(" D");
                                 }
                                 if !tags.is_empty() {

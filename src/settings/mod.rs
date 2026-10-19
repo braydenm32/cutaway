@@ -564,6 +564,7 @@ impl SettingsUi {
                 })
                 .map(|s| s.name.clone())
                 .collect();
+            let ducking_on = self.draft.mix.ducking;
             ui.vertical(|ui| {
                 let Some(a) = self.draft.audio.get_mut(self.sel_audio) else {
                     hint(ui, "No audio inputs. Add your interface to record your DAW.");
@@ -625,7 +626,12 @@ impl SettingsUi {
                     });
                     ui.end_row();
                     label(ui, "Duck under voices");
-                    ui.checkbox(&mut a.duck, "turn down while other inputs talk (music, pads, ambience)");
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut a.duck, "turn down while other inputs talk (music, pads, ambience)");
+                        if a.duck && !ducking_on {
+                            hint(ui, "ducking is off: turn it on in Mixing & headphones");
+                        }
+                    });
                     ui.end_row();
                     label(ui, "Record to WAV");
                     ui.checkbox(&mut a.record, "");

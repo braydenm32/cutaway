@@ -12,12 +12,12 @@ pub(super) fn processing_editor(ui: &mut egui::Ui, p: &mut VoiceProcessing) {
         if ui.button("Spoken voice").on_hover_text("High-pass, gentle compression, de-esser").clicked() {
             *p = VoiceProcessing { enabled: true, high_pass_hz: 80.0, compressor: true, comp_threshold_db: -20.0, comp_ratio: 3.0, comp_makeup_db: 4.0, de_esser: true, ..Default::default() };
         }
-        if ui.button("Noisy room").on_hover_text("Adds a noise gate").clicked() {
+        if ui.button("Noisy room").on_hover_text("Adds noise reduction").clicked() {
             *p = VoiceProcessing {
                 enabled: true,
                 high_pass_hz: 100.0,
-                gate: true,
-                gate_threshold_db: -45.0,
+                noise_reduction: true,
+                noise_amount: 1.0,
                 compressor: true,
                 comp_threshold_db: -20.0,
                 comp_ratio: 3.0,
@@ -39,6 +39,15 @@ pub(super) fn processing_editor(ui: &mut egui::Ui, p: &mut VoiceProcessing) {
                     p.high_pass_hz = if on { 80.0 } else { 0.0 };
                 }
                 ui.add_enabled(on, egui::Slider::new(&mut p.high_pass_hz, 20.0..=300.0).suffix(" Hz").logarithmic(true));
+            });
+            ui.end_row();
+            label(ui, "Noise reduction");
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut p.noise_reduction, "");
+                let mut pct = p.noise_amount * 100.0;
+                if ui.add_enabled(p.noise_reduction, egui::Slider::new(&mut pct, 10.0..=100.0).suffix(" %").text("fans, hum, traffic")).changed() {
+                    p.noise_amount = pct / 100.0;
+                }
             });
             ui.end_row();
             label(ui, "Noise gate");
@@ -139,24 +148,38 @@ impl SettingsUi {
 
         ui.add_space(14.0);
         subtitle(ui, "Ducking");
-        let ducked: Vec<String> = self.draft.audio.iter().filter(|a| a.duck).map(|a| a.name.clone()).collect();
-        let m = &mut self.draft.mix;
-        egui::Grid::new("ducking").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
-            label(ui, "Turn down by");
-            ui.add(egui::Slider::new(&mut m.duck_db, -40.0..=-3.0).suffix(" dB"));
-            ui.end_row();
-            label(ui, "When a voice is above");
-            ui.add(egui::Slider::new(&mut m.duck_threshold_db, -60.0..=-10.0).suffix(" dBFS"));
-            ui.end_row();
-            label(ui, "Back up after");
-            ui.add(egui::DragValue::new(&mut m.duck_release_ms).range(100..=5000).speed(10).suffix(" ms of quiet"));
-            ui.end_row();
-        });
-        hint(ui, &if ducked.is_empty() {
-            "No inputs duck yet: tick \"Duck under voices\" on music, pads or Syrinscape in Settings → Audio inputs.".to_string()
+        ui.checkbox(&mut self.draft.mix.ducking, "Turn music, pads and ambience down while people talk");
+        if self.draft.mix.ducking {
+            let m = &mut self.draft.mix;
+            egui::Grid::new("ducking").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+                label(ui, "Turn down by");
+                ui.add(egui::Slider::new(&mut m.duck_db, -40.0..=-3.0).suffix(" dB"));
+                ui.end_row();
+                label(ui, "When a voice is above");
+                ui.add(egui::Slider::new(&mut m.duck_threshold_db, -60.0..=-10.0).suffix(" dBFS"));
+                ui.end_row();
+                label(ui, "Back up after");
+                ui.add(egui::DragValue::new(&mut m.duck_release_ms).range(100..=5000).speed(10).suffix(" ms of quiet"));
+                ui.end_row();
+                label(ui, "These go down");
+                ui.vertical(|ui| {
+                    for a in self.draft.audio.iter_mut() {
+                        ui.checkbox(&mut a.duck, &a.name);
+                    }
+                    if self.draft.audio.is_empty() {
+                        hint(ui, "No audio inputs yet.");
+                    }
+                });
+                ui.end_row();
+            });
+            if !self.draft.audio.iter().any(|a| a.duck) {
+                hint(ui, "Tick the music, pads or Syrinscape inputs above. Everything else counts as voices.");
+            } else {
+                hint(ui, "The ticked inputs go down smoothly when anyone else talks, and come back up after the pause.");
+            }
         } else {
-            format!("Ducking: {}. They go down smoothly when anyone else talks, and come back up after the pause.", ducked.join(", "))
-        });
+            hint(ui, "Off. Turn it on to keep music beds, pads and ambience below the talking.");
+        }
 
         ui.add_space(14.0);
         subtitle(ui, "Talkback");
