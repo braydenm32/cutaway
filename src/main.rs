@@ -192,6 +192,7 @@ fn run() -> Result<()> {
             server: url.clone(),
             key: String::new(),
             enabled: true,
+            vertical: false,
         });
     }
 

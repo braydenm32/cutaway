@@ -207,6 +207,14 @@ impl Engine {
             program_muxes = muxes;
         }
 
+        // The vertical version, with the recording mix.
+        if cfg.vertical.enabled && cfg.vertical.record {
+            let (vw, vh) = cfg.vertical.size();
+            let rate = encode::record_bitrate_kbps(codec, out.program_bitrate_kbps, vw, vh, fps);
+            let (_, vtx, _) = add_video("Program (vertical)".into(), format!("Program_Vertical.{ext}"), fps, (vw, vh), true, rate, None, (fps as usize / 2).max(8), Vec::new(), None);
+            self.video_taps.lock().unwrap().tall = Some(ProgramTap { tx: vtx, from: t0 });
+        }
+
         // One file per source.
         for (i, s) in self.sources.iter().enumerate() {
             if !s.record {
@@ -368,7 +376,11 @@ impl Engine {
         let settle = (VIDEO_LATENCY + 2 * NS_PER_SEC / fps as i64).max(self.audio_latency + audio::BLOCK_NS).max(300_000_000) + 100_000_000;
         let handle = std::thread::spawn(move || {
             clock::sleep_until(t1 + settle);
-            taps.lock().unwrap().program = None;
+            {
+                let mut t = taps.lock().unwrap();
+                t.program = None;
+                t.tall = None;
+            }
             let mut problems = Vec::new();
             for (name, s) in &slots {
                 let dropped = s.stop_iso_tap();

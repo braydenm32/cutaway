@@ -48,6 +48,8 @@ pub struct Config {
     pub comments: CommentsConfig,
     /// The program (and sources) as NDI on the network.
     pub ndi_out: NdiOutConfig,
+    /// A vertical (9:16) version of the show for Shorts, Reels and TikTok.
+    pub vertical: VerticalConfig,
 }
 
 /// Syrinscape Online: moods and sounds started from Cutaway's buttons,
@@ -1046,6 +1048,8 @@ pub struct StreamDestination {
     /// Stream key (kept in this settings file; treat the file as private).
     pub key: String,
     pub enabled: bool,
+    /// Gets the vertical (9:16) version instead of the program.
+    pub vertical: bool,
 }
 
 impl Default for StreamDestination {
@@ -1056,6 +1060,7 @@ impl Default for StreamDestination {
             server: Service::Youtube.default_server().into(),
             key: String::new(),
             enabled: true,
+            vertical: false,
         }
     }
 }
@@ -2071,5 +2076,103 @@ pub struct NdiOutConfig {
 impl Default for NdiOutConfig {
     fn default() -> Self {
         NdiOutConfig { program: false, name: "Cutaway".into(), sources: false }
+    }
+}
+
+/// A vertical (9:16) version of the show, made alongside the program from
+/// the same sources: each scene has a tall layout of its own (worked out
+/// from the scene, or chosen), and each source a framing (which part of
+/// its picture fills a tall frame). Recorded into the take and/or streamed
+/// to destinations marked vertical.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct VerticalConfig {
+    pub enabled: bool,
+    pub width: u32,
+    pub height: u32,
+    /// Record it in the take ("Program_Vertical").
+    pub record: bool,
+    /// The program's graphics (titles, logos), across its width, low down.
+    pub graphics: bool,
+    /// Scenes' tall layouts by scene name (a scene not listed is automatic).
+    pub layouts: Vec<VerticalLayout>,
+    /// Sources' framing by source name (not listed: the middle).
+    pub framing: Vec<VerticalFraming>,
+}
+
+impl Default for VerticalConfig {
+    fn default() -> Self {
+        VerticalConfig { enabled: false, width: 1080, height: 1920, record: true, graphics: true, layouts: Vec::new(), framing: Vec::new() }
+    }
+}
+
+impl VerticalConfig {
+    /// The tall picture size (even numbers, taller than wide).
+    pub fn size(&self) -> (u32, u32) {
+        let w = self.width.clamp(270, 2160) & !1;
+        let h = self.height.clamp(480, 3840) & !1;
+        (w, h.max(w))
+    }
+
+    pub fn layout_of(&self, scene: &str) -> VerticalLayout {
+        self.layouts.iter().find(|l| l.scene.eq_ignore_ascii_case(scene)).cloned().unwrap_or_else(|| VerticalLayout { scene: scene.to_string(), ..Default::default() })
+    }
+
+    pub fn framing_of(&self, source: &str) -> VerticalFraming {
+        self.framing.iter().find(|f| f.source.eq_ignore_ascii_case(source)).cloned().unwrap_or_else(|| VerticalFraming { source: source.to_string(), ..Default::default() })
+    }
+}
+
+/// How a scene is laid out in the tall picture.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum VerticalMode {
+    /// Worked out from the scene: a full-screen source fills it, picture in
+    /// picture keeps its inset (top right), anything else is stacked.
+    #[default]
+    Auto,
+    /// The scene's sources one above another.
+    Stack,
+    /// One source fills it.
+    One,
+}
+
+impl VerticalMode {
+    pub const ALL: [VerticalMode; 3] = [VerticalMode::Auto, VerticalMode::Stack, VerticalMode::One];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            VerticalMode::Auto => "Automatic",
+            VerticalMode::Stack => "Stacked",
+            VerticalMode::One => "One source",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct VerticalLayout {
+    pub scene: String,
+    pub mode: VerticalMode,
+    /// For "one": which source (by name).
+    pub source: String,
+}
+
+/// Which part of a source's picture fills a tall frame.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct VerticalFraming {
+    pub source: String,
+    /// Where the window sits across the picture (0 = left edge, 1 = right).
+    pub x: f32,
+    /// And up and down (0 = top).
+    pub y: f32,
+    /// 1 = as much as fits; more is closer.
+    pub zoom: f32,
+}
+
+impl Default for VerticalFraming {
+    fn default() -> Self {
+        VerticalFraming { source: String::new(), x: 0.5, y: 0.5, zoom: 1.0 }
     }
 }

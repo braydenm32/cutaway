@@ -30,6 +30,7 @@ pub mod export;
 pub mod feed;
 pub mod framing;
 pub mod ptz;
+pub mod vertical;
 pub mod replay;
 pub mod graphics;
 pub mod guests;
@@ -105,6 +106,11 @@ impl FrameSlot {
     pub fn latest(&self) -> Option<(u64, Arc<Frame>)> {
         let f = self.frame.lock().unwrap().clone()?;
         Some((self.generation.load(Ordering::Acquire), f))
+    }
+    /// Forget the picture.
+    pub fn clear(&self) {
+        *self.frame.lock().unwrap() = None;
+        self.generation.fetch_add(1, Ordering::Release);
     }
     /// True when frames have stopped arriving.
     pub fn stale(&self, after: Duration) -> bool {
@@ -243,6 +249,9 @@ pub struct NdiOutputs {
 pub struct VideoTaps {
     pub program: Option<ProgramTap>,
     pub stream: Option<StreamTap>,
+    /// The vertical version: recorded, and streamed.
+    pub tall: Option<ProgramTap>,
+    pub tall_stream: Option<StreamTap>,
     /// Other consumers of every program frame (the virtual camera).
     pub listeners: Vec<(u64, Sender<VideoFrame>)>,
 }
@@ -287,6 +296,14 @@ pub struct LookState {
     pub style: crate::config::FrameStyle,
 }
 
+/// The vertical version's settings, for the compositor.
+pub struct TallState {
+    pub generation: u64,
+    pub cfg: crate::config::VerticalConfig,
+    /// The sources' names (to find layouts and framing by name).
+    pub names: Vec<String>,
+}
+
 type CaptionsSlot = Arc<Mutex<Option<(u64, Arc<captions::Captions>)>>>;
 
 pub struct Engine {
@@ -295,6 +312,9 @@ pub struct Engine {
     pub sources: Vec<SourceHandle>,
     pub audio: Vec<AudioHandle>,
     pub program_preview: Arc<FrameSlot>,
+    /// The vertical version's monitor picture (while it's on).
+    pub tall_preview: Arc<FrameSlot>,
+    tall: Arc<Mutex<TallState>>,
     /// The preview bus (next scene), when preview/program switching is on.
     pub preview_bus: Arc<FrameSlot>,
     pub graphics: Arc<graphics::Graphics>,
@@ -506,6 +526,8 @@ impl Engine {
         let switcher = Arc::new(Switcher::new((cw, ch), aspects, initial));
         switcher.set_style(cfg.transition.direction, &cfg.transition.dip_color);
         let program_preview = FrameSlot::new();
+        let tall_preview = FrameSlot::new();
+        let tall = Arc::new(Mutex::new(TallState { generation: 1, cfg: cfg.vertical.clone(), names: cfg.sources.iter().map(|s| s.name.clone()).collect() }));
         let preview_bus = FrameSlot::new();
         let graphics = graphics::Graphics::new(&cfg.graphics, (cw, ch), timers::Timers::new());
         let looks = Arc::new(Mutex::new(LookState { generation: 1, looks: cfg.sources.iter().map(|s| s.look.clone()).collect(), style: cfg.style.clone() }));
@@ -528,6 +550,10 @@ impl Engine {
                 thumbs: sources.iter().map(|s| s.preview.clone()).collect(),
                 preview: program_preview.clone(),
                 preview_bus: preview_bus.clone(),
+                tall: tall.clone(),
+                tall_generation: 0,
+                tall_on: None,
+                tall_preview: tall_preview.clone(),
                 graphics: graphics.clone(),
                 looks: looks.clone(),
                 looks_generation: 0,
@@ -624,6 +650,8 @@ impl Engine {
             sources,
             audio,
             program_preview,
+            tall_preview,
+            tall,
             preview_bus,
             graphics,
             looks,
@@ -1020,6 +1048,11 @@ impl Engine {
             self.pads.set_pads(&new.pads);
         }
         self.replay_label.store(new.replay.label, Ordering::Relaxed);
+        if old.vertical != new.vertical {
+            let mut t = self.tall.lock().unwrap();
+            t.cfg = new.vertical.clone();
+            t.generation += 1;
+        }
         if old.transition != new.transition {
             self.switcher.set_style(new.transition.direction, &new.transition.dip_color);
             self.stinger.configure(&new.transition.stinger);
@@ -1098,6 +1131,10 @@ impl Engine {
                 mix_taps: self.mix_taps.clone(),
                 tap_id: id,
                 program_fps: self.info.fps,
+                vertical: {
+                    let v = &self.tall.lock().unwrap().cfg;
+                    v.enabled.then(|| v.size())
+                },
                 status: self.status.clone(),
                 waker: self.waker.clone(),
             },
@@ -1380,6 +1417,11 @@ struct CompositorLoop {
     thumbs: Vec<Arc<FrameSlot>>,
     preview: Arc<FrameSlot>,
     preview_bus: Arc<FrameSlot>,
+    tall: Arc<Mutex<TallState>>,
+    tall_generation: u64,
+    /// While the vertical version is on: its settings and framing.
+    tall_on: Option<(crate::config::VerticalConfig, vertical::Framing)>,
+    tall_preview: Arc<FrameSlot>,
     graphics: Arc<graphics::Graphics>,
     looks: Arc<Mutex<LookState>>,
     looks_generation: u64,
@@ -1406,6 +1448,8 @@ impl CompositorLoop {
         let thumb_every = fps.div_ceil(15).max(1) as i64;
         let mut k = grid_index(clock::now() - VIDEO_LATENCY, fps);
         let mut stream_grid: Option<(Ns, i64)> = None; // (from, next stream frame index)
+        let mut tall_grid: Option<(Ns, i64)> = None;
+        let mut warned_tall = false;
         let mut warned_program = false;
         let mut warned_stream = false;
         let mut last_behind: Option<Instant> = None;
@@ -1426,6 +1470,17 @@ impl CompositorLoop {
             if pw != self.comp.preview_width() {
                 self.comp.set_preview_width(pw);
             }
+            {
+                let t = self.tall.lock().unwrap();
+                if t.generation != self.tall_generation {
+                    self.tall_generation = t.generation;
+                    self.tall_on = t.cfg.enabled.then(|| (t.cfg.clone(), vertical::framing(&t.cfg, &t.names)));
+                    self.comp.set_tall(t.cfg.enabled.then(|| t.cfg.size()), t.cfg.graphics);
+                    if !t.cfg.enabled {
+                        self.tall_preview.clear();
+                    }
+                }
+            }
             for (i, slot) in self.slots.iter().enumerate() {
                 if let Some(f) = slot.pick(t) {
                     self.comp.upload(i, &f);
@@ -1438,14 +1493,32 @@ impl CompositorLoop {
             }
 
             // Who wants this frame?
-            let (program_tx, stream, listeners) = {
+            let (program_tx, stream, listeners, tall_tx, tall_stream) = {
                 let taps = self.taps.lock().unwrap();
                 (
                     taps.program.as_ref().filter(|p| t >= p.from).map(|p| p.tx.clone()),
                     taps.stream.as_ref().map(|s| (s.tx.clone(), s.from, s.size, s.fps.min(fps).max(1))),
                     taps.listeners.iter().map(|l| l.1.clone()).collect::<Vec<_>>(),
+                    taps.tall.as_ref().filter(|p| t >= p.from).map(|p| p.tx.clone()),
+                    taps.tall_stream.as_ref().map(|s| (s.tx.clone(), s.from, s.fps.min(fps).max(1))),
                 )
             };
+            // The vertical stream, on its own frame grid.
+            let mut tall_stream_now = None;
+            match tall_stream.filter(|_| self.tall_on.is_some()) {
+                Some((tx, from, sfps)) => {
+                    if tall_grid.is_none_or(|g| g.0 != from) {
+                        tall_grid = Some((from, 0));
+                    }
+                    let (from, next) = tall_grid.unwrap();
+                    if t >= from + grid_time(next, sfps) {
+                        tall_stream_now = Some(tx);
+                        tall_grid = Some((from, grid_index(t - from + 1, sfps)));
+                    }
+                }
+                None => tall_grid = None,
+            }
+            let tall_tx = tall_tx.filter(|_| self.tall_on.is_some());
             let mut stream_now = None;
             match stream {
                 Some((tx, from, size, sfps)) => {
@@ -1475,10 +1548,30 @@ impl CompositorLoop {
                 preview: preview_now,
                 preview_bus: bus.is_some(),
                 thumbs,
+                tall: tall_tx.is_some() || tall_stream_now.is_some(),
+                tall_preview: preview_now && self.tall_on.is_some(),
             };
-            if wants.program || wants.stream.is_some() || wants.preview || !wants.thumbs.is_empty() {
+            if wants.program || wants.stream.is_some() || wants.preview || !wants.thumbs.is_empty() || wants.tall {
                 self.comp.set_black(self.switcher.black_level());
                 let layout = self.switcher.layout();
+                // The vertical version follows the same scenes.
+                if let Some((cfg, framing)) = &self.tall_on {
+                    let (w, h) = cfg.size();
+                    let aspect = w as f32 / h as f32;
+                    let names = self.tall.lock().unwrap().names.clone();
+                    let frames_of = |scene: &crate::scene::Scene| {
+                        let l = cfg.layout_of(&scene.name);
+                        let one = names.iter().position(|n| n.eq_ignore_ascii_case(&l.source));
+                        vertical::frames(scene, l.mode, one, aspect, framing)
+                    };
+                    let (from, to, k) = self.switcher.scenes_now();
+                    let to_frames = frames_of(&to);
+                    let frames = match from {
+                        Some(f) => vertical::compose(Some(&frames_of(&f)), &to_frames, k),
+                        None => to_frames,
+                    };
+                    self.comp.set_tall_frames(frames);
+                }
                 if let switcher::Layout::Stinger { elapsed, .. } = &layout {
                     let f = self.stinger.frame_at(*elapsed);
                     self.comp.set_stinger(f.as_ref(), self.stinger.matte());
@@ -1527,6 +1620,20 @@ impl CompositorLoop {
                         }
                         for (i, w, h, rgba) in r.thumbs {
                             self.thumbs[i].put(Frame { width: w as usize, height: h as usize, rgba });
+                        }
+                        if let Some((w, h, rgba)) = r.tall_preview {
+                            self.tall_preview.put(Frame { width: w as usize, height: h as usize, rgba });
+                        }
+                        if let Some(f) = r.tall {
+                            if let Some(tx) = &tall_stream_now {
+                                let _ = tx.try_send(f.clone());
+                            }
+                            if let Some(tx) = &tall_tx {
+                                if tx.try_send(f).is_err() && !warned_tall {
+                                    warned_tall = true;
+                                    self.status.lock().unwrap().push(LogLevel::Warning, "Vertical version: the encoder can't keep up, frames are being repeated.");
+                                }
+                            }
                         }
                         if fresh {
                             (self.waker)();

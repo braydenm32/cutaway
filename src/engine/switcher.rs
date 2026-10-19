@@ -202,6 +202,21 @@ impl Switcher {
         out
     }
 
+    /// What's on now, for the vertical version: the scene being left (mid
+    /// transition), the scene, and how far (0..1). Wipes, pushes and dips
+    /// become a mix there; a stinger changes scenes at its cut point.
+    pub fn scenes_now(&self) -> (Option<Scene>, Scene, f32) {
+        let st = self.state.lock().unwrap();
+        let Some(a) = &st.active else { return (None, st.current.clone(), 1.0) };
+        let elapsed = Instant::now().saturating_duration_since(a.start);
+        let t = (elapsed.as_secs_f32() / a.dur.as_secs_f32().max(1e-3)).min(1.0);
+        match a.mode {
+            TransitionMode::Stinger => (None, if elapsed < a.cut { a.from.clone() } else { a.to.clone() }, 1.0),
+            _ if t >= 1.0 => (None, a.to.clone(), 1.0),
+            _ => (Some(a.from.clone()), a.to.clone(), t),
+        }
+    }
+
     /// The scene that is live (or about to be, mid-transition).
     pub fn live(&self) -> Scene {
         let st = self.state.lock().unwrap();

@@ -15,6 +15,7 @@ mod rundown;
 mod sound;
 mod sources;
 mod switching;
+mod vertical;
 
 
 use crate::config::{AudioConfig, Codec, Config, Container, Service, SourceConfig, StreamDestination};
@@ -45,6 +46,7 @@ pub enum Section {
     Captions,
     Recording,
     Streaming,
+    Vertical,
     Outputs,
     Control,
     Shortcuts,
@@ -52,7 +54,7 @@ pub enum Section {
 }
 
 impl Section {
-    const ALL: [Section; 21] = [
+    const ALL: [Section; 22] = [
         Section::General,
         Section::Sources,
         Section::Audio,
@@ -70,6 +72,7 @@ impl Section {
         Section::Captions,
         Section::Recording,
         Section::Streaming,
+        Section::Vertical,
         Section::Outputs,
         Section::Control,
         Section::Shortcuts,
@@ -99,6 +102,7 @@ impl Section {
             Section::Captions => "Captions",
             Section::Recording => "Recording",
             Section::Streaming => "Streaming",
+            Section::Vertical => "Vertical version",
             Section::Outputs => "Screens & webcam",
             Section::Control => "Remote & MIDI",
             Section::Shortcuts => "Shortcuts",
@@ -338,6 +342,7 @@ impl SettingsUi {
                                     Section::Captions => self.captions(ui, info),
                                     Section::Recording => self.recording(ui),
                                     Section::Streaming => self.streaming(ui),
+                                    Section::Vertical => self.vertical(ui),
                                     Section::Outputs => self.outputs(ui, info),
                                     Section::Control => self.control(ui, info),
                                     Section::Shortcuts => shortcuts(ui),
@@ -465,6 +470,7 @@ impl SettingsUi {
             Section::Captions => a.captions != b.captions,
             Section::Recording => a.output != b.output || a.podcast != b.podcast,
             Section::Streaming => a.streaming != b.streaming,
+            Section::Vertical => a.vertical != b.vertical,
             Section::Outputs => a.display != b.display || a.ndi_out != b.ndi_out,
             Section::Control => a.remote != b.remote || a.midi != b.midi || a.osc != b.osc,
             _ => false,
@@ -1052,6 +1058,7 @@ impl SettingsUi {
                                     server: s.default_server().into(),
                                     key: String::new(),
                                     enabled: true,
+                                    vertical: false,
                                 });
                                 self.sel_dest = self.draft.streaming.destinations.len() - 1;
                             }
@@ -1110,7 +1117,16 @@ impl SettingsUi {
                     label(ui, "Go live here");
                     ui.checkbox(&mut d.enabled, "");
                     ui.end_row();
+                    label(ui, "Sends");
+                    ui.horizontal(|ui| {
+                        ui.radio_value(&mut d.vertical, false, "the program");
+                        ui.radio_value(&mut d.vertical, true, "the vertical version (9:16)");
+                    });
+                    ui.end_row();
                 });
+                if d.vertical && !self.draft.vertical.enabled {
+                    ui.label(RichText::new("⚠ The vertical version is off: turn it on in Vertical version.").color(AMBER));
+                }
                 ui.add_space(6.0);
                 hint(ui, d.service.help());
                 if let Some(p) = d.problem() {

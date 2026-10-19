@@ -11,6 +11,7 @@
 
 use super::graphics::GraphicLayer;
 use super::switcher::Layout;
+use super::vertical::{self, TallFrame};
 use crate::config::{parse_color, FrameStyle, Matte, SourceLook, TransitionMode};
 use crate::media::{Ns, Pixels, VideoFrame};
 use crate::scene::PadState;
@@ -115,6 +116,8 @@ struct LutGpu {
 const SLOT_A: usize = 0;
 const SLOT_B: usize = 1;
 const SLOT_PREVIEW: usize = 2;
+/// The vertical version.
+const SLOT_TALL: usize = 3;
 
 const COPY_ALIGN: u32 = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
@@ -215,7 +218,22 @@ struct GraphicGpu {
     /// Uniforms for the program and for the preview monitor.
     program: (wgpu::Buffer, wgpu::BindGroup),
     preview: (wgpu::Buffer, wgpu::BindGroup),
+    /// For the vertical version, once it's on.
+    tall: Option<(wgpu::Buffer, wgpu::BindGroup)>,
     used: bool,
+}
+
+/// The vertical version's canvas, its NV12 output and its monitor picture.
+struct TallGpu {
+    size: (u32, u32),
+    canvas: Target,
+    out: NvOut,
+    preview: (Target, wgpu::BindGroup),
+    /// The background picture, cropped to fill it.
+    bg: Option<wgpu::BindGroup>,
+    /// The replay label.
+    label: Option<(wgpu::Buffer, wgpu::BindGroup)>,
+    graphics: bool,
 }
 
 /// An off-screen whole-scene picture (for wipes, pushes and dips).
@@ -234,6 +252,9 @@ pub struct Rendered {
     /// The preview bus (next scene), RGBA.
     pub preview_bus: Option<(u32, u32, Vec<u8>)>,
     pub thumbs: Vec<(usize, u32, u32, Vec<u8>)>,
+    /// The vertical version, and its monitor picture (RGBA).
+    pub tall: Option<VideoFrame>,
+    pub tall_preview: Option<(u32, u32, Vec<u8>)>,
 }
 
 /// What to produce this time.
@@ -245,6 +266,9 @@ pub struct Wants {
     pub preview_bus: bool,
     /// Sources whose thumbnails should be refreshed.
     pub thumbs: Vec<usize>,
+    /// The vertical version (when it's on), and its monitor picture.
+    pub tall: bool,
+    pub tall_preview: bool,
 }
 
 pub struct Compositor {
@@ -294,6 +318,11 @@ pub struct Compositor {
     replay_draw: bool,
     replay_label: Option<(wgpu::Texture, (wgpu::Buffer, wgpu::BindGroup))>,
     replay_label_on: bool,
+    /// The vertical version, when it's on, and what's in it this time.
+    tall: Option<TallGpu>,
+    tall_frames: Vec<TallFrame>,
+    /// The background picture (kept to crop it for the vertical version).
+    bg_view: Option<(wgpu::TextureView, (u32, u32))>,
 }
 
 /// Create a GPU device for compositing.
@@ -519,6 +548,9 @@ impl Compositor {
             replay_draw: false,
             replay_label: None,
             replay_label_on: false,
+            tall: None,
+            tall_frames: Vec::new(),
+            bg_view: None,
             background: [s.background_rgb[0] as f64 / 255.0, s.background_rgb[1] as f64 / 255.0, s.background_rgb[2] as f64 / 255.0],
             bg_image: None,
             stream_out: None,
@@ -547,6 +579,7 @@ impl Compositor {
             let (taps, foot) = reduction((img.width(), img.height()), (cw, ch));
             let bind = c.bind(Quad::full(1.0, taps, foot), &view, &view).1;
             c.bg_image = Some((tex, bind));
+            c.bg_view = Some((view, (img.width(), img.height())));
         }
         Ok(c)
     }
@@ -628,13 +661,14 @@ impl Compositor {
         (buf, bind)
     }
 
-    /// A source's three uniform slots, with its mask and LUT (if any).
+    /// A source's uniform slots (program A/B, preview, vertical), with its
+    /// mask and LUT (if any).
     fn source_slots(&self, y: &wgpu::Texture, uv: &wgpu::Texture, mask: Option<&wgpu::Texture>, lut: Option<&LutGpu>) -> Vec<(wgpu::Buffer, wgpu::BindGroup)> {
         let (yv, uvv) = (y.create_view(&Default::default()), uv.create_view(&Default::default()));
         let mv = mask.map(|m| m.create_view(&Default::default()));
         let mask_view = mv.as_ref().unwrap_or(&self.white);
         let lut_view = lut.map(|l| &l.view).unwrap_or(&self.no_lut);
-        (0..3).map(|_| self.bind_mask(Quad::full(0.0, 1.0, [0.0, 0.0]), &yv, &uvv, mask_view, lut_view)).collect()
+        (0..4).map(|_| self.bind_mask(Quad::full(0.0, 1.0, [0.0, 0.0]), &yv, &uvv, mask_view, lut_view)).collect()
     }
 
     /// Load a .cube LUT onto the GPU.
@@ -675,14 +709,56 @@ impl Compositor {
 
     /// NV12 output of size w×h from a canvas-sized picture.
     fn nv_out_from(&self, view: &wgpu::TextureView, w: u32, h: u32) -> NvOut {
+        self.nv_out_sized(view, (self.canvas.width, self.canvas.height), w, h)
+    }
+
+    /// NV12 output of size w×h from a picture of size `canvas`.
+    fn nv_out_sized(&self, view: &wgpu::TextureView, canvas: (u32, u32), w: u32, h: u32) -> NvOut {
         let y = Target::new(&self.device, "out y", w, h, wgpu::TextureFormat::R8Unorm, 1);
         let uv = Target::new(&self.device, "out uv", w / 2, h / 2, wgpu::TextureFormat::Rg8Unorm, 2);
-        let canvas = (self.canvas.width, self.canvas.height);
         let (ty, fy) = reduction(canvas, (w, h));
         let (tc, fc) = reduction(canvas, (w / 2, h / 2));
         let y_bind = self.bind(Quad::full(1.0, ty, fy), view, view).1;
         let uv_bind = self.bind(Quad::full(1.0, tc, fc), view, view).1;
         NvOut { y, uv, y_bind, uv_bind }
+    }
+
+    /// Turn the vertical version on (at `size`, with or without the
+    /// program's graphics) or off.
+    pub fn set_tall(&mut self, size: Option<(u32, u32)>, graphics: bool) {
+        let size = size.map(|(w, h)| (w.max(16) & !1, h.max(16) & !1));
+        if self.tall.as_ref().map(|t| t.size) == size {
+            if let Some(t) = &mut self.tall {
+                t.graphics = graphics;
+            }
+            return;
+        }
+        for g in self.graphics.values_mut() {
+            g.tall = None;
+        }
+        let Some((w, h)) = size else {
+            self.tall = None;
+            return;
+        };
+        let canvas = Target::new(&self.device, "tall canvas", w, h, wgpu::TextureFormat::Rgba8Unorm, 4);
+        let out = self.nv_out_sized(&canvas.view, (w, h), w, h);
+        // Its monitor: as tall as the program's.
+        let ph = self.preview.0.height.max(2);
+        let pw = ((ph as u64 * w as u64 / h as u64) as u32).max(2) & !1;
+        let pt = Target::new(&self.device, "tall preview", pw, ph, wgpu::TextureFormat::Rgba8Unorm, 4);
+        let (taps, foot) = reduction((w, h), (pw, ph));
+        let pbind = self.bind(Quad::full(1.0, taps, foot), &canvas.view, &canvas.view).1;
+        let bg = self.bg_view.as_ref().map(|(view, (iw, ih))| {
+            let c = vertical::crop(*iw as f32 / *ih as f32, w as f32 / h as f32, [0.5, 0.5], 1.0);
+            let (taps, foot) = reduction(((*iw as f32 * (c[2] - c[0])) as u32, (*ih as f32 * (c[3] - c[1])) as u32), (w, h));
+            self.bind(Quad { uv: c, ..Quad::full(1.0, taps, foot) }, view, view).1
+        });
+        self.tall = Some(TallGpu { size: (w, h), canvas, out, preview: (pt, pbind), bg, label: None, graphics });
+    }
+
+    /// What the vertical version shows this time.
+    pub fn set_tall_frames(&mut self, frames: Vec<TallFrame>) {
+        self.tall_frames = frames;
     }
 
     pub fn canvas_size(&self) -> (u32, u32) {
@@ -809,6 +885,10 @@ impl Compositor {
         let bind = self.bind(Quad::full(1.0, taps, foot), &self.canvas.view, &self.canvas.view).1;
         self.preview = (preview, bind);
         self.preview_bus = None;
+        // The vertical monitor stays as tall as this one.
+        if let Some(t) = self.tall.take() {
+            self.set_tall(Some(t.size), t.graphics);
+        }
     }
 
     pub fn preview_width(&self) -> u32 {
@@ -847,6 +927,52 @@ impl Compositor {
             key2: [look.key2[0], look.key2[1], if look.key2[2] > 0.5 && self.sources[i].mask_pts.is_some() { 1.0 } else { 0.0 }, look.key2[3]],
             keyrgb: look.keyrgb,
             lut: match &self.sources[i].lut {
+                Some(l) if look.lut_strength > 0.0 => [look.lut_strength, l.domain[0], l.domain[1], l.points],
+                _ => [0.0; 4],
+            },
+            ..Default::default()
+        }
+    }
+
+    /// Uniforms for source `f.source` filling its frame in the vertical
+    /// version (cropped to its framing), with the frames' style.
+    fn tall_quad(&self, f: &TallFrame, size: (u32, u32)) -> Quad {
+        let i = f.source;
+        let (tw, th) = (size.0 as f32, size.1 as f32);
+        let look = self.looks.get(i).copied().unwrap_or_default();
+        let src = &self.sources[i];
+        let px = [f.rect[0] * tw, f.rect[1] * th, (f.rect[0] + f.rect[2]) * tw, (f.rect[1] + f.rect[3]) * th];
+        let (fw, fh) = ((px[2] - px[0]).max(1.0), (px[3] - px[1]).max(1.0));
+        let lu = look.uv;
+        let shown = ((lu[2] - lu[0]).abs() * src.width as f32) / ((lu[3] - lu[1]).abs() * src.height as f32).max(1.0);
+        let c = vertical::crop(shown, fw / fh, f.focus, f.zoom);
+        let uv = [lu[0] + (lu[2] - lu[0]) * c[0], lu[1] + (lu[3] - lu[1]) * c[1], lu[0] + (lu[2] - lu[0]) * c[2], lu[1] + (lu[3] - lu[1]) * c[3]];
+        // Corners, border and shadow on frames that don't fill it (in the
+        // program's sizes, scaled to this picture's width).
+        let k = tw / self.canvas.width as f32;
+        let gap = 1.0 - f.rect[2].max(f.rect[3]);
+        let amount = if f.rect[2] >= 0.999 || f.rect[3] >= 0.999 { 0.0 } else { (gap / 0.05).clamp(0.0, 1.0) };
+        let st = self.style;
+        let cw = self.canvas.width as f32;
+        let shadow_off = [0.004 * cw * k, 0.006 * cw * k];
+        let blur = 0.012 * cw * k;
+        let margin = if st.shadow > 0.0 && amount > 0.0 { shadow_off[0].max(shadow_off[1]) + blur * 1.5 } else { 0.0 } + 1.0;
+        let to_clip = |x: f32, y: f32| [x / tw * 2.0 - 1.0, 1.0 - y / th * 2.0];
+        let a = to_clip(px[0] - margin, px[1] - margin);
+        let b = to_clip(px[2] + margin, px[3] + margin);
+        Quad {
+            rect: [a[0], a[1], b[0], b[1]],
+            uv,
+            params: [f.alpha, 1.0, 0.0, 0.0],
+            px,
+            style: [st.radius * k, st.border * k, st.shadow, amount],
+            style2: [shadow_off[0], shadow_off[1], blur, 0.0],
+            border: [st.border_rgb[0], st.border_rgb[1], st.border_rgb[2], 0.0],
+            color: look.color,
+            key: look.key,
+            key2: [look.key2[0], look.key2[1], if look.key2[2] > 0.5 && src.mask_pts.is_some() { 1.0 } else { 0.0 }, look.key2[3]],
+            keyrgb: look.keyrgb,
+            lut: match &src.lut {
                 Some(l) if look.lut_strength > 0.0 => [look.lut_strength, l.domain[0], l.domain[1], l.points],
                 _ => [0.0; 4],
             },
@@ -908,7 +1034,12 @@ impl Compositor {
                 let view = tex.create_view(&Default::default());
                 let program = self.bind(Quad::full(0.0, 1.0, [0.0, 0.0]), &view, &view);
                 let preview = self.bind(Quad::full(0.0, 1.0, [0.0, 0.0]), &view, &view);
-                self.graphics.insert(l.key, GraphicGpu { _tex: tex, size: (img.width(), img.height()), program, preview, used: false });
+                self.graphics.insert(l.key, GraphicGpu { _tex: tex, size: (img.width(), img.height()), program, preview, tall: None, used: false });
+            }
+            if self.tall.is_some() && self.graphics[&l.key].tall.is_none() {
+                let view = self.graphics[&l.key]._tex.create_view(&Default::default());
+                let b = self.bind(Quad::full(0.0, 1.0, [0.0, 0.0]), &view, &view);
+                self.graphics.get_mut(&l.key).unwrap().tall = Some(b);
             }
             let black = self.black;
             let g = self.graphics.get_mut(&l.key).unwrap();
@@ -927,6 +1058,22 @@ impl Compositor {
                 let q = Quad {
                     rect: [x * 2.0 - 1.0, 1.0 - y * 2.0, (x + w) * 2.0 - 1.0, 1.0 - (y + h) * 2.0],
                     params: [alpha, taps, foot[0], foot[1]],
+                    uv: l.uv,
+                    ..Default::default()
+                };
+                self.queue.write_buffer(buf, 0, bytemuck::bytes_of(&q));
+            }
+            // The vertical version: across its width, low down.
+            if let (Some(t), Some((buf, _))) = (&self.tall, &g.tall) {
+                let (tw, th) = t.size;
+                let r = vertical::graphic_rect(l.rect, self.canvas.width as f32 / self.canvas.height as f32, tw as f32 / th as f32);
+                let dst = ((r[2] * tw as f32).max(1.0) as u32, (r[3] * th as f32).max(1.0) as u32);
+                let (uw, vh) = ((l.uv[2] - l.uv[0]).abs().max(1e-4), (l.uv[3] - l.uv[1]).abs().max(1e-4));
+                let win = (((g.size.0 as f32 * uw) as u32).max(1), ((g.size.1 as f32 * vh) as u32).max(1));
+                let (taps, foot) = reduction(win, dst);
+                let q = Quad {
+                    rect: [r[0] * 2.0 - 1.0, 1.0 - r[1] * 2.0, (r[0] + r[2]) * 2.0 - 1.0, 1.0 - (r[1] + r[3]) * 2.0],
+                    params: [alpha, taps, foot[0] * uw, foot[1] * vh],
                     uv: l.uv,
                     ..Default::default()
                 };
@@ -1002,6 +1149,13 @@ impl Compositor {
         };
         let q = Quad { uv, key, ..Quad::full(1.0, 1.0, [0.0, 0.0]) };
         self.queue.write_buffer(&s.slots[SLOT_A].0, 0, bytemuck::bytes_of(&q));
+        // The vertical version: the middle of it, filling the tall picture.
+        if let Some(t) = &self.tall {
+            let shown = ((uv[2] - uv[0]) * s.width as f32) / ((uv[3] - uv[1]) * s.height as f32).max(1.0);
+            let c = vertical::crop(shown, t.size.0 as f32 / t.size.1 as f32, [0.5, 0.5], 1.0);
+            let tuv = [uv[0] + (uv[2] - uv[0]) * c[0], uv[1] + (uv[3] - uv[1]) * c[1], uv[0] + (uv[2] - uv[0]) * c[2], uv[1] + (uv[3] - uv[1]) * c[3]];
+            self.queue.write_buffer(&s.slots[SLOT_TALL].0, 0, bytemuck::bytes_of(&Quad { uv: tuv, ..q }));
+        }
         self.stinger_draw = true;
     }
 
@@ -1023,8 +1177,28 @@ impl Compositor {
         }
         let a = alpha.clamp(0.0, 1.0);
         self.queue.write_buffer(&r.slots[SLOT_A].0, 0, bytemuck::bytes_of(&Quad::full(a, 1.0, [0.0, 0.0])));
+        if let Some(t) = &self.tall {
+            let c = vertical::crop(r.width as f32 / r.height as f32, t.size.0 as f32 / t.size.1 as f32, [0.5, 0.5], 1.0);
+            self.queue.write_buffer(&r.slots[SLOT_TALL].0, 0, bytemuck::bytes_of(&Quad { uv: c, ..Quad::full(a, 1.0, [0.0, 0.0]) }));
+        }
         if label && self.replay_label.is_none() {
             self.replay_label = Some(self.make_replay_label());
+        }
+        // Its label on the vertical version: top left, in from the edge.
+        if let (Some((tex, _)), Some(t)) = (&self.replay_label, &self.tall) {
+            let (tw, th) = (t.size.0 as f32, t.size.1 as f32);
+            let w = tw * 0.32;
+            let h = w / 3.6;
+            let (x, y) = (tw * 0.06, th * 0.05);
+            let q = Quad { rect: [x / tw * 2.0 - 1.0, 1.0 - y / th * 2.0, (x + w) / tw * 2.0 - 1.0, 1.0 - (y + h) / th * 2.0], ..Quad::full(a, 1.0, [0.0, 0.0]) };
+            match &self.tall.as_ref().unwrap().label {
+                Some((buf, _)) => self.queue.write_buffer(buf, 0, bytemuck::bytes_of(&q)),
+                None => {
+                    let view = tex.create_view(&Default::default());
+                    let b = self.bind(q, &view, &view);
+                    self.tall.as_mut().unwrap().label = Some(b);
+                }
+            }
         }
         if let Some((_, (buf, _))) = &self.replay_label {
             let (cw, ch) = (self.canvas.width as f32, self.canvas.height as f32);
@@ -1272,6 +1446,69 @@ impl Compositor {
             draw_scene(&mut enc, &t.view, &bus_order, SLOT_PREVIEW, Some(false));
             t.copy(&mut enc);
         }
+        // The vertical version: its own canvas, from the same sources.
+        let tall_now = self.tall.is_some() && (wants.tall || wants.tall_preview);
+        if tall_now {
+            let t = self.tall.as_ref().unwrap();
+            let mut frames: Vec<&TallFrame> = self.tall_frames.iter().filter(|f| f.alpha > 0.001 && self.sources.get(f.source).is_some_and(|s| s.serial.is_some())).collect();
+            frames.sort_by_key(|f| f.z);
+            for f in &frames {
+                let q = self.tall_quad(f, t.size);
+                self.queue.write_buffer(&self.sources[f.source].slots[SLOT_TALL].0, 0, bytemuck::bytes_of(&q));
+            }
+            let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("tall"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &t.canvas.view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(clear), store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            if let Some(bind) = &t.bg {
+                rp.set_pipeline(&self.rgba_pipe);
+                rp.set_bind_group(0, bind, &[]);
+                rp.draw(0..4, 0..1);
+            }
+            rp.set_pipeline(&self.layer_pipe);
+            for f in &frames {
+                rp.set_bind_group(0, &self.sources[f.source].slots[SLOT_TALL].1, &[]);
+                rp.draw(0..4, 0..1);
+            }
+            if t.graphics {
+                rp.set_pipeline(&self.rgba_pipe);
+                for k in &graphic_keys {
+                    if let Some((_, b)) = self.graphics.get(k).and_then(|g| g.tall.as_ref()) {
+                        rp.set_bind_group(0, b, &[]);
+                        rp.draw(0..4, 0..1);
+                    }
+                }
+            }
+            if let (true, true, Some(st)) = (self.stinger_draw, matches!(layout, Layout::Stinger { .. }), &self.stinger) {
+                rp.set_pipeline(&self.stinger_pipe);
+                rp.set_bind_group(0, &st.slots[SLOT_TALL].1, &[]);
+                rp.draw(0..4, 0..1);
+            }
+            if let (true, Some(r)) = (self.replay_draw, &self.replay) {
+                rp.set_pipeline(&self.yuv_pipe);
+                rp.set_bind_group(0, &r.slots[SLOT_TALL].1, &[]);
+                rp.draw(0..4, 0..1);
+                if let (true, Some((_, b))) = (self.replay_label_on, &t.label) {
+                    rp.set_pipeline(&self.rgba_pipe);
+                    rp.set_bind_group(0, b, &[]);
+                    rp.draw(0..4, 0..1);
+                }
+            }
+            if self.black > 0.0 {
+                rp.set_pipeline(&self.rgba_pipe);
+                rp.set_bind_group(0, &self.black_bind.1, &[]);
+                rp.draw(0..4, 0..1);
+            }
+        }
         let pass = |enc: &mut wgpu::CommandEncoder, target: &Target, pipe: &wgpu::RenderPipeline, bind: &wgpu::BindGroup| {
             let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
@@ -1350,6 +1587,23 @@ impl Compositor {
             self.preview.0.copy(&mut enc);
             reads.push(&self.preview.0);
         }
+        if tall_now {
+            let t = self.tall.as_ref().unwrap();
+            if wants.tall {
+                let o = &t.out;
+                pass(&mut enc, &o.y, &self.out_y_pipe, &o.y_bind);
+                pass(&mut enc, &o.uv, &self.out_uv_pipe, &o.uv_bind);
+                o.y.copy(&mut enc);
+                o.uv.copy(&mut enc);
+                reads.push(&o.y);
+                reads.push(&o.uv);
+            }
+            if wants.tall_preview {
+                pass(&mut enc, &t.preview.0, &self.rgba_pipe, &t.preview.1);
+                t.preview.0.copy(&mut enc);
+                reads.push(&t.preview.0);
+            }
+        }
         let mut thumb_ids = Vec::new();
         for &i in &wants.thumbs {
             if let Some(s) = self.sources.get(i) {
@@ -1419,6 +1673,17 @@ impl Compositor {
             let data = read(t);
             out.thumbs.push((i, t.width, t.height, tight(t, data)));
         }
+        if tall_now {
+            let t = self.tall.as_ref().unwrap();
+            if wants.tall {
+                out.tall = Some(nv12(&t.out));
+            }
+            if wants.tall_preview {
+                let p = &t.preview.0;
+                let data = read(p);
+                out.tall_preview = Some((p.width, p.height, tight(p, data)));
+            }
+        }
         Ok(out)
     }
 }
@@ -1467,7 +1732,7 @@ mod tests {
             PadState { x: 0, y: 0, w: 160, h: 90, alpha: 1.0, zorder: 2 },
             PadState { x: 80, y: 45, w: 160, h: 90, alpha: 1.0, zorder: 3 },
         ];
-        let r = c.render(&Layout::One(states.to_vec()), None, &[], 0, 0, &Wants { program: true, stream: Some((160, 90)), preview: true, preview_bus: false, thumbs: vec![0] }).unwrap();
+        let r = c.render(&Layout::One(states.to_vec()), None, &[], 0, 0, &Wants { program: true, stream: Some((160, 90)), preview: true, preview_bus: false, thumbs: vec![0], ..Default::default() }).unwrap();
         let p = r.program.unwrap();
         let px = |f: &VideoFrame, x: usize, y: usize| -> (u8, u8, u8) {
             f.pixels.with_planes(|pl| (pl.y[y * pl.y_stride + x], pl.uv[(y / 2) * pl.uv_stride + (x / 2) * 2], pl.uv[(y / 2) * pl.uv_stride + (x / 2) * 2 + 1]))
@@ -1487,6 +1752,65 @@ mod tests {
         assert!(prev[0] > 240 && prev[1] < 15, "preview top-left should be red");
         assert_eq!(r.thumbs.len(), 1);
         assert!(r.thumbs[0].3[0] > 240);
+    }
+
+    /// The vertical version: the scene's tall layout, each source cropped
+    /// to its framing, over everything the program has (fade to black too).
+    #[test]
+    fn draws_the_vertical_version() {
+        use crate::config::VerticalMode;
+        let settings = CompositorSettings { canvas: (320, 180), background_rgb: [0, 0, 0], background_image: None, preview_width: 160, thumb_width: 64 };
+        let mut c = match Compositor::new(&settings) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("skipping GPU test: {e:#}");
+                return;
+            }
+        };
+        let a = c.add_source(64, 36);
+        let b = c.add_source(64, 36);
+        // Source a: white on the left half, black on the right.
+        let (wy, wu, wv) = rgb_to_yuv(1.0, 1.0, 1.0);
+        let (ky, _, _) = rgb_to_yuv(0.0, 0.0, 0.0);
+        let y: Vec<u8> = (0..64 * 36).map(|i| if i % 64 < 32 { wy } else { ky }).collect();
+        let uv: Vec<u8> = (0..64 * 18).flat_map(|_| [wu, wv]).collect();
+        c.upload(a, &VideoFrame::new_nv12(64, 36, 0, y, uv, 1));
+        c.upload(b, &solid(64, 36, (0.0, 1.0, 0.0), 1));
+        let (tw, th) = (90u32, 160u32);
+        c.set_tall(Some((tw, th)), true);
+        let px = |f: &VideoFrame, x: usize, y: usize| -> (u8, u8, u8) {
+            f.pixels.with_planes(|pl| (pl.y[y * pl.y_stride + x], pl.uv[(y / 2) * pl.uv_stride + (x / 2) * 2], pl.uv[(y / 2) * pl.uv_stride + (x / 2) * 2 + 1]))
+        };
+        let near = |a: (u8, u8, u8), b: (u8, u8, u8)| (a.0 as i32 - b.0 as i32).abs() <= 6 && (a.1 as i32 - b.1 as i32).abs() <= 6 && (a.2 as i32 - b.2 as i32).abs() <= 6;
+        let scenes = crate::scene::presets(&["A".to_string(), "B".to_string()]);
+        let sbs = scenes.iter().find(|s| s.name == "Side by side").unwrap();
+        let wants = Wants { tall: true, tall_preview: true, ..Default::default() };
+        let tall = |c: &mut Compositor, scene: &crate::scene::Scene, focus: f32| {
+            let framing = vec![([focus, 0.5], 1.0); 2];
+            c.set_tall_frames(vertical::frames(scene, VerticalMode::Auto, None, tw as f32 / th as f32, &framing));
+            c.render(&Layout::One(Vec::new()), None, &[], 0, 1, &wants).unwrap()
+        };
+        // Side by side becomes a over b.
+        let r = tall(&mut c, sbs, 0.0);
+        let t = r.tall.unwrap();
+        assert_eq!((t.width, t.height), (tw, th));
+        assert!(near(px(&t, 45, 40), rgb_to_yuv(1.0, 1.0, 1.0)), "a on top, framed left: white {:?}", px(&t, 45, 40));
+        assert!(near(px(&t, 45, 120), rgb_to_yuv(0.0, 1.0, 0.0)), "b below: green {:?}", px(&t, 45, 120));
+        let (pw, ph, rgba) = r.tall_preview.unwrap();
+        assert_eq!((ph, rgba.len()), (90, (pw * ph * 4) as usize), "as tall as the program monitor");
+        // Framed right: a's black half.
+        let t = tall(&mut c, sbs, 1.0).tall.unwrap();
+        assert!(near(px(&t, 45, 40), rgb_to_yuv(0.0, 0.0, 0.0)), "framed right: black {:?}", px(&t, 45, 40));
+        // A full-screen scene fills it; faded to black, it's black.
+        let t = tall(&mut c, &scenes[1], 0.5).tall.unwrap();
+        assert!(near(px(&t, 45, 20), rgb_to_yuv(0.0, 1.0, 0.0)) && near(px(&t, 45, 150), rgb_to_yuv(0.0, 1.0, 0.0)));
+        c.set_black(1.0);
+        let t = tall(&mut c, &scenes[1], 0.5).tall.unwrap();
+        assert!(near(px(&t, 45, 80), rgb_to_yuv(0.0, 0.0, 0.0)), "faded: {:?}", px(&t, 45, 80));
+        c.set_black(0.0);
+        // Off: nothing more.
+        c.set_tall(None, true);
+        assert!(tall(&mut c, sbs, 0.0).tall.is_none());
     }
 
     #[test]

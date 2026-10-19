@@ -1436,32 +1436,46 @@ impl App {
         ui.allocate_rect(avail, Sense::hover());
         let preview_mode = self.preview_mode() && !self.edit_mode;
         let top_h = (avail.height() * if preview_mode { 0.5 } else { 0.62 }).max(120.0);
+        // The vertical version's monitor sits to the right of the program.
+        let tall_aspect = self.cfg.vertical.enabled.then(|| {
+            let (w, h) = self.cfg.vertical.size();
+            w as f32 / h as f32
+        });
+        let gap = 14.0;
+        let tall_gap = if tall_aspect.is_some() { gap } else { 0.0 };
         let mv_top;
+        let tall_rect;
         if preview_mode {
             // Preview (left) and program (right).
-            let gap = 14.0;
-            let mut w = ((avail.width() - gap) / 2.0).min(top_h * canvas_aspect);
-            let mut h = w / canvas_aspect;
-            if h > top_h {
-                h = top_h;
-                w = h * canvas_aspect;
+            let ta = tall_aspect.unwrap_or(0.0);
+            let mut h = top_h;
+            let width = |h: f32| h * canvas_aspect * 2.0 + gap + h * ta + tall_gap;
+            if width(h) > avail.width() {
+                h = (avail.width() - gap - tall_gap) / (canvas_aspect * 2.0 + ta);
             }
-            let left = avail.center().x - w - gap / 2.0;
+            let w = h * canvas_aspect;
+            let left = avail.center().x - width(h) / 2.0;
             let pv = Rect::from_min_size(pos2(left, avail.top()), vec2(w, h));
             let pg = Rect::from_min_size(pos2(left + w + gap, avail.top()), vec2(w, h));
             self.preview_monitor(ui, pv);
             self.program_monitor(ui, pg);
+            tall_rect = Rect::from_min_size(pos2(pg.right() + tall_gap, avail.top()), vec2(h * ta, h));
             mv_top = pg.bottom() + 12.0;
         } else {
+            let ta = tall_aspect.unwrap_or(0.0);
             let mut prog_h = top_h;
-            let mut prog_w = prog_h * canvas_aspect;
-            if prog_w > avail.width() {
-                prog_w = avail.width();
-                prog_h = prog_w / canvas_aspect;
+            if prog_h * (canvas_aspect + ta) + tall_gap > avail.width() {
+                prog_h = (avail.width() - tall_gap) / (canvas_aspect + ta);
             }
-            let prog_rect = Rect::from_min_size(pos2(avail.center().x - prog_w / 2.0, avail.top()), vec2(prog_w, prog_h));
+            let prog_w = prog_h * canvas_aspect;
+            let total = prog_w + tall_gap + prog_h * ta;
+            let prog_rect = Rect::from_min_size(pos2(avail.center().x - total / 2.0, avail.top()), vec2(prog_w, prog_h));
             self.program_monitor(ui, prog_rect);
+            tall_rect = Rect::from_min_size(pos2(prog_rect.right() + tall_gap, avail.top()), vec2(prog_h * ta, prog_h));
             mv_top = prog_rect.bottom() + 12.0;
+        }
+        if tall_aspect.is_some() && !self.edit_mode {
+            self.tall_monitor(ui, tall_rect);
         }
         let mv = Rect::from_min_max(pos2(avail.left(), mv_top), pos2(avail.right(), avail.bottom()));
         if n > 0 && mv.height() > 40.0 {
@@ -1504,6 +1518,27 @@ impl App {
         }
         if rc.on_hover_text("Straight to program (Enter)").clicked() {
             self.take_preview(true);
+        }
+    }
+
+    /// The vertical version, as it's recorded and streamed.
+    fn tall_monitor(&mut self, ui: &mut egui::Ui, rect: Rect) {
+        let ctx = ui.ctx().clone();
+        let painter = ui.painter_at(rect.expand(4.0));
+        painter.rect_filled(rect, 4.0, Color32::BLACK);
+        let engine = self.engine.as_ref().unwrap();
+        let slot = engine.tall_preview.clone();
+        let recording = engine.is_recording() && self.cfg.vertical.record;
+        if let Some(tex) = self.texture(&ctx, "tall", &slot) {
+            painter.image(tex, rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        }
+        painter.rect_stroke(rect, 4.0, Stroke::new(if recording { 2.0 } else { 1.0 }, if recording { RED } else { RED_DIM }), StrokeKind::Outside);
+        let badge = Rect::from_min_size(rect.min + vec2(8.0, 8.0), vec2(26.0, 18.0));
+        painter.rect_filled(badge, 3.0, Color32::from_black_alpha(170));
+        painter.text(badge.center(), Align2::CENTER_CENTER, "9:16", FontId::proportional(10.0), Color32::WHITE);
+        let r = ui.interact(rect, ui.scope_id().with("tall_monitor"), Sense::click());
+        if r.on_hover_text("The vertical version (click to set its layouts and framing)").clicked() {
+            self.settings = Some(SettingsUi::new(self.cfg.clone()).open_at(Section::Vertical));
         }
     }
 

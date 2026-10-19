@@ -7,6 +7,9 @@
 //!                                                        └─► destination thread ─► MPEG-TS ─► SRT
 //! ```
 //!
+//! Destinations marked vertical get the vertical (9:16) version instead,
+//! from its own encoder (same sound).
+//!
 //! Each destination has its own thread and queue. A slow connection only
 //! drops its own packets (and picks up again at the next keyframe); a dead
 //! one reconnects with growing waits. Neither ever holds up the encoder,
@@ -81,6 +84,8 @@ pub struct Context {
     pub mix_taps: MixTaps,
     pub tap_id: u64,
     pub program_fps: u32,
+    /// The vertical version's size, while it's on.
+    pub vertical: Option<(u32, u32)>,
     pub status: Arc<Mutex<Status>>,
     pub waker: Waker,
 }
@@ -156,6 +161,7 @@ pub struct StreamSession {
     ctx: Context,
     stop: Arc<AtomicBool>,
     video_job: Option<JoinHandle<()>>,
+    tall_job: Option<JoinHandle<()>>,
     audio_job: Option<JoinHandle<()>>,
     dests: Vec<JoinHandle<()>>,
 }
@@ -171,15 +177,22 @@ impl StreamSession {
             if let Some(p) = d.problem() {
                 bail!("{}: {p}", d.name);
             }
+            if d.vertical && ctx.vertical.is_none() {
+                bail!("{} is set to get the vertical version, which is off (Settings → Vertical version)", d.name);
+            }
         }
         let backend = encode::resolve_backend(VideoCodec::H264, &cfg.encoder)?;
         let mut aac = encode::create_aac(super::audio::MIX_RATE, 2, cfg.audio_bitrate_kbps)?;
         let acfg = aac.config();
         let fps = cfg.fps.min(ctx.program_fps).max(1);
         let size = (cfg.width & !1, cfg.height & !1);
-        let encoder = format!("H.264 · {} · {} kbps", encode::describe_backend(backend), cfg.video_bitrate_kbps);
+        let any_tall = enabled.iter().any(|d| d.vertical);
+        let any_wide = enabled.iter().any(|d| !d.vertical);
+        let encoder = format!("H.264 · {} · {} kbps{}", encode::describe_backend(backend), cfg.video_bitrate_kbps, if any_tall && any_wide { " (and vertical)" } else if any_tall { " · vertical" } else { "" });
         let stop = Arc::new(AtomicBool::new(false));
+        // Destinations ask their encoder for a keyframe when they connect.
         let force_key = Arc::new(AtomicBool::new(true));
+        let tall_key = Arc::new(AtomicBool::new(true));
         let s0 = next_boundary(ctx.program_fps);
 
         {
@@ -207,17 +220,22 @@ impl StreamSession {
         // Destinations: queue ~3 s of packets each.
         let queue = (fps as usize + 50) * 3;
         let mut fan = Vec::new();
+        let mut tall_fan = Vec::new();
         let mut dests = Vec::new();
         for (i, d) in enabled.iter().enumerate() {
             let (tx, rx) = bounded(queue);
             let shared = Arc::new(DestShared::default());
-            fan.push((tx, shared.clone()));
+            if d.vertical {
+                tall_fan.push((tx, shared.clone()));
+            } else {
+                fan.push((tx, shared.clone()));
+            }
             let dest = Destination {
                 index: i,
                 cfg: (*d).clone(),
                 rx,
                 shared,
-                force_key: force_key.clone(),
+                force_key: if d.vertical { tall_key.clone() } else { force_key.clone() },
                 stop: stop.clone(),
                 status: ctx.status.clone(),
                 waker: ctx.waker.clone(),
@@ -231,11 +249,13 @@ impl StreamSession {
             dests.push(std::thread::Builder::new().name(format!("stream {}", d.name)).spawn(move || dest.run())?);
         }
         let fan = Arc::new(Fanout { dests: fan });
+        let tall_fan = Arc::new(Fanout { dests: tall_fan });
 
-        // Video: retimed onto the stream's frame rate, encoded once.
-        let (vtx, vrx) = bounded::<VideoFrame>((fps as usize / 2).max(4));
-        let video_job = {
-            let (fan, status, waker, force_key) = (fan.clone(), ctx.status.clone(), ctx.waker.clone(), force_key.clone());
+        // Video: retimed onto the stream's frame rate, encoded once (and the
+        // vertical version, once, if a destination gets it).
+        let spawn_video = |name: &str, size: (u32, u32), fan: Arc<Fanout>, force_key: Arc<AtomicBool>| -> Result<(Sender<VideoFrame>, JoinHandle<()>)> {
+            let (vtx, vrx) = bounded::<VideoFrame>((fps as usize / 2).max(4));
+            let (status, waker) = (ctx.status.clone(), ctx.waker.clone());
             let mut settings = VideoSettings {
                 codec: VideoCodec::H264,
                 width: size.0,
@@ -245,7 +265,7 @@ impl StreamSession {
                 purpose: Purpose::Stream,
                 backend: backend.to_string(),
             };
-            std::thread::Builder::new().name("stream video".into()).spawn(move || {
+            let job = std::thread::Builder::new().name(name.into()).spawn(move || {
                 let mut retimer = Retimer::new(s0, fps, 0);
                 let mut enc: Option<Box<dyn encode::VideoEncoder>> = None;
                 let result = (|| -> Result<()> {
@@ -273,14 +293,26 @@ impl StreamSession {
                     waker();
                     for _ in vrx.iter() {} // keep draining until the tap goes away
                 }
-            })?
+            })?;
+            Ok((vtx, job))
         };
-        ctx.video_taps.lock().unwrap().stream = Some(StreamTap { tx: vtx, from: s0, size, fps });
+        let mut video_job = None;
+        if any_wide {
+            let (vtx, job) = spawn_video("stream video", size, fan.clone(), force_key.clone())?;
+            video_job = Some(job);
+            ctx.video_taps.lock().unwrap().stream = Some(StreamTap { tx: vtx, from: s0, size, fps });
+        }
+        let mut tall_job = None;
+        if let (true, Some(tall)) = (any_tall, ctx.vertical) {
+            let (vtx, job) = spawn_video("stream vertical", tall, tall_fan.clone(), tall_key.clone())?;
+            tall_job = Some(job);
+            ctx.video_taps.lock().unwrap().tall_stream = Some(StreamTap { tx: vtx, from: s0, size: tall, fps });
+        }
 
         // Audio: the program mix, AAC.
         let (atx, arx) = bounded(500);
         let audio_job = {
-            let fan = fan.clone();
+            let (fan, tall_fan) = (fan.clone(), tall_fan.clone());
             let status = ctx.status.clone();
             std::thread::Builder::new().name("stream audio".into()).spawn(move || {
                 let rate = acfg.rate as i64;
@@ -292,7 +324,9 @@ impl StreamSession {
                 let mut n = 0i64;
                 let mut send = |frames: Vec<Vec<u8>>| {
                     for f in frames {
-                        fan.audio((n * AAC_FRAME as i64 - priming) * NS_PER_SEC / rate, Arc::new(f));
+                        let (t, data) = ((n * AAC_FRAME as i64 - priming) * NS_PER_SEC / rate, Arc::new(f));
+                        fan.audio(t, data.clone());
+                        tall_fan.audio(t, data);
                         n += 1;
                     }
                 };
@@ -317,7 +351,7 @@ impl StreamSession {
         };
         ctx.mix_taps.lock().unwrap().push((ctx.tap_id, super::audio::MixKind::Stream, atx));
 
-        Ok(StreamSession { encoder, ctx, stop, video_job: Some(video_job), audio_job: Some(audio_job), dests })
+        Ok(StreamSession { encoder, ctx, stop, video_job, tall_job, audio_job: Some(audio_job), dests })
     }
 
     /// End the stream: the encoders flush, every destination sends what's
@@ -325,10 +359,14 @@ impl StreamSession {
     pub fn stop(mut self) {
         // Let the last frames through the compositor and mixer.
         std::thread::sleep(Duration::from_millis(150));
-        self.ctx.video_taps.lock().unwrap().stream = None;
+        {
+            let mut taps = self.ctx.video_taps.lock().unwrap();
+            taps.stream = None;
+            taps.tall_stream = None;
+        }
         let id = self.ctx.tap_id;
         self.ctx.mix_taps.lock().unwrap().retain(|(i, ..)| *i != id);
-        for j in [self.video_job.take(), self.audio_job.take()].into_iter().flatten() {
+        for j in [self.video_job.take(), self.tall_job.take(), self.audio_job.take()].into_iter().flatten() {
             let _ = j.join();
         }
         // Encoders are gone, so destination queues end; anyone still
