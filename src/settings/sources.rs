@@ -17,10 +17,11 @@ enum SourceKind {
     Rtmp,
     Ndi,
     Framed,
+    VirtualPtz,
 }
 
 impl SourceKind {
-    const ALL: [SourceKind; 9] = [
+    const ALL: [SourceKind; 10] = [
         SourceKind::Device,
         SourceKind::Screen,
         SourceKind::Test,
@@ -30,6 +31,7 @@ impl SourceKind {
         SourceKind::Rtmp,
         SourceKind::Ndi,
         SourceKind::Framed,
+        SourceKind::VirtualPtz,
     ];
 
     fn of(device: &str) -> SourceKind {
@@ -44,6 +46,8 @@ impl SourceKind {
             SourceKind::Ndi
         } else if d.starts_with("frame:") {
             SourceKind::Framed
+        } else if d.starts_with("vptz:") {
+            SourceKind::VirtualPtz
         } else {
             match netsrc::parse_spec(device) {
                 Some(NetSpec::SrtListen { .. }) => SourceKind::SrtListen,
@@ -65,6 +69,7 @@ impl SourceKind {
             SourceKind::Rtmp => "RTMP input (OBS, phones, encoders)",
             SourceKind::Ndi => "NDI",
             SourceKind::Framed => "Auto-framed close-up (from another source)",
+            SourceKind::VirtualPtz => "Virtual PTZ camera (pan, tilt and zoom in another source)",
         }
     }
 
@@ -79,6 +84,7 @@ impl SourceKind {
             SourceKind::Rtmp => format!("rtmp-in:1935/{}", random_key()),
             SourceKind::Ndi => "ndi:".into(),
             SourceKind::Framed => "frame:".into(),
+            SourceKind::VirtualPtz => "vptz:".into(),
         }
     }
 }
@@ -156,7 +162,7 @@ impl SettingsUi {
             .sources
             .iter()
             .enumerate()
-            .filter(|(i, s)| *i != self.sel_source && s.framed_from().is_none())
+            .filter(|(i, s)| *i != self.sel_source && s.framed_from().is_none() && s.virtual_ptz_of().is_none())
             .map(|(_, s)| (s.name.clone(), s.fps))
             .collect();
         let Some(src) = self.draft.sources.get_mut(self.sel_source) else {
@@ -180,6 +186,10 @@ impl SettingsUi {
                         if k == SourceKind::Framed {
                             src.device = format!("frame:{}", wides.first().map(|w| w.0.as_str()).unwrap_or(""));
                             src.framing = FramingConfig::default();
+                        }
+                        if k == SourceKind::VirtualPtz {
+                            src.device = format!("vptz:{}", wides.first().map(|w| w.0.as_str()).unwrap_or(""));
+                            src.ptz = crate::config::PtzConfig::default();
                         }
                         if k == SourceKind::Media || matches!(k, SourceKind::SrtListen | SourceKind::SrtCall | SourceKind::Rtmp | SourceKind::Ndi) {
                             src.record = k != SourceKind::Media;
@@ -303,13 +313,40 @@ impl SettingsUi {
                     }
                     framing_editor(ui, &mut src.framing);
                 }
+                SourceKind::VirtualPtz => {
+                    let from = src.virtual_ptz_of().unwrap_or("").to_string();
+                    label(ui, "Cut from");
+                    egui::ComboBox::from_id_salt("vptz_from").selected_text(if from.is_empty() { "choose…" } else { &from }).width(240.0).show_ui(ui, |ui| {
+                        if wides.is_empty() {
+                            ui.label(RichText::new("Add the wide camera first").color(TEXT_DIM));
+                        }
+                        for (name, _) in &wides {
+                            if ui.selectable_label(name.eq_ignore_ascii_case(&from), name).clicked() {
+                                src.device = format!("vptz:{name}");
+                            }
+                        }
+                    });
+                    ui.end_row();
+                    if let Some((_, fps)) = wides.iter().find(|w| w.0.eq_ignore_ascii_case(&from)) {
+                        src.fps = *fps;
+                    }
+                    label(ui, "Zoom limit");
+                    ui.horizontal(|ui| {
+                        ui.add(egui::Slider::new(&mut src.ptz.max_zoom, 1.0..=4.0).step_by(0.1).suffix("×"));
+                        hint(ui, "how far into the picture it can go; more is tighter but softer");
+                    });
+                    ui.end_row();
+                    label(ui, "Moves to presets take");
+                    ui.add(egui::Slider::new(&mut src.ptz.glide_seconds, 0.2..=6.0).step_by(0.1).suffix(" s"));
+                    ui.end_row();
+                }
                 SourceKind::Screen | SourceKind::Media => {}
             }
 
             let network = matches!(kind, SourceKind::SrtListen | SourceKind::SrtCall | SourceKind::Rtmp | SourceKind::Ndi);
             label(ui, match kind {
                 SourceKind::Device | SourceKind::Screen => "Capture size",
-                SourceKind::Framed => "Output size",
+                SourceKind::Framed | SourceKind::VirtualPtz => "Output size",
                 _ => "Picture size",
             });
             ui.horizontal(|ui| {
@@ -319,7 +356,7 @@ impl SettingsUi {
                 ui.add(egui::DragValue::new(&mut src.height).range(90..=4320).speed(2));
             });
             ui.end_row();
-            if kind != SourceKind::Framed {
+            if !matches!(kind, SourceKind::Framed | SourceKind::VirtualPtz) {
                 label(ui, "Frame rate");
                 let modes = devices.iter().find(|d| d.name == src.device).map(|d| d.modes.clone()).unwrap_or_default();
                 let allowed = modes.iter().find(|m| m.width == src.width && m.height == src.height).map(|m| m.fps.clone());
@@ -337,7 +374,7 @@ impl SettingsUi {
             label(ui, "Record to its own file");
             ui.checkbox(&mut src.record, "");
             ui.end_row();
-            if kind != SourceKind::Framed {
+            if !matches!(kind, SourceKind::Framed | SourceKind::VirtualPtz) {
                 label(ui, "Delay");
                 ui.add(egui::DragValue::new(&mut src.delay_ms).range(0..=2000).suffix(" ms"));
                 ui.end_row();
@@ -379,6 +416,12 @@ impl SettingsUi {
                     how = if cfg!(target_os = "macos") { "People are found by Apple's Vision framework" } else { "People are found by a small open model on the graphics card" }
                 ));
             }
+            SourceKind::VirtualPtz => {
+                let from = src.virtual_ptz_of().unwrap_or("the wide camera");
+                hint(ui, &format!(
+                    "A camera operator inside {from}: pan, tilt and zoom with the PTZ panel, the Stream Deck or the remote, and save shots as presets it glides to. Best from a 4K camera. Runs and records like any source, at {from}'s frame rate and delay."
+                ));
+            }
             SourceKind::SrtCall => hint(ui, "Cutaway connects to an SRT listener (a receiver, an encoder or a relay) and pulls its stream."),
             SourceKind::Ndi => {
                 if !crate::engine::ndi::available() {
@@ -388,6 +431,13 @@ impl SettingsUi {
             }
         }
         ui.add_space(10.0);
+        let is_virtual = kind == SourceKind::VirtualPtz;
+        let is_ndi = kind == SourceKind::Ndi;
+        let ptz_title = if is_virtual { "Presets" } else { "PTZ control: pan, tilt, zoom and presets" };
+        egui::CollapsingHeader::new(RichText::new(ptz_title).strong())
+            .id_salt(("ptz", self.sel_source))
+            .default_open(src.has_ptz())
+            .show(ui, |ui| ptz_editor(ui, &mut src.ptz, is_virtual, is_ndi));
         egui::CollapsingHeader::new(RichText::new("Picture adjustments: crop, mirror, colour, LUT, background removal, green screen").strong()).id_salt(("look", self.sel_source)).show(ui, |ui| {
             look_editor(ui, &mut src.look, &mut self.lut_check);
         });
@@ -406,9 +456,85 @@ impl SettingsUi {
                 if s.framed_from().is_some_and(|f| f.eq_ignore_ascii_case(&old_name)) {
                     s.device = format!("frame:{new_name}");
                 }
+                if s.virtual_ptz_of().is_some_and(|f| f.eq_ignore_ascii_case(&old_name)) {
+                    s.device = format!("vptz:{new_name}");
+                }
             }
         }
     }
+}
+
+/// A PTZ camera's controls and presets.
+fn ptz_editor(ui: &mut egui::Ui, p: &mut crate::config::PtzConfig, is_virtual: bool, is_ndi: bool) {
+    use crate::config::{PtzControl, PtzPreset};
+    egui::Grid::new("ptz").num_columns(2).spacing([16.0, 8.0]).show(ui, |ui| {
+        if !is_virtual {
+            label(ui, "Controlled by");
+            egui::ComboBox::from_id_salt("ptz_control").selected_text(p.control.label()).width(380.0).show_ui(ui, |ui| {
+                for c in PtzControl::ALL {
+                    if c == PtzControl::Ndi && !is_ndi {
+                        continue;
+                    }
+                    ui.selectable_value(&mut p.control, c, c.label());
+                }
+            });
+            ui.end_row();
+            if matches!(p.control, PtzControl::ViscaIp | PtzControl::ViscaTcp | PtzControl::ViscaUdp) {
+                label(ui, "Camera's address");
+                ui.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut p.address).desired_width(200.0).hint_text(format!("192.168.1.50 (port {})", p.control.default_port())));
+                    ui.label("camera");
+                    ui.add(egui::DragValue::new(&mut p.camera).range(1..=7)).on_hover_text("VISCA camera number: 1 unless it's daisy-chained");
+                });
+                ui.end_row();
+            }
+        }
+        if is_virtual || p.control != PtzControl::None {
+            label(ui, "Speed");
+            ui.add(egui::Slider::new(&mut p.speed, 0.1..=1.0).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
+            ui.end_row();
+            label(ui, "Mounted upside down");
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut p.invert_pan, "flip left/right");
+                ui.checkbox(&mut p.invert_tilt, "flip up/down");
+            });
+            ui.end_row();
+        }
+    });
+    if !is_virtual && p.control == PtzControl::None {
+        hint(ui, "For network PTZ cameras: most speak VISCA (Sony, BirdDog, PTZOptics, Panasonic, Lumens…); NDI PTZ cameras can also be moved through NDI.");
+        return;
+    }
+    ui.add_space(6.0);
+    subtitle(ui, "Presets");
+    let mut remove = None;
+    for (i, pr) in p.presets.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(format!("{}.", i + 1)).color(TEXT_DIM));
+            ui.add_sized([180.0, 22.0], egui::TextEdit::singleline(&mut pr.name));
+            if is_virtual {
+                hint(ui, &format!("{:.0}% across, {:.0}% down, {:.1}×", pr.x * 100.0, pr.y * 100.0, pr.zoom));
+            }
+            if ui.small_button("✕").clicked() {
+                remove = Some(i);
+            }
+        });
+    }
+    if let Some(i) = remove {
+        p.presets.remove(i);
+    }
+    if ui.button("＋ Preset").clicked() {
+        let name = format!("Preset {}", p.presets.len() + 1);
+        p.presets.push(PtzPreset { name, ..Default::default() });
+    }
+    hint(
+        ui,
+        if is_virtual {
+            "Frame a shot with the PTZ panel, then right-click a preset there and choose Save, or press ＋ in the panel. Presets are recalled with a smooth move."
+        } else {
+            "Presets live in the camera, in this order (preset 1 is the camera's memory 0). Frame a shot with the PTZ panel, then right-click a preset there to save it into the camera."
+        },
+    );
 }
 
 /// Who an auto-framed source follows, and how tight (grid rows).

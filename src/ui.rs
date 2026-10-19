@@ -126,6 +126,12 @@ pub struct App {
     rundown: control::rundown::Rundown,
     /// Commands waiting after a "wait" in a macro or cues.
     queued: Vec<production::Queued>,
+    /// The PTZ panel's camera (source index), and what it's doing.
+    ptz_cam: usize,
+    ptz_drive: Option<[f32; 2]>,
+    ptz_zoom: Option<f32>,
+    /// The last replay problem shown.
+    replay_problem: Option<String>,
     /// The pad held down with the mouse, and the talkback button.
     pad_held: Option<usize>,
     talk_held: bool,
@@ -164,6 +170,10 @@ impl App {
             syrinscape,
             rundown: Default::default(),
             queued: Vec::new(),
+            ptz_cam: 0,
+            ptz_drive: None,
+            ptz_zoom: None,
+            replay_problem: None,
             pad_held: None,
             talk_held: false,
             scenes: cfg.effective_scenes(),
@@ -282,6 +292,19 @@ impl App {
                     self.toast(format!("Saved settings to {}", p.display()), false)
                 }
                 Err(e) => self.toast(format!("Couldn't save settings: {e:#}"), true),
+            }
+        }
+    }
+
+    /// Save without a message (small changes made from the desk, like a
+    /// PTZ preset), and tell the engine.
+    fn save_config_quietly(&mut self) {
+        if let Some(e) = &self.engine {
+            let _ = e.update_config(&self.cfg);
+        }
+        if let Some(p) = &self.save_path {
+            if self.cfg.save(p).is_ok() && !self.cfg.ui.profile.trim().is_empty() {
+                let _ = profiles::save(&crate::config::profiles_dir(p), &self.cfg.ui.profile, &self.cfg);
             }
         }
     }
@@ -1168,6 +1191,8 @@ impl App {
         let mut status_line: Option<(String, Color32)> = None;
         let mut marker_clicked = false;
         let mut clip_clicked = false;
+        // Some(Some(slow)): replay; Some(None): stop it.
+        let mut replay_clicked: Option<Option<bool>> = None;
 
         // ---- record
         match &rec {
@@ -1189,6 +1214,29 @@ impl App {
                 {
                     clip_clicked = true;
                 }
+                // Instant replay: click to replay (or stop it); right-click for slow motion.
+                let replaying = self.engine.as_ref().is_some_and(|e| e.replay.playing());
+                let rb = egui::Button::new(RichText::new(if replaying { "⟲ Replaying" } else { "⟲ Replay" }).color(if replaying { Color32::WHITE } else { ui.visuals().text_color() }))
+                    .fill(if replaying { RED_DIM } else { ui.visuals().widgets.inactive.weak_bg_fill })
+                    .min_size(vec2(0.0, 30.0));
+                let r = ui.add(rb).on_hover_text(format!("Play the last {:.0} seconds again, on air. Right-click for slow motion.", self.cfg.replay.seconds));
+                if r.clicked() {
+                    replay_clicked = Some(if replaying { None } else { Some(false) });
+                }
+                r.context_menu(|ui| {
+                    if ui.button("Replay in slow motion").clicked() {
+                        replay_clicked = Some(Some(true));
+                        ui.close();
+                    }
+                    if ui.button("Replay at normal speed").clicked() {
+                        replay_clicked = Some(Some(false));
+                        ui.close();
+                    }
+                    if replaying && ui.button("Stop the replay").clicked() {
+                        replay_clicked = Some(None);
+                        ui.close();
+                    }
+                });
                 if let Some(d) = &disk {
                     let left = d.seconds_left().map(crate::engine::health::fmt_left).unwrap_or_default();
                     status_line = Some((format!("{} free · {left} left", crate::util::human_size(d.free)), if d.seconds_left().is_some_and(|s| s < 1800.0) { AMBER } else { TEXT_DIM }));
@@ -1258,6 +1306,21 @@ impl App {
             match self.run_action(Action::Clip(None)) {
                 Ok(m) => self.toast(m, false),
                 Err(e) => self.toast(e, true),
+            }
+        }
+        if let Some(r) = replay_clicked {
+            let cmd = match r {
+                Some(slow) => control::ReplayCmd::Play { seconds: None, slow },
+                None => control::ReplayCmd::Stop,
+            };
+            if let Err(e) = self.run_action(Action::Replay(cmd)) {
+                self.toast(e, true);
+            }
+        }
+        if let Some(p) = self.engine.as_ref().and_then(|e| e.replay.problem()) {
+            if self.replay_problem.as_deref() != Some(p.as_str()) {
+                self.replay_problem = Some(p.clone());
+                self.toast(p, true);
             }
         }
     }
@@ -3156,6 +3219,7 @@ impl eframe::App for App {
                 ui.separator();
                 self.rundown_panel(ui);
                 self.guests_panel(ui);
+                self.ptz_panel(ui);
                 self.macros_panel(ui);
                 self.graphics_panel(ui);
                 self.sound_panel(ui);

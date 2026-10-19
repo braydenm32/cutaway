@@ -198,7 +198,9 @@ impl Engine {
         {
             let (cw, ch) = self.info.canvas;
             let rate = encode::record_bitrate_kbps(codec, out.program_bitrate_kbps, cw, ch, fps);
-            self.clips.start(folder.clone(), fps, brand, audio_cfg.clone(), out.clip_seconds.clamp(5, 600));
+            // Kept for clips and replays, whichever needs more.
+            let keep = out.clip_seconds.max(cfg.replay.seconds.ceil() as u32).clamp(5, 600);
+            self.clips.start(folder.clone(), fps, brand, audio_cfg.clone(), keep);
             let (path, vtx, muxes) = add_video("Program".into(), format!("Program.{ext}"), fps, (cw, ch), true, rate, None, (fps as usize / 2).max(8), track_cfgs.clone(), Some(self.clips.clone()));
             export_files.push(ExportFile { path, name: "Program".into(), width: cw, height: ch, fps, has_audio: audio_cfg.is_some(), source: None, tc_frame: tc_for(fps) });
             self.video_taps.lock().unwrap().program = Some(ProgramTap { tx: vtx, from: t0 });

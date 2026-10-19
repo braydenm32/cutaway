@@ -87,6 +87,19 @@ struct Api {
     recv_capture: unsafe extern "C" fn(*mut c_void, *mut VideoFrameV2, *mut AudioFrameV2, *mut c_void, u32) -> i32,
     free_video: unsafe extern "C" fn(*mut c_void, *const VideoFrameV2),
     free_audio: unsafe extern "C" fn(*mut c_void, *const AudioFrameV2),
+    ptz: Option<PtzApi>,
+}
+
+/// NDI's PTZ controls (in every runtime since NDI 3).
+#[derive(Clone, Copy)]
+struct PtzApi {
+    supported: unsafe extern "C" fn(*mut c_void) -> bool,
+    pan_tilt_speed: unsafe extern "C" fn(*mut c_void, f32, f32) -> bool,
+    zoom_speed: unsafe extern "C" fn(*mut c_void, f32) -> bool,
+    store: unsafe extern "C" fn(*mut c_void, i32) -> bool,
+    recall: unsafe extern "C" fn(*mut c_void, i32, f32) -> bool,
+    pan_tilt: unsafe extern "C" fn(*mut c_void, f32, f32) -> bool,
+    zoom: unsafe extern "C" fn(*mut c_void, f32) -> bool,
 }
 
 // Function pointers into a library that stays loaded.
@@ -134,6 +147,18 @@ fn load() -> Result<Api, String> {
                     recv_capture: *lib.get(b"NDIlib_recv_capture_v2\0")?,
                     free_video: *lib.get(b"NDIlib_recv_free_video_v2\0")?,
                     free_audio: *lib.get(b"NDIlib_recv_free_audio_v2\0")?,
+                    ptz: (|| -> Result<PtzApi, libloading::Error> {
+                        Ok(PtzApi {
+                            supported: *lib.get(b"NDIlib_recv_ptz_is_supported\0")?,
+                            pan_tilt_speed: *lib.get(b"NDIlib_recv_ptz_pan_tilt_speed\0")?,
+                            zoom_speed: *lib.get(b"NDIlib_recv_ptz_zoom_speed\0")?,
+                            store: *lib.get(b"NDIlib_recv_ptz_store_preset\0")?,
+                            recall: *lib.get(b"NDIlib_recv_ptz_recall_preset\0")?,
+                            pan_tilt: *lib.get(b"NDIlib_recv_ptz_pan_tilt\0")?,
+                            zoom: *lib.get(b"NDIlib_recv_ptz_zoom\0")?,
+                        })
+                    })()
+                    .ok(),
                     _lib: lib,
                 })
             }
@@ -240,7 +265,41 @@ impl Drop for NdiRunning {
     }
 }
 
-pub fn start(source: &str, cfg: &SourceConfig, slot: Arc<SourceSlot>, hub: Arc<AudioHub>, state: NetStatus) -> Result<(Box<dyn Running>, String)> {
+/// Pass PTZ moves to an NDI camera.
+unsafe fn ptz_move(p: &PtzApi, recv: *mut c_void, m: super::ptz::Move) {
+    use super::ptz::Move;
+    match m {
+        Move::Drive { pan, tilt } => {
+            (p.pan_tilt_speed)(recv, pan, tilt);
+        }
+        Move::Zoom(z) => {
+            (p.zoom_speed)(recv, z);
+        }
+        Move::Stop => {
+            (p.pan_tilt_speed)(recv, 0.0, 0.0);
+            (p.zoom_speed)(recv, 0.0);
+        }
+        Move::Home => {
+            (p.pan_tilt)(recv, 0.0, 0.0);
+            (p.zoom)(recv, 0.0);
+        }
+        Move::Recall(n) => {
+            (p.recall)(recv, n.min(99) as i32, 1.0);
+        }
+        Move::Store(n) => {
+            (p.store)(recv, n.min(99) as i32);
+        }
+    }
+}
+
+pub fn start(
+    source: &str,
+    cfg: &SourceConfig,
+    slot: Arc<SourceSlot>,
+    hub: Arc<AudioHub>,
+    state: NetStatus,
+    ptz_rx: Option<crossbeam_channel::Receiver<super::ptz::Move>>,
+) -> Result<(Box<dyn Running>, String)> {
     let api = api()?;
     let stop = Arc::new(AtomicBool::new(false));
     let mut feeder = Feeder::new(&cfg.name, slot, hub, (cfg.width, cfg.height), cfg.network_latency_ms.min(1000), stop.clone());
@@ -265,6 +324,14 @@ pub fn start(source: &str, cfg: &SourceConfig, slot: Arc<SourceSlot>, hub: Arc<A
         let mut mix = None;
         let mut last_frame = std::time::Instant::now();
         while !s2.load(Ordering::Relaxed) {
+            // PTZ moves for this camera.
+            if let (Some(rx), Some(p)) = (&ptz_rx, &api.ptz) {
+                while let Ok(m) = rx.try_recv() {
+                    if (p.supported)(recv) {
+                        ptz_move(p, recv, m);
+                    }
+                }
+            }
             let mut v: VideoFrameV2 = std::mem::zeroed();
             let mut a: AudioFrameV2 = std::mem::zeroed();
             match (api.recv_capture)(recv, &mut v, &mut a, std::ptr::null_mut(), 200) {

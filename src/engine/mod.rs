@@ -29,6 +29,8 @@ pub mod encode;
 pub mod export;
 pub mod feed;
 pub mod framing;
+pub mod ptz;
+pub mod replay;
 pub mod graphics;
 pub mod guests;
 pub mod health;
@@ -316,6 +318,9 @@ pub struct Engine {
     clips: Arc<clips::ClipBuffer>,
     /// The stinger transition's video.
     pub stinger: Arc<stinger::StingerPlayer>,
+    /// Instant replays.
+    pub replay: Arc<replay::ReplayPlayer>,
+    replay_label: Arc<AtomicBool>,
     monitor_volume: Arc<AtomicU32>,
     /// The virtual camera, while on: (tap id, sender).
     vcam: Mutex<Option<(u64, Box<dyn sources::Running>)>>,
@@ -499,9 +504,13 @@ impl Engine {
         let masks: Vec<Arc<cutout::MaskSlot>> = sources.iter().map(|_| cutout::MaskSlot::new()).collect();
         let stinger = Arc::new(stinger::StingerPlayer::new((cw, ch)));
         stinger.configure(&cfg.transition.stinger);
+        let replay = Arc::new(replay::ReplayPlayer::new((cw, ch)));
+        let replay_label = Arc::new(AtomicBool::new(cfg.replay.label));
         {
             let ctx = CompositorLoop {
                 stinger: stinger.clone(),
+                replay: replay.clone(),
+                replay_label: replay_label.clone(),
                 comp,
                 slots: sources.iter().map(|s| s.slot.clone()).collect(),
                 thumbs: sources.iter().map(|s| s.preview.clone()).collect(),
@@ -628,6 +637,8 @@ impl Engine {
             pads,
             clips: clips::ClipBuffer::new(),
             stinger,
+            replay,
+            replay_label,
             monitor_volume: Arc::new(AtomicU32::new(1.0f32.to_bits())),
             vcam: Mutex::new(None),
             captions: captions_slot,
@@ -891,6 +902,7 @@ impl Engine {
         if old.pads != new.pads {
             self.pads.set_pads(&new.pads);
         }
+        self.replay_label.store(new.replay.label, Ordering::Relaxed);
         if old.transition != new.transition {
             self.switcher.set_style(new.transition.direction, &new.transition.dip_color);
             self.stinger.configure(&new.transition.stinger);
@@ -917,6 +929,14 @@ impl Engine {
                     if let Some(f) = h.input.framing() {
                         *f.cfg.lock().unwrap() = s.framing.clone();
                     }
+                }
+            }
+        }
+        // PTZ controls follow their settings.
+        for (i, s) in new.sources.iter().enumerate() {
+            if let (Some(h), Some(o)) = (self.sources.get(i), old.sources.get(i)) {
+                if o.ptz != s.ptz && o.device == s.device {
+                    h.input.update_ptz(s, &[]);
                 }
             }
         }
@@ -1050,6 +1070,24 @@ impl Engine {
 
     pub fn is_black(&self) -> bool {
         self.switcher.is_black()
+    }
+
+    /// Play the last `seconds` (None: as set) of the program again, on air.
+    /// Returns how long it'll be on.
+    pub fn start_replay(&self, seconds: Option<f32>, slow: bool) -> Result<Duration> {
+        let cfg = self.config();
+        let secs = seconds.unwrap_or(cfg.replay.seconds).clamp(1.0, 60.0);
+        // The newest pictures are still on their way to the recording.
+        let packets = self.clips.recent(secs)?;
+        let speed = if slow { cfg.replay.slow_speed.clamp(0.1, 1.0) } else { 1.0 };
+        let d = self.replay.start(packets, speed)?;
+        (self.waker)();
+        Ok(d)
+    }
+
+    /// Pan, tilt and zoom controls of a source (a PTZ or virtual camera).
+    pub fn ptz(&self, source: usize) -> Option<Arc<ptz::PtzCamera>> {
+        self.sources.get(source)?.input.ptz()
     }
 
     /// Media players set to "restart when on air" start from the top when
@@ -1235,6 +1273,8 @@ struct CompositorLoop {
     captions: CaptionsSlot,
     masks: Vec<Arc<cutout::MaskSlot>>,
     stinger: Arc<stinger::StingerPlayer>,
+    replay: Arc<replay::ReplayPlayer>,
+    replay_label: Arc<AtomicBool>,
 }
 
 impl CompositorLoop {
@@ -1321,6 +1361,10 @@ impl CompositorLoop {
                 if let switcher::Layout::Stinger { elapsed, .. } = &layout {
                     let f = self.stinger.frame_at(*elapsed);
                     self.comp.set_stinger(f.as_ref(), self.stinger.matte());
+                }
+                match self.replay.frame() {
+                    Some(r) => self.comp.set_replay(Some(&r.frame), r.alpha, self.replay_label.load(Ordering::Relaxed)),
+                    None => self.comp.set_replay(None, 0.0, false),
                 }
                 let mut graphics = self.graphics.layers(t);
                 if let Some((_, c)) = &*self.captions.lock().unwrap() {

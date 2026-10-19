@@ -289,6 +289,11 @@ pub struct Compositor {
     stinger: Option<SourceGpu>,
     stinger_pipe: wgpu::RenderPipeline,
     stinger_draw: bool,
+    /// An instant replay over the program (and its "REPLAY" label).
+    replay: Option<SourceGpu>,
+    replay_draw: bool,
+    replay_label: Option<(wgpu::Texture, (wgpu::Buffer, wgpu::BindGroup))>,
+    replay_label_on: bool,
 }
 
 /// Create a GPU device for compositing.
@@ -510,6 +515,10 @@ impl Compositor {
             stinger: None,
             stinger_pipe,
             stinger_draw: false,
+            replay: None,
+            replay_draw: false,
+            replay_label: None,
+            replay_label_on: false,
             background: [s.background_rgb[0] as f64 / 255.0, s.background_rgb[1] as f64 / 255.0, s.background_rgb[2] as f64 / 255.0],
             bg_image: None,
             stream_out: None,
@@ -992,6 +1001,70 @@ impl Compositor {
         self.stinger_draw = true;
     }
 
+    /// The replay picture to draw over the program (None: none), how solid
+    /// it is, and whether to label it.
+    pub fn set_replay(&mut self, frame: Option<&VideoFrame>, alpha: f32, label: bool) {
+        let Some(frame) = frame.filter(|f| f.width >= 2 && f.height >= 2) else {
+            self.replay_draw = false;
+            return;
+        };
+        let fits = self.replay.as_ref().is_some_and(|s| s.width == frame.width & !1 && s.height == frame.height & !1);
+        if !fits {
+            self.replay = Some(self.make_source(frame.width, frame.height, None));
+        }
+        let r = self.replay.as_mut().unwrap();
+        if r.serial != Some(frame.serial) {
+            r.serial = Some(frame.serial);
+            Self::write_frame(&self.queue, r, frame);
+        }
+        let a = alpha.clamp(0.0, 1.0);
+        self.queue.write_buffer(&r.slots[SLOT_A].0, 0, bytemuck::bytes_of(&Quad::full(a, 1.0, [0.0, 0.0])));
+        if label && self.replay_label.is_none() {
+            self.replay_label = Some(self.make_replay_label());
+        }
+        if let Some((_, (buf, _))) = &self.replay_label {
+            let (cw, ch) = (self.canvas.width as f32, self.canvas.height as f32);
+            let h = (ch * 0.06).round();
+            let w = h * 3.6;
+            let (x, y) = (cw * 0.035, ch * 0.05);
+            let q = Quad { rect: [x / cw * 2.0 - 1.0, 1.0 - y / ch * 2.0, (x + w) / cw * 2.0 - 1.0, 1.0 - (y + h) / ch * 2.0], ..Quad::full(a, 1.0, [0.0, 0.0]) };
+            self.queue.write_buffer(buf, 0, bytemuck::bytes_of(&q));
+        }
+        self.replay_label_on = label;
+        self.replay_draw = true;
+    }
+
+    /// "REPLAY" in white on red.
+    fn make_replay_label(&self) -> (wgpu::Texture, (wgpu::Buffer, wgpu::BindGroup)) {
+        let h = ((self.canvas.height as f32 * 0.06).round() as u32).max(16);
+        let w = (h as f32 * 3.6) as u32;
+        let mut img = image::RgbaImage::new(w, h);
+        super::text::fill_rect(&mut img, 0, 0, w as i32, h as i32, [214, 36, 48, 235]);
+        let (bold, _) = super::text::system_fonts();
+        let size = h as f32 * 0.62;
+        let tw = super::text::text_width(bold, size, "REPLAY");
+        let base = (h as f32 + super::text::ascent(bold, size) * 0.72) / 2.0;
+        super::text::draw_text(&mut img, bold, size, (w as f32 - tw) / 2.0, base, "REPLAY", [255, 255, 255]);
+        let tex = self.device.create_texture_with_data(
+            &self.queue,
+            &wgpu::TextureDescriptor {
+                label: Some("replay label"),
+                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            img.as_raw(),
+        );
+        let view = tex.create_view(&Default::default());
+        let bind = self.bind(Quad::full(0.0, 1.0, [0.0, 0.0]), &view, &view);
+        (tex, bind)
+    }
+
     /// Draw the program (and the preview bus) and produce what's wanted.
     pub fn render(&mut self, layout: &Layout, preview_bus: Option<&[PadState]>, graphics: &[GraphicLayer], pts: Ns, serial: u64, wants: &Wants) -> Result<Rendered> {
         let canvas = (self.canvas.width, self.canvas.height);
@@ -1143,6 +1216,32 @@ impl Compositor {
                 rp.set_pipeline(&self.stinger_pipe);
                 rp.set_bind_group(0, &s.slots[SLOT_A].1, &[]);
                 rp.draw(0..4, 0..1);
+            }
+        }
+        // A replay over the program (which already has its graphics).
+        if self.replay_draw {
+            if let Some(r) = &self.replay {
+                let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("replay"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &self.canvas.view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                rp.set_pipeline(&self.yuv_pipe);
+                rp.set_bind_group(0, &r.slots[SLOT_A].1, &[]);
+                rp.draw(0..4, 0..1);
+                if let (true, Some((_, (_, bind)))) = (self.replay_label_on, &self.replay_label) {
+                    rp.set_pipeline(&self.rgba_pipe);
+                    rp.set_bind_group(0, bind, &[]);
+                    rp.draw(0..4, 0..1);
+                }
             }
         }
         // Fade to black, over everything.
@@ -1417,7 +1516,7 @@ mod tests {
         };
         let near = |a: (u8, u8, u8), b: (u8, u8, u8), tol: i32| (a.0 as i32 - b.0 as i32).abs() <= tol && (a.1 as i32 - b.1 as i32).abs() <= tol && (a.2 as i32 - b.2 as i32).abs() <= tol;
         let wants = || Wants { program: true, ..Default::default() };
-        let mut render = |c: &mut Compositor| c.render(&Layout::One(states.to_vec()), None, &[], 0, 0, &wants()).unwrap().program.unwrap();
+        let render = |c: &mut Compositor| c.render(&Layout::One(states.to_vec()), None, &[], 0, 0, &wants()).unwrap().program.unwrap();
 
         let problems = c.set_looks(&[SourceLook { lut: Some(path.clone()), ..Default::default() }], &FrameStyle::default());
         assert!(problems.is_empty(), "{problems:?}");

@@ -24,7 +24,7 @@ fn is_generated(device: &str) -> bool {
 /// Whether opening needs the list of connected devices.
 pub fn needs_device_list(device: &str) -> bool {
     let d = device.trim().to_lowercase();
-    !(is_generated(&d) || d == "screen" || d == "default" || d.is_empty() || d == "media" || d.starts_with("source:") || d.starts_with("ndi:") || d.starts_with("frame:") || d.starts_with("app:") || d == "pads" || d.starts_with("guest:") || super::netsrc::is_network(&d))
+    !(is_generated(&d) || d == "screen" || d == "default" || d.is_empty() || d == "media" || d.starts_with("source:") || d.starts_with("ndi:") || d.starts_with("frame:") || d.starts_with("vptz:") || d.starts_with("app:") || d == "pads" || d.starts_with("guest:") || super::netsrc::is_network(&d))
 }
 
 pub struct VideoInput {
@@ -46,6 +46,7 @@ impl VideoInput {
     /// from one of them).
     pub fn new(index: usize, cfg: SourceConfig, slot: Arc<SourceSlot>, hub: Arc<AudioHub>, peers: Arc<Vec<(String, Arc<SourceSlot>)>>) -> Arc<Self> {
         let framing = cfg.framed_from().is_some().then(|| super::framing::FramingShared::new(&cfg.framing));
+        let ptz = super::ptz::PtzCamera::for_source(&cfg);
         Arc::new(VideoInput {
             index,
             cfg,
@@ -55,8 +56,30 @@ impl VideoInput {
             description: Mutex::new("not connected".into()),
             player: Mutex::new(None),
             net: Default::default(),
-            links: sources::Links { peers, framing },
+            links: sources::Links { peers, framing, ptz: Mutex::new(ptz) },
         })
+    }
+
+    /// Pan, tilt and zoom controls (a PTZ camera, or a virtual one).
+    pub fn ptz(&self) -> Option<Arc<super::ptz::PtzCamera>> {
+        self.links.ptz.lock().unwrap().clone()
+    }
+
+    /// Follow new PTZ settings: adjust the controls, or remake them (and
+    /// reopen an NDI camera so its receiver gets the new ones).
+    pub fn update_ptz(&self, cfg: &SourceConfig, devices: &[DeviceInfo]) {
+        let current = self.ptz();
+        match &current {
+            Some(p) if !p.needs_remaking(cfg) => p.configure(&cfg.ptz),
+            None if !cfg.has_ptz() => {}
+            _ => {
+                *self.links.ptz.lock().unwrap() = super::ptz::PtzCamera::for_source(cfg);
+                let ndi = |p: &Option<Arc<super::ptz::PtzCamera>>| p.as_ref().is_some_and(|p| p.ndi_rx.is_some());
+                if ndi(&current) || ndi(&self.links.ptz.lock().unwrap()) {
+                    let _ = self.open(devices);
+                }
+            }
+        }
     }
 
     /// Live framing settings and state, for auto-framed sources.

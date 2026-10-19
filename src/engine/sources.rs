@@ -185,13 +185,16 @@ pub struct Extras {
 }
 
 /// What a source may need from the rest of the engine.
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub struct Links {
     /// Every source's frames, by name (an auto-framed source is cut from
     /// another).
     pub peers: Arc<Vec<(String, Arc<SourceSlot>)>>,
     /// Live framing settings, for auto-framed sources.
     pub framing: Option<Arc<super::framing::FramingShared>>,
+    /// PTZ controls: a virtual camera's state, or the moves an NDI
+    /// receiver passes on.
+    pub ptz: Mutex<Option<Arc<super::ptz::PtzCamera>>>,
 }
 
 /// Start a video source. Returns the running source and a description.
@@ -217,6 +220,16 @@ pub fn start_video(
         let shared = links.framing.clone().unwrap_or_else(|| super::framing::FramingShared::new(&cfg.framing));
         return super::framing::start(cfg, from, parent, slot, shared);
     }
+    if let Some(from) = cfg.virtual_ptz_of() {
+        let parent = links
+            .peers
+            .iter()
+            .find(|(n, _)| n.trim().eq_ignore_ascii_case(from))
+            .map(|p| p.1.clone())
+            .ok_or_else(|| anyhow::anyhow!("there's no source called \"{from}\" to cut it from"))?;
+        let virt = links.ptz.lock().unwrap().as_ref().and_then(|p| p.virt.clone()).unwrap_or_else(|| super::ptz::VirtualPtz::new(&cfg.ptz));
+        return super::ptz::start_virtual(cfg, from, parent, slot, virt);
+    }
     if lower == "test" || lower.starts_with("test:") {
         let pattern = lower.strip_prefix("test:").map(str::to_string).unwrap_or_else(|| PATTERNS[index % PATTERNS.len()].to_string());
         let r = start_test_video(&pattern, cfg, slot)?;
@@ -231,7 +244,8 @@ pub fn start_video(
         return super::netsrc::start(cfg, slot, hub.clone(), net.clone());
     }
     if let Some(name) = spec.strip_prefix("ndi:").or_else(|| spec.strip_prefix("NDI:")) {
-        return super::ndi::start(name.trim(), cfg, slot, hub.clone(), net.clone());
+        let ptz_rx = links.ptz.lock().unwrap().as_ref().and_then(|p| p.ndi_rx.clone());
+        return super::ndi::start(name.trim(), cfg, slot, hub.clone(), net.clone(), ptz_rx);
     }
     if cfg.guest_id().is_some() {
         let r = super::guests::start_source(cfg, slot, hub.clone())?;

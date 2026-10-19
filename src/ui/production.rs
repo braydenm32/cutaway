@@ -141,12 +141,182 @@ impl App {
         Ok(format!("Running {}", mac.name))
     }
 
-    pub(super) fn run_ptz(&mut self, _cam: Target, _cmd: PtzCmd) -> Result<String, String> {
-        Err("PTZ isn't ready yet".into())
+    pub(super) fn run_ptz(&mut self, cam: Target, cmd: PtzCmd) -> Result<String, String> {
+        use crate::engine::ptz::Move;
+        let names: Vec<String> = self.cfg.sources.iter().map(|s| s.name.clone()).collect();
+        let i = cam.find(&names).ok_or("there's no such camera")?;
+        let name = names[i].clone();
+        let e = self.engine.as_ref().ok_or("the engine isn't running")?;
+        let p = e.ptz(i).ok_or_else(|| format!("{name} has no PTZ controls (Settings → Video sources)"))?;
+        let virt = p.virt.clone();
+        let presets: Vec<String> = self.cfg.sources[i].ptz.presets.iter().map(|p| p.name.clone()).collect();
+        match cmd {
+            PtzCmd::Drive { pan, tilt } => p.send(Move::Drive { pan, tilt }),
+            PtzCmd::Zoom(z) => p.send(Move::Zoom(z)),
+            PtzCmd::Stop => p.send(Move::Stop),
+            PtzCmd::Home => p.send(Move::Home),
+            PtzCmd::Recall(t) => {
+                // Real cameras: any memory number; virtual ones: saved presets.
+                let n = match (&t, t.find(&presets)) {
+                    (_, Some(n)) => n,
+                    (Target::Index(n), None) if virt.is_none() => *n,
+                    _ => return Err(format!("{name} has no preset {t}")),
+                };
+                p.send(Move::Recall(n));
+                let label = presets.get(n).cloned().unwrap_or_else(|| format!("preset {}", n + 1));
+                return Ok(format!("{name}: {label}"));
+            }
+            PtzCmd::Store(t) => {
+                let n = match (&t, t.find(&presets)) {
+                    (_, Some(n)) => n,
+                    (Target::Index(n), None) => *n,
+                    (Target::Name(_), None) => presets.len(),
+                };
+                p.send(Move::Store(n));
+                // Remember it (a virtual camera's position, a real one's name).
+                let list = &mut self.cfg.sources[i].ptz.presets;
+                while list.len() <= n {
+                    let k = list.len();
+                    list.push(crate::config::PtzPreset { name: format!("Preset {}", k + 1), ..Default::default() });
+                }
+                if let Target::Name(new) = &t {
+                    list[n].name = new.clone();
+                }
+                if let Some(v) = &virt {
+                    let pos = v.position();
+                    list[n].x = pos.x;
+                    list[n].y = pos.y;
+                    list[n].zoom = pos.zoom;
+                }
+                let label = list[n].name.clone();
+                self.save_config_quietly();
+                return Ok(format!("{name}: saved {label}"));
+            }
+        }
+        Ok("OK".into())
     }
 
-    pub(super) fn run_replay(&mut self, _cmd: ReplayCmd) -> Result<String, String> {
-        Err("replay isn't ready yet".into())
+    /// The PTZ panel: pick a camera, steer it, zoom, and its presets.
+    pub(super) fn ptz_panel(&mut self, ui: &mut egui::Ui) {
+        let cams: Vec<(usize, String)> = self.cfg.sources.iter().enumerate().filter(|(_, s)| s.has_ptz()).map(|(i, s)| (i, s.name.clone())).collect();
+        if cams.is_empty() || self.engine.is_none() {
+            return;
+        }
+        if !cams.iter().any(|(i, _)| *i == self.ptz_cam) {
+            self.ptz_cam = cams[0].0;
+        }
+        ui.add_space(4.0);
+        self.section_heading(ui, "PTZ", Section::Sources);
+        let live = self.engine.as_ref().map(|e| e.switcher.live().sources()).unwrap_or_default();
+        ui.horizontal_wrapped(|ui| {
+            for (i, name) in &cams {
+                let on_air = live.contains(i);
+                let text = RichText::new(name).size(12.5).color(if on_air { RED } else { Color32::WHITE });
+                if ui.add(egui::Button::selectable(self.ptz_cam == *i, text)).on_hover_text(if on_air { "On air" } else { "" }).clicked() {
+                    self.ptz_cam = *i;
+                }
+            }
+        });
+        let cam = self.ptz_cam;
+        let target = Target::Index(cam);
+        let status = self.engine.as_ref().and_then(|e| e.ptz(cam)).map(|p| p.status()).unwrap_or_default();
+        let mut send: Vec<PtzCmd> = Vec::new();
+        ui.horizontal(|ui| {
+            // Joystick: drag from the middle; let go to stop.
+            let size = 96.0;
+            let (rect, resp) = ui.allocate_exact_size(vec2(size, size), egui::Sense::drag());
+            let painter = ui.painter_at(rect);
+            painter.circle_filled(rect.center(), size / 2.0, RAISED);
+            painter.circle_stroke(rect.center(), size / 2.0, egui::Stroke::new(1.0, LINE));
+            for (dx, dy) in [(0.0, -1.0), (0.0, 1.0), (-1.0, 0.0), (1.0, 0.0)] {
+                painter.circle_filled(rect.center() + vec2(dx, dy) * (size / 2.0 - 9.0), 2.5, TEXT_DIM);
+            }
+            let mut knob = rect.center();
+            if resp.dragged() {
+                if let Some(pos) = resp.interact_pointer_pos() {
+                    let d = (pos - rect.center()) / (size / 2.0);
+                    let d = if d.length() > 1.0 { d / d.length() } else { d };
+                    knob = rect.center() + d * (size / 2.0);
+                    // A small dead zone, then speed grows with distance.
+                    let shape = |v: f32| if v.abs() < 0.12 { 0.0 } else { v.signum() * ((v.abs() - 0.12) / 0.88).powf(1.5) };
+                    let want = [shape(d.x), shape(-d.y)];
+                    let last = self.ptz_drive.unwrap_or([0.0, 0.0]);
+                    if (want[0] - last[0]).abs() > 0.04 || (want[1] - last[1]).abs() > 0.04 || self.ptz_drive.is_none() {
+                        self.ptz_drive = Some(want);
+                        send.push(PtzCmd::Drive { pan: want[0], tilt: want[1] });
+                    }
+                }
+            } else if self.ptz_drive.take().is_some() {
+                send.push(PtzCmd::Stop);
+            }
+            painter.circle_filled(knob, 13.0, if resp.dragged() { ACCENT } else { Color32::from_gray(160) });
+            resp.on_hover_text("Drag to pan and tilt; let go to stop");
+            ui.vertical(|ui| {
+                // Zoom: hold.
+                for (label, z) in [("＋ Zoom in", 1.0f32), ("－ Zoom out", -1.0)] {
+                    let r = ui.add(egui::Button::new(label).min_size(vec2(96.0, 28.0)).sense(egui::Sense::click_and_drag()));
+                    let down = r.is_pointer_button_down_on();
+                    if down && self.ptz_zoom != Some(z) {
+                        self.ptz_zoom = Some(z);
+                        send.push(PtzCmd::Zoom(z));
+                    } else if !down && self.ptz_zoom == Some(z) {
+                        self.ptz_zoom = None;
+                        send.push(PtzCmd::Stop);
+                    }
+                }
+                if ui.add(egui::Button::new("⌂ Home").min_size(vec2(96.0, 24.0))).clicked() {
+                    send.push(PtzCmd::Home);
+                }
+            });
+        });
+        // Presets: click to go; right-click to save the current shot there.
+        let presets: Vec<String> = self.cfg.sources.get(cam).map(|s| s.ptz.presets.iter().map(|p| p.name.clone()).collect()).unwrap_or_default();
+        ui.horizontal_wrapped(|ui| {
+            for (k, name) in presets.iter().enumerate() {
+                let r = ui.add(egui::Button::new(RichText::new(name).size(12.5)).min_size(vec2(56.0, 26.0))).on_hover_text("Go there. Right-click to save the current shot here.");
+                if r.clicked() {
+                    send.push(PtzCmd::Recall(Target::Index(k)));
+                }
+                r.context_menu(|ui| {
+                    if ui.button(format!("Save the current shot as \"{name}\"")).clicked() {
+                        send.push(PtzCmd::Store(Target::Index(k)));
+                        ui.close();
+                    }
+                });
+            }
+            if ui.small_button("＋").on_hover_text("Save the current shot as a new preset").clicked() {
+                send.push(PtzCmd::Store(Target::Name(format!("Preset {}", presets.len() + 1))));
+            }
+        });
+        if !status.is_empty() && status != "virtual" {
+            ui.label(RichText::new(&status).color(TEXT_DIM).size(11.0));
+        }
+        if self.ptz_drive.is_some() || self.ptz_zoom.is_some() {
+            ui.ctx().request_repaint_after(Duration::from_millis(50));
+        }
+        for c in send {
+            match self.run_ptz(target.clone(), c) {
+                Ok(m) if m != "OK" => self.toast(m, false),
+                Ok(_) => {}
+                Err(e) => self.toast(e, true),
+            }
+        }
+        ui.add_space(4.0);
+        ui.separator();
+    }
+
+    pub(super) fn run_replay(&mut self, cmd: ReplayCmd) -> Result<String, String> {
+        let e = self.engine.as_ref().ok_or("the engine isn't running")?;
+        match cmd {
+            ReplayCmd::Stop => {
+                e.replay.stop();
+                Ok("Replay stopped".into())
+            }
+            ReplayCmd::Play { seconds, slow } => {
+                let d = e.start_replay(seconds, slow).map_err(|e| format!("{e:#}"))?;
+                Ok(format!("Replay{} ({:.0} s)", if slow { " in slow motion" } else { "" }, d.as_secs_f32()))
+            }
+        }
     }
 
     pub(super) fn run_prompter(&mut self, _cmd: PrompterCmd) -> Result<String, String> {

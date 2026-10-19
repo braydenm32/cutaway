@@ -520,6 +520,115 @@ pub struct SourceConfig {
     pub network_latency_ms: u32,
     /// Auto-framed sources (device "frame:<source>"): who to follow and how.
     pub framing: FramingConfig,
+    /// Pan, tilt and zoom: a PTZ camera's controls, or a virtual one's
+    /// (device "vptz:<source>") presets.
+    pub ptz: PtzConfig,
+}
+
+/// How a PTZ camera is moved.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PtzControl {
+    #[default]
+    None,
+    /// VISCA over IP (Sony, BirdDog, Panasonic…): UDP port 52381.
+    ViscaIp,
+    /// Plain VISCA over TCP (PTZOptics and many others): port 5678.
+    ViscaTcp,
+    /// Plain VISCA over UDP: port 1259.
+    ViscaUdp,
+    /// An NDI camera's own controls (NDI sources only).
+    Ndi,
+}
+
+impl PtzControl {
+    pub const ALL: [PtzControl; 5] = [PtzControl::None, PtzControl::ViscaIp, PtzControl::ViscaTcp, PtzControl::ViscaUdp, PtzControl::Ndi];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            PtzControl::None => "None",
+            PtzControl::ViscaIp => "VISCA over IP (Sony, BirdDog, Panasonic: UDP 52381)",
+            PtzControl::ViscaTcp => "VISCA over TCP (PTZOptics and others: 5678)",
+            PtzControl::ViscaUdp => "VISCA over UDP (1259)",
+            PtzControl::Ndi => "NDI (the camera's own controls)",
+        }
+    }
+
+    pub fn default_port(self) -> u16 {
+        match self {
+            PtzControl::ViscaIp => 52381,
+            PtzControl::ViscaTcp => 5678,
+            PtzControl::ViscaUdp => 1259,
+            _ => 0,
+        }
+    }
+}
+
+/// A saved camera position. Real cameras keep their own (by number, in
+/// order); virtual ones keep it here.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct PtzPreset {
+    pub name: String,
+    /// Virtual: the centre of the shot (0..1 across and down the picture).
+    pub x: f32,
+    pub y: f32,
+    /// Virtual: 1 = the whole picture, 2 = twice as close…
+    pub zoom: f32,
+}
+
+impl Default for PtzPreset {
+    fn default() -> Self {
+        PtzPreset { name: "Preset".into(), x: 0.5, y: 0.5, zoom: 1.0 }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct PtzConfig {
+    pub control: PtzControl,
+    /// The camera's address: "192.168.1.50" or "192.168.1.50:52381".
+    pub address: String,
+    /// VISCA camera number (1–7; 1 for a camera on its own).
+    pub camera: u8,
+    /// How fast moves and preset recalls go (0.1–1).
+    pub speed: f32,
+    pub invert_pan: bool,
+    pub invert_tilt: bool,
+    pub presets: Vec<PtzPreset>,
+    /// Virtual: how far it can zoom into the picture (1–4).
+    pub max_zoom: f32,
+    /// Virtual: how long a move to a preset takes.
+    pub glide_seconds: f32,
+}
+
+impl Default for PtzConfig {
+    fn default() -> Self {
+        PtzConfig {
+            control: PtzControl::None,
+            address: String::new(),
+            camera: 1,
+            speed: 0.6,
+            invert_pan: false,
+            invert_tilt: false,
+            presets: Vec::new(),
+            max_zoom: 3.0,
+            glide_seconds: 1.5,
+        }
+    }
+}
+
+impl SourceConfig {
+    /// The source a virtual PTZ camera is cut from.
+    pub fn virtual_ptz_of(&self) -> Option<&str> {
+        let d = self.device.trim();
+        (d.len() > 5 && d[..5].eq_ignore_ascii_case("vptz:")).then(|| d[5..].trim())
+    }
+
+    /// Moved by PTZ controls (a real PTZ camera or a virtual one).
+    pub fn has_ptz(&self) -> bool {
+        self.virtual_ptz_of().is_some() || self.ptz.control != PtzControl::None
+    }
 }
 
 impl SourceConfig {
@@ -744,6 +853,7 @@ impl Default for SourceConfig {
             media: MediaConfig::default(),
             network_latency_ms: 300,
             framing: FramingConfig::default(),
+            ptz: PtzConfig::default(),
         }
     }
 }
@@ -1588,6 +1698,8 @@ impl Config {
                     x.look = SourceLook::default();
                     x.media = MediaConfig::default();
                     x.framing = FramingConfig::default();
+                    // Applied live, except a virtual camera's parent (its device).
+                    x.ptz = PtzConfig::default();
                     x
                 })
                 .collect()
@@ -1835,12 +1947,10 @@ pub struct ReplayConfig {
     pub slow_speed: f32,
     /// Show "REPLAY" in a corner while it plays.
     pub label: bool,
-    /// Play the sound too (at normal speed only).
-    pub sound: bool,
 }
 
 impl Default for ReplayConfig {
     fn default() -> Self {
-        ReplayConfig { seconds: 8.0, slow_speed: 0.5, label: true, sound: false }
+        ReplayConfig { seconds: 8.0, slow_speed: 0.5, label: true }
     }
 }

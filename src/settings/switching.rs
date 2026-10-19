@@ -110,6 +110,22 @@ impl SettingsUi {
         });
         hint(ui, "FTB in the bottom bar (or ftb on the Stream Deck, MIDI or the remote) fades everything, graphics included, to black; press it again to come back.");
 
+        ui.add_space(14.0);
+        subtitle(ui, "Instant replay");
+        let r = &mut self.draft.replay;
+        egui::Grid::new("replay").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            label(ui, "Replay the last");
+            ui.add(egui::Slider::new(&mut r.seconds, 2.0..=30.0).step_by(1.0).suffix(" s"));
+            ui.end_row();
+            label(ui, "Slow motion");
+            ui.add(egui::Slider::new(&mut r.slow_speed, 0.25..=0.75).step_by(0.05).custom_formatter(|v, _| format!("{:.0}% speed", v * 100.0)));
+            ui.end_row();
+            label(ui, "Label");
+            ui.checkbox(&mut r.label, "show REPLAY in the corner while it plays");
+            ui.end_row();
+        });
+        hint(ui, "⟲ Replay in the header (right-click for slow motion), replay or replay:slow from the Stream Deck, MIDI or the remote. It replays the program while recording, fading in and out over the live picture; the show's sound carries on.");
+
         ui.add_space(16.0);
         subtitle(ui, "Automatic switching");
         let scenes: Vec<String> = self.draft.effective_scenes().iter().map(|s| s.name.clone()).collect();

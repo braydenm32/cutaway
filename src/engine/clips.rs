@@ -84,6 +84,19 @@ impl ClipBuffer {
         }
     }
 
+    /// The last `seconds` of the program's pictures (from the keyframe
+    /// before), for an instant replay.
+    pub fn recent(&self, seconds: f32) -> Result<Vec<VideoPacket>> {
+        let i = self.inner.lock().unwrap();
+        if i.folder.is_none() {
+            return Err(anyhow!("replays come from the recording: start recording first"));
+        }
+        let newest = i.video.back().map(|p| p.dts).ok_or_else(|| anyhow!("nothing recorded yet"))?;
+        let want = newest - (seconds.max(0.5) * 1e9) as Ns;
+        let start = i.video.iter().rposition(|p| p.keyframe && p.dts <= want).or_else(|| i.video.iter().position(|p| p.keyframe)).ok_or_else(|| anyhow!("nothing recorded yet"))?;
+        Ok(i.video.iter().skip(start).cloned().collect())
+    }
+
     /// The next clip's number (errors when not recording).
     pub fn reserve(&self) -> Result<u32> {
         let mut i = self.inner.lock().unwrap();
