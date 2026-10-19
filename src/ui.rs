@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 
 mod panels;
 mod production;
+mod uploads;
 
 pub mod theme {
     use eframe::egui::Color32;
@@ -134,6 +135,11 @@ pub struct App {
     replay_problem: Option<String>,
     /// A phone camera's QR code on show: its link id.
     qr_for: Option<String>,
+    /// A newer Cutaway, once GitHub has said so; and its window.
+    update: Arc<std::sync::Mutex<Option<crate::net::update::Release>>>,
+    update_open: bool,
+    /// Uploads to YouTube and Google Drive.
+    uploads: uploads::Uploads,
     /// The live chat, the comment on screen, and the newest one shown.
     chat: Option<crate::net::chat::Chat>,
     comment_on: Option<u64>,
@@ -184,6 +190,9 @@ impl App {
             ptz_zoom: None,
             replay_problem: None,
             qr_for: None,
+            update: Arc::new(std::sync::Mutex::new(None)),
+            update_open: false,
+            uploads: Default::default(),
             chat: None,
             comment_on: None,
             comment_at: None,
@@ -228,6 +237,21 @@ impl App {
         };
         app.start_engine();
         app.apply_control_settings();
+        if app.cfg.ui.check_updates {
+            let (slot, waker) = (app.update.clone(), app.waker.clone());
+            let _ = std::thread::Builder::new().name("update check".into()).spawn(move || {
+                // Not in the way of starting up.
+                std::thread::sleep(Duration::from_secs(5));
+                match crate::net::update::check(env!("CARGO_PKG_VERSION")) {
+                    Ok(Some(r)) => {
+                        *slot.lock().unwrap() = Some(r);
+                        waker();
+                    }
+                    Ok(None) => {}
+                    Err(e) => eprintln!("update check: {e:#}"),
+                }
+            });
+        }
         if app.cfg.display.virtual_camera {
             app.set_virtual_camera(true);
         }
@@ -1175,6 +1199,41 @@ impl App {
     fn header_right(&mut self, ui: &mut egui::Ui) {
         if ui.button("Settings").on_hover_text("Ctrl/Cmd+,").clicked() {
             self.open_settings();
+        }
+        let update = self.update.lock().unwrap().clone().filter(|r| r.version != self.cfg.ui.skip_version);
+        if let Some(r) = &update {
+            if ui.add(egui::Button::selectable(self.update_open, RichText::new(format!("⬆ {} is out", r.version)).color(ACCENT))).on_hover_text("A newer Cutaway is ready to download").clicked() {
+                self.update_open = !self.update_open;
+            }
+        }
+        if let (true, Some(r)) = (self.update_open, update) {
+            let mut open = true;
+            let mut skip = false;
+            egui::Window::new(format!("Cutaway {}", r.version)).open(&mut open).collapsible(false).resizable(false).default_width(420.0).show(ui.ctx(), |ui| {
+                ui.label(format!("You have {}.", env!("CARGO_PKG_VERSION")));
+                if !r.notes.is_empty() {
+                    ui.add_space(6.0);
+                    egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+                        ui.label(RichText::new(&r.notes).size(12.5).color(TEXT_DIM));
+                    });
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button(RichText::new("Download").strong()).on_hover_text(&r.url).clicked() {
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(&r.url));
+                    }
+                    if ui.button("Skip this version").clicked() {
+                        skip = true;
+                    }
+                });
+                ui.label(RichText::new("Your settings and shows stay as they are when you update.").size(11.5).color(TEXT_DIM));
+            });
+            if skip {
+                self.cfg.ui.skip_version = r.version.clone();
+                self.cfg_dirty = true;
+                open = false;
+            }
+            self.update_open = open;
         }
         let (warn_count, problems) = self
             .engine
@@ -3278,6 +3337,7 @@ impl eframe::App for App {
             ctx.request_repaint_after(d);
         }
         self.tick_comments(&ctx);
+        self.tick_uploads();
         self.tick_prompter(&ctx);
         self.handle_keys(&ctx);
         self.poll_status();
@@ -3304,6 +3364,7 @@ impl eframe::App for App {
                 self.stream_panel(ui);
                 ui.add_space(4.0);
                 ui.separator();
+                self.uploads_panel(ui);
                 self.rundown_panel(ui);
                 self.guests_panel(ui);
                 self.ptz_panel(ui);

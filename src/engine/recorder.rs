@@ -31,6 +31,8 @@ pub struct TakeReport {
     pub files: Vec<(PathBuf, u64)>,
     pub problems: Vec<String>,
     pub duration: Duration,
+    /// Markers (seconds into the take, name), for chapters.
+    pub markers: Vec<(f64, String)>,
 }
 
 /// A marker dropped during a take (time from the start of the files).

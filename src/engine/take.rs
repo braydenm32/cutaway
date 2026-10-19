@@ -411,6 +411,7 @@ impl Engine {
             });
             report.problems.extend(problems);
             report.duration = Duration::from_nanos((t1 - t0).max(0) as u64);
+            report.markers = side.markers.iter().map(|m| (m.at as f64 / NS_PER_SEC as f64, m.name.clone())).collect();
             let events = switcher.events_between(t0 + VIDEO_LATENCY, t1 + VIDEO_LATENCY);
             let written = side.write(&cfg, &report, &summary, &events, t0, t1, fps, (cw, ch), stream_since, cues.as_deref());
             let mut st = status.lock().unwrap();

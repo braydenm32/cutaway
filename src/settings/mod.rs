@@ -15,6 +15,7 @@ mod rundown;
 mod sound;
 mod sources;
 mod switching;
+mod upload;
 mod vertical;
 
 
@@ -47,6 +48,7 @@ pub enum Section {
     Recording,
     Streaming,
     Vertical,
+    Upload,
     Outputs,
     Control,
     Shortcuts,
@@ -54,7 +56,7 @@ pub enum Section {
 }
 
 impl Section {
-    const ALL: [Section; 22] = [
+    const ALL: [Section; 23] = [
         Section::General,
         Section::Sources,
         Section::Audio,
@@ -73,6 +75,7 @@ impl Section {
         Section::Recording,
         Section::Streaming,
         Section::Vertical,
+        Section::Upload,
         Section::Outputs,
         Section::Control,
         Section::Shortcuts,
@@ -103,6 +106,7 @@ impl Section {
             Section::Recording => "Recording",
             Section::Streaming => "Streaming",
             Section::Vertical => "Vertical version",
+            Section::Upload => "Upload",
             Section::Outputs => "Screens & webcam",
             Section::Control => "Remote & MIDI",
             Section::Shortcuts => "Shortcuts",
@@ -163,6 +167,8 @@ pub struct SettingsUi {
     sel_source: usize,
     sel_audio: usize,
     sel_dest: usize,
+    /// Signing in to Google (Settings → Upload).
+    google: Option<upload::GoogleSignIn>,
     show_keys: HashSet<usize>,
     encoders: Arc<Mutex<Option<EncoderLists>>>,
     scanning: bool,
@@ -219,6 +225,7 @@ impl SettingsUi {
             sel_source: 0,
             sel_audio: 0,
             sel_dest: 0,
+            google: None,
             show_keys: HashSet::new(),
             encoders: Arc::new(Mutex::new(Some({
                 let list = |c: Codec| crate::engine::encode::video_backends(c.video_codec()).into_iter().map(String::from).collect::<Vec<_>>();
@@ -343,6 +350,7 @@ impl SettingsUi {
                                     Section::Recording => self.recording(ui),
                                     Section::Streaming => self.streaming(ui),
                                     Section::Vertical => self.vertical(ui),
+                                    Section::Upload => self.upload(ui),
                                     Section::Outputs => self.outputs(ui, info),
                                     Section::Control => self.control(ui, info),
                                     Section::Shortcuts => shortcuts(ui),
@@ -471,6 +479,7 @@ impl SettingsUi {
             Section::Recording => a.output != b.output || a.podcast != b.podcast,
             Section::Streaming => a.streaming != b.streaming,
             Section::Vertical => a.vertical != b.vertical,
+            Section::Upload => a.upload != b.upload,
             Section::Outputs => a.display != b.display || a.ndi_out != b.ndi_out,
             Section::Control => a.remote != b.remote || a.midi != b.midi || a.osc != b.osc,
             _ => false,
@@ -493,6 +502,9 @@ impl SettingsUi {
             ui.end_row();
             label(ui, "Pre-show check");
             ui.checkbox(&mut self.draft.ui.check_before_start, "check sources, sound, disk and stream servers before recording or going live");
+            ui.end_row();
+            label(ui, "Updates");
+            ui.checkbox(&mut self.draft.ui.check_updates, "check GitHub for a newer Cutaway when it starts (nothing else is sent)");
             ui.end_row();
         });
         ui.add_space(14.0);

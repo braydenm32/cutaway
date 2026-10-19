@@ -50,6 +50,8 @@ pub struct Config {
     pub ndi_out: NdiOutConfig,
     /// A vertical (9:16) version of the show for Shorts, Reels and TikTok.
     pub vertical: VerticalConfig,
+    /// Uploading takes to YouTube and Google Drive.
+    pub upload: UploadConfig,
 }
 
 /// Syrinscape Online: moods and sounds started from Cutaway's buttons,
@@ -1167,11 +1169,15 @@ pub struct UiConfig {
     pub profile: String,
     /// Run the pre-show check before recording or going live.
     pub check_before_start: bool,
+    /// Ask GitHub whether there's a newer Cutaway, at start.
+    pub check_updates: bool,
+    /// A newer version you chose not to hear about again.
+    pub skip_version: String,
 }
 
 impl Default for UiConfig {
     fn default() -> Self {
-        UiConfig { scale: 1.0, confirm_stop_recording: false, confirm_end_stream: true, profile: String::new(), check_before_start: false }
+        UiConfig { scale: 1.0, confirm_stop_recording: false, confirm_end_stream: true, profile: String::new(), check_before_start: false, check_updates: true, skip_version: String::new() }
     }
 }
 
@@ -2178,5 +2184,122 @@ pub struct VerticalFraming {
 impl Default for VerticalFraming {
     fn default() -> Self {
         VerticalFraming { source: String::new(), x: 0.5, y: 0.5, zoom: 1.0 }
+    }
+}
+
+/// Uploading takes to YouTube and Google Drive after the show, with your
+/// own Google OAuth client (a "Desktop app" client from Google Cloud).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct UploadConfig {
+    pub client_id: String,
+    pub client_secret: String,
+    /// Kept after signing in (treat the settings file as private).
+    pub refresh_token: String,
+    /// Who's signed in (shown only).
+    pub account: String,
+    /// What signing in allowed: "youtube", "drive".
+    pub granted: Vec<String>,
+    /// The program to YouTube.
+    pub youtube: bool,
+    pub youtube_privacy: YoutubePrivacy,
+    /// "" = the show's name and the date.
+    pub youtube_title: String,
+    pub youtube_description: String,
+    /// Markers as YouTube chapters (in the description).
+    pub youtube_chapters: bool,
+    /// Files to Google Drive.
+    pub drive: bool,
+    /// The Drive folder takes go in (one folder per take inside it).
+    pub drive_folder: String,
+    pub drive_files: DriveFiles,
+    /// Start as soon as each take is saved (otherwise there's an Upload
+    /// button for it).
+    pub automatic: bool,
+}
+
+impl Default for UploadConfig {
+    fn default() -> Self {
+        UploadConfig {
+            client_id: String::new(),
+            client_secret: String::new(),
+            refresh_token: String::new(),
+            account: String::new(),
+            granted: Vec::new(),
+            youtube: false,
+            youtube_privacy: YoutubePrivacy::Private,
+            youtube_title: String::new(),
+            youtube_description: String::new(),
+            youtube_chapters: true,
+            drive: false,
+            drive_folder: "Cutaway".into(),
+            drive_files: DriveFiles::Program,
+            automatic: false,
+        }
+    }
+}
+
+impl UploadConfig {
+    pub fn signed_in(&self) -> bool {
+        !self.refresh_token.trim().is_empty()
+    }
+
+    /// Something to upload to, and signed in for it.
+    pub fn ready(&self) -> bool {
+        self.signed_in() && ((self.youtube && self.granted.iter().any(|g| g == "youtube")) || (self.drive && self.granted.iter().any(|g| g == "drive")))
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum YoutubePrivacy {
+    #[default]
+    Private,
+    Unlisted,
+    Public,
+}
+
+impl YoutubePrivacy {
+    pub const ALL: [YoutubePrivacy; 3] = [YoutubePrivacy::Private, YoutubePrivacy::Unlisted, YoutubePrivacy::Public];
+
+    pub fn api(self) -> &'static str {
+        match self {
+            YoutubePrivacy::Private => "private",
+            YoutubePrivacy::Unlisted => "unlisted",
+            YoutubePrivacy::Public => "public",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            YoutubePrivacy::Private => "Private",
+            YoutubePrivacy::Unlisted => "Unlisted",
+            YoutubePrivacy::Public => "Public",
+        }
+    }
+}
+
+/// What goes to Google Drive.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DriveFiles {
+    /// The program file.
+    #[default]
+    Program,
+    /// The program, the vertical version and the mix (WAV).
+    ProgramAndMix,
+    /// Everything in the take's folder.
+    Everything,
+}
+
+impl DriveFiles {
+    pub const ALL: [DriveFiles; 3] = [DriveFiles::Program, DriveFiles::ProgramAndMix, DriveFiles::Everything];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            DriveFiles::Program => "the program",
+            DriveFiles::ProgramAndMix => "the program, the vertical version and the mix",
+            DriveFiles::Everything => "the whole take (every file)",
+        }
     }
 }

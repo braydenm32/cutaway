@@ -56,6 +56,8 @@ getrandom = "0.3"
 # RNNoise (noise reduction), in Rust.
 nnnoiseless = { version = "0.5.2", default-features = false }
 qrcode = { version = "0.14.1", default-features = false }
+# Signing in to Google (PKCE) for uploads.
+sha2 = "0.10"
 
 # Software encoders: used for development builds on Linux. macOS uses
 # VideoToolbox and AudioToolbox; Windows uses Media Foundation.
