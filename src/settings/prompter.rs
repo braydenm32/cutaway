@@ -4,7 +4,7 @@ use super::*;
 
 impl SettingsUi {
     pub(super) fn prompter(&mut self, ui: &mut egui::Ui) {
-        title(ui, "Teleprompter", "A script that scrolls for the presenters: on the second screen (Settings → Screens & webcam), or full screen on a tablet or phone. Roll it from the main window, the Stream Deck, the remote or MIDI.");
+        title(ui, "Teleprompter", "A script that scrolls for the presenters, on the second screen or a tablet. Roll it from the main window, the Stream Deck, the remote or MIDI.");
         let has_rundown = !self.draft.rundown.segments.is_empty();
         let p = &mut self.draft.prompter;
         egui::Grid::new("prompter").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
@@ -27,7 +27,7 @@ impl SettingsUi {
             });
             ui.end_row();
             label(ui, "Rundown");
-            ui.add_enabled(has_rundown, egui::Checkbox::new(&mut p.use_rundown, "start with each segment's name and notes, and jump to the segment as the rundown moves on"));
+            ui.add_enabled(has_rundown, egui::Checkbox::new(&mut p.use_rundown, "follow it, with each segment's notes"));
             ui.end_row();
             label(ui, "Speed");
             ui.add(egui::Slider::new(&mut p.words_per_minute, 60.0..=260.0).step_by(5.0).suffix(" words a minute"));
@@ -36,7 +36,7 @@ impl SettingsUi {
             ui.add(egui::Slider::new(&mut p.text_size, 0.03..=0.15).custom_formatter(|v, _| format!("{:.0}% of the screen's height", v * 100.0)));
             ui.end_row();
             label(ui, "Mirror");
-            ui.checkbox(&mut p.mirror, "flip left to right, for a prompter with glass in front of the camera");
+            ui.checkbox(&mut p.mirror, "flip left to right");
             ui.end_row();
             label(ui, "Colours");
             ui.horizontal(|ui| {
@@ -52,6 +52,6 @@ impl SettingsUi {
         });
         ui.add_space(8.0);
         let addr = if self.draft.remote.enabled { format!("http://<this computer's address>:{}/prompter", self.draft.remote.port) } else { "turn on Remote control (Settings → Remote & MIDI) first".into() };
-        hint(ui, &format!("On a tablet or phone: {addr}. Tap it to roll or pause; the speed and position follow the main window. On the second screen, choose \"The teleprompter\" in Settings → Screens & webcam."));
+        hint(ui, &format!("On a tablet or phone: {addr} (tap to roll or pause). On the second screen: choose \"The teleprompter\" in Screens & webcam."));
     }
 }

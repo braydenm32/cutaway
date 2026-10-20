@@ -20,7 +20,7 @@ const PAD_COLORS: [&str; 6] = ["#3b6fd8", "#d8873b", "#3bb36f", "#b33bb3", "#d83
 
 impl SettingsUi {
     pub(super) fn pads(&mut self, ui: &mut egui::Ui) {
-        title(ui, "Sound pads", "Jingles, stings, applause and music beds on buttons, F1–F12, the Stream Deck, MIDI pads and the phone remote.");
+        title(ui, "Sound pads", "Jingles, stings, applause and music beds on buttons, F1–F12, the Stream Deck, MIDI pads and the remote.");
         if !self.draft.audio.iter().any(|a| a.is_pads()) {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("⚠ Pads play through a \"Sound pads\" audio input, which this show doesn't have yet.").color(AMBER));
@@ -46,7 +46,7 @@ impl SettingsUi {
                     }
                 }
             }
-            hint(ui, "WAV, AIFF, MP3, AAC/M4A, FLAC, Ogg or CAF. Each is loaded into memory, so it starts instantly.");
+            hint(ui, "WAV, AIFF, MP3, AAC/M4A, FLAC, Ogg or CAF, loaded into memory so they start instantly.");
         });
         ui.add_space(8.0);
         let n = self.draft.pads.len();
@@ -54,7 +54,7 @@ impl SettingsUi {
         let mut swap = None;
         egui::Grid::new("pads").num_columns(8).spacing([10.0, 8.0]).striped(true).show(ui, |ui| {
             for h in ["Key", "Name", "Sound", "Plays", "Level", "Fade out", "Colour", ""] {
-                ui.label(RichText::new(h).color(TEXT_DIM).size(12.0));
+                column_head(ui, h);
             }
             ui.end_row();
             for (i, p) in self.draft.pads.iter_mut().enumerate() {
@@ -102,8 +102,7 @@ impl SettingsUi {
             hint(ui, "No pads yet.");
         }
         ui.add_space(10.0);
-        hint(ui, "Press a pad to play it; press again to stop (with its fade). Loops play until pressed again; \"while held\" pads play while the key or button is held. The Sound pads input has its own fader and meter, is recorded like any input, and can duck under voices (Settings → Audio inputs).");
-        hint(ui, "Commands: pad:1, pad:Applause, pad:1:stop, pads:stop.");
+        hint(ui, "Press a pad to play it, again to stop. The Sound pads input has its own fader, is recorded like any input, and can duck under voices. Commands: pad:1, pad:Applause, pad:1:stop, pads:stop.");
     }
 
     pub(super) fn syrinscape(&mut self, ui: &mut egui::Ui) {
@@ -120,7 +119,7 @@ impl SettingsUi {
             });
             ui.end_row();
         });
-        hint(ui, "Your token lets Cutaway press buttons in your Syrinscape Online player, like its remote-control links. Keep it private. You need a Syrinscape Online subscription, and the Online Player open (in a browser or the app) on this or any computer.");
+        hint(ui, "Needs a Syrinscape Online subscription, with the Online Player open somewhere.");
         if !s.enabled {
             return;
         }

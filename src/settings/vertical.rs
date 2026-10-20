@@ -10,12 +10,12 @@ impl SettingsUi {
         title(
             ui,
             "Vertical version",
-            "A 9:16 version of the show for Shorts, Reels and TikTok, made alongside the program from the same sources. Each scene gets a tall layout, and each source a framing: which part of its picture fills a tall frame.",
+            "A 9:16 version of the show for Shorts, Reels and TikTok, made alongside the program: a tall layout for each scene, and a framing for each source.",
         );
         let v = &mut self.draft.vertical;
         egui::Grid::new("vertical").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
-            label(ui, "Vertical version");
-            ui.checkbox(&mut v.enabled, "make it (shown beside the program monitor)");
+            label(ui, "Make it");
+            ui.checkbox(&mut v.enabled, "shown beside the program monitor");
             ui.end_row();
             label(ui, "Size");
             ui.horizontal(|ui| {
@@ -27,13 +27,13 @@ impl SettingsUi {
             });
             ui.end_row();
             label(ui, "Record");
-            ui.checkbox(&mut v.record, "into each take, as Program_Vertical (with the recording mix)");
+            ui.checkbox(&mut v.record, "into each take");
             ui.end_row();
             label(ui, "Stream");
-            hint(ui, "In Streaming, set a destination to send the vertical version (YouTube Shorts and TikTok take it); the others keep the program.");
+            hint(ui, "choose it for a destination in Streaming");
             ui.end_row();
             label(ui, "Graphics");
-            ui.checkbox(&mut v.graphics, "the program's titles, logos and tickers, across its width (ones at the top stay near the top, the rest sit low down)");
+            ui.checkbox(&mut v.graphics, "the program's titles, logos and tickers");
             ui.end_row();
         });
         if !v.enabled {

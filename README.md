@@ -53,6 +53,12 @@ and [Install on Windows](#install-on-windows).
 - **Any source, many at once.** Webcams, USB/Thunderbolt capture cards and
   cameras over HDMI capture (if QuickTime Player can see it, Cutaway can), the
   screen, or test patterns. There is no fixed limit; 4K sources are supported.
+- **Change the line-up mid-show.** Add, remove or change sources and audio
+  inputs while recording or live: only what changed opens or closes, and the
+  rest never blinks. Removing one while recording or streaming asks first; its
+  own file in that take ends there (timelines know), and one added mid-take is
+  in the program at once and gets its own file from the next take. Only the
+  program's size and frame rate still need recording and streaming stopped.
 - **Network sources.** Take a feed from another computer, a phone app or an
   encoder over the network:
   - **RTMP in:** Cutaway runs its own RTMP server (`rtmp-in:1935/key`); point
@@ -468,6 +474,11 @@ Video Extensions** on some PCs.
   `%APPDATA%\Cutaway\config.toml`).
   Change anything in **Settings** (top right), or edit the file directly.
   `cutaway.example.toml` explains every option.
+- **Settings** are in six groups (Inputs, Sound, Look, Show, Output and
+  General), each with its pages as tabs; less-used parts fold away, showing how
+  they're set. Hover a setting's name, or its ⓘ, for what it does.
+- **Starting up:** the window opens straight away; while the cameras come up,
+  the monitors show a clapperboard with a line from the studio floor.
 - **Check your hardware:** `cutaway --probe-encoders` shows the encoders
   (including whether ProRes is available) and the GPU Cutaway will use.
 - **Try it without hardware:** `cutaway --demo 4` runs with 4 test pictures and
@@ -734,7 +745,7 @@ Safari on iPhone or Chrome on Android (they send H.264, which Cutaway takes).
 
 ## PTZ cameras
 
-In **Settings → Video sources**, open a camera's **PTZ control**: choose
+In **Settings → Video sources**, open a camera's **PTZ camera control**: choose
 **VISCA over IP** (Sony and most PTZ cameras, port 52381), **VISCA over
 TCP** or **UDP** (PTZOptics and others), or **NDI** for an NDI PTZ camera,
 and its address. Save presets there or from the **PTZ** panel in the main
@@ -1113,7 +1124,7 @@ and a software GPU:
 - **Whisper captions:** the streaming logic (partial and settled words,
   timing, long speech) with a stand-in recogniser, and whisper.cpp itself
   loading and running a model.
-- **Unit tests:** `cargo test` (183 tests, plus Windows-only ones that run there), including the compositor's
+- **Unit tests:** `cargo test` (193 tests, plus Windows-only ones that run there), including the compositor's
   styling, keying, person masks, transitions and graphics, the voice
   processing, loudness, limiters and leveller, automatic switching,
   auto-framing, captions, lip sync, the podcast, OSC, the WebSocket, the

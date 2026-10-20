@@ -20,7 +20,7 @@ impl SettingsUi {
         let c = &mut self.draft.captions;
         egui::Grid::new("captions").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
             label(ui, "Live captions");
-            ui.checkbox(&mut c.enabled, "listen and caption (on this computer: nothing is sent anywhere)");
+            ui.checkbox(&mut c.enabled, "listen and caption, on this computer");
             ui.end_row();
             if c.enabled {
                 label(ui, "Status");
@@ -100,7 +100,7 @@ impl SettingsUi {
             });
             ui.end_row();
             label(ui, "On screen at start");
-            ui.checkbox(&mut c.show, "(the CC button and the C key turn them on and off)");
+            ui.checkbox(&mut c.show, "showing");
             ui.end_row();
             label(ui, "Look");
             ui.horizontal(|ui| {
@@ -112,14 +112,11 @@ impl SettingsUi {
             });
             ui.end_row();
             label(ui, "Transcript");
-            ui.checkbox(&mut c.transcript, "save Transcript.txt, Captions.srt and Captions.vtt with each take");
+            ui.checkbox(&mut c.transcript, "with each take (text, .srt and .vtt)");
             ui.end_row();
         });
-        hint(ui, "Captions follow speech about a second behind, as live captions do. On the stream only, the recording stays clean and gets the caption files instead (import the .srt into your editor or YouTube). The operator sees the captions over the program monitor either way.");
         if cfg!(target_os = "macos") {
-            hint(ui, "On a Mac, recognition runs on the Mac itself (macOS asks for permission the first time). If a language says on-device recognition isn't available, turn on Dictation for it in System Settings → Keyboard, which downloads it.");
-        } else {
-            hint(ui, "Recognition runs on this computer with OpenAI's Whisper model, downloaded once from Hugging Face. Fast suits any recent computer; Accurate makes fewer mistakes but needs a strong processor. English uses a model made for English; other languages use the multilingual one.");
+            hint(ui, "macOS asks for permission the first time.");
         }
     }
 }

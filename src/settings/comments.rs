@@ -4,23 +4,17 @@ use super::*;
 
 impl SettingsUi {
     pub(super) fn comments(&mut self, ui: &mut egui::Ui) {
-        title(ui, "Viewer comments", "Read your stream's live chat in the main window and put a viewer's comment on screen with a click (or comment:next from the Stream Deck, MIDI or the remote).");
+        title(ui, "Viewer comments", "Read your stream's chat in the main window, and put a comment on screen with a click (or comment:next). Comments are only read, never posted.");
         let c = &mut self.draft.comments;
         egui::Grid::new("comments").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
             label(ui, "Twitch channel");
-            ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut c.twitch_channel).desired_width(200.0).hint_text("yourchannel"));
-                hint(ui, "no sign-in needed");
-            });
+            ui.add(egui::TextEdit::singleline(&mut c.twitch_channel).desired_width(200.0).hint_text("yourchannel"));
             ui.end_row();
             label(ui, "YouTube stream");
             ui.add(egui::TextEdit::singleline(&mut c.youtube).desired_width(360.0).hint_text("https://www.youtube.com/watch?v=… or /live/…"));
             ui.end_row();
             label(ui, "YouTube API key");
-            ui.vertical(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut c.youtube_api_key).password(true).desired_width(360.0));
-                hint(ui, "Free: in Google Cloud Console, create a project, enable \"YouTube Data API v3\", then Credentials → Create credentials → API key.");
-            });
+            ui.add(egui::TextEdit::singleline(&mut c.youtube_api_key).password(true).desired_width(360.0).hint_text("needed for YouTube (free)"));
             ui.end_row();
         });
         if !c.youtube.trim().is_empty() && crate::net::chat::youtube_video_id(&c.youtube).is_none() {
@@ -60,7 +54,6 @@ impl SettingsUi {
             });
             ui.end_row();
         });
-        ui.add_space(6.0);
-        hint(ui, "The commenter's name is shown in their chat colour (Twitch) or the platform's colour. Comments are only read, never posted.");
+
     }
 }

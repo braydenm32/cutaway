@@ -7,8 +7,7 @@ use crate::net::tunnel::TunnelState;
 impl SettingsUi {
     /// Phones as cameras: each has a QR code to scan.
     fn phone_cameras(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
-        subtitle(ui, "Phone cameras");
-        hint(ui, "Use a phone as a camera: scan its code with the phone's camera app and allow the camera. It sends up to 1080p, picture only, straight over your network (keep it on the same Wi-Fi for the best picture), and keeps its screen on. Works with Safari on iPhone and Chrome on Android.");
+        hint(ui, "Scan a phone's code with its camera app and allow the camera: it sends up to 1080p, picture only, over your Wi-Fi. Safari on iPhone, Chrome on Android.");
         let phones: Vec<usize> = self.draft.sources.iter().enumerate().filter(|(_, s)| s.phone_id().is_some()).map(|(i, _)| i).collect();
         let mut remove = None;
         for &i in &phones {
@@ -60,7 +59,7 @@ impl SettingsUi {
     }
 
     pub(super) fn guests(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
-        title(ui, "Remote guests", "Guests join from their browser — computer, tablet or phone — with a link: no app, no account. They become a source and an audio input, hear the show without their own voice, and can see the program. A phone can also be a camera.");
+        title(ui, "Remote guests", "Guests join from a browser with a link (no app, no account), arriving as a source and an audio input. A phone can be a camera too.");
         let g = &mut self.draft.guests;
         egui::Grid::new("guests").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
             label(ui, "Guests");
@@ -68,29 +67,21 @@ impl SettingsUi {
             ui.end_row();
             label(ui, "Reached through");
             ui.vertical(|ui| {
-                ui.radio_value(&mut g.access, GuestAccess::Tunnel, "a free Cloudflare tunnel (an https://….trycloudflare.com address; nothing to set up)");
-                ui.radio_value(&mut g.access, GuestAccess::Custom, "my own https:// address, forwarded to this computer");
+                ui.radio_value(&mut g.access, GuestAccess::Tunnel, "a free Cloudflare tunnel (nothing to set up)");
+                ui.radio_value(&mut g.access, GuestAccess::Custom, "my own https:// address");
                 if g.access == GuestAccess::Custom {
                     ui.add(egui::TextEdit::singleline(&mut g.public_url).hint_text("https://guests.example.com").desired_width(320.0));
                 }
             });
             ui.end_row();
             label(ui, "Port");
-            ui.horizontal(|ui| {
-                ui.add(egui::DragValue::new(&mut g.port).range(1024..=65535));
-                hint(ui, if g.access == GuestAccess::Tunnel { "only this computer can reach it; the tunnel brings guests in" } else { "open to the network, for your forwarding" });
-            });
+            ui.add(egui::DragValue::new(&mut g.port).range(1024..=65535));
             ui.end_row();
             label(ui, "Guests see");
-            ui.checkbox(&mut g.return_video, "the program (small, so it's light on their connection)");
+            ui.checkbox(&mut g.return_video, "the program");
             ui.end_row();
             label(ui, "Backup recordings");
-            ui.vertical(|ui| {
-                ui.checkbox(&mut g.backup, "guests' browsers record them too while you record");
-                if g.backup {
-                    hint(ui, "Their camera and microphone as captured, before the internet gets at it, sent in pieces into the take's Guests folder as it goes (and finished after you stop, if their connection is slow). It uses more of their upload, so it suits guests with decent internet. Their page tells them it's happening.");
-                }
-            });
+            ui.checkbox(&mut g.backup, "their browsers record them too");
             ui.end_row();
         });
         if g.enabled {
@@ -102,13 +93,13 @@ impl SettingsUi {
                 TunnelState::Off => ui.label(RichText::new("Apply to start the guest page.").color(TEXT_DIM)),
             };
             if g.access == GuestAccess::Tunnel {
-                hint(ui, "The tunnel's address is new each time Cutaway starts, so send links on the day. Cutaway downloads Cloudflare's small tunnel program the first time (or uses cloudflared if it's installed).");
+                hint(ui, "The address is new each time Cutaway starts: send links on the day.");
             }
         }
 
         ui.add_space(14.0);
         subtitle(ui, "Guest spots");
-        hint(ui, "Each spot has its own link, video source and audio input (named alike). Send each guest their spot's link; whoever opens it appears there.");
+        hint(ui, "Each spot has its own link, source and audio input. Whoever opens the link appears there.");
         let guests: Vec<usize> = self.draft.sources.iter().enumerate().filter(|(_, s)| s.guest_id().is_some()).map(|(i, _)| i).collect();
         if guests.is_empty() {
             hint(ui, "No guest spots yet.");
@@ -187,13 +178,16 @@ impl SettingsUi {
             self.draft.audio.push(AudioConfig { name: name.clone(), device: format!("source:{name}"), channels: 2, program_left: 1, program_right: 2, ..Default::default() });
             self.draft.guests.enabled = true;
         }
-        hint(ui, "Spots you add or remove change on Apply, even while recording or live. Guests already on stay connected.");
-
-        ui.add_space(14.0);
-        self.phone_cameras(ui, info);
-
-        ui.add_space(14.0);
-        egui::CollapsingHeader::new(RichText::new("Strict networks (TURN)").strong()).default_open(!self.draft.guests.turn_url.is_empty()).show(ui, |ui| {
+        ui.add_space(12.0);
+        let phones = self.draft.sources.iter().filter(|s| s.phone_id().is_some()).count();
+        let state = match phones {
+            0 => "none".to_string(),
+            1 => "1 phone".to_string(),
+            n => format!("{n} phones"),
+        };
+        part(ui, "phones", "Phone cameras", &state, phones > 0, |ui| self.phone_cameras(ui, info));
+        let state = if self.draft.guests.turn_url.trim().is_empty() { "not needed by most".to_string() } else { "set".to_string() };
+        part(ui, "turn", "Strict networks (TURN)", &state, false, |ui| {
             let g = &mut self.draft.guests;
             egui::Grid::new("turn").num_columns(2).spacing([16.0, 8.0]).show(ui, |ui| {
                 label(ui, "TURN server");
@@ -206,10 +200,9 @@ impl SettingsUi {
                 ui.add(egui::TextEdit::singleline(&mut g.turn_password).password(true).desired_width(200.0));
                 ui.end_row();
             });
-            hint(ui, "Most guests connect directly. Some office, school and hotel networks block that; a TURN server (e.g. Cloudflare Calls, Twilio, or your own coturn) relays for them.");
         });
-        ui.add_space(8.0);
-        hint(ui, "Guests need Chrome, Edge, Safari or Firefox, and headphones help. Their sound arrives as the audio input of the same name; the outputs and mix-minus set in Mixing & headphones work for them too.");
+        ui.add_space(4.0);
+        hint(ui, "Guests need Chrome, Edge, Safari or Firefox; headphones help.");
     }
 }
 

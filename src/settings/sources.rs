@@ -108,7 +108,7 @@ fn random_key() -> String {
 
 impl SettingsUi {
     pub(super) fn sources(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
-        title(ui, "Video sources", "Every source is shown in the multiview and can be recorded to its own file.");
+        title(ui, "Video sources", "Cameras, capture cards, the screen, media and network feeds. Each shows in the multiview and can record to its own file.");
         ui.horizontal(|ui| {
             if ui.button("Rescan devices").clicked() {
                 self.video = devices::list(Kind::Video);
@@ -350,10 +350,7 @@ impl SettingsUi {
                         src.fps = *fps;
                     }
                     label(ui, "Zoom limit");
-                    ui.horizontal(|ui| {
-                        ui.add(egui::Slider::new(&mut src.ptz.max_zoom, 1.0..=4.0).step_by(0.1).suffix("×"));
-                        hint(ui, "how far into the picture it can go; more is tighter but softer");
-                    });
+                    ui.add(egui::Slider::new(&mut src.ptz.max_zoom, 1.0..=4.0).step_by(0.1).suffix("×"));
                     ui.end_row();
                     label(ui, "Moves to presets take");
                     ui.add(egui::Slider::new(&mut src.ptz.glide_seconds, 0.2..=6.0).step_by(0.1).suffix(" s"));
@@ -384,10 +381,7 @@ impl SettingsUi {
             }
             if network {
                 label(ui, "Buffer");
-                ui.horizontal(|ui| {
-                    ui.add(egui::DragValue::new(&mut src.network_latency_ms).range(40..=3000).speed(10).suffix(" ms"));
-                    hint(ui, "more rides out network hiccups; less is closer to live");
-                });
+                ui.add(egui::DragValue::new(&mut src.network_latency_ms).range(40..=3000).speed(10).suffix(" ms"));
                 ui.end_row();
             }
             label(ui, "Record to its own file");
@@ -407,10 +401,9 @@ impl SettingsUi {
                 } else if !self.video.is_empty() {
                     ui.label(RichText::new("⚠ This device isn't connected right now. It will connect by itself when plugged in.").color(AMBER));
                 }
-                hint(ui, "If the device can't do the exact size or rate, Cutaway converts so every file stays consistent. Delay holds this source back to line it up with slower sources or the audio.");
             }
-            SourceKind::Screen => hint(ui, if cfg!(windows) { "Captures your main display." } else { "Captures your main display. On macOS, allow Screen Recording for Cutaway in System Settings → Privacy & Security." }),
-            SourceKind::Test => hint(ui, "A generated test picture with a flash every second — handy for trying layouts and checking sync."),
+            SourceKind::Screen => hint(ui, if cfg!(windows) { "Captures your main display." } else { "Captures your main display (allow Screen Recording for Cutaway in System Settings → Privacy & Security)." }),
+            SourceKind::Test => {}
             SourceKind::Media => {
                 media_editor(ui, &mut src.media);
                 hint(ui, &format!("To hear its sound, add an audio input set to \"Sound from {}\".", src.name));
@@ -420,10 +413,7 @@ impl SettingsUi {
                     ui.label(RichText::new("Send to:").strong());
                     ui.label(RichText::new(netsrc::sender_address(&spec)).monospace().color(ACCENT));
                 }
-                hint(ui, &format!(
-                    "Point OBS, a phone camera app (e.g. Larix), a hardware encoder or another computer here. H.264 or HEVC video with AAC sound. Add an audio input set to \"Sound from {}\" to hear it.",
-                    src.name
-                ));
+                hint(ui, &format!("For OBS, a phone app (e.g. Larix), a hardware encoder or another computer: H.264 or HEVC with AAC sound. To hear it, add an audio input set to \"Sound from {}\".", src.name));
             }
             SourceKind::Framed => {
                 if let Some(p) = crate::platform::vision::problem() {
@@ -431,15 +421,13 @@ impl SettingsUi {
                 }
                 let from = src.framed_from().unwrap_or("the wide camera");
                 hint(ui, &format!(
-                    "Finds the people in {from} and cuts a shot out of it that follows them, gliding like a camera operator — a second (or third) camera without one. Best from a 4K camera: a 1080p close-up cut from 4K stays sharp. Runs and records like any source, at {from}'s frame rate and delay. {how}; nothing leaves the computer.",
+                    "Finds the people in {from} and cuts out a shot that follows them, gliding like a camera operator: another camera without one. {how}; nothing leaves the computer.",
                     how = if cfg!(target_os = "macos") { "People are found by Apple's Vision framework" } else { "People are found by a small open model on the graphics card" }
                 ));
             }
             SourceKind::VirtualPtz => {
                 let from = src.virtual_ptz_of().unwrap_or("the wide camera");
-                hint(ui, &format!(
-                    "A camera operator inside {from}: pan, tilt and zoom with the PTZ panel, the Stream Deck or the remote, and save shots as presets it glides to. Best from a 4K camera. Runs and records like any source, at {from}'s frame rate and delay."
-                ));
+                hint(ui, &format!("A camera operator inside {from}: pan, tilt and zoom with the PTZ panel, the Stream Deck or the remote, and save shots as presets it glides to."));
             }
             SourceKind::SrtCall => hint(ui, "Cutaway connects to an SRT listener (a receiver, an encoder or a relay) and pulls its stream."),
             SourceKind::Phone | SourceKind::Guest => {
@@ -461,7 +449,7 @@ impl SettingsUi {
                         }
                         None => hint(ui, "Its QR code appears here once Remote guests is on and this is applied."),
                     }
-                    hint(ui, "The phone sends its camera (picture only, up to 1080p) straight over your network and keeps its screen on; hold it sideways. Safari on iPhone, Chrome on Android. The buffer evens out Wi-Fi hiccups.");
+                    hint(ui, "Picture only, up to 1080p, straight over your network; hold the phone sideways. Safari on iPhone, Chrome on Android.");
                 } else {
                     if let Some(link) = &link {
                         ui.horizontal(|ui| {
@@ -475,19 +463,27 @@ impl SettingsUi {
                 }
             }
             SourceKind::Ndi => {
-                hint(ui, "NDI sources on your network: other computers running NDI Tools or OBS with NDI, PTZ cameras, NDI converters.");
                 super::ndi_offer(ui);
             }
         }
         ui.add_space(10.0);
         let is_virtual = kind == SourceKind::VirtualPtz;
         let is_ndi = kind == SourceKind::Ndi;
-        let ptz_title = if is_virtual { "Presets" } else { "PTZ control: pan, tilt, zoom and presets" };
-        egui::CollapsingHeader::new(RichText::new(ptz_title).strong())
-            .id_salt(("ptz", self.sel_source))
-            .default_open(src.has_ptz())
-            .show(ui, |ui| ptz_editor(ui, &mut src.ptz, is_virtual, is_ndi));
-        egui::CollapsingHeader::new(RichText::new("Picture adjustments: crop, mirror, colour, LUT, background removal, green screen").strong()).id_salt(("look", self.sel_source)).show(ui, |ui| {
+        let presets = match src.ptz.presets.len() {
+            0 => "no presets".to_string(),
+            1 => "1 preset".to_string(),
+            n => format!("{n} presets"),
+        };
+        let (ptz_title, ptz_state) = if is_virtual {
+            ("Presets", presets)
+        } else if src.ptz.control == crate::config::PtzControl::None {
+            ("PTZ camera control", "off".to_string())
+        } else {
+            ("PTZ camera control", format!("{} · {presets}", src.ptz.control.label().split(" (").next().unwrap_or("")))
+        };
+        part(ui, ("ptz", self.sel_source), ptz_title, &ptz_state, src.has_ptz(), |ui| ptz_editor(ui, &mut src.ptz, is_virtual, is_ndi));
+        let look = look_summary(&src.look);
+        part(ui, ("look", self.sel_source), "Picture adjustments", &look, false, |ui| {
             look_editor(ui, &mut src.look, &mut self.lut_check);
         });
         if guests_on {
@@ -554,7 +550,7 @@ fn ptz_editor(ui: &mut egui::Ui, p: &mut crate::config::PtzConfig, is_virtual: b
         }
     });
     if !is_virtual && p.control == PtzControl::None {
-        hint(ui, "For network PTZ cameras: most speak VISCA (Sony, BirdDog, PTZOptics, Panasonic, Lumens…); NDI PTZ cameras can also be moved through NDI.");
+        hint(ui, "For network PTZ cameras: most speak VISCA (Sony, BirdDog, PTZOptics, Panasonic, Lumens…).");
         return;
     }
     ui.add_space(6.0);
@@ -606,16 +602,10 @@ fn framing_editor(ui: &mut egui::Ui, f: &mut FramingConfig) {
     });
     ui.end_row();
     label(ui, "Moves take");
-    ui.horizontal(|ui| {
-        ui.add(egui::Slider::new(&mut f.reframe_seconds, 0.3..=4.0).step_by(0.1).suffix(" s"));
-        hint(ui, "longer is calmer");
-    });
+    ui.add(egui::Slider::new(&mut f.reframe_seconds, 0.3..=4.0).step_by(0.1).suffix(" s"));
     ui.end_row();
     label(ui, "Zoom limit");
-    ui.horizontal(|ui| {
-        ui.add(egui::Slider::new(&mut f.max_zoom, 1.0..=3.0).step_by(0.1).suffix("×"));
-        hint(ui, "how far the wide picture may be enlarged; more is tighter but softer");
-    });
+    ui.add(egui::Slider::new(&mut f.max_zoom, 1.0..=3.0).step_by(0.1).suffix("×"));
     ui.end_row();
 }
 
@@ -671,13 +661,45 @@ fn media_editor(ui: &mut egui::Ui, m: &mut MediaConfig) {
         }
     });
     ui.add_space(4.0);
-    ui.checkbox(&mut m.loop_playlist, "Loop the playlist");
-    ui.checkbox(&mut m.autoplay, "Play when Cutaway starts");
-    ui.checkbox(&mut m.restart_on_air, "Start from the beginning when a scene with this source is taken");
-    ui.horizontal(|ui| {
-        ui.label("Show images for");
+    egui::Grid::new("media").num_columns(2).spacing([16.0, 8.0]).show(ui, |ui| {
+        label(ui, "Loop");
+        ui.checkbox(&mut m.loop_playlist, "the playlist");
+        ui.end_row();
+        label(ui, "At start");
+        ui.checkbox(&mut m.autoplay, "play when Cutaway starts");
+        ui.end_row();
+        label(ui, "When taken");
+        ui.checkbox(&mut m.restart_on_air, "start from the beginning");
+        ui.end_row();
+        label(ui, "Show images for");
         ui.add(egui::DragValue::new(&mut m.image_seconds).range(0.5..=600.0).speed(0.1).suffix(" s"));
+        ui.end_row();
     });
+}
+
+/// What's been done to a source's picture, in a few words.
+fn look_summary(l: &SourceLook) -> String {
+    let d = SourceLook::default();
+    let mut on = Vec::new();
+    if l.crop_left > 0.0 || l.crop_right > 0.0 || l.crop_top > 0.0 || l.crop_bottom > 0.0 {
+        on.push("cropped");
+    }
+    if l.mirror {
+        on.push("mirrored");
+    }
+    if l.brightness != d.brightness || l.contrast != d.contrast || l.saturation != d.saturation {
+        on.push("colour");
+    }
+    if l.lut.is_some() {
+        on.push("LUT");
+    }
+    if l.remove_background {
+        on.push("background removed");
+    }
+    if l.chroma_key {
+        on.push("green screen");
+    }
+    if on.is_empty() { "none".into() } else { on.join(", ") }
 }
 
 fn look_editor(ui: &mut egui::Ui, l: &mut SourceLook, lut_check: &mut Option<(std::path::PathBuf, Result<String, String>)>) {
@@ -695,7 +717,7 @@ fn look_editor(ui: &mut egui::Ui, l: &mut SourceLook, lut_check: &mut Option<(st
         });
         ui.end_row();
         label(ui, "Mirror");
-        ui.checkbox(&mut l.mirror, "flip left to right (e.g. a camera filming a presenter's screen)");
+        ui.checkbox(&mut l.mirror, "flip left to right");
         ui.end_row();
         label(ui, "Brightness");
         ui.add(egui::Slider::new(&mut l.brightness, -0.5..=0.5).custom_formatter(|v, _| format!("{:+.0}", v * 100.0)));
@@ -735,14 +757,12 @@ fn look_editor(ui: &mut egui::Ui, l: &mut SourceLook, lut_check: &mut Option<(st
                         ui.label(RichText::new(format!("⚠ {e}")).color(AMBER));
                     }
                 }
-            } else {
-                hint(ui, "For cameras that shoot in log (S-Log, V-Log, C-Log, BRAW…), or a look.");
             }
         });
         ui.end_row();
         label(ui, "Remove background");
         ui.horizontal(|ui| {
-            ui.checkbox(&mut l.remove_background, "cut the people out, no green screen needed");
+            ui.checkbox(&mut l.remove_background, "cut the people out (no green screen)");
             if l.remove_background {
                 egui::ComboBox::from_id_salt("cutout_q").selected_text(l.cutout_quality.label()).width(110.0).show_ui(ui, |ui| {
                     for q in crate::config::CutoutQuality::ALL {
@@ -758,19 +778,18 @@ fn look_editor(ui: &mut egui::Ui, l: &mut SourceLook, lut_check: &mut Option<(st
                 Some(p) => {
                     ui.label(RichText::new(format!("⚠ Not available here: {p}.")).color(AMBER));
                 }
-                None => hint(
-                    ui,
-                    if cfg!(target_os = "macos") {
-                        "Apple's Vision framework finds the people in every picture, on this Mac. What's behind them shows the scene's background or the sources layered below. \"Best edges\" is finer around hair but busier."
+                None => {
+                    if !cfg!(target_os = "macos") {
+                        hint(ui, "(Fast, Balanced and Best edges only differ on a Mac.)");
                     } else {
-                        "A small open model finds the people in every picture, on the graphics card. What's behind them shows the scene's background or the sources layered below. (Fast, Balanced and Best edges only differ on a Mac.)"
-                    },
-                ),
+                        ui.label("");
+                    }
+                }
             }
             ui.end_row();
         }
         label(ui, "Green / blue screen");
-        ui.checkbox(&mut l.chroma_key, "remove the screen colour behind this source");
+        ui.checkbox(&mut l.chroma_key, "remove the screen colour");
         ui.end_row();
         if l.chroma_key {
             label(ui, "Screen colour");
@@ -802,6 +821,6 @@ fn look_editor(ui: &mut egui::Ui, l: &mut SourceLook, lut_check: &mut Option<(st
         if ui.button("Reset picture adjustments").clicked() {
             *l = SourceLook::default();
         }
-        hint(ui, "These change the program only; the source's own file stays untouched. They apply live.");
+        hint(ui, "The program only (its own file stays untouched); applies live.");
     });
 }

@@ -7,6 +7,7 @@ mod comments;
 mod control;
 mod graphics;
 mod guests;
+mod help;
 mod macros;
 mod prompter;
 mod mixing;
@@ -94,7 +95,7 @@ impl Section {
             Section::Mixing => "Mixing & headphones",
             Section::Pads => "Sound pads",
             Section::Syrinscape => "Syrinscape",
-            Section::Program => "Program & look",
+            Section::Program => "Program",
             Section::Switching => "Switching",
             Section::Graphics => "Graphics",
             Section::Rundown => "Rundown",
@@ -111,6 +112,58 @@ impl Section {
             Section::Control => "Remote & MIDI",
             Section::Shortcuts => "Shortcuts",
             Section::Diagnostics => "Diagnostics",
+        }
+    }
+
+    fn group(self) -> Group {
+        Group::ALL.into_iter().find(|g| g.sections().contains(&self)).unwrap_or(Group::General)
+    }
+}
+
+/// The sidebar: a few groups, each with its pages as tabs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+enum Group {
+    Inputs,
+    Sound,
+    Look,
+    Show,
+    Output,
+    General,
+}
+
+impl Group {
+    const ALL: [Group; 6] = [Group::Inputs, Group::Sound, Group::Look, Group::Show, Group::Output, Group::General];
+
+    fn label(self) -> &'static str {
+        match self {
+            Group::Inputs => "Inputs",
+            Group::Sound => "Sound",
+            Group::Look => "Look",
+            Group::Show => "Show",
+            Group::Output => "Output",
+            Group::General => "General",
+        }
+    }
+
+    fn summary(self) -> &'static str {
+        match self {
+            Group::Inputs => "Cameras, mics and guests",
+            Group::Sound => "Mixing, headphones, pads",
+            Group::Look => "Program, graphics, captions",
+            Group::Show => "Switching, rundown, prompter",
+            Group::Output => "Recording, streaming, screens",
+            Group::General => "Shows, control, diagnostics",
+        }
+    }
+
+    fn sections(self) -> &'static [Section] {
+        match self {
+            Group::Inputs => &[Section::Sources, Section::Audio, Section::Guests],
+            Group::Sound => &[Section::Mixing, Section::Pads, Section::Syrinscape],
+            Group::Look => &[Section::Program, Section::Graphics, Section::Captions],
+            Group::Show => &[Section::Switching, Section::Rundown, Section::Macros, Section::Prompter, Section::Comments],
+            Group::Output => &[Section::Recording, Section::Streaming, Section::Vertical, Section::Upload, Section::Outputs],
+            Group::General => &[Section::General, Section::Control, Section::Shortcuts, Section::Diagnostics],
         }
     }
 }
@@ -216,6 +269,8 @@ pub struct SettingsUi {
     resolve_note: Option<(String, bool)>,
     /// The LUT picked for a source, checked: (file, description or problem).
     lut_check: Option<(PathBuf, Result<String, String>)>,
+    /// The tab last open in each group.
+    last_tab: std::collections::HashMap<Group, Section>,
 }
 
 const RESOLUTIONS: &[(u32, u32, &str)] = &[
@@ -271,6 +326,7 @@ impl SettingsUi {
             apps: None,
             resolve_note: None,
             lut_check: None,
+            last_tab: Default::default(),
         }
     }
 
@@ -335,30 +391,51 @@ impl SettingsUi {
             .show(ctx, |ui| {
                 let body_h = size.y - 64.0;
                 ui.horizontal_top(|ui| {
-                    // ---- sidebar
+                    // ---- sidebar: the groups
                     ui.vertical(|ui| {
-                        ui.set_width(170.0);
+                        ui.set_width(190.0);
                         ui.set_min_height(body_h);
-                        egui::ScrollArea::vertical().id_salt("sections").max_height(body_h).show(ui, |ui| {
-                            for s in Section::ALL {
-                                let changed = self.section_dirty(s);
-                                let text = if changed { format!("{}  •", s.label()) } else { s.label().to_string() };
-                                let selected = self.section == s;
-                                let b = egui::Button::selectable(selected, RichText::new(text).size(14.0)).min_size(vec2(170.0, 29.0));
-                                if ui.add(b).clicked() {
-                                    self.section = s;
-                                }
+                        let here = self.section.group();
+                        for g in Group::ALL {
+                            let changed = g.sections().iter().any(|s| self.section_dirty(*s));
+                            let mut text = egui::text::LayoutJob::default();
+                            let name = if changed { format!("{}  •\n", g.label()) } else { format!("{}\n", g.label()) };
+                            text.append(&name, 0.0, egui::TextFormat::simple(egui::FontId::proportional(15.0), if g == here { Color32::WHITE } else { Color32::from_rgb(214, 218, 226) }));
+                            text.append(g.summary(), 0.0, egui::TextFormat::simple(egui::FontId::proportional(11.5), TEXT_DIM));
+                            let b = egui::Button::selectable(g == here, text).min_size(vec2(190.0, 46.0));
+                            if ui.add(b).clicked() && g != here {
+                                self.last_tab.insert(here, self.section);
+                                self.section = self.last_tab.get(&g).copied().unwrap_or(g.sections()[0]);
                             }
-                        });
+                            ui.add_space(2.0);
+                        }
                     });
                     ui.separator();
-                    // ---- content
+                    // ---- content: the group's pages as tabs, then the page
                     ui.vertical(|ui| {
-                        ui.set_width(size.x - 200.0);
-                        egui::ScrollArea::vertical().id_salt(self.section).max_height(body_h).auto_shrink([false, false]).show(
+                        ui.set_width(size.x - 220.0);
+                        let tabs = self.section.group().sections();
+                        let mut tabs_h = 0.0;
+                        if tabs.len() > 1 {
+                            let r = ui.horizontal(|ui| {
+                                for &t in tabs {
+                                    let text = if self.section_dirty(t) { format!("{}  •", t.label()) } else { t.label().to_string() };
+                                    let on = self.section == t;
+                                    let b = egui::Button::selectable(on, RichText::new(text).size(13.5)).min_size(vec2(0.0, 28.0));
+                                    if ui.add(b).clicked() {
+                                        self.section = t;
+                                    }
+                                }
+                            });
+                            ui.add_space(2.0);
+                            ui.separator();
+                            tabs_h = r.response.rect.height() + 10.0;
+                        }
+                        egui::ScrollArea::vertical().id_salt(self.section).max_height(body_h - tabs_h).auto_shrink([false, false]).show(
                             ui,
                             |ui| {
                                 ui.add_space(4.0);
+                                help::set_page(Some(self.section));
                                 match self.section {
                                     Section::General => self.general(ui, info),
                                     Section::Sources => self.sources(ui, info),
@@ -384,6 +461,7 @@ impl SettingsUi {
                                     Section::Shortcuts => shortcuts(ui),
                                     Section::Diagnostics => self.diagnostics(ui, info),
                                 }
+                                help::set_page(None);
                                 ui.add_space(12.0);
                             },
                         );
@@ -588,7 +666,7 @@ impl SettingsUi {
     // ---- General ------------------------------------------------------------------
 
     fn general(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
-        title(ui, "General & shows", "Interface, safety checks, show profiles and settings files.");
+        title(ui, "General & shows", "The window, safety checks, and saved shows.");
         egui::Grid::new("general").num_columns(2).spacing([18.0, 10.0]).show(ui, |ui| {
             label(ui, "Interface size");
             ui.add(egui::Slider::new(&mut self.draft.ui.scale, 0.75..=2.0).step_by(0.05).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
@@ -600,10 +678,10 @@ impl SettingsUi {
             });
             ui.end_row();
             label(ui, "Pre-show check");
-            ui.checkbox(&mut self.draft.ui.check_before_start, "check sources, sound, disk and stream servers before recording or going live");
+            ui.checkbox(&mut self.draft.ui.check_before_start, "before recording or going live");
             ui.end_row();
             label(ui, "Updates");
-            ui.checkbox(&mut self.draft.ui.check_updates, "check GitHub for a newer Cutaway when it starts (nothing else is sent)");
+            ui.checkbox(&mut self.draft.ui.check_updates, "look for a newer Cutaway when it starts");
             ui.end_row();
         });
         ui.add_space(14.0);
@@ -648,7 +726,7 @@ impl SettingsUi {
         title(
             ui,
             "Audio inputs",
-            "Route your DAW to an interface input (or a loopback device). Each input is saved as WAV and can feed the program mix.",
+            "Microphones, interfaces and other sound. Each input can be saved as a WAV and feed the mixes.",
         );
         ui.horizontal(|ui| {
             if ui.button("Rescan devices").clicked() {
@@ -759,7 +837,7 @@ impl SettingsUi {
                     }
                     ui.end_row();
                     label(ui, "On");
-                    ui.checkbox(&mut a.in_program, "heard in the mixes (the ON button)");
+                    ui.checkbox(&mut a.in_program, "heard in the mixes");
                     ui.end_row();
                     label(ui, "Heard in");
                     ui.horizontal(|ui| {
@@ -769,9 +847,9 @@ impl SettingsUi {
                     ui.end_row();
                     label(ui, "Duck under voices");
                     ui.horizontal(|ui| {
-                        ui.checkbox(&mut a.duck, "turn down while other inputs talk (music, pads, ambience)");
+                        ui.checkbox(&mut a.duck, "turn down while others talk");
                         if a.duck && !ducking_on {
-                            hint(ui, "ducking is off: turn it on in Mixing & headphones");
+                            hint(ui, "(ducking is off in Mixing & headphones)");
                         }
                     });
                     ui.end_row();
@@ -779,22 +857,15 @@ impl SettingsUi {
                     ui.checkbox(&mut a.record, "");
                     ui.end_row();
                     label(ui, "One file per channel");
-                    ui.checkbox(&mut a.split_channels, "mono WAVs, e.g. for multitrack editing");
+                    ui.checkbox(&mut a.split_channels, "mono WAVs");
                     ui.end_row();
                     label(ui, "Delay");
                     ui.add(egui::DragValue::new(&mut a.delay_ms).range(0..=2000).suffix(" ms"));
                     ui.end_row();
                 });
-                ui.add_space(8.0);
-                hint(ui, "Cameras usually run a few frames behind the audio. If lips and sound don't match, add delay here (start around 60–100 ms) — a hand clap on camera makes it easy to judge.");
-                if !a.to_recording || !a.to_stream {
-                    hint(ui, "Separate mixes: e.g. leave music out of the recording (for editing later) or a talkback mic out of the stream.");
-                }
                 ui.add_space(10.0);
-                egui::CollapsingHeader::new(RichText::new("Voice processing").strong())
-                    .id_salt(("fx", self.sel_audio))
-                    .default_open(a.processing.enabled)
-                    .show(ui, |ui| mixing::processing_editor(ui, &mut a.processing));
+                let state = mixing::processing_summary(&a.processing);
+                part(ui, ("fx", self.sel_audio), "Voice processing", &state, a.processing.enabled, |ui| mixing::processing_editor(ui, &mut a.processing));
             });
         });
     }
@@ -802,7 +873,7 @@ impl SettingsUi {
     // ---- Program ------------------------------------------------------------------
 
     fn program(&mut self, ui: &mut egui::Ui) {
-        title(ui, "Program", "The switched picture you record and stream.");
+        title(ui, "Program", "The switched picture you record and stream, and how frames look in it.");
         let p = &mut self.draft.program;
         egui::Grid::new("program").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
             label(ui, "Size");
@@ -854,8 +925,6 @@ impl SettingsUi {
             ui.add(egui::Slider::new(&mut p.multiview_width, 160..=960).step_by(32.0).suffix(" px wide"));
             ui.end_row();
         });
-        ui.add_space(8.0);
-        hint(ui, "Monitor/multiview quality only affects what you see in the app, not what is recorded. Lower them on slower machines.");
         ui.add_space(14.0);
         subtitle(ui, "Frames that don't fill the screen");
         let st = &mut self.draft.style;
@@ -876,18 +945,16 @@ impl SettingsUi {
             ui.add(egui::Slider::new(&mut st.shadow, 0.0..=1.0));
             ui.end_row();
         });
-        hint(ui, "Picture-in-picture, side by side and grid frames get these; full-screen shots stay clean. Applies live.");
     }
 
     // ---- Recording ----------------------------------------------------------------
 
     fn recording(&mut self, ui: &mut egui::Ui) {
-        title(ui, "Recording", "Where takes go and how they're encoded.");
+        title(ui, "Recording", "Where takes go, how they're encoded, and what's saved with them for editing.");
         self.poll_encoder_scan();
         let scan = self.encoders.lock().unwrap().clone();
         let o = &mut self.draft.output;
         let (pw, ph, pfps) = (self.draft.program.width, self.draft.program.height, self.draft.program.fps);
-        let start_scan = false;
         egui::Grid::new("recording").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
             label(ui, "Save takes in");
             ui.horizontal(|ui| {
@@ -908,74 +975,6 @@ impl SettingsUi {
                 hint(ui, &format!("→ {}_2026-10-16_19-30-00", crate::util::safe_file_name(if o.take_prefix.trim().is_empty() { "Take" } else { &o.take_prefix })));
             });
             ui.end_row();
-            label(ui, "File format");
-            egui::ComboBox::from_id_salt("container").selected_text(container_label(o.container)).width(260.0).show_ui(ui, |ui| {
-                for c in [Container::Mp4, Container::Mov] {
-                    ui.selectable_value(&mut o.container, c, container_label(c));
-                }
-            });
-            ui.end_row();
-            label(ui, "Codec");
-            egui::ComboBox::from_id_salt("codec").selected_text(crate::engine::encode::codec_name(o.codec.video_codec())).width(260.0).show_ui(ui, |ui| {
-                ui.selectable_value(&mut o.codec, Codec::H264, "H.264 — opens everywhere");
-                ui.selectable_value(&mut o.codec, Codec::H265, "H.265/HEVC — smaller 4K files");
-                ui.separator();
-                let prores_ok = crate::engine::encode::codec_problem(Codec::Prores.video_codec()).is_none();
-                for (c, text) in [
-                    (Codec::ProresProxy, "ProRes 422 Proxy — light editing copies"),
-                    (Codec::ProresLt, "ProRes 422 LT"),
-                    (Codec::Prores, "ProRes 422 — smooth editing, big files"),
-                    (Codec::ProresHq, "ProRes 422 HQ — highest quality"),
-                ] {
-                    ui.add_enabled_ui(prores_ok, |ui| {
-                        ui.selectable_value(&mut o.codec, c, text);
-                    });
-                }
-                if !prores_ok {
-                    ui.label(RichText::new("ProRes needs a Mac").color(TEXT_DIM).size(11.5));
-                }
-            });
-            ui.end_row();
-            if o.codec.is_prores() {
-                ui.label("");
-                hint(ui, &format!(
-                    "ProRes files are recorded as MOV and are large: about {} GB per hour for the program alone.",
-                    crate::engine::encode::auto_bitrate_kbps(o.codec.video_codec(), pw, ph, pfps) as u64 * 3600 / 8 / 1_000_000
-                ));
-                ui.end_row();
-            }
-            label(ui, "Encoder");
-            ui.horizontal(|ui| {
-                let list = scan.as_ref().map(|(h264, h265)| if o.codec == Codec::H264 { h264.clone() } else { h265.clone() });
-                encoder_combo(ui, "rec_encoder", &mut o.encoder, list.as_deref());
-            });
-            ui.end_row();
-            if !o.codec.is_prores() {
-                label(ui, "Source file bitrate");
-                bitrate_field(ui, &mut o.iso_bitrate_kbps, "set from each source's size and rate");
-                ui.end_row();
-                label(ui, "Program bitrate");
-                let auto = crate::engine::encode::auto_bitrate_kbps(o.codec.video_codec(), pw, ph, pfps);
-                bitrate_field(ui, &mut o.program_bitrate_kbps, &format!("auto = {} Mbps here", auto / 1000));
-                ui.end_row();
-            }
-            label(ui, "Audio in video files");
-            egui::ComboBox::from_id_salt("abr").selected_text(format!("AAC {} kbps", o.audio_bitrate_kbps)).show_ui(ui, |ui| {
-                for r in [128, 160, 192, 256, 320] {
-                    ui.selectable_value(&mut o.audio_bitrate_kbps, r, format!("AAC {r} kbps"));
-                }
-            });
-            ui.end_row();
-            label(ui, "Program audio in source files");
-            ui.checkbox(&mut o.iso_audio, "makes multicam sync in editors automatic");
-            ui.end_row();
-            label(ui, "WAV files");
-            egui::ComboBox::from_id_salt("wav").selected_text(format!("{}-bit{}", o.wav_bit_depth, if o.wav_bit_depth == 32 { " float" } else { "" })).show_ui(ui, |ui| {
-                ui.selectable_value(&mut o.wav_bit_depth, 16, "16-bit");
-                ui.selectable_value(&mut o.wav_bit_depth, 24, "24-bit");
-                ui.selectable_value(&mut o.wav_bit_depth, 32, "32-bit float");
-            });
-            ui.end_row();
             label(ui, "Backup copy");
             ui.horizontal(|ui| {
                 let mut text = o.backup_folder.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
@@ -992,120 +991,21 @@ impl SettingsUi {
                 }
             });
             ui.end_row();
-            label(ui, "Timecode");
-            ui.checkbox(&mut o.timecode, "stamp every file with the time of day (editors can sync by it)");
-            ui.end_row();
-            label(ui, "Editor timelines");
-            ui.checkbox(&mut o.export_timelines, "save the live edit for Final Cut Pro, DaVinci Resolve and Premiere Pro");
-            ui.end_row();
-            label(ui, "Audio sessions");
-            ui.checkbox(&mut o.daw_sessions, "save a REAPER session and a DAWproject (Fender Studio Pro, Bitwig, Cubase) with every WAV on its own track");
-            ui.end_row();
-            label(ui, "DaVinci Resolve");
-            ui.vertical(|ui| {
-                ui.checkbox(&mut o.resolve_project, "save what Cutaway's Resolve script needs to build a project from the take");
-                ui.horizontal(|ui| {
-                    if ui.button("Install the Resolve script").on_hover_text("Adds \"Cutaway - Build project from a take\" to Resolve's Workspace → Scripts menu").clicked() {
-                        self.resolve_note = Some(match crate::engine::sessions::install_resolve_script() {
-                            Ok(p) => (format!("Installed in {}. In Resolve: Workspace → Scripts → Cutaway - Build project from a take.", p.display()), false),
-                            Err(e) => (format!("Couldn't install it: {e:#}"), true),
-                        });
-                    }
-                });
-                if let Some((note, err)) = &self.resolve_note {
-                    ui.label(RichText::new(note).color(if *err { AMBER } else { GREEN }).size(12.0));
-                }
-            });
-            ui.end_row();
             label(ui, "Instant clips");
             ui.horizontal(|ui| {
                 ui.label("the Clip button saves the last");
                 ui.add(egui::DragValue::new(&mut o.clip_seconds).range(5..=600).suffix(" s"));
-                hint(ui, "to the take's Clips folder");
-            });
-            ui.end_row();
-            label(ui, "Proxy files");
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut o.proxies, "small copies for editing on a laptop, up to");
-                ui.add_enabled(o.proxies, egui::DragValue::new(&mut o.proxy_width).range(320..=1920).speed(16).suffix(" px wide"));
             });
             ui.end_row();
             label(ui, "Crash protection");
-            hint(ui, "always on: after a crash or power cut, files keep everything up to the last second");
+            hint(ui, "always on");
             ui.end_row();
         });
-
-        ui.add_space(12.0);
-        subtitle(ui, "Audio tracks");
-        let podcast_on = self.draft.podcast.enabled;
-        let o = &mut self.draft.output;
-        egui::Grid::new("tracks").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
-            label(ui, "Each input on its own track");
-            ui.checkbox(&mut o.input_tracks, "in the Program file, after the mix (for re-balancing in an editor)");
-            ui.end_row();
-            if o.input_tracks {
-                label(ui, "Input tracks");
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut o.input_tracks_post_fader, false, "before the fader (clean)");
-                    ui.selectable_value(&mut o.input_tracks_post_fader, true, "as heard in the mix");
-                });
-                ui.end_row();
-            }
-            label(ui, "Mix WAV");
-            if podcast_on {
-                ui.add_enabled(false, egui::Checkbox::new(&mut true.clone(), "saved: the podcast copy is made from it"));
-            } else {
-                ui.checkbox(&mut o.mix_wav, "also save the recording mix as Mix.wav");
-            }
-            ui.end_row();
-        });
-        hint(ui, "Players play the mix; editors (Premiere, Resolve, Final Cut) see every track, named after its input. Processing (voice chain) is included; \"before the fader\" ignores the fader and the ON button, so nothing is lost if a mic was off.");
-
-        ui.add_space(12.0);
-        subtitle(ui, "Podcast");
-        let p = &mut self.draft.podcast;
-        egui::Grid::new("podcast").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
-            label(ui, "Podcast copy");
-            ui.checkbox(&mut p.enabled, "after each take, save an .m4a of the mix, levelled, with the markers as chapters");
-            ui.end_row();
-            if p.enabled {
-                label(ui, "Loudness");
-                ui.horizontal(|ui| {
-                    for (v, t) in [(-16.0, "−16 LUFS (Apple, Spotify)"), (-14.0, "−14"), (-19.0, "−19 (mono speech)")] {
-                        ui.selectable_value(&mut p.target_lufs, v, t);
-                    }
-                });
-                ui.end_row();
-                label(ui, "Channels");
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut p.mono, false, "stereo");
-                    ui.selectable_value(&mut p.mono, true, "mono");
-                    egui::ComboBox::from_id_salt("pod_br").selected_text(format!("{} kbps", p.bitrate_kbps)).show_ui(ui, |ui| {
-                        for r in [64, 96, 128, 160, 192, 256] {
-                            ui.selectable_value(&mut p.bitrate_kbps, r, format!("{r} kbps"));
-                        }
-                    });
-                });
-                ui.end_row();
-                label(ui, "Podcast name");
-                ui.add(egui::TextEdit::singleline(&mut p.show).hint_text("the show's name").desired_width(260.0));
-                ui.end_row();
-                label(ui, "Episode title");
-                ui.add(egui::TextEdit::singleline(&mut p.title).hint_text("blank: podcast name and date").desired_width(260.0));
-                ui.end_row();
-                label(ui, "Author");
-                ui.add(egui::TextEdit::singleline(&mut p.author).desired_width(260.0));
-                ui.end_row();
-            }
-        });
-        if p.enabled {
-            hint(ui, "Made in the background once the take is saved (the header shows its progress). A look-ahead limiter keeps peaks under −1.5 dBFS after levelling.");
-        }
         {
             let cfg = &self.draft;
             let rate = crate::engine::health::estimate_rate(cfg, &cfg.audio.iter().map(|a| (a.channels, a.record)).collect::<Vec<_>>());
             let free = crate::engine::health::disk_space(&cfg.output.folder).map(|(f, _)| f);
-            ui.add_space(6.0);
+            ui.add_space(4.0);
             hint(ui, &format!(
                 "These settings write about {}/hour{}.",
                 crate::util::human_size((rate * 3600.0) as u64),
@@ -1117,20 +1017,202 @@ impl SettingsUi {
                 }
             }
         }
-        if start_scan {
-            self.start_encoder_scan();
-        }
-        ui.add_space(8.0);
-        hint(ui, "MOV suits Final Cut Pro; MP4 opens everywhere. Encoding uses the Mac's built-in media engine, so many sources at once is fine. Markers (M while recording) become chapters in every file and a YouTube chapter list.");
+        ui.add_space(10.0);
+
+        let o = &mut self.draft.output;
+        let quality = format!(
+            "{} · {} · {}",
+            if o.container == Container::Mov || o.codec.is_prores() { "MOV" } else { "MP4" },
+            crate::engine::encode::codec_name(o.codec.video_codec()),
+            if o.codec.is_prores() || (o.iso_bitrate_kbps == 0 && o.program_bitrate_kbps == 0) { "automatic quality".to_string() } else { "set bitrates".to_string() }
+        );
+        part(ui, "rec_quality", "Formats and quality", &quality, false, |ui| {
+            egui::Grid::new("rec_quality_grid").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+                label(ui, "File format");
+                egui::ComboBox::from_id_salt("container").selected_text(container_label(o.container)).width(260.0).show_ui(ui, |ui| {
+                    for c in [Container::Mp4, Container::Mov] {
+                        ui.selectable_value(&mut o.container, c, container_label(c));
+                    }
+                });
+                ui.end_row();
+                label(ui, "Codec");
+                egui::ComboBox::from_id_salt("codec").selected_text(crate::engine::encode::codec_name(o.codec.video_codec())).width(260.0).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut o.codec, Codec::H264, "H.264 — opens everywhere");
+                    ui.selectable_value(&mut o.codec, Codec::H265, "H.265/HEVC — smaller 4K files");
+                    ui.separator();
+                    let prores_ok = crate::engine::encode::codec_problem(Codec::Prores.video_codec()).is_none();
+                    for (c, text) in [
+                        (Codec::ProresProxy, "ProRes 422 Proxy — light editing copies"),
+                        (Codec::ProresLt, "ProRes 422 LT"),
+                        (Codec::Prores, "ProRes 422 — smooth editing, big files"),
+                        (Codec::ProresHq, "ProRes 422 HQ — highest quality"),
+                    ] {
+                        ui.add_enabled_ui(prores_ok, |ui| {
+                            ui.selectable_value(&mut o.codec, c, text);
+                        });
+                    }
+                    if !prores_ok {
+                        ui.label(RichText::new("ProRes needs a Mac").color(TEXT_DIM).size(11.5));
+                    }
+                });
+                ui.end_row();
+                if o.codec.is_prores() {
+                    ui.label("");
+                    hint(ui, &format!(
+                        "ProRes is recorded as MOV, at about {} GB an hour for the program alone.",
+                        crate::engine::encode::auto_bitrate_kbps(o.codec.video_codec(), pw, ph, pfps) as u64 * 3600 / 8 / 1_000_000
+                    ));
+                    ui.end_row();
+                }
+                label(ui, "Encoder");
+                let list = scan.as_ref().map(|(h264, h265)| if o.codec == Codec::H264 { h264.clone() } else { h265.clone() });
+                encoder_combo(ui, "rec_encoder", &mut o.encoder, list.as_deref());
+                ui.end_row();
+                if !o.codec.is_prores() {
+                    label(ui, "Source file bitrate");
+                    bitrate_field(ui, &mut o.iso_bitrate_kbps, "set from each source's size and rate");
+                    ui.end_row();
+                    label(ui, "Program bitrate");
+                    let auto = crate::engine::encode::auto_bitrate_kbps(o.codec.video_codec(), pw, ph, pfps);
+                    bitrate_field(ui, &mut o.program_bitrate_kbps, &format!("{} Mbps here", auto / 1000));
+                    ui.end_row();
+                }
+                label(ui, "Audio in video files");
+                egui::ComboBox::from_id_salt("abr").selected_text(format!("AAC {} kbps", o.audio_bitrate_kbps)).show_ui(ui, |ui| {
+                    for r in [128, 160, 192, 256, 320] {
+                        ui.selectable_value(&mut o.audio_bitrate_kbps, r, format!("AAC {r} kbps"));
+                    }
+                });
+                ui.end_row();
+                label(ui, "Program audio in source files");
+                ui.checkbox(&mut o.iso_audio, "the recording mix");
+                ui.end_row();
+                label(ui, "WAV files");
+                egui::ComboBox::from_id_salt("wav").selected_text(format!("{}-bit{}", o.wav_bit_depth, if o.wav_bit_depth == 32 { " float" } else { "" })).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut o.wav_bit_depth, 16, "16-bit");
+                    ui.selectable_value(&mut o.wav_bit_depth, 24, "24-bit");
+                    ui.selectable_value(&mut o.wav_bit_depth, 32, "32-bit float");
+                });
+                ui.end_row();
+            });
+        });
+
+        let podcast_on = self.draft.podcast.enabled;
+        let o = &mut self.draft.output;
+        let extras: Vec<&str> = [
+            (o.timecode, "timecode"),
+            (o.export_timelines, "timelines"),
+            (o.daw_sessions, "audio sessions"),
+            (o.resolve_project, "Resolve"),
+            (o.proxies, "proxies"),
+            (o.input_tracks, "input tracks"),
+            (o.mix_wav || podcast_on, "mix WAV"),
+        ]
+        .into_iter()
+        .filter(|(on, _)| *on)
+        .map(|(_, n)| n)
+        .collect();
+        let state = if extras.is_empty() { "nothing extra".to_string() } else { extras.join(", ") };
+        part(ui, "rec_editing", "For editing", &state, false, |ui| {
+            egui::Grid::new("rec_editing_grid").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+                label(ui, "Timecode");
+                ui.checkbox(&mut o.timecode, "the time of day, in every file");
+                ui.end_row();
+                label(ui, "Editor timelines");
+                ui.checkbox(&mut o.export_timelines, "Final Cut Pro, DaVinci Resolve and Premiere Pro");
+                ui.end_row();
+                label(ui, "Audio sessions");
+                ui.checkbox(&mut o.daw_sessions, "REAPER and DAWproject");
+                ui.end_row();
+                label(ui, "DaVinci Resolve");
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut o.resolve_project, "a project from each take");
+                        if ui.button("Install the Resolve script").on_hover_text("Adds \"Cutaway - Build project from a take\" to Resolve's Workspace → Scripts menu").clicked() {
+                            self.resolve_note = Some(match crate::engine::sessions::install_resolve_script() {
+                                Ok(p) => (format!("Installed in {}. In Resolve: Workspace → Scripts → Cutaway - Build project from a take.", p.display()), false),
+                                Err(e) => (format!("Couldn't install it: {e:#}"), true),
+                            });
+                        }
+                    });
+                    if let Some((note, err)) = &self.resolve_note {
+                        ui.label(RichText::new(note).color(if *err { AMBER } else { GREEN }).size(12.0));
+                    }
+                });
+                ui.end_row();
+                label(ui, "Proxy files");
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut o.proxies, "small copies, up to");
+                    ui.add_enabled(o.proxies, egui::DragValue::new(&mut o.proxy_width).range(320..=1920).speed(16).suffix(" px wide"));
+                });
+                ui.end_row();
+                label(ui, "Each input on its own track");
+                ui.checkbox(&mut o.input_tracks, "in the Program file");
+                ui.end_row();
+                if o.input_tracks {
+                    label(ui, "Input tracks");
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(&mut o.input_tracks_post_fader, false, "before the fader (clean)");
+                        ui.selectable_value(&mut o.input_tracks_post_fader, true, "as heard in the mix");
+                    });
+                    ui.end_row();
+                }
+                label(ui, "Mix WAV");
+                if podcast_on {
+                    ui.add_enabled(false, egui::Checkbox::new(&mut true.clone(), "saved (the podcast copy is made from it)"));
+                } else {
+                    ui.checkbox(&mut o.mix_wav, "Mix.wav");
+                }
+                ui.end_row();
+            });
+        });
+
+        let p = &mut self.draft.podcast;
+        let state = if p.enabled { format!("on · {} LUFS", p.target_lufs) } else { "off".to_string() };
+        part(ui, "rec_podcast", "Podcast", &state, false, |ui| {
+            egui::Grid::new("podcast").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+                label(ui, "Podcast copy");
+                ui.checkbox(&mut p.enabled, "an .m4a of the mix after each take");
+                ui.end_row();
+                if p.enabled {
+                    label(ui, "Loudness");
+                    ui.horizontal(|ui| {
+                        for (v, t) in [(-16.0, "−16 LUFS (Apple, Spotify)"), (-14.0, "−14"), (-19.0, "−19 (mono speech)")] {
+                            ui.selectable_value(&mut p.target_lufs, v, t);
+                        }
+                    });
+                    ui.end_row();
+                    label(ui, "Channels");
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(&mut p.mono, false, "stereo");
+                        ui.selectable_value(&mut p.mono, true, "mono");
+                        egui::ComboBox::from_id_salt("pod_br").selected_text(format!("{} kbps", p.bitrate_kbps)).show_ui(ui, |ui| {
+                            for r in [64, 96, 128, 160, 192, 256] {
+                                ui.selectable_value(&mut p.bitrate_kbps, r, format!("{r} kbps"));
+                            }
+                        });
+                    });
+                    ui.end_row();
+                    label(ui, "Podcast name");
+                    ui.add(egui::TextEdit::singleline(&mut p.show).hint_text("the show's name").desired_width(260.0));
+                    ui.end_row();
+                    label(ui, "Episode title");
+                    ui.add(egui::TextEdit::singleline(&mut p.title).hint_text("blank: podcast name and date").desired_width(260.0));
+                    ui.end_row();
+                    label(ui, "Author");
+                    ui.add(egui::TextEdit::singleline(&mut p.author).desired_width(260.0));
+                    ui.end_row();
+                }
+            });
+        });
     }
 
     // ---- Streaming ----------------------------------------------------------------
 
     fn streaming(&mut self, ui: &mut egui::Ui) {
-        title(ui, "Streaming", "Go live to any number of places at once. The program is encoded once and sent to each.");
+        title(ui, "Streaming", "Go live to any number of places at once: the program is encoded once and sent to each.");
         self.poll_encoder_scan();
         let scan = self.encoders.lock().unwrap().clone();
-        subtitle(ui, "Destinations");
         let n = self.draft.streaming.destinations.len();
         if self.sel_dest >= n {
             self.sel_dest = n.saturating_sub(1);
@@ -1246,77 +1328,73 @@ impl SettingsUi {
             });
         });
 
-        ui.add_space(16.0);
-        subtitle(ui, "Stream quality");
+        ui.add_space(14.0);
         let s = &mut self.draft.streaming;
-        egui::Grid::new("stream_quality").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
-            label(ui, "Size");
-            ui.horizontal(|ui| {
-                size_combo(ui, "stream_size", &mut s.width, &mut s.height);
-                ui.add(egui::DragValue::new(&mut s.width).range(160..=3840).speed(2));
-                ui.label("×");
-                ui.add(egui::DragValue::new(&mut s.height).range(90..=2160).speed(2));
-            });
-            ui.end_row();
-            label(ui, "Frame rate");
-            fps_picker(ui, "stream_fps", &mut s.fps, None);
-            ui.end_row();
-            label(ui, "Video bitrate");
-            ui.horizontal(|ui| {
-                ui.add(egui::DragValue::new(&mut s.video_bitrate_kbps).range(500..=50_000).speed(50).suffix(" kbps"));
-                let (lo, hi) = recommended_kbps(s.width, s.height, s.fps);
-                hint(ui, &format!("typical for this size: {lo}–{hi} kbps"));
-            });
-            ui.end_row();
-            label(ui, "Audio bitrate");
-            egui::ComboBox::from_id_salt("stream_abr").selected_text(format!("AAC {} kbps", s.audio_bitrate_kbps)).show_ui(ui, |ui| {
-                for r in [96, 128, 160, 192, 256, 320] {
-                    ui.selectable_value(&mut s.audio_bitrate_kbps, r, format!("AAC {r} kbps"));
-                }
-            });
-            ui.end_row();
-            label(ui, "Encoder");
-            let list = scan.as_ref().map(|(h264, _)| h264.clone());
-            ui.horizontal(|ui| {
-                encoder_combo(ui, "stream_encoder", &mut s.encoder, list.as_deref());
-                hint(ui, "always H.264 (what streaming services accept)");
-            });
-            ui.end_row();
-        });
         let up = (s.video_bitrate_kbps + s.audio_bitrate_kbps) as f64 / 1000.0;
         let enabled = s.destinations.iter().filter(|d| d.enabled).count();
-        hint(
-            ui,
-            &format!(
-                "Upload needed: about {:.1} Mbps per destination, {:.1} Mbps for the {enabled} enabled. Keep it under ~70% of your measured upload speed.",
-                up,
-                up * enabled as f64
-            ),
-        );
-
-        ui.add_space(16.0);
-        subtitle(ui, "Reliability");
-        egui::Grid::new("stream_rel").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
-            label(ui, "If a connection drops");
-            ui.checkbox(&mut s.auto_reconnect, "reconnect automatically");
-            ui.end_row();
-            label(ui, "Give up after");
-            ui.add_enabled(
-                s.auto_reconnect,
-                egui::DragValue::new(&mut s.max_retries).range(0..=100).custom_formatter(|v, _| {
-                    if v == 0.0 { "never (keep trying)".into() } else { format!("{v} attempts") }
-                }),
-            );
-            ui.end_row();
-            label(ui, "When going live");
-            ui.checkbox(&mut s.record_when_live, "also start recording");
-            ui.end_row();
-            label(ui, "Slow connection");
-            ui.checkbox(&mut s.adaptive_bitrate, "lower the video bitrate while it can't keep up, and bring it back after (adaptive bitrate)");
-            ui.end_row();
+        let state = format!("{}×{} · {} fps · {:.1} Mbps", s.width, s.height, s.fps, up);
+        part(ui, "stream_quality", "Quality", &state, false, |ui| {
+            egui::Grid::new("stream_quality_grid").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+                label(ui, "Size");
+                ui.horizontal(|ui| {
+                    size_combo(ui, "stream_size", &mut s.width, &mut s.height);
+                    ui.add(egui::DragValue::new(&mut s.width).range(160..=3840).speed(2));
+                    ui.label("×");
+                    ui.add(egui::DragValue::new(&mut s.height).range(90..=2160).speed(2));
+                });
+                ui.end_row();
+                label(ui, "Frame rate");
+                fps_picker(ui, "stream_fps", &mut s.fps, None);
+                ui.end_row();
+                label(ui, "Video bitrate");
+                ui.horizontal(|ui| {
+                    ui.add(egui::DragValue::new(&mut s.video_bitrate_kbps).range(500..=50_000).speed(50).suffix(" kbps"));
+                    let (lo, hi) = recommended_kbps(s.width, s.height, s.fps);
+                    hint(ui, &format!("typical for this size: {lo}–{hi} kbps"));
+                });
+                ui.end_row();
+                label(ui, "Audio bitrate");
+                egui::ComboBox::from_id_salt("stream_abr").selected_text(format!("AAC {} kbps", s.audio_bitrate_kbps)).show_ui(ui, |ui| {
+                    for r in [96, 128, 160, 192, 256, 320] {
+                        ui.selectable_value(&mut s.audio_bitrate_kbps, r, format!("AAC {r} kbps"));
+                    }
+                });
+                ui.end_row();
+                label(ui, "Encoder");
+                let list = scan.as_ref().map(|(h264, _)| h264.clone());
+                encoder_combo(ui, "stream_encoder", &mut s.encoder, list.as_deref());
+                ui.end_row();
+            });
+            hint(ui, &format!("Upload needed: about {up:.1} Mbps per destination, {:.1} Mbps for the {enabled} on. Keep it under ~70% of your upload speed.", up * enabled as f64));
         });
-        ui.add_space(8.0);
-        hint(ui, "A destination that fails never affects the others, the program or your recordings. Stream keys are stored in the settings file — keep it private.");
+        let s = &mut self.draft.streaming;
+        let state = [(s.auto_reconnect, "reconnects"), (s.record_when_live, "records too"), (s.adaptive_bitrate, "adapts to the connection")]
+            .into_iter()
+            .filter(|(on, _)| *on)
+            .map(|(_, t)| t)
+            .collect::<Vec<_>>()
+            .join(", ");
+        part(ui, "stream_rel", "Going live", &state, false, |ui| {
+            egui::Grid::new("stream_rel_grid").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+                label(ui, "If a connection drops");
+                ui.checkbox(&mut s.auto_reconnect, "reconnect");
+                ui.end_row();
+                label(ui, "Give up after");
+                ui.add_enabled(
+                    s.auto_reconnect,
+                    egui::DragValue::new(&mut s.max_retries).range(0..=100).custom_formatter(|v, _| {
+                        if v == 0.0 { "never (keep trying)".into() } else { format!("{v} attempts") }
+                    }),
+                );
+                ui.end_row();
+                label(ui, "When going live");
+                ui.checkbox(&mut s.record_when_live, "also start recording");
+                ui.end_row();
+                label(ui, "Slow connection");
+                ui.checkbox(&mut s.adaptive_bitrate, "lower the bitrate while it can't keep up");
+                ui.end_row();
+            });
+        });
     }
 
     // ---- Diagnostics ----------------------------------------------------------------
@@ -1389,17 +1467,6 @@ impl SettingsUi {
 
     // ---- encoder detection ------------------------------------------------------------
 
-    fn start_encoder_scan(&mut self) {
-        self.scanning = true;
-        *self.encoders.lock().unwrap() = None;
-        let out = self.encoders.clone();
-        std::thread::spawn(move || {
-            let list = |c: Codec| crate::engine::encode::video_backends(c.video_codec()).into_iter().map(String::from).collect::<Vec<_>>();
-            let (h264, h265) = (list(Codec::H264), list(Codec::H265));
-            *out.lock().unwrap() = Some((h264, h265));
-        });
-    }
-
     fn poll_encoder_scan(&mut self) {
         if self.scanning && self.encoders.lock().unwrap().is_some() {
             self.scanning = false;
@@ -1409,10 +1476,27 @@ impl SettingsUi {
 
 // ---- widgets ---------------------------------------------------------------------------
 
-pub(super) fn title(ui: &mut egui::Ui, text: &str, sub: &str) {
-    ui.label(RichText::new(text).size(20.0).strong().color(Color32::WHITE));
-    ui.label(RichText::new(sub).color(TEXT_DIM));
+/// What a page is for, in a line (the tab above names it).
+pub(super) fn title(ui: &mut egui::Ui, _text: &str, sub: &str) {
+    ui.add(egui::Label::new(RichText::new(sub).color(TEXT_DIM)).wrap());
     ui.add_space(10.0);
+}
+
+/// A part of a page that folds away, with how it's set when folded.
+pub(super) fn part<R>(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, name: &str, state: &str, open: bool, body: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
+    let mut job = egui::text::LayoutJob::default();
+    job.append(name, 0.0, egui::TextFormat::simple(egui::FontId::proportional(14.5), Color32::WHITE));
+    if !state.is_empty() {
+        job.append(&format!("   {state}"), 0.0, egui::TextFormat::simple(egui::FontId::proportional(12.5), TEXT_DIM));
+    }
+    let r = egui::CollapsingHeader::new(job).id_salt(id).default_open(open).show(ui, |ui| {
+        ui.add_space(4.0);
+        let r = body(ui);
+        ui.add_space(6.0);
+        r
+    });
+    ui.add_space(4.0);
+    r.body_returned
 }
 
 pub(super) fn subtitle(ui: &mut egui::Ui, text: &str) {
@@ -1420,8 +1504,66 @@ pub(super) fn subtitle(ui: &mut egui::Ui, text: &str) {
     ui.add_space(2.0);
 }
 
+/// The width every setting's name takes, so rows line up down a page.
+const LABEL_W: f32 = 176.0;
+
+/// A setting's name, with an ⓘ that explains it (on hover) when there's
+/// more to say.
 pub(super) fn label(ui: &mut egui::Ui, text: &str) {
-    ui.label(RichText::new(text).color(Color32::from_rgb(200, 205, 214)));
+    let help = help::get(text);
+    ui.allocate_ui_with_layout(vec2(LABEL_W, 20.0), Layout::left_to_right(Align::Center), |ui| {
+        ui.set_min_width(LABEL_W);
+        ui.spacing_mut().item_spacing.x = 5.0;
+        let r = ui.add(egui::Label::new(RichText::new(text).color(Color32::from_rgb(200, 205, 214))).selectable(false).sense(egui::Sense::hover()));
+        if let Some(h) = help {
+            // The name explains itself after a moment; the ⓘ straight away.
+            r.on_hover_ui(|ui| help_text(ui, h));
+            let i = info_icon(ui);
+            if i.hovered() {
+                egui::Tooltip::for_widget(&i).gap(8.0).show(|ui| help_text(ui, h));
+            }
+        }
+    });
+}
+
+fn help_text(ui: &mut egui::Ui, text: &str) {
+    ui.set_max_width(340.0);
+    ui.label(RichText::new(text).size(13.0));
+}
+
+/// A table's column heading, explained on hover like a setting's name.
+pub(super) fn column_head(ui: &mut egui::Ui, text: &str) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.label(RichText::new(text).color(TEXT_DIM).size(12.0));
+        if let Some(h) = help::get(text) {
+            let i = info_icon(ui);
+            if i.hovered() {
+                egui::Tooltip::for_widget(&i).gap(8.0).show(|ui| help_text(ui, h));
+            }
+        }
+    });
+}
+
+/// A small ⓘ.
+pub(super) fn info_icon(ui: &mut egui::Ui) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(14.0, 14.0), egui::Sense::hover());
+    let c = if resp.hovered() { ACCENT } else { Color32::from_rgb(120, 128, 142) };
+    let p = ui.painter();
+    p.circle_stroke(rect.center(), 6.0, egui::Stroke::new(1.1, c));
+    p.text(rect.center() + vec2(0.0, 0.5), egui::Align2::CENTER_CENTER, "i", egui::FontId::proportional(10.0), c);
+    resp
+}
+
+/// A checkbox that explains itself on hover (when there's more to say).
+pub(super) fn check(ui: &mut egui::Ui, value: &mut bool, text: impl Into<egui::WidgetText>) -> egui::Response {
+    let text: egui::WidgetText = text.into();
+    let help = help::get(text.text());
+    let r = ui.checkbox(value, text);
+    match help {
+        Some(h) => r.on_hover_ui(|ui| help_text(ui, h)),
+        None => r,
+    }
 }
 
 pub(super) fn hint(ui: &mut egui::Ui, text: &str) {

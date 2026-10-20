@@ -9,7 +9,7 @@ use std::time::Duration;
 
 impl SettingsUi {
     pub(super) fn upload(&mut self, ui: &mut egui::Ui) {
-        title(ui, "Upload after the show", "Send each take to YouTube and/or Google Drive once it's saved, signed in with your own Google account. Uploads go on in the background (one at a time, in the Uploads panel) and pick up again if the connection drops.");
+        title(ui, "Upload after the show", "Send each take to YouTube and Google Drive once it's saved, with your own Google sign-in. Uploads run in the background and resume if the connection drops.");
         // A sign-in that has finished.
         let finished = self.google.as_ref().and_then(|g| g.result.lock().unwrap().take());
         if let Some(r) = finished {
@@ -80,7 +80,6 @@ impl SettingsUi {
         let granted = |g: &str| u.granted.iter().any(|x| x == g);
 
         ui.add_space(12.0);
-        subtitle(ui, "YouTube");
         egui::Grid::new("upload_yt").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
             label(ui, "YouTube");
             ui.checkbox(&mut u.youtube, "upload the program");
@@ -94,13 +93,13 @@ impl SettingsUi {
                 });
                 ui.end_row();
                 label(ui, "Title");
-                ui.add(egui::TextEdit::singleline(&mut u.youtube_title).desired_width(380.0).hint_text("the show's name and the date ({show} and {date} work too)"));
+                ui.add(egui::TextEdit::singleline(&mut u.youtube_title).desired_width(380.0).hint_text("the show's name and the date"));
                 ui.end_row();
                 label(ui, "Description");
                 ui.add(egui::TextEdit::multiline(&mut u.youtube_description).desired_width(380.0).desired_rows(3));
                 ui.end_row();
                 label(ui, "Chapters");
-                ui.checkbox(&mut u.youtube_chapters, "markers as chapters, added to the description (YouTube needs at least three, ten seconds apart)");
+                ui.checkbox(&mut u.youtube_chapters, "the markers, in the description");
                 ui.end_row();
             }
         });
@@ -109,7 +108,6 @@ impl SettingsUi {
         }
 
         ui.add_space(12.0);
-        subtitle(ui, "Google Drive");
         egui::Grid::new("upload_drive").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
             label(ui, "Google Drive");
             ui.checkbox(&mut u.drive, "upload files from the take");
@@ -123,10 +121,7 @@ impl SettingsUi {
                 });
                 ui.end_row();
                 label(ui, "Folder");
-                ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut u.drive_folder).desired_width(200.0));
-                    hint(ui, "in My Drive; each take gets a folder inside it");
-                });
+                ui.add(egui::TextEdit::singleline(&mut u.drive_folder).desired_width(200.0).hint_text("in My Drive"));
                 ui.end_row();
             }
         });
@@ -138,7 +133,7 @@ impl SettingsUi {
         egui::Grid::new("upload_when").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
             label(ui, "When");
             ui.vertical(|ui| {
-                ui.radio_value(&mut u.automatic, false, "ask: an Upload button appears when a take is saved");
+                ui.radio_value(&mut u.automatic, false, "when I press Upload (it appears as a take is saved)");
                 ui.radio_value(&mut u.automatic, true, "straight away, as each take is saved");
             });
             ui.end_row();

@@ -76,7 +76,7 @@ fn fmt_len(secs: u32) -> String {
 
 impl SettingsUi {
     pub(super) fn rundown(&mut self, ui: &mut egui::Ui) {
-        title(ui, "Rundown", "The show's running order: each segment's length, scene and cues. Step through it from the main window, N, the Stream Deck or the remote.");
+        title(ui, "Rundown", "The show's running order: each segment's length, scene and cues. Step through it with N, the main window, the Stream Deck or the remote.");
         let n = self.draft.rundown.segments.len();
         if self.sel_segment >= n {
             self.sel_segment = n.saturating_sub(1);
@@ -138,7 +138,7 @@ impl SettingsUi {
                         if a.changed() || b.changed() {
                             s.seconds = m * 60 + sec;
                         }
-                        hint(ui, if s.seconds == 0 { "open-ended: counts up" } else { "counts down; red when it runs over" });
+                        hint(ui, if s.seconds == 0 { "open-ended" } else { "" });
                     });
                     ui.end_row();
                     label(ui, "Scene");
@@ -157,12 +157,14 @@ impl SettingsUi {
                     ui.add(egui::TextEdit::multiline(&mut s.notes).desired_width(340.0).desired_rows(4).hint_text("talking points, who's on, what to set up"));
                     ui.end_row();
                 });
-                ui.add_space(6.0);
-                hint(ui, "Cues run as the segment starts: show a title or clock, play a pad, start a Syrinscape mood, start a countdown, mute a mic… The scene's own cues run too.");
             });
         });
         ui.add_space(12.0);
-        ui.checkbox(&mut self.draft.rundown.markers, "Mark each segment in the recording (it becomes a chapter in the files and the podcast)");
-        hint(ui, "Add a clock graphic showing \"Rundown segment time left\" to put the countdown on the program, or turn on clocks for the second screen (Settings → Screens & webcam) so only the presenters see it.");
+        egui::Grid::new("rundown_marks").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            label(ui, "Chapters");
+            ui.checkbox(&mut self.draft.rundown.markers, "mark each segment in the recording");
+            ui.end_row();
+        });
+        hint(ui, "For a countdown on the program, add a clock graphic showing \"Rundown segment time left\"; for the presenters only, turn on clocks on the second screen.");
     }
 }

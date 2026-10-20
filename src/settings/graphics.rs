@@ -12,7 +12,7 @@ fn fingerprint(g: &Graphic, canvas: (u32, u32)) -> u64 {
 
 impl SettingsUi {
     pub(super) fn graphics(&mut self, ui: &mut egui::Ui) {
-        title(ui, "Graphics", "Logos, watermarks, name titles, clocks and tickers above every scene. Each gets its own button next to the scenes.");
+        title(ui, "Graphics", "Logos, watermarks, name titles, clocks and tickers over every scene, each with its own button beside the scenes.");
         let n = self.draft.graphics.len();
         if self.sel_graphic >= n {
             self.sel_graphic = n.saturating_sub(1);
@@ -88,10 +88,7 @@ impl SettingsUi {
             match g.kind {
                 GraphicKind::Ticker => {
                     label(ui, "Text");
-                    ui.vertical(|ui| {
-                        ui.add(egui::TextEdit::multiline(&mut g.title).desired_width(340.0).desired_rows(3).hint_text("one item per line"));
-                        hint(ui, "One item per line; they scroll past in turn, again and again.");
-                    });
+                    ui.add(egui::TextEdit::multiline(&mut g.title).desired_width(340.0).desired_rows(3).hint_text("one item per line"));
                     ui.end_row();
                     label(ui, "Label");
                     ui.add(egui::TextEdit::singleline(&mut g.subtitle).desired_width(160.0).hint_text("e.g. Coming up (optional)"));
@@ -261,13 +258,13 @@ impl SettingsUi {
             ui.label(RichText::new("⚠ Choose a PNG or JPEG image.").color(AMBER));
         }
         if g.kind == GraphicKind::Ticker {
-            hint(ui, "A band across the picture with text scrolling through it, like a news ticker. Change the text live from its button in the main window (✎).");
+            hint(ui, "Change the text live from its button in the main window (✎).");
         } else if g.kind == GraphicKind::Clock && g.clock.is_timer() {
             hint(ui, &format!("Start, pause and reset it from its button in the main window (right-click), a Stream Deck Timer key, or the commands timer:{0}:start, timer:{0}:pause and timer:{0}:reset.", g.name));
         } else if g.kind == GraphicKind::Clock && g.clock == ClockKind::Segment {
-            hint(ui, "Counts down the rundown segment that's on (Settings → Rundown), and shows how far over it runs in red.");
+            hint(ui, "Counts down the rundown segment that's on, and shows in red how far over it runs.");
         } else {
-            hint(ui, "Titles can also be edited live from the main window (click ✎ on the title's button) — handy for changing names between guests.");
+            hint(ui, "Edit titles live from the main window (✎ on the title's button).");
         }
     }
 }

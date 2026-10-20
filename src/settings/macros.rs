@@ -7,7 +7,7 @@ use crate::config::Macro;
 
 impl SettingsUi {
     pub(super) fn macros(&mut self, ui: &mut egui::Ui) {
-        title(ui, "Macros", "A macro runs a list of commands with one press: take a scene, wait, show a title, start a pad, start a countdown… They appear as buttons in the main window, on the Stream Deck (Macro key) and the remote, and can be run from MIDI, cues or macro:Name.");
+        title(ui, "Macros", "One press runs a list of commands: take a scene, wait, show a title, play a pad, start a countdown… Each is a button in the main window, the Stream Deck and the remote.");
         let n = self.draft.macros.len();
         if self.sel_macro >= n {
             self.sel_macro = n.saturating_sub(1);
@@ -61,8 +61,7 @@ impl SettingsUi {
                     ui.vertical(|ui| commands_editor(ui, &format!("macro{sel}"), &mut m.commands, &suggestions, true));
                     ui.end_row();
                 });
-                ui.add_space(6.0);
-                hint(ui, "Steps run in order; a wait pauses before the next. A macro can run another macro.");
+
             });
         });
     }
