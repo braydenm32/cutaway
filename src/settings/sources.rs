@@ -475,10 +475,8 @@ impl SettingsUi {
                 }
             }
             SourceKind::Ndi => {
-                if !crate::engine::ndi::available() {
-                    ui.label(RichText::new("⚠ NDI isn't installed on this computer. Install the free NDI Tools from ndi.video/tools, then restart Cutaway.").color(AMBER));
-                }
                 hint(ui, "NDI sources on your network: other computers running NDI Tools or OBS with NDI, PTZ cameras, NDI converters.");
+                super::ndi_offer(ui);
             }
         }
         ui.add_space(10.0);

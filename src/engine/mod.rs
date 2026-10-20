@@ -787,6 +787,25 @@ impl Engine {
 
     // ---- NDI output -----------------------------------------------------------------------
 
+    /// NDI was installed while Cutaway was running: start the NDI sources
+    /// that couldn't open without it, and the NDI output.
+    pub fn ndi_arrived(&self) {
+        let mut started = Vec::new();
+        for s in &self.sources {
+            if s.input.cfg.device.trim().to_lowercase().starts_with("ndi:") && !s.input.is_open() {
+                match s.input.open(&[]) {
+                    Ok(_) => started.push(s.name.clone()),
+                    Err(e) => self.status.lock().unwrap().push(LogLevel::Warning, format!("{}: {e:#}", s.name)),
+                }
+            }
+        }
+        let mut st = self.status.lock().unwrap();
+        st.push(LogLevel::Info, if started.is_empty() { "NDI is installed".to_string() } else { format!("NDI is installed: connecting {}", started.join(", ")) });
+        drop(st);
+        let cfg = self.config();
+        self.apply_ndi_out(&cfg.ndi_out);
+    }
+
     /// Start, change or stop the NDI outputs to match the settings.
     pub fn apply_ndi_out(&self, cfg: &crate::config::NdiOutConfig) {
         let mut cur = self.ndi_out.lock().unwrap();

@@ -1575,6 +1575,67 @@ fn shortcuts(ui: &mut egui::Ui) {
     hint(ui, "Going live is mouse-only on purpose, so a stray key can't start or end a broadcast.");
 }
 
+/// Wherever NDI is chosen: when it isn't installed, offer to install NDI's
+/// own free runtime (downloaded from NDI, its installer opened), and credit
+/// NDI as its licence asks.
+pub fn ndi_offer(ui: &mut egui::Ui) {
+    use crate::net::ndi_install::{self, Stage};
+    if crate::engine::ndi::available() {
+        ndi_credit(ui);
+        return;
+    }
+    ui.label(RichText::new("⚠ NDI isn't installed on this computer.").color(AMBER));
+    match ndi_install::stage() {
+        Stage::Idle if ndi_install::installer().is_none() => {
+            hint(ui, "Install the NDI SDK from ndi.video; Cutaway finds it as soon as it's there.");
+        }
+        Stage::Idle => {
+            if ui.button("Install NDI…").on_hover_text("Downloads NDI's free runtime from NDI and opens its installer").clicked() {
+                ndi_install::start();
+            }
+            hint(ui, "Downloads NDI's free runtime from NDI and opens its installer, which asks for your password. Cutaway picks NDI up as soon as it's installed.");
+        }
+        Stage::Downloading { got, total } => {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(format!("Downloading NDI… {}", ndi_install::progress_text(got, total)));
+            });
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
+        }
+        Stage::Opened(_) => {
+            hint(ui, "NDI's installer is open: follow its steps (it asks for your password). Cutaway picks NDI up as soon as it's installed.");
+            ui.horizontal(|ui| {
+                if ui.small_button("Open the installer again").clicked() {
+                    ndi_install::open_again();
+                }
+                if ui.small_button("Download it again").clicked() {
+                    ndi_install::start();
+                }
+            });
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
+        }
+        Stage::Failed(e) => {
+            ui.add(egui::Label::new(RichText::new(format!("Couldn't get NDI: {e}")).color(AMBER)).wrap());
+            ui.horizontal(|ui| {
+                if ui.button("Try again").clicked() {
+                    ndi_install::start();
+                }
+                ui.hyperlink_to("Get it from NDI's website", ndi_install::PAGE);
+            });
+        }
+    }
+    ndi_credit(ui);
+}
+
+/// "NDI® is a registered trademark of Vizrt NDI AB", with a link to NDI.
+pub fn ndi_credit(ui: &mut egui::Ui) {
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.label(RichText::new(crate::net::ndi_install::TRADEMARK).size(11.0).color(TEXT_DIM));
+        ui.hyperlink_to(RichText::new("ndi.video").size(11.0), crate::net::ndi_install::SITE);
+    });
+}
+
 /// A QR code for `text`, `size` points across, on a white card (phones
 /// scan it from the screen).
 pub fn qr_code(ui: &mut egui::Ui, text: &str, size: f32) -> egui::Response {

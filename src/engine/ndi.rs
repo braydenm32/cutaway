@@ -1,6 +1,7 @@
-//! NDI input and output. NDI's licence doesn't allow bundling its library,
-//! so this uses the free NDI runtime (installed with NDI Tools) when it's
-//! present and explains how to get it when it isn't.
+//! NDI input and output, through NDI's free runtime when it's installed
+//! (with NDI Tools, or NDI's runtime installer). Where it isn't, Settings
+//! offers to download NDI's own installer (`net::ndi_install`), and Cutaway
+//! picks the runtime up as soon as it's there, without a restart.
 
 use super::feed::{AudioHub, Feeder};
 use super::netsrc::{NetState, NetStatus};
@@ -11,7 +12,8 @@ use anyhow::{anyhow, bail, Result};
 use libloading::Library;
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use std::thread::JoinHandle;
 
 #[repr(C)]
@@ -141,12 +143,50 @@ fn candidates() -> Vec<String> {
                 .map(String::from),
         );
     } else if cfg!(windows) {
+        // Installed after Cutaway started: the installer's NDI_RUNTIME_DIR
+        // isn't in this process's environment yet, so read it from where
+        // Windows keeps it.
+        for var in ["NDI_RUNTIME_DIR_V6", "NDI_RUNTIME_DIR_V5"] {
+            if let Some(dir) = system_env(var) {
+                v.push(format!("{dir}\\Processing.NDI.Lib.x64.dll"));
+            }
+        }
+        let pf = std::env::var("ProgramW6432").or_else(|_| std::env::var("ProgramFiles")).unwrap_or_else(|_| "C:\\Program Files".into());
+        v.push(format!("{pf}\\NDI\\NDI 6 Runtime\\v6\\Processing.NDI.Lib.x64.dll"));
+        // Next to Cutaway, or on the PATH.
         v.push("Processing.NDI.Lib.x64.dll".into());
     } else {
         v.extend(["libndi.so.6", "libndi.so.5", "libndi.so"].map(String::from));
     }
     v
 }
+
+/// A system-wide environment variable as Windows has it now (not as it was
+/// when Cutaway started).
+#[cfg(windows)]
+fn system_env(name: &str) -> Option<String> {
+    use windows::core::HSTRING;
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
+    let key = HSTRING::from("SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment");
+    let value = HSTRING::from(name);
+    let mut buf = [0u16; 1024];
+    let mut len = (buf.len() * 2) as u32;
+    // SAFETY: valid buffer and length; REG_EXPAND_SZ values come back expanded.
+    let r = unsafe { RegGetValueW(HKEY_LOCAL_MACHINE, &key, &value, RRF_RT_REG_SZ, None, Some(buf.as_mut_ptr() as *mut _), Some(&mut len)) };
+    if r.is_err() {
+        return None;
+    }
+    let n = (len as usize / 2).saturating_sub(1);
+    Some(String::from_utf16_lossy(&buf[..n])).filter(|s| !s.trim().is_empty())
+}
+
+#[cfg(not(windows))]
+fn system_env(_name: &str) -> Option<String> {
+    None
+}
+
+/// What to say when the runtime isn't there.
+pub const NOT_INSTALLED: &str = "NDI isn't installed on this computer (Settings offers to install it where you choose NDI)";
 
 fn load() -> Result<Api, String> {
     for path in candidates() {
@@ -198,12 +238,49 @@ fn load() -> Result<Api, String> {
             return Ok(api);
         }
     }
-    Err("NDI isn't installed on this computer. Install the free NDI Tools from ndi.video/tools, then restart Cutaway.".into())
+    Err(NOT_INSTALLED.into())
 }
 
+/// How often to look again for a runtime that wasn't there.
+const LOOK_AGAIN: Duration = Duration::from_secs(3);
+
+/// Set when the runtime turns up after Cutaway first looked for it.
+static ARRIVED: AtomicBool = AtomicBool::new(false);
+
 fn api() -> Result<&'static Api> {
-    static API: OnceLock<Result<Api, String>> = OnceLock::new();
-    API.get_or_init(load).as_ref().map_err(|e| anyhow!("{e}"))
+    static API: OnceLock<Api> = OnceLock::new();
+    // When it was last looked for, and why it couldn't be used.
+    static LOOKED: Mutex<Option<(Instant, String)>> = Mutex::new(None);
+    if let Some(api) = API.get() {
+        return Ok(api);
+    }
+    let mut looked = LOOKED.lock().unwrap();
+    if let Some(api) = API.get() {
+        return Ok(api);
+    }
+    if let Some((_, why)) = looked.as_ref().filter(|(at, _)| at.elapsed() < LOOK_AGAIN) {
+        return Err(anyhow!("{why}"));
+    }
+    let before = looked.is_some();
+    match load() {
+        Ok(api) => {
+            let api = API.get_or_init(|| api);
+            if before {
+                ARRIVED.store(true, Ordering::Relaxed);
+            }
+            Ok(api)
+        }
+        Err(why) => {
+            *looked = Some((Instant::now(), why.clone()));
+            Err(anyhow!("{why}"))
+        }
+    }
+}
+
+/// True once, when the runtime has just turned up (installed while Cutaway
+/// was running), so NDI sources and outputs can start.
+pub fn take_arrived() -> bool {
+    ARRIVED.swap(false, Ordering::Relaxed)
 }
 
 pub fn available() -> bool {
@@ -572,8 +649,40 @@ mod tests {
         assert_eq!(uv, vec![128, 128]);
         // Without the runtime installed this reports how to get it.
         if !available() {
-            assert!(find_sources(10).unwrap_err().to_string().contains("NDI Tools"));
+            assert!(find_sources(10).unwrap_err().to_string().contains("install it"));
         }
+    }
+
+    /// NDI installed while Cutaway runs is picked up without a restart: a
+    /// stand-in runtime (built with cc) appears in NDI_RUNTIME_DIR_V6 after
+    /// the first look. Changes this process's NDI state, so it runs alone:
+    /// `cargo test picks_ndi_up -- --ignored`.
+    #[test]
+    #[ignore]
+    #[cfg(target_os = "linux")]
+    fn picks_ndi_up_once_installed() {
+        let dir = std::env::temp_dir().join(format!("cutaway-fake-ndi-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("NDI_RUNTIME_DIR_V6", &dir);
+        assert!(!available(), "not installed yet");
+        assert!(!take_arrived());
+        let names = [
+            "find_create_v2", "find_wait_for_sources", "find_get_current_sources", "find_destroy", "recv_create_v3", "recv_destroy", "recv_capture_v2", "recv_free_video_v2", "recv_free_audio_v2",
+        ];
+        let mut c = String::from("#include <stdbool.h>\nbool NDIlib_initialize(void) { return true; }\n");
+        for n in names {
+            c += &format!("void *NDIlib_{n}(void) {{ return 0; }}\n");
+        }
+        std::fs::write(dir.join("fake.c"), c).unwrap();
+        let ok = std::process::Command::new("cc").args(["-shared", "-fPIC", "-o"]).arg(dir.join("libndi.so")).arg(dir.join("fake.c")).status().unwrap();
+        assert!(ok.success());
+        // Still the first answer until it's time to look again.
+        assert!(!available());
+        std::thread::sleep(LOOK_AGAIN + Duration::from_millis(100));
+        assert!(available(), "found once installed");
+        assert!(take_arrived(), "and says so once");
+        assert!(!take_arrived());
+        assert!(available());
     }
 
     /// Send a picture and sound as NDI, and receive it again (needs the NDI

@@ -2833,6 +2833,10 @@ impl App {
                         ui.end_row();
                     }
                 });
+                if items.iter().any(|i| i.what == precheck::NDI && i.level != Level::Ok) {
+                    ui.add_space(6.0);
+                    crate::settings::ndi_offer(ui);
+                }
             });
             ui.add_space(8.0);
             ui.horizontal(|ui| {
@@ -3342,6 +3346,24 @@ impl App {
     }
 }
 
+impl App {
+    /// While NDI's installer is going, look for NDI now and then; when it
+    /// turns up, start what was waiting for it.
+    fn tick_ndi(&mut self, ctx: &egui::Context) {
+        if crate::net::ndi_install::waiting() {
+            let _ = crate::engine::ndi::available();
+            ctx.request_repaint_after(Duration::from_secs(1));
+        }
+        if crate::engine::ndi::take_arrived() {
+            crate::net::ndi_install::reset();
+            if let Some(e) = &self.engine {
+                e.ndi_arrived();
+            }
+            self.toast("NDI is installed and ready".into(), false);
+        }
+    }
+}
+
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
@@ -3352,6 +3374,7 @@ impl eframe::App for App {
         }
         self.tick_comments(&ctx);
         self.tick_uploads();
+        self.tick_ndi(&ctx);
         self.tick_prompter(&ctx);
         self.handle_keys(&ctx);
         self.poll_status();

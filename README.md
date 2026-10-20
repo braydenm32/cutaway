@@ -387,15 +387,22 @@ this if you don't need it; everything else works without it.
 
 ### NDI
 
-NDI is optional. Install the free **NDI Tools** (or the NDI SDK) from
-[ndi.video](https://ndi.video/tools/); Cutaway finds the NDI runtime on its
-own. Then choose **NDI** as a source's type in **Settings → Video sources**
-and pick from the senders it finds. To send the program (and, if you like,
-every source) to the network as NDI, turn it on in **Settings → Screens &
-webcam → NDI output**; it shows how many receivers are watching. PTZ cameras
-on NDI can be steered from Cutaway (see [PTZ cameras](#ptz-cameras)).
-Cutaway doesn't include any NDI code, so nothing changes if it isn't
-installed.
+NDI is optional, and Cutaway doesn't include it. Choose **NDI** as a
+source's type in **Settings → Video sources** and pick from the senders it
+finds. To send the program (and, if you like, every source) to the network
+as NDI, turn it on in **Settings → Screens & webcam → NDI output**; it shows
+how many receivers are watching. PTZ cameras on NDI can be steered from
+Cutaway (see [PTZ cameras](#ptz-cameras)).
+
+If NDI isn't installed, those settings offer **Install NDI…**: it downloads
+NDI's free runtime from NDI and opens its installer, which asks for your
+password. Cutaway picks NDI up as soon as it's installed, without a restart,
+and starts any NDI sources and NDI output that were waiting for it. The
+pre-show check offers the same when a show uses NDI on a computer without
+it. NDI Tools or the NDI SDK from [ndi.video](https://ndi.video/tools/) work
+too. Nothing else changes if NDI isn't installed.
+
+NDI® is a registered trademark of Vizrt NDI AB.
 
 ## Install on Windows
 
@@ -1106,7 +1113,7 @@ and a software GPU:
 - **Whisper captions:** the streaming logic (partial and settled words,
   timing, long speech) with a stand-in recogniser, and whisper.cpp itself
   loading and running a model.
-- **Unit tests:** `cargo test` (176 tests, plus Windows-only ones that run there), including the compositor's
+- **Unit tests:** `cargo test` (179 tests, plus Windows-only ones that run there), including the compositor's
   styling, keying, person masks, transitions and graphics, the voice
   processing, loudness, limiters and leveller, automatic switching,
   auto-framing, captions, lip sync, the podcast, OSC, the WebSocket, the

@@ -19,6 +19,9 @@ pub struct CheckItem {
     pub detail: String,
 }
 
+/// The check for the NDI runtime, when the show uses NDI.
+pub const NDI: &str = "NDI";
+
 fn item(level: Level, what: impl Into<String>, detail: impl Into<String>) -> CheckItem {
     CheckItem { level, what: what.into(), detail: detail.into() }
 }
@@ -62,6 +65,14 @@ impl Engine {
                 out.push(item(Level::Warn, what, "silent right now (muted at the source, or nobody talking?)"));
             } else {
                 out.push(item(Level::Ok, what, format!("{} · level {:.0} dB", a.description(), peak.max(-90.0))));
+            }
+        }
+        // NDI, if the show uses it.
+        let ndi_sources = cfg.sources.iter().any(|s| s.device.trim().to_lowercase().starts_with("ndi:"));
+        if ndi_sources || cfg.ndi_out.program || cfg.ndi_out.sources {
+            match super::ndi::api_ready() {
+                Ok(()) => out.push(item(Level::Ok, NDI, "installed")),
+                Err(_) => out.push(item(Level::Fail, NDI, "isn't installed on this computer, and this show uses it (install it below)")),
             }
         }
         // Recording space.

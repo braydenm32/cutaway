@@ -41,12 +41,14 @@ impl SettingsUi {
             ui.checkbox(&mut n.sources, &format!("send every source too, as \"{} - Cam 1\"…", if n.name.trim().is_empty() { "Cutaway" } else { n.name.trim() }));
             ui.end_row();
         });
-        if (n.program || n.sources) && !crate::engine::ndi::available() {
-            ui.label(RichText::new("⚠ NDI isn't installed on this computer. Install the free NDI Tools from ndi.video/tools, then restart Cutaway.").color(AMBER));
-        }
         match info.ndi_watchers {
             Some(k) => hint(ui, &format!("On the network now; {k} receiver{} watching.", if k == 1 { "" } else { "s" })),
             None => hint(ui, "Other computers, OBS, vMix, NDI Studio Monitor and NDI recorders see it on the same network (NDI adds this computer's name)."),
+        }
+        if n.program || n.sources {
+            super::ndi_offer(ui);
+        } else {
+            super::ndi_credit(ui);
         }
 
         ui.add_space(16.0);
