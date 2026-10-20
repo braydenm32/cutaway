@@ -589,7 +589,12 @@ impl SettingsUi {
         let audio: HashSet<u64> = self.draft.audio.iter().map(|a| a.uid).collect();
         let gone_video: Vec<&SourceConfig> = self.original.sources.iter().filter(|s| s.uid != 0 && !video.contains(&s.uid)).collect();
         let mut names: Vec<String> = gone_video.iter().map(|s| s.name.clone()).collect();
-        names.extend(self.original.audio.iter().filter(|a| a.uid != 0 && !audio.contains(&a.uid)).map(|a| a.name.clone()));
+        for a in self.original.audio.iter().filter(|a| a.uid != 0 && !audio.contains(&a.uid)) {
+            // (A guest spot's input shares its source's name.)
+            if !names.iter().any(|n| n.eq_ignore_ascii_case(&a.name)) {
+                names.push(a.name.clone());
+            }
+        }
         let live = gone_video.iter().filter(|s| on_air.contains(&s.uid)).map(|s| s.name.clone()).collect();
         (names, live)
     }
