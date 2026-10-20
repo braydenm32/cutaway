@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 
 mod panels;
 mod production;
+mod starting;
 mod uploads;
 
 pub mod theme {
@@ -103,6 +104,14 @@ pub struct App {
     save_path: Option<PathBuf>,
     engine: Option<Engine>,
     engine_error: Option<String>,
+    /// The engine being started in the background (the window carries on).
+    starting: Option<starting::Starting>,
+    /// Settings changed again while it was starting: start once more.
+    restart_again: bool,
+    /// Turn the virtual camera on once the engine is up.
+    vcam_wanted: bool,
+    /// Engine starts this session (the slate's take number).
+    starts_count: u32,
     scenes: Vec<Scene>,
     scenes_dirty: bool,
     cfg_dirty: bool,
@@ -211,6 +220,10 @@ impl App {
             save_path,
             engine: None,
             engine_error: None,
+            starting: None,
+            restart_again: false,
+            vcam_wanted: false,
+            starts_count: 0,
             scenes_dirty: false,
             cfg_dirty: false,
             textures: HashMap::new(),
@@ -235,6 +248,7 @@ impl App {
             title_edit: None,
             self_test: None,
         };
+        app.vcam_wanted = app.cfg.display.virtual_camera;
         app.start_engine();
         app.apply_control_settings();
         if app.cfg.ui.check_updates {
@@ -252,28 +266,7 @@ impl App {
                 }
             });
         }
-        if app.cfg.display.virtual_camera {
-            app.set_virtual_camera(true);
-        }
         app
-    }
-
-    fn start_engine(&mut self) {
-        if let Some(mut e) = self.engine.take() {
-            e.shutdown();
-        }
-        self.textures.clear();
-        self.peak_hold.clear();
-        match Engine::start(&self.cfg, self.waker.clone()) {
-            Ok(e) => {
-                *self.remote_shared.program.lock().unwrap() = Some(e.program_preview.clone());
-                self.engine = Some(e);
-                self.engine_error = None;
-            }
-            Err(e) => {
-                self.engine_error = Some(format!("{e:#}"));
-            }
-        }
     }
 
     /// Start or stop the remote server and MIDI to match the settings.
@@ -1088,6 +1081,11 @@ impl App {
 
     fn run_self_test(&mut self, ctx: &egui::Context) {
         let Some((start, step)) = self.self_test else { return };
+        if self.engine.is_none() && step == 0 {
+            // The script runs from when the engine is up.
+            self.self_test = Some((Instant::now(), 0));
+            return;
+        }
         let t = start.elapsed().as_secs_f32();
         ctx.request_repaint_after(Duration::from_millis(100));
         let pip = self.scenes.iter().position(|s| s.name == "Picture in picture").unwrap_or(0);
@@ -1485,6 +1483,10 @@ impl App {
     // ---- monitors --------------------------------------------------------------
 
     fn monitors(&mut self, ui: &mut egui::Ui) {
+        if self.is_starting() {
+            self.starting_screen(ui);
+            return;
+        }
         if let Some(err) = self.engine_error.clone() {
             ui.vertical_centered(|ui| {
                 ui.add_space(80.0);
@@ -3297,7 +3299,7 @@ impl App {
         } else if let Some(e) = &self.engine {
             e.update_config(&new).map_err(|e| format!("{e:#}"))?;
         }
-        let vcam_was = self.engine.as_ref().is_some_and(|e| e.virtual_camera_on());
+        let vcam_was = self.engine.as_ref().is_some_and(|e| e.virtual_camera_on()) || self.starting.as_ref().is_some_and(|s| s.vcam);
         let keep_scenes = std::mem::take(&mut self.cfg.scenes);
         self.cfg = new;
         if self.cfg.scenes.is_empty() {
@@ -3309,13 +3311,9 @@ impl App {
         }
         ctx.set_zoom_factor(self.cfg.ui.scale.clamp(0.5, 3.0));
         if restart {
+            // Starts in the background; the monitors show how it's going.
+            self.vcam_wanted = vcam_was;
             self.start_engine();
-            if vcam_was {
-                self.set_virtual_camera(true);
-            }
-            if let Some(err) = &self.engine_error {
-                return Err(format!("Saved, but the engine didn't start: {err}"));
-            }
         }
         if control_changed {
             self.apply_control_settings();
@@ -3371,6 +3369,7 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.tick_starting(&ctx);
         self.handle_requests();
         self.run_queued();
         if let Some(d) = self.next_queued() {
@@ -3445,6 +3444,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self) {
+        self.finish_starting();
         self.remote = None;
         self.midi = None;
         self.osc = None;
