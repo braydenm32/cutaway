@@ -1216,16 +1216,21 @@ pub fn start_source(cfg: &SourceConfig, slot: Arc<SourceSlot>, audio: Arc<AudioH
     Ok(Box::new(GuestRunning { id, stop, thread: Some(thread) }))
 }
 
+/// The hub is the app's one hub: tests that use it (directly, or by
+/// starting an engine, which attaches to it) take turns.
+#[cfg(test)]
+pub(crate) fn test_turn() -> std::sync::MutexGuard<'static, ()> {
+    static TURN: Mutex<()> = Mutex::new(());
+    TURN.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::{Read, Write};
 
-    /// The hub is the app's one hub: its tests take turns.
-    static TURN: Mutex<()> = Mutex::new(());
-
     fn turn() -> std::sync::MutexGuard<'static, ()> {
-        TURN.lock().unwrap_or_else(|e| e.into_inner())
+        super::test_turn()
     }
 
     fn get(port: u16, path: &str) -> String {

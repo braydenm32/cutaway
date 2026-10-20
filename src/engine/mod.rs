@@ -2151,6 +2151,8 @@ mod tests {
     #[test]
     fn sources_change_while_recording() {
         use crate::config::{AudioConfig, SourceConfig};
+        // (The engine attaches to the guest hub, which the guest tests use.)
+        let _turn = guests::test_turn();
         let dir = std::env::temp_dir().join(format!("cutaway-lineup-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let mut cfg = Config::default();
