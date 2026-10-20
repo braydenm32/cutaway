@@ -8,7 +8,7 @@ use crate::config::{DriveFiles, UploadConfig};
 use crate::engine::recorder::TakeReport;
 use crate::net::google::{self, Auth, Client, Endpoints};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -29,6 +29,9 @@ enum Work {
 
 #[derive(Clone)]
 pub struct Job {
+    /// Jobs are found by this, not by place: the list changes while one
+    /// is uploading (finished ones cleared, failed ones retried).
+    id: u64,
     pub label: String,
     pub take: String,
     pub state: JobState,
@@ -78,6 +81,11 @@ fn all_files(dir: &Path, path: Vec<String>, out: &mut Vec<(PathBuf, Vec<String>)
     }
 }
 
+fn new_id() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
 /// The jobs for a take, as the settings say.
 fn jobs_for(cfg: &Config, report: &TakeReport) -> (Vec<Job>, Vec<String>) {
     let u = &cfg.upload;
@@ -85,6 +93,7 @@ fn jobs_for(cfg: &Config, report: &TakeReport) -> (Vec<Job>, Vec<String>) {
     let mut problems = Vec::new();
     let take = report.folder.file_name().unwrap_or_default().to_string_lossy().to_string();
     let job = |label: String, work: Work| Job {
+        id: new_id(),
         label,
         take: take.clone(),
         state: JobState::Waiting,
@@ -205,55 +214,59 @@ impl Uploads {
     /// Queue jobs and make sure they're being worked on.
     fn add(&mut self, jobs: Vec<Job>, status: Option<Arc<Mutex<crate::engine::Status>>>, waker: Waker) {
         self.jobs.lock().unwrap().extend(jobs);
+        self.work(status, waker);
+    }
+
+    /// Work through the waiting jobs, one at a time, unless that's already
+    /// happening.
+    fn work(&mut self, status: Option<Arc<Mutex<crate::engine::Status>>>, waker: Waker) {
         if self.running.swap(true, Ordering::SeqCst) {
             return;
         }
         let (list, running) = (self.jobs.clone(), self.running.clone());
-        let _ = std::thread::Builder::new().name("uploads".into()).spawn(move || {
+        let spawned = std::thread::Builder::new().name("uploads".into()).spawn(move || {
             loop {
                 let next = {
                     let mut l = list.lock().unwrap();
-                    let i = l.iter().position(|j| j.state == JobState::Waiting);
-                    if let Some(i) = i {
-                        l[i].state = JobState::Uploading;
-                    }
-                    i.map(|i| (i, l[i].clone()))
+                    l.iter_mut().find(|j| j.state == JobState::Waiting).map(|j| {
+                        j.state = JobState::Uploading;
+                        j.clone()
+                    })
                 };
-                let Some((i, job)) = next else { break };
+                let Some(job) = next else { break };
                 waker();
                 let update = |s: u64, t: u64| {
-                    if let Some(j) = list.lock().unwrap().get_mut(i) {
+                    if let Some(j) = list.lock().unwrap().iter_mut().find(|j| j.id == job.id) {
                         (j.sent, j.total) = (s, t);
                     }
                     waker();
                 };
                 let result = run(&job, &update);
-                let text = {
-                    let mut l = list.lock().unwrap();
-                    let j = &mut l[i];
-                    match result {
-                        Ok(link) => {
-                            j.state = JobState::Done;
-                            j.link = Some(link.clone());
-                            (crate::engine::LogLevel::Info, format!("Uploaded {} to {}: {link}", job.take, job.label))
-                        }
-                        Err(_) if job.cancel.load(Ordering::Relaxed) => {
-                            j.state = JobState::Cancelled;
-                            (crate::engine::LogLevel::Info, format!("Upload of {} to {} cancelled", job.take, job.label))
-                        }
-                        Err(e) => {
-                            j.state = JobState::Failed(e.clone());
-                            (crate::engine::LogLevel::Warning, format!("Upload of {} to {} failed: {e}", job.take, job.label))
-                        }
-                    }
+                let (level, text) = match &result {
+                    Ok(link) => (crate::engine::LogLevel::Info, format!("Uploaded {} to {}: {link}", job.take, job.label)),
+                    Err(_) if job.cancel.load(Ordering::Relaxed) => (crate::engine::LogLevel::Info, format!("Upload of {} to {} cancelled", job.take, job.label)),
+                    Err(e) => (crate::engine::LogLevel::Warning, format!("Upload of {} to {} failed: {e}", job.take, job.label)),
                 };
+                if let Some(j) = list.lock().unwrap().iter_mut().find(|j| j.id == job.id) {
+                    j.state = match result {
+                        Ok(link) => {
+                            j.link = Some(link);
+                            JobState::Done
+                        }
+                        Err(_) if job.cancel.load(Ordering::Relaxed) => JobState::Cancelled,
+                        Err(e) => JobState::Failed(e),
+                    };
+                }
                 if let Some(st) = &status {
-                    st.lock().unwrap().push(text.0, text.1);
+                    st.lock().unwrap().push(level, text);
                 }
                 waker();
             }
             running.store(false, Ordering::SeqCst);
         });
+        if spawned.is_err() {
+            self.running.store(false, Ordering::SeqCst);
+        }
     }
 }
 
@@ -324,7 +337,7 @@ impl App {
         }
         let mut clear_done = false;
         let mut retry = None;
-        for (i, j) in jobs.iter().enumerate() {
+        for j in &jobs {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(&j.label).size(12.0).strong());
                 ui.add(egui::Label::new(RichText::new(&j.take).size(11.5).color(TEXT_DIM)).truncate());
@@ -334,7 +347,7 @@ impl App {
                     ui.label(RichText::new("waiting").size(11.5).color(TEXT_DIM));
                     if ui.small_button("✕").on_hover_text("Don't upload it").clicked() {
                         j.cancel.store(true, Ordering::Relaxed);
-                        if let Some(x) = self.uploads.jobs.lock().unwrap().get_mut(i) {
+                        if let Some(x) = self.uploads.jobs.lock().unwrap().iter_mut().find(|x| x.id == j.id && x.state == JobState::Waiting) {
                             x.state = JobState::Cancelled;
                         }
                     }
@@ -358,7 +371,7 @@ impl App {
                 JobState::Failed(e) => {
                     ui.add(egui::Label::new(RichText::new(format!("⚠ {e}")).size(11.5).color(AMBER)).wrap());
                     if ui.small_button("Retry").clicked() {
-                        retry = Some(i);
+                        retry = Some(j.id);
                     }
                 }
                 JobState::Cancelled => {
@@ -370,11 +383,17 @@ impl App {
         if jobs.iter().any(|j| j.state == JobState::Uploading) {
             ui.ctx().request_repaint_after(Duration::from_millis(500));
         }
-        if let Some(i) = retry {
-            let job = self.uploads.jobs.lock().unwrap().remove(i);
-            let fresh = Job { state: JobState::Waiting, sent: 0, total: 0, cancel: Arc::new(AtomicBool::new(false)), refresh: self.cfg.upload.refresh_token.clone(), client: client_of(&self.cfg.upload), ..job };
+        if let Some(id) = retry {
+            // Again, in its place, with the sign-in as it is now.
+            if let Some(j) = self.uploads.jobs.lock().unwrap().iter_mut().find(|j| j.id == id) {
+                j.state = JobState::Waiting;
+                (j.sent, j.total) = (0, 0);
+                j.cancel = Arc::new(AtomicBool::new(false));
+                j.refresh = self.cfg.upload.refresh_token.clone();
+                j.client = client_of(&self.cfg.upload);
+            }
             let status = self.engine.as_ref().map(|e| e.status.clone());
-            self.uploads.add(vec![fresh], status, self.waker.clone());
+            self.uploads.work(status, self.waker.clone());
         }
         if clear_done && ui.small_button("Clear finished").clicked() {
             self.uploads.jobs.lock().unwrap().retain(|j| !matches!(j.state, JobState::Done | JobState::Cancelled));
@@ -426,6 +445,43 @@ mod tests {
                 assert!(files.iter().any(|(f, path)| f.ends_with("Guest_1_backup.webm") && path == &vec!["Guests".to_string()]));
             }
         }
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    #[test]
+    fn clearing_finished_ones_while_one_uploads() {
+        let g = crate::net::google::tests::fake_google(0);
+        let dir = std::env::temp_dir().join(format!("cutaway-upclear-{}", std::process::id())).join("Take_2");
+        let report = take(&dir);
+        let mut cfg = Config::default();
+        cfg.upload = UploadConfig { refresh_token: "r1".into(), granted: vec!["drive".into()], drive: true, ..Default::default() };
+        let (mut jobs, _) = jobs_for(&cfg, &report);
+        let mut job = jobs.remove(0);
+        job.client = crate::net::google::tests::client(g.port);
+        let finished = Job { id: new_id(), state: JobState::Done, ..job.clone() };
+        let failed = Job { id: new_id(), state: JobState::Failed("offline".into()), ..job.clone() };
+        let (job_id, failed_id) = (job.id, failed.id);
+        let mut up = Uploads::default();
+        up.jobs.lock().unwrap().extend([finished, failed]);
+        // As soon as it starts, "Clear finished" (the list shifts under it).
+        let list = up.jobs.clone();
+        let cleared = Arc::new(AtomicBool::new(false));
+        let c2 = cleared.clone();
+        let waker: Waker = Arc::new(move || {
+            if !c2.swap(true, Ordering::SeqCst) {
+                list.lock().unwrap().retain(|j| !matches!(j.state, JobState::Done | JobState::Cancelled));
+            }
+        });
+        up.add(vec![job], None, waker);
+        let t0 = Instant::now();
+        while up.running.load(Ordering::SeqCst) && t0.elapsed() < Duration::from_secs(20) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let l = up.jobs.lock().unwrap();
+        assert_eq!(l.len(), 2);
+        assert_eq!(l.iter().find(|j| j.id == job_id).unwrap().state, JobState::Done, "the upload finished in its own entry");
+        assert_eq!(l.iter().find(|j| j.id == failed_id).unwrap().state, JobState::Failed("offline".into()), "the others untouched");
+        drop(l);
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }
 

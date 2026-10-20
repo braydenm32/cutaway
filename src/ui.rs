@@ -949,6 +949,10 @@ impl App {
         if self.last_publish.elapsed() < Duration::from_millis(150) {
             return;
         }
+        // Nobody to tell: the remote, OSC and MIDI are all off.
+        if self.remote.is_none() && self.osc.is_none() && self.midi.is_none() {
+            return;
+        }
         self.last_publish = Instant::now();
         let Some(state) = self.show_state() else { return };
         if self.remote.is_some() {

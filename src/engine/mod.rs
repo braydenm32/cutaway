@@ -1500,17 +1500,6 @@ impl CompositorLoop {
                     }
                 }
             }
-            for (i, slot) in self.slots.iter().enumerate() {
-                if let Some(f) = slot.pick(t) {
-                    self.comp.upload(i, &f);
-                    // Background removal: the mask made from this picture.
-                    match self.masks.get(i).filter(|m| m.on.load(Ordering::Relaxed)).and_then(|m| m.pick(f.pts)) {
-                        Some((pts, mask)) => self.comp.upload_mask(i, pts, &mask),
-                        None => self.comp.clear_mask(i),
-                    }
-                }
-            }
-
             // Who wants this frame?
             let (program_tx, stream, listeners, tall_tx, tall_stream) = {
                 let taps = self.taps.lock().unwrap();
@@ -1574,6 +1563,7 @@ impl CompositorLoop {
                 self.comp.set_black(self.switcher.black_level());
                 let layout = self.switcher.layout();
                 // The vertical version follows the same scenes.
+                let mut tall_sources = Vec::new();
                 if let Some((cfg, framing)) = &self.tall_on {
                     let (w, h) = cfg.size();
                     let aspect = w as f32 / h as f32;
@@ -1589,7 +1579,28 @@ impl CompositorLoop {
                         Some(f) => vertical::compose(Some(&frames_of(&f)), &to_frames, k),
                         None => to_frames,
                     };
+                    if wants.tall || wants.tall_preview {
+                        tall_sources = frames.iter().filter(|f| f.alpha > 0.001).map(|f| f.source).collect();
+                    }
                     self.comp.set_tall_frames(frames);
+                }
+                // New pictures, for the sources this frame draws: on air (both
+                // scenes mid-transition), the preview bus, the multiview tiles
+                // and the vertical version. The rest keep their last picture on
+                // the GPU, rather than every camera being copied every frame.
+                let drawn = sources_drawn(self.slots.len(), &layout, bus.as_deref(), &wants.thumbs, &tall_sources);
+                for (i, slot) in self.slots.iter().enumerate() {
+                    if !drawn[i] {
+                        continue;
+                    }
+                    if let Some(f) = slot.pick(t) {
+                        self.comp.upload(i, &f);
+                        // Background removal: the mask made from this picture.
+                        match self.masks.get(i).filter(|m| m.on.load(Ordering::Relaxed)).and_then(|m| m.pick(f.pts)) {
+                            Some((pts, mask)) => self.comp.upload_mask(i, pts, &mask),
+                            None => self.comp.clear_mask(i),
+                        }
+                    }
                 }
                 if let switcher::Layout::Stinger { elapsed, .. } = &layout {
                     let f = self.stinger.frame_at(*elapsed);
@@ -1683,6 +1694,36 @@ impl CompositorLoop {
     }
 }
 
+/// Which sources a frame draws (by index): any shown in the layout (both
+/// scenes of a transition), the preview bus, the multiview tiles being
+/// redrawn, and the vertical version's frames.
+fn sources_drawn(n: usize, layout: &switcher::Layout, bus: Option<&[crate::scene::PadState]>, thumbs: &[usize], tall: &[usize]) -> Vec<bool> {
+    let mut drawn = vec![false; n];
+    let mut mark = |states: &[crate::scene::PadState]| {
+        for (i, s) in states.iter().enumerate().take(n) {
+            if s.alpha > 0.001 {
+                drawn[i] = true;
+            }
+        }
+    };
+    match layout {
+        switcher::Layout::One(states) | switcher::Layout::Stinger { states, .. } => mark(states),
+        switcher::Layout::Two { from, to, .. } => {
+            mark(from);
+            mark(to);
+        }
+    }
+    if let Some(b) = bus {
+        mark(b);
+    }
+    for &i in thumbs.iter().chain(tall) {
+        if let Some(d) = drawn.get_mut(i) {
+            *d = true;
+        }
+    }
+    drawn
+}
+
 pub fn fmt_duration(d: Duration) -> String {
     let s = d.as_secs();
     format!("{:02}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60)
@@ -1691,6 +1732,24 @@ pub fn fmt_duration(d: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn draws_only_what_it_needs() {
+        use crate::scene::PadState;
+        let on = PadState { alpha: 1.0, ..PadState::HIDDEN };
+        let off = PadState::HIDDEN;
+        let which = |d: Vec<bool>| d.iter().enumerate().filter(|(_, &x)| x).map(|(i, _)| i).collect::<Vec<_>>();
+        // Source 1 on air; nothing else this frame.
+        let one = switcher::Layout::One(vec![off, on, off, off]);
+        assert_eq!(which(sources_drawn(4, &one, None, &[], &[])), vec![1]);
+        // Mid-transition from 0 to 2, 3 in preview, tiles for all, 1 in the vertical version.
+        let two = switcher::Layout::Two { from: vec![on, off, off, off], to: vec![off, off, on, off], mode: crate::config::TransitionMode::Wipe, t: 0.5, direction: [1.0, 0.0], dip: [0.0; 3] };
+        assert_eq!(which(sources_drawn(4, &two, Some(&[off, off, off, on]), &[], &[])), vec![0, 2, 3]);
+        assert_eq!(which(sources_drawn(4, &two, None, &[0, 1, 2, 3], &[])), vec![0, 1, 2, 3]);
+        assert_eq!(which(sources_drawn(4, &one, None, &[], &[3])), vec![1, 3]);
+        // Indices past the end are ignored.
+        assert_eq!(which(sources_drawn(2, &one, None, &[7], &[9])), vec![1]);
+    }
 
     #[test]
     fn grid() {

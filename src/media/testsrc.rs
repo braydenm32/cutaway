@@ -71,6 +71,10 @@ fn hue(h: f32) -> (f32, f32, f32) {
 pub struct TestPattern {
     pattern: String,
     base: Option<Nv12Image>,
+    /// Pinwheel and spokes: each pixel's angle around the centre (a turn is
+    /// 65536). Circular: its distance from the centre (256 to a ring).
+    /// Worked out once, so a frame is cheap to draw.
+    polar: Vec<u32>,
     width: usize,
     height: usize,
     seed: u64,
@@ -80,7 +84,7 @@ impl TestPattern {
     pub fn new(pattern: &str, width: u32, height: u32) -> Self {
         // "clap" (for lip-sync testing) isn't offered as a picture.
         let pattern = if PATTERNS.contains(&pattern) || pattern == "clap" || pattern == "people" { pattern.to_string() } else { "smpte".to_string() };
-        TestPattern { pattern, base: None, width: width as usize, height: height as usize, seed: 0x9E37_79B9_7F4A_7C15 }
+        TestPattern { pattern, base: None, polar: Vec::new(), width: width as usize, height: height as usize, seed: 0x9E37_79B9_7F4A_7C15 }
     }
 
     fn bars(w: usize, h: usize) -> Nv12Image {
@@ -143,19 +147,36 @@ impl TestPattern {
             }
             "pinwheel" | "spokes" | "circular" => {
                 let mut img = Nv12Image::new(w, h);
-                let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
-                let spin = if self.pattern == "spokes" { t * 0.2 } else { t * 0.6 };
-                let wedges = if self.pattern == "spokes" { 48.0 } else { 24.0 };
-                for y in 0..h {
-                    for x in 0..w {
-                        let (dx, dy) = (x as f64 - cx, y as f64 - cy);
-                        let on = if self.pattern == "circular" {
-                            ((dx * dx + dy * dy).sqrt() / (h as f64 / 24.0) - t * 2.0).rem_euclid(2.0) < 1.0
-                        } else {
-                            ((dy.atan2(dx) / std::f64::consts::TAU + spin) * wedges).rem_euclid(2.0) < 1.0
-                        };
-                        if on {
-                            img.y[y * w + x] = 235;
+                let circular = self.pattern == "circular";
+                if self.polar.len() != w * h {
+                    let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
+                    self.polar = (0..w * h)
+                        .map(|i| {
+                            let (dx, dy) = ((i % w) as f64 - cx, (i / w) as f64 - cy);
+                            if circular {
+                                ((dx * dx + dy * dy).sqrt() / (h as f64 / 24.0) * 256.0) as u32
+                            } else {
+                                ((dy.atan2(dx) / std::f64::consts::TAU).rem_euclid(1.0) * 65536.0) as u32 & 0xFFFF
+                            }
+                        })
+                        .collect();
+                }
+                if circular {
+                    // Rings moving out: on where (distance - 2t) is in an even ring.
+                    let shift = ((t * 2.0).rem_euclid(2.0) * 256.0) as u32;
+                    for (px, &d) in img.y.iter_mut().zip(&self.polar) {
+                        if ((d + 512 - shift) >> 8) & 1 == 0 {
+                            *px = 235;
+                        }
+                    }
+                } else {
+                    // Turning wedges (an even number, so whole turns don't matter).
+                    let spin = if self.pattern == "spokes" { t * 0.2 } else { t * 0.6 };
+                    let wedges: u32 = if self.pattern == "spokes" { 48 } else { 24 };
+                    let phase = (spin.rem_euclid(1.0) * 65536.0) as u32;
+                    for (px, &a) in img.y.iter_mut().zip(&self.polar) {
+                        if ((((a + phase) & 0xFFFF) * wedges) >> 16) & 1 == 0 {
+                            *px = 235;
                         }
                     }
                 }
@@ -313,6 +334,34 @@ impl TestTone {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The quick way of drawing the turning patterns matches the formula.
+    #[test]
+    fn turning_patterns_match_the_formula() {
+        let (w, h) = (160usize, 90usize);
+        for (pattern, at) in [("pinwheel", 0.37), ("spokes", 12.9), ("circular", 3.21), ("circular", 0.0), ("pinwheel", 2000.5)] {
+            let mut tp = TestPattern::new(pattern, w as u32, h as u32);
+            let img = tp.render((at * 1e9) as Ns + 500_000_000, 30);
+            let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
+            let t = at + 0.5;
+            let mut differ = 0;
+            for y in 0..h - (h / 16).max(2) {
+                for x in (h / 8).max(8)..w {
+                    let (dx, dy) = (x as f64 - cx, y as f64 - cy);
+                    let want = if pattern == "circular" {
+                        ((dx * dx + dy * dy).sqrt() / (h as f64 / 24.0) - t * 2.0).rem_euclid(2.0) < 1.0
+                    } else {
+                        let (spin, wedges) = if pattern == "spokes" { (t * 0.2, 48.0) } else { (t * 0.6, 24.0) };
+                        ((dy.atan2(dx) / std::f64::consts::TAU + spin) * wedges).rem_euclid(2.0) < 1.0
+                    };
+                    if want != (img.y[y * w + x] == 235) {
+                        differ += 1;
+                    }
+                }
+            }
+            assert!(differ < w * h / 100, "{pattern} at {at}: {differ} pixels differ");
+        }
+    }
 
     #[test]
     fn patterns_render_and_flash() {

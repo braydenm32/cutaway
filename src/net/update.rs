@@ -42,12 +42,65 @@ pub fn parse(json: &str, current: &str) -> Result<Option<Release>> {
     if v["draft"].as_bool() == Some(true) || v["prerelease"].as_bool() == Some(true) || !is_newer(tag, current) {
         return Ok(None);
     }
-    let notes: String = v["body"].as_str().unwrap_or("").trim().chars().take(1200).collect();
+    let notes = readable_notes(v["body"].as_str().unwrap_or(""));
     Ok(Some(Release {
         version: tag.trim_start_matches(['v', 'V']).to_string(),
         url: v["html_url"].as_str().map(str::to_string).unwrap_or_else(|| format!("https://github.com/{REPO}/releases/latest")),
         notes,
     }))
+}
+
+/// The release notes as plain text for the update window: what's new
+/// (not the download table above it), without the Markdown marks, cut to a
+/// readable length at a line.
+pub fn readable_notes(body: &str) -> String {
+    let lines: Vec<&str> = body.lines().collect();
+    let from = lines.iter().position(|l| l.trim_start().starts_with('#') && l.to_lowercase().contains("new in")).map(|i| i + 1).unwrap_or(0);
+    let mut out: Vec<String> = Vec::new();
+    for l in &lines[from..] {
+        let t = l.trim();
+        if t.starts_with('|') {
+            continue;
+        }
+        let t = t.trim_start_matches('#').trim();
+        let t = match t.strip_prefix("- ").or_else(|| t.strip_prefix("* ")) {
+            Some(rest) => format!("• {rest}"),
+            None => t.to_string(),
+        };
+        let t = plain_links(&t.replace("**", "").replace('`', ""));
+        if t.is_empty() && out.last().is_none_or(|l| l.is_empty()) {
+            continue;
+        }
+        out.push(t);
+    }
+    while out.last().is_some_and(|l| l.is_empty()) {
+        out.pop();
+    }
+    let mut text = String::new();
+    for l in out {
+        if text.chars().count() + l.chars().count() > 1200 {
+            text.push('…');
+            break;
+        }
+        text.push_str(&l);
+        text.push('\n');
+    }
+    text.trim_end().to_string()
+}
+
+/// "[the README](https://…)" → "the README".
+fn plain_links(s: &str) -> String {
+    let mut out = String::new();
+    let mut rest = s;
+    while let Some(open) = rest.find('[') {
+        let Some(mid) = rest[open..].find("](").map(|i| open + i) else { break };
+        let Some(close) = rest[mid..].find(')').map(|i| mid + i) else { break };
+        out.push_str(&rest[..open]);
+        out.push_str(&rest[open + 1..mid]);
+        rest = &rest[close + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Ask GitHub (a few seconds at most).
@@ -89,6 +142,17 @@ mod tests {
         let r = check("0.0.1");
         println!("{r:?}");
         assert!(r.is_ok());
+    }
+
+    #[test]
+    fn notes_read_as_plain_text() {
+        let body = "## Download\n\n| For | File |\n|---|---|\n| Mac | **Cutaway.zip** |\n\nThe apps aren't signed yet.\n\n## New in 0.6.1\n\n**Production**\n- Fade to black, `ftb`.\n- See [the README](https://github.com/x#readme).\n\n\n";
+        assert_eq!(readable_notes(body), "Production\n• Fade to black, ftb.\n• See the README.");
+        // Without a "New in" heading: all of it, tables left out.
+        assert_eq!(readable_notes("Fixes.\n| a | b |\n"), "Fixes.");
+        let long = format!("## New in 1.0\n{}", "- a line of notes\n".repeat(200));
+        let short = readable_notes(&long);
+        assert!(short.chars().count() <= 1201 && short.ends_with('…'), "{}", short.len());
     }
 
     #[test]
