@@ -168,7 +168,8 @@ fn rule_levels(cfg: &AutoSwitchConfig, inputs: &[(String, Arc<InputShared>)]) ->
 pub struct AutoSwitcher {
     pub shared: Arc<AutoShared>,
     pub cfg: Arc<Mutex<Config>>,
-    pub inputs: Vec<(String, Arc<InputShared>)>,
+    /// The audio inputs by name (they change when inputs are added or removed).
+    pub inputs: Arc<Mutex<Vec<(String, Arc<InputShared>)>>>,
     pub switcher: Arc<Switcher>,
     /// Does the switching (applies scene audio too).
     pub take: Box<dyn Fn(&Scene) + Send>,
@@ -185,11 +186,11 @@ impl AutoSwitcher {
         while !self.stop.load(Ordering::Relaxed) {
             std::thread::sleep(Duration::from_millis(50));
             let now = Instant::now();
-            let cfg = self.cfg.lock().unwrap().clone();
-            let a = &cfg.auto_switch;
+            // Only its own settings (this runs twenty times a second).
+            let a = &self.cfg.lock().unwrap().auto_switch.clone();
             let enabled = self.shared.enabled.load(Ordering::Relaxed);
             let pause_left = self.shared.last_manual.lock().unwrap().map(|m| (a.manual_pause_s - now.duration_since(m).as_secs_f32()).max(0.0)).unwrap_or(0.0);
-            let levels = rule_levels(a, &self.inputs);
+            let levels = rule_levels(a, &self.inputs.lock().unwrap());
             let live = self.switcher.live();
             let decision = if enabled {
                 director.decide(&Tick { now, cfg: a, levels: &levels, live: &live.name, manual_pause_left: pause_left })
@@ -198,7 +199,8 @@ impl AutoSwitcher {
                 None
             };
             if let Some(name) = decision {
-                match cfg.effective_scenes().into_iter().find(|s| s.name.eq_ignore_ascii_case(&name)) {
+                let scenes = self.cfg.lock().unwrap().effective_scenes();
+                match scenes.into_iter().find(|s| s.name.eq_ignore_ascii_case(&name)) {
                     Some(scene) => (self.take)(&scene),
                     None if warned_missing != name => {
                         warned_missing = name.clone();

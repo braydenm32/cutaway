@@ -505,6 +505,13 @@ impl GuestHub {
         }
     }
 
+    /// The engine's audio inputs changed (added, removed or moved).
+    pub fn set_engine_inputs(&self, inputs: Vec<(String, usize)>) {
+        if let Some(e) = self.inner.lock().unwrap().engine.as_mut() {
+            e.inputs = inputs;
+        }
+    }
+
     pub fn detach_engine(&self) {
         let mut inner = self.inner.lock().unwrap();
         inner.engine = None;

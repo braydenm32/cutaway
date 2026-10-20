@@ -202,7 +202,7 @@ impl Engine {
             let keep = out.clip_seconds.max(cfg.replay.seconds.ceil() as u32).clamp(5, 600);
             self.clips.start(folder.clone(), fps, brand, audio_cfg.clone(), keep);
             let (path, vtx, muxes) = add_video("Program".into(), format!("Program.{ext}"), fps, (cw, ch), true, rate, None, (fps as usize / 2).max(8), track_cfgs.clone(), Some(self.clips.clone()));
-            export_files.push(ExportFile { path, name: "Program".into(), width: cw, height: ch, fps, has_audio: audio_cfg.is_some(), source: None, tc_frame: tc_for(fps) });
+            export_files.push(ExportFile { path, name: "Program".into(), width: cw, height: ch, fps, has_audio: audio_cfg.is_some(), source: None, tc_frame: tc_for(fps), length: None });
             self.video_taps.lock().unwrap().program = Some(ProgramTap { tx: vtx, from: t0 });
             program_muxes = muxes;
         }
@@ -216,10 +216,12 @@ impl Engine {
         }
 
         // One file per source.
+        let mut iso_slots = Vec::new();
         for (i, s) in self.sources.iter().enumerate() {
             if !s.record {
                 continue;
             }
+            iso_slots.push((s.name.clone(), s.slot.clone()));
             let label = format!("ISO {} ({})", i + 1, s.name);
             let file = format!("ISO_{:02}_{}.{ext}", i + 1, safe_file_name(&s.name));
             let with_audio = out.iso_audio && audio_cfg.is_some();
@@ -228,7 +230,8 @@ impl Engine {
             // starves the camera's buffer pool.
             let retimer = Some(recorder::Retimer::new(t0, s.fps, s.slot.delay));
             let (path, vtx, _) = add_video(label, file, s.fps, s.size, with_audio, rate, retimer, 8, Vec::new(), None);
-            export_files.push(ExportFile { path, name: s.name.clone(), width: s.size.0, height: s.size.1, fps: s.fps, has_audio: with_audio, source: Some(i), tc_frame: tc_for(s.fps) });
+            // (By identity: the switch log's angles stay right if sources move.)
+            export_files.push(ExportFile { path, name: s.name.clone(), width: s.size.0, height: s.size.1, fps: s.fps, has_audio: with_audio, source: Some(s.uid as usize), tc_frame: tc_for(s.fps), length: None });
             s.slot.start_iso_tap(vtx, t0);
         }
 
@@ -258,10 +261,12 @@ impl Engine {
         }
 
         // WAVs.
+        let mut raw_inputs = Vec::new();
         for (i, a) in self.audio.iter().enumerate() {
             if !a.record {
                 continue;
             }
+            raw_inputs.push(a.shared.clone());
             let base = folder.join(format!("Audio_{:02}_{}", i + 1, safe_file_name(&a.name)));
             let (wtx, wrx) = bounded(3000);
             wavs.push((a.name.clone(), recorder::spawn_wav(wrx, base, out.wav_bit_depth, a.split, t0, t1.clone(), self.status.clone(), opts.clone())));
@@ -275,7 +280,7 @@ impl Engine {
             t1,
             started: Instant::now(),
             first_scene: live.name.clone(),
-            first_angle: live.full_frame_source(),
+            first_angle: self.switcher.angle_now(),
             video_jobs,
             audio_job,
             track_jobs,
@@ -286,6 +291,8 @@ impl Engine {
             opts,
             export_files,
             tc_seconds: tc_secs,
+            iso_slots,
+            raw_inputs,
         };
         *self.take_monitor.lock().unwrap() = Some(TakeMonitor::new(folder.clone(), backup_folder.clone(), stats));
         {
@@ -362,8 +369,9 @@ impl Engine {
         (self.waker)();
 
         let taps = self.video_taps.clone();
-        let slots: Vec<(String, Arc<super::sources::SourceSlot>)> = self.sources.iter().map(|s| (s.name.clone(), s.slot.clone())).collect();
-        let inputs: Vec<Arc<audio::InputShared>> = self.audio.iter().map(|a| a.shared.clone()).collect();
+        // The take's own: sources may have been added or removed since it started.
+        let slots = take.iso_slots.clone();
+        let inputs = take.raw_inputs.clone();
         let mix_taps = self.mix_taps.clone();
         let monitor = self.take_monitor.clone();
         let (status, switcher, waker) = (self.status.clone(), self.switcher.clone(), self.waker.clone());

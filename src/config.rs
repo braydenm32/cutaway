@@ -3,6 +3,7 @@
 use crate::scene::Scene;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -533,6 +534,10 @@ pub struct SourceConfig {
     /// Pan, tilt and zoom: a PTZ camera's controls, or a virtual one's
     /// (device "vptz:<source>") presets.
     pub ptz: PtzConfig,
+    /// Which source this is while Cutaway runs (never saved): a settings
+    /// change finds the same source by it, however it was renamed or moved.
+    #[serde(skip)]
+    pub uid: u64,
 }
 
 /// How a PTZ camera is moved.
@@ -849,6 +854,35 @@ impl SourceLook {
     }
 }
 
+/// A source's settings without those that change while it runs (its look,
+/// playlist, framing, PTZ and whether it's recorded): if these differ, the
+/// source is reopened.
+pub fn source_key(s: &SourceConfig) -> SourceConfig {
+    SourceConfig { look: SourceLook::default(), media: MediaConfig::default(), framing: FramingConfig::default(), ptz: PtzConfig::default(), record: true, ..s.clone() }
+}
+
+/// The same for an audio input (level, routing, processing, ducking and
+/// recording change while it runs).
+pub fn audio_key(a: &AudioConfig) -> AudioConfig {
+    AudioConfig {
+        gain_db: 0.0,
+        in_program: true,
+        to_recording: true,
+        to_stream: true,
+        processing: VoiceProcessing::default(),
+        duck: false,
+        record: true,
+        split_channels: false,
+        ..a.clone()
+    }
+}
+
+/// A new identity for a source or input.
+pub fn next_uid() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 impl Default for SourceConfig {
     fn default() -> Self {
         Self {
@@ -864,6 +898,7 @@ impl Default for SourceConfig {
             network_latency_ms: 300,
             framing: FramingConfig::default(),
             ptz: PtzConfig::default(),
+            uid: 0,
         }
     }
 }
@@ -898,6 +933,9 @@ pub struct AudioConfig {
     pub processing: VoiceProcessing,
     /// Turned down automatically while others talk (music, pads, ambience).
     pub duck: bool,
+    /// Which input this is while Cutaway runs (never saved), as for sources.
+    #[serde(skip)]
+    pub uid: u64,
 }
 
 /// A channel strip for a microphone. Off by default: a DAW's output is
@@ -972,6 +1010,7 @@ impl Default for AudioConfig {
             to_stream: true,
             processing: VoiceProcessing::default(),
             duck: false,
+            uid: 0,
         }
     }
 }
@@ -1719,37 +1758,37 @@ impl Config {
         c
     }
 
+    /// Changes that rebuild the whole engine: the program's size and rate.
+    /// (Sources and inputs change live: see `lineup_changed`.)
     pub fn needs_restart(&self, other: &Config) -> bool {
-        let strip = |a: &[AudioConfig]| -> Vec<AudioConfig> {
-            a.iter()
-                .cloned()
-                .map(|mut x| {
-                    x.gain_db = 0.0;
-                    x.in_program = true;
-                    x.to_recording = true;
-                    x.to_stream = true;
-                    x.processing = VoiceProcessing::default();
-                    x.duck = false;
-                    x
-                })
-                .collect()
-        };
-        let strip_sources = |s: &[SourceConfig]| -> Vec<SourceConfig> {
-            s.iter()
-                .cloned()
-                .map(|mut x| {
-                    x.look = SourceLook::default();
-                    x.media = MediaConfig::default();
-                    x.framing = FramingConfig::default();
-                    // Applied live, except a virtual camera's parent (its device).
-                    x.ptz = PtzConfig::default();
-                    x
-                })
-                .collect()
-        };
-        strip_sources(&self.sources) != strip_sources(&other.sources)
-            || strip(&self.audio) != strip(&other.audio)
-            || self.program != other.program
+        self.program != other.program
+    }
+
+    /// Sources or audio inputs added, removed, moved or changed in a way
+    /// that reopens them (applied live, source by source).
+    pub fn lineup_changed(&self, other: &Config) -> bool {
+        let video = |c: &Config| c.sources.iter().map(source_key).collect::<Vec<_>>();
+        let audio = |c: &Config| c.audio.iter().map(audio_key).collect::<Vec<_>>();
+        video(self) != video(other) || audio(self) != audio(other)
+    }
+
+    /// Give every source and input an identity (new ones, and copies that
+    /// share one).
+    pub fn assign_uids(&mut self) {
+        let mut seen = HashSet::new();
+        for s in &mut self.sources {
+            if s.uid == 0 || !seen.insert(s.uid) {
+                s.uid = next_uid();
+                seen.insert(s.uid);
+            }
+        }
+        let mut seen = HashSet::new();
+        for a in &mut self.audio {
+            if a.uid == 0 || !seen.insert(a.uid) {
+                a.uid = next_uid();
+                seen.insert(a.uid);
+            }
+        }
     }
 
     pub fn load(path: &Path) -> Result<Self> {
@@ -1968,8 +2007,40 @@ mod tests {
         b.streaming.video_bitrate_kbps = 4500;
         b.output.container = Container::Mov;
         assert!(!a.needs_restart(&b), "gain/stream/output changes apply live");
+        assert!(!a.lineup_changed(&b));
         b.program.fps = 60;
         assert!(a.needs_restart(&b));
+    }
+
+    #[test]
+    fn sources_keep_who_they_are() {
+        let mut a = Config::default();
+        a.sources = vec![SourceConfig { name: "Wide".into(), ..Default::default() }, SourceConfig { name: "Host".into(), ..Default::default() }];
+        a.audio.push(AudioConfig::default());
+        a.assign_uids();
+        let (wide, host, mic) = (a.sources[0].uid, a.sources[1].uid, a.audio[0].uid);
+        assert!(wide != 0 && host != 0 && wide != host && mic != 0);
+        // A copy keeps them (settings work on one); a duplicate gets its own.
+        let mut b = a.clone();
+        assert!(!a.lineup_changed(&b));
+        b.sources.push(b.sources[0].clone());
+        b.assign_uids();
+        assert_eq!((b.sources[0].uid, b.sources[1].uid), (wide, host));
+        assert!(b.sources[2].uid != wide && b.sources[2].uid != 0);
+        assert!(a.lineup_changed(&b), "a source added");
+        // Live changes don't reopen; a new device or a move does.
+        let mut c = a.clone();
+        c.sources[0].look.mirror = true;
+        c.sources[0].record = false;
+        c.audio[0].gain_db = -6.0;
+        c.audio[0].record = false;
+        assert!(!a.lineup_changed(&c));
+        c.sources.swap(0, 1);
+        assert!(a.lineup_changed(&c), "moved");
+        let mut d = a.clone();
+        d.sources[1].device = "test:ball".into();
+        assert!(a.lineup_changed(&d));
+        assert!(!a.needs_restart(&d), "sources change live now");
     }
 
     #[test]

@@ -59,6 +59,18 @@ impl Scene {
     pub fn retain_sources(&mut self, n_sources: usize) {
         self.layers.retain(|l| l.source < n_sources);
     }
+
+    /// Sources were added, removed or moved: `new_of(old)` is a source's new
+    /// number (None: it's gone, and so are its frames in this scene).
+    pub fn remap_sources(&mut self, new_of: &dyn Fn(usize) -> Option<usize>) {
+        self.layers.retain_mut(|l| match new_of(l.source) {
+            Some(n) => {
+                l.source = n;
+                true
+            }
+            None => false,
+        });
+    }
 }
 
 /// Built-in layouts for `names.len()` sources.

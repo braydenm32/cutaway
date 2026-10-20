@@ -30,6 +30,9 @@ pub struct ExportFile {
     pub source: Option<usize>,
     /// First frame's timecode (frames since midnight at `fps`).
     pub tc_frame: Option<u32>,
+    /// Where the file ends (from the start of the take) when that's before
+    /// the take did: its source left the show while recording.
+    pub length: Option<Ns>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -184,9 +187,16 @@ impl TakeExport {
         self.files.iter().find(|f| f.source == angle).or_else(|| self.program())
     }
 
-    /// Length of a file in its own frames (every file is the take length).
+    /// Length of a file in its own frames (the take's length, unless its
+    /// source left early).
     fn file_frames(&self, f: &ExportFile) -> i64 {
-        (self.frames * f.fps as i64 + self.fps as i64 / 2) / self.fps as i64
+        let full = (self.frames * f.fps as i64 + self.fps as i64 / 2) / self.fps as i64;
+        f.length.map_or(full, |ns| ns_to_frame(ns, f.fps).clamp(0, full))
+    }
+
+    /// Where a file ends, in program frames.
+    fn file_end(&self, f: &ExportFile) -> i64 {
+        f.length.map_or(self.frames, |ns| ns_to_frame(ns, self.fps).clamp(0, self.frames))
     }
 
     /// Shots: (start frame, end frame, file).
@@ -348,6 +358,12 @@ pub fn premiere_xml(t: &TakeExport) -> String {
     // V1: the live edit.
     x += "        <track>\n";
     for (start, end, f, scene) in t.shots() {
+        // A source that left the show: its shot stops with its file (a gap
+        // till the next; the program's sound carries on below).
+        let end = end.min(t.file_end(f));
+        if end <= start {
+            continue;
+        }
         clip_id += 1;
         let _ = writeln!(
             x,
@@ -370,7 +386,7 @@ pub fn premiere_xml(t: &TakeExport) -> String {
             esc(&f.name),
             t.file_frames(f),
             xm_rate(f.fps),
-            t.frames,
+            t.file_end(f),
             t.file_frames(f),
             file_el(f, &mut described)
         );
@@ -438,6 +454,7 @@ mod tests {
             has_audio: true,
             source,
             tc_frame: Some(37230 * fps),
+            length: None,
         };
         TakeExport {
             name: "Take & Co".into(),
@@ -491,6 +508,23 @@ mod tests {
         assert!(x.contains("<start>180</start><end>300</end><in>150</in><out>250</out>"), "{x}");
         assert_eq!(x.matches("<file id=\"file-1\">").count(), 1, "each file described once");
         xml_balanced(&x);
+    }
+
+    /// Host left the show 8 s in: its file is 8 s long, and its shot (from
+    /// 6 s) stops there in Premiere (Final Cut's multicam just runs out of
+    /// that angle, with the program's sound going on).
+    #[test]
+    fn a_source_that_left_early() {
+        let mut t = sample();
+        t.files[2].length = Some(8 * NS_PER_SEC);
+        let x = premiere_xml(&t);
+        assert!(x.contains("<start>180</start><end>240</end><in>150</in><out>200</out>"), "{x}");
+        assert!(x.contains("<duration>200</duration>"), "{x}");
+        let f = fcpxml(&t);
+        assert!(f.contains("start=\"37230s\" duration=\"8s\" hasVideo=\"1\" format=\"f2\""), "{f}");
+        assert_eq!(f.matches("<mc-clip ").count(), 3);
+        xml_balanced(&x);
+        xml_balanced(&f);
     }
 
     #[test]

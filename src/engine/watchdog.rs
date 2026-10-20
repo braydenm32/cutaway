@@ -2,7 +2,8 @@
 //! reopens them, and keeps the health and disk figures up to date.
 
 use super::inputs::{AudioInputDev, DeviceCache, VideoInput};
-use super::{LogLevel, Status, Waker};
+use super::{LogLevel, SharedLineup, Status, Waker};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -15,6 +16,8 @@ struct Outage {
     ever_alive: bool,
     attempts: u32,
     next_try: Option<Instant>,
+    /// Just added (and being opened): left alone until then.
+    settle_until: Option<Instant>,
 }
 
 impl Outage {
@@ -71,7 +74,8 @@ impl Device for AudioInputDev {
 }
 
 pub struct Watchdog {
-    pub devices: Vec<Arc<dyn Device + Send + Sync>>,
+    /// The sources and inputs (they change when they're added or removed).
+    pub lineup: SharedLineup,
     pub status: Arc<Mutex<Status>>,
     pub stop: Arc<AtomicBool>,
     pub waker: Waker,
@@ -80,9 +84,33 @@ pub struct Watchdog {
 }
 
 impl Watchdog {
+    /// The devices now, each with its reconnect bookkeeping (kept for those
+    /// that were there before; new ones get a moment to open).
+    fn devices(&self, seen: &mut u64, outages: &mut HashMap<usize, Outage>) -> Vec<Arc<dyn Device + Send + Sync>> {
+        let l = self.lineup.lock().unwrap();
+        let mut list: Vec<Arc<dyn Device + Send + Sync>> = Vec::new();
+        for v in &l.video {
+            list.push(v.clone());
+        }
+        for a in &l.audio {
+            list.push(a.clone());
+        }
+        let first = *seen == 0;
+        if l.generation != *seen {
+            *seen = l.generation;
+            let keys: Vec<usize> = list.iter().map(|d| key(d)).collect();
+            outages.retain(|k, _| keys.contains(k));
+            for k in keys {
+                outages.entry(k).or_insert_with(|| Outage { settle_until: (!first).then(|| Instant::now() + Duration::from_secs(6)), ..Default::default() });
+            }
+        }
+        list
+    }
+
     pub fn run(mut self) {
         let started = Instant::now();
-        let mut outages: Vec<Outage> = self.devices.iter().map(|_| Outage::default()).collect();
+        let mut outages: HashMap<usize, Outage> = HashMap::new();
+        let mut seen = 0u64;
         let mut last_second = Instant::now();
         while !self.stop.load(Ordering::Relaxed) {
             std::thread::sleep(Duration::from_millis(250));
@@ -98,9 +126,14 @@ impl Watchdog {
             }
             let mut cache = DeviceCache::default();
             let mut changed = false;
-            for (dev, out) in self.devices.iter().zip(outages.iter_mut()) {
+            let devices = self.devices(&mut seen, &mut outages);
+            for dev in &devices {
                 if self.stop.load(Ordering::Relaxed) {
                     return;
+                }
+                let Some(out) = outages.get_mut(&key(dev)) else { continue };
+                if out.settle_until.is_some_and(|t| Instant::now() < t) {
+                    continue;
                 }
                 let name = dev.name().to_string();
                 if dev.alive() {
@@ -159,4 +192,9 @@ impl Watchdog {
             }
         }
     }
+}
+
+/// A device's identity while it's in the line-up.
+fn key(d: &Arc<dyn Device + Send + Sync>) -> usize {
+    Arc::as_ptr(d) as *const () as usize
 }

@@ -197,6 +197,8 @@ impl Status {
 }
 
 pub struct SourceHandle {
+    /// Identity (`SourceConfig::uid`).
+    pub uid: u64,
     pub name: String,
     /// Multiview tile.
     pub preview: Arc<FrameSlot>,
@@ -214,6 +216,8 @@ impl SourceHandle {
 }
 
 pub struct AudioHandle {
+    /// Identity (`AudioConfig::uid`).
+    pub uid: u64,
     pub name: String,
     pub record: bool,
     pub split: bool,
@@ -306,6 +310,34 @@ pub struct TallState {
 
 type CaptionsSlot = Arc<Mutex<Option<(u64, Arc<captions::Captions>)>>>;
 
+/// The sources and inputs as they are now, for the background work that
+/// watches them (the watchdog, the health figures). It changes when they're
+/// added, removed or moved.
+#[derive(Default)]
+pub struct Lineup {
+    pub generation: u64,
+    pub video: Vec<Arc<inputs::VideoInput>>,
+    pub audio: Vec<Arc<inputs::AudioInputDev>>,
+}
+
+pub type SharedLineup = Arc<Mutex<Lineup>>;
+
+/// A new line-up of sources for the compositor thread, which takes it up
+/// between frames (with the switcher, so what's on air follows).
+struct CompLineup {
+    generation: u64,
+    /// For each source now: the number it had (None: new).
+    from: Vec<Option<usize>>,
+    sizes: Vec<(u32, u32)>,
+    slots: Vec<Arc<SourceSlot>>,
+    thumbs: Vec<Arc<FrameSlot>>,
+    masks: Vec<Arc<cutout::MaskSlot>>,
+    looks: Vec<crate::config::SourceLook>,
+    style: crate::config::FrameStyle,
+    aspects: Vec<f32>,
+    uids: Vec<u64>,
+}
+
 pub struct Engine {
     cfg: Arc<Mutex<Config>>,
     pub info: EngineInfo,
@@ -362,6 +394,16 @@ pub struct Engine {
     /// Background removal: each source's masks, and what makes them.
     masks: Vec<Arc<cutout::MaskSlot>>,
     cutouts: Mutex<Vec<CutoutState>>,
+    /// Sound from sources and players, by name (for inputs added later).
+    hub: Arc<feed::AudioHub>,
+    /// The line-up, for the watchdog and health figures.
+    lineup: SharedLineup,
+    /// The inputs by name, for automatic switching.
+    auto_inputs: Arc<Mutex<Vec<(String, Arc<InputShared>)>>>,
+    /// A line-up waiting for the compositor, the last it took up, and a count.
+    comp_lineup: Arc<Mutex<Option<CompLineup>>>,
+    comp_done: Arc<AtomicU64>,
+    comp_lineups: AtomicU64,
 }
 
 /// An extra audio output while it runs.
@@ -370,6 +412,20 @@ struct RunningOutput {
     tap: u64,
     volume: Arc<AtomicU32>,
     running: Box<dyn sources::Running>,
+}
+
+/// An output's feed: the mix it takes, without the inputs it leaves out
+/// (by name), with talkback if it has it.
+fn output_kind_for(o: &crate::config::AudioOutput, inputs: &[String]) -> audio::MixKind {
+    let mut minus = 0u64;
+    for name in &o.minus {
+        if let Some(i) = inputs.iter().position(|a| a.eq_ignore_ascii_case(name.trim())) {
+            if i < 64 {
+                minus |= 1 << i;
+            }
+        }
+    }
+    audio::MixKind::Feed { stream: o.mix.trim().eq_ignore_ascii_case("stream"), minus, talkback: o.talkback }
 }
 
 fn db_to_gain(db: f32) -> f32 {
@@ -401,7 +457,10 @@ impl Engine {
 
     fn start_inner(cfg: &Config, waker: Waker) -> Result<Engine> {
         cfg.validate()?;
-        let cfg = &cfg.with_framed_rates();
+        let mut cfg = cfg.with_framed_rates();
+        // (The app gives them identities; started on its own, it has none yet.)
+        cfg.assign_uids();
+        let cfg = &cfg;
         let mut device_cache = inputs::DeviceCache::default();
         let status = Arc::new(Mutex::new(Status::default()));
         let stop = Arc::new(AtomicBool::new(false));
@@ -470,6 +529,7 @@ impl Engine {
             comp.add_source(sc.width, sc.height);
             aspects.push(sc.look.cropped_aspect(sc.width as f32 / sc.height as f32));
             sources.push(SourceHandle {
+                uid: sc.uid,
                 name: sc.name.clone(),
                 preview: FrameSlot::new(),
                 size: (sc.width, sc.height),
@@ -505,7 +565,7 @@ impl Engine {
                 shared: shared.clone(),
                 gaps_expected: input.gaps_expected(),
             });
-            audio.push(AudioHandle { name: ac.name.clone(), record: ac.record, split: ac.split_channels, shared, input });
+            audio.push(AudioHandle { uid: ac.uid, name: ac.name.clone(), record: ac.record, split: ac.split_channels, shared, input });
         }
         let max_audio_delay = cfg.audio.iter().map(|a| a.delay_ms).max().unwrap_or(0) as i64 * 1_000_000;
         let audio_latency = audio::mix_latency(max_audio_delay);
@@ -526,10 +586,10 @@ impl Engine {
 
         // ---- switcher + compositor thread --------------------------------------
         let scenes = cfg.effective_scenes();
-        let sw_sources = sources.len();
         let mut initial = scenes.first().cloned().unwrap_or_else(|| crate::scene::grid(sources.len()));
         initial.retain_sources(sources.len());
         let switcher = Arc::new(Switcher::new((cw, ch), aspects, initial));
+        switcher.set_uids(sources.iter().map(|s| s.uid).collect());
         switcher.set_style(cfg.transition.direction, &cfg.transition.dip_color);
         let program_preview = FrameSlot::new();
         let tall_preview = FrameSlot::new();
@@ -546,8 +606,12 @@ impl Engine {
         stinger.configure(&cfg.transition.stinger);
         let replay = Arc::new(replay::ReplayPlayer::new((cw, ch)));
         let replay_label = Arc::new(AtomicBool::new(cfg.replay.label));
+        let comp_lineup: Arc<Mutex<Option<CompLineup>>> = Arc::new(Mutex::new(None));
+        let comp_done = Arc::new(AtomicU64::new(0));
         {
             let ctx = CompositorLoop {
+                lineup: comp_lineup.clone(),
+                lineup_done: comp_done.clone(),
                 stinger: stinger.clone(),
                 replay: replay.clone(),
                 replay_label: replay_label.clone(),
@@ -589,25 +653,19 @@ impl Engine {
         // ---- watchdog: reconnects devices, keeps health figures current -----------
         let shared_cfg = Arc::new(Mutex::new(cfg.clone()));
         let take_monitor = Arc::new(Mutex::new(None));
+        let lineup: SharedLineup = Arc::new(Mutex::new(Lineup { generation: 1, video: sources.iter().map(|s| s.input.clone()).collect(), audio: audio.iter().map(|a| a.input.clone()).collect() }));
         {
-            let mut devices: Vec<Arc<dyn watchdog::Device + Send + Sync>> = Vec::new();
-            for s in &sources {
-                devices.push(s.input.clone());
-            }
-            for a in &audio {
-                devices.push(a.input.clone());
-            }
             let mut monitor = health::HealthMonitor {
                 cfg: shared_cfg.clone(),
                 status: status.clone(),
                 take: take_monitor.clone(),
-                sources: sources.iter().map(|s| s.input.clone()).collect(),
-                audio: audio.iter().map(|a| a.input.clone()).collect(),
+                lineup: lineup.clone(),
                 compositor_skips: compositor_skips.clone(),
                 last_frames: Vec::new(),
+                seen: 0,
             };
             let w = watchdog::Watchdog {
-                devices,
+                lineup: lineup.clone(),
                 status: status.clone(),
                 stop: stop.clone(),
                 waker: waker.clone(),
@@ -618,22 +676,22 @@ impl Engine {
 
         // ---- automatic switching ----------------------------------------------------
         let auto = autoswitch::AutoShared::new(cfg.auto_switch.enabled);
+        let auto_inputs: Arc<Mutex<Vec<(String, Arc<InputShared>)>>> = Arc::new(Mutex::new(audio.iter().map(|a| (a.name.clone(), a.shared.clone())).collect()));
         {
-            let inputs: Vec<(String, Arc<InputShared>)> = audio.iter().map(|a| (a.name.clone(), a.shared.clone())).collect();
-            let (sw, c2, inputs2) = (switcher.clone(), shared_cfg.clone(), inputs.clone());
+            let (sw, c2, inputs2) = (switcher.clone(), shared_cfg.clone(), auto_inputs.clone());
             let take = Box::new(move |scene: &crate::scene::Scene| {
                 let t = c2.lock().unwrap().transition.clone();
                 let mut s = scene.clone();
-                s.retain_sources(sw_sources);
+                s.retain_sources(sw.source_count());
                 // A stinger every time someone speaks would be a lot: mix.
                 let mode = if t.mode == TransitionMode::Stinger { TransitionMode::Mix } else { t.mode };
-                apply_scene_audio(&inputs2, &s, scene_audio_timing(mode, t.duration_ms));
+                apply_scene_audio(&inputs2.lock().unwrap(), &s, scene_audio_timing(mode, t.duration_ms));
                 sw.take(s, mode, t.duration_ms);
             });
             let a = autoswitch::AutoSwitcher {
                 shared: auto.clone(),
                 cfg: shared_cfg.clone(),
-                inputs,
+                inputs: auto_inputs.clone(),
                 switcher: switcher.clone(),
                 take,
                 status: status.clone(),
@@ -692,6 +750,12 @@ impl Engine {
             captions_cfg: Mutex::new(None),
             cutouts: Mutex::new(masks.iter().map(|_| CutoutState::Off).collect()),
             masks,
+            hub,
+            lineup,
+            auto_inputs,
+            comp_lineup,
+            comp_done,
+            comp_lineups: AtomicU64::new(0),
         })
         .map(|e| {
             e.apply_monitor(&cfg.mix);
@@ -978,15 +1042,14 @@ impl Engine {
 
     /// The mix kind an output needs.
     fn output_kind(&self, o: &crate::config::AudioOutput) -> audio::MixKind {
-        let mut minus = 0u64;
-        for name in &o.minus {
-            if let Some(i) = self.audio.iter().position(|a| a.name.eq_ignore_ascii_case(name.trim())) {
-                if i < 64 {
-                    minus |= 1 << i;
-                }
-            }
-        }
-        audio::MixKind::Feed { stream: o.mix.trim().eq_ignore_ascii_case("stream"), minus, talkback: o.talkback }
+        let names: Vec<String> = self.audio.iter().map(|a| a.name.clone()).collect();
+        output_kind_for(o, &names)
+    }
+
+    /// The same, for inputs listed in settings.
+    fn output_kind_in(&self, o: &crate::config::AudioOutput, inputs: &[crate::config::AudioConfig]) -> audio::MixKind {
+        let names: Vec<String> = inputs.iter().map(|a| a.name.clone()).collect();
+        output_kind_for(o, &names)
     }
 
     /// Start, change or stop the extra outputs to match the settings.
@@ -1038,6 +1101,26 @@ impl Engine {
     /// Current settings (as last applied).
     pub fn config(&self) -> Config {
         self.cfg.lock().unwrap().clone()
+    }
+
+    /// Whether `update_config` would take these settings now.
+    pub fn check_config(&self, new: &Config) -> Result<()> {
+        let old = self.config();
+        if old.output.codec != new.output.codec || old.output.encoder != new.output.encoder {
+            if self.is_recording() {
+                bail!("stop recording before changing the codec or encoder");
+            }
+            encode::resolve_backend(new.output.codec.video_codec(), &new.output.encoder)?;
+        }
+        if old.streaming.encoder != new.streaming.encoder {
+            encode::resolve_backend(crate::media::VideoCodec::H264, &new.streaming.encoder)?;
+        }
+        Ok(())
+    }
+
+    /// The scenes as saved (automatic switching finds them by name).
+    pub fn set_scenes(&self, scenes: &[crate::scene::Scene]) {
+        self.cfg.lock().unwrap().scenes = scenes.to_vec();
     }
 
     /// Apply settings that don't need the engine rebuilt (recording format,
@@ -1126,6 +1209,312 @@ impl Engine {
         }
         *self.cfg.lock().unwrap() = new.clone();
         Ok(())
+    }
+
+    // ---- sources and inputs while running ------------------------------------------
+
+    /// Sources and audio inputs added, removed, moved or changed (whatever
+    /// `Config::lineup_changed` sees), while everything else carries on:
+    /// the program, the recording and the stream included. Sources that
+    /// stay keep running untouched; changed ones reopen on their own; new
+    /// ones open in the background. Returns notes for the operator.
+    pub fn apply_lineup(&mut self, new: &Config) -> Vec<String> {
+        use crate::config::{audio_key, source_key};
+        let new = new.with_framed_rates();
+        let old = self.config();
+        let recording = self.is_recording();
+        let mut notes = Vec::new();
+
+        // ---- video sources -----------------------------------------------------
+        // Each source now: the one it was (by identity, if nothing that
+        // needs reopening changed), or made afresh.
+        let mut keep: Vec<Option<usize>> = new
+            .sources
+            .iter()
+            .map(|sc| {
+                let j = self.sources.iter().position(|h| h.uid == sc.uid)?;
+                old.sources.get(j).filter(|o| source_key(o) == source_key(sc)).map(|_| j)
+            })
+            .collect();
+        // A close-up or virtual camera follows its wide source when that's remade.
+        loop {
+            let mut again = false;
+            for (i, sc) in new.sources.iter().enumerate() {
+                let Some(parent) = sc.framed_from().or_else(|| sc.virtual_ptz_of()) else { continue };
+                if keep[i].is_some() {
+                    let p = new.sources.iter().position(|p| p.name.trim().eq_ignore_ascii_case(parent.trim()));
+                    if p.is_none_or(|p| keep[p].is_none()) {
+                        keep[i] = None;
+                        again = true;
+                    }
+                }
+            }
+            if !again {
+                break;
+            }
+        }
+        let delay_of = |sc: &crate::config::SourceConfig| {
+            let parent = sc.framed_from().and_then(|from| new.sources.iter().find(|p| p.name.trim().eq_ignore_ascii_case(from)));
+            parent.unwrap_or(sc).delay_ms
+        };
+        let slots: Vec<Arc<SourceSlot>> = new.sources.iter().enumerate().map(|(i, sc)| match keep[i] {
+            Some(j) => self.sources[j].slot.clone(),
+            None => SourceSlot::new(i, delay_of(sc), VIDEO_LATENCY),
+        }).collect();
+        let peers: Arc<Vec<(String, Arc<SourceSlot>)>> = Arc::new(new.sources.iter().zip(&slots).map(|(sc, s)| (sc.name.clone(), s.clone())).collect());
+        let mut old_handles: Vec<Option<SourceHandle>> = std::mem::take(&mut self.sources).into_iter().map(Some).collect();
+        let mut old_masks: Vec<Option<Arc<cutout::MaskSlot>>> = std::mem::take(&mut self.masks).into_iter().map(Some).collect();
+        let mut old_cutouts: Vec<Option<CutoutState>> = std::mem::take(&mut *self.cutouts.lock().unwrap()).into_iter().map(Some).collect();
+        let mut sources = Vec::new();
+        let mut masks = Vec::new();
+        let mut cutouts = Vec::new();
+        let mut to_open = Vec::new();
+        for (i, sc) in new.sources.iter().enumerate() {
+            match keep[i].and_then(|j| old_handles[j].take().map(|h| (j, h))) {
+                Some((j, mut h)) => {
+                    h.record = sc.record;
+                    sources.push(h);
+                    masks.push(old_masks[j].take().unwrap_or_else(cutout::MaskSlot::new));
+                    cutouts.push(old_cutouts[j].take().unwrap_or_default());
+                }
+                None => {
+                    keep[i] = None;
+                    let input = inputs::VideoInput::new(i, sc.clone(), slots[i].clone(), self.hub.clone(), peers.clone());
+                    to_open.push(input.clone());
+                    sources.push(SourceHandle { uid: sc.uid, name: sc.name.clone(), preview: FrameSlot::new(), size: (sc.width, sc.height), fps: sc.fps, record: sc.record, slot: slots[i].clone(), input });
+                    masks.push(cutout::MaskSlot::new());
+                    cutouts.push(CutoutState::Off);
+                }
+            }
+        }
+        let gone: Vec<SourceHandle> = old_handles.into_iter().flatten().collect();
+        let old_cutouts: Vec<CutoutState> = old_cutouts.into_iter().flatten().collect();
+        for h in &gone {
+            let still = new.sources.iter().any(|s| s.uid == h.uid);
+            if recording {
+                // Its file ends now rather than holding its last picture to
+                // the end of the take.
+                h.slot.stop_iso_tap();
+                if let Some(take) = self.take.lock().unwrap().as_mut() {
+                    let length = clock::now() - take.t0;
+                    for f in take.export_files.iter_mut().filter(|f| f.source == Some(h.uid as usize)) {
+                        f.length = Some(length);
+                    }
+                }
+            }
+            if recording && h.record {
+                notes.push(if still {
+                    format!("{}: changed, so its own file in this take ends here (it's recorded again from the next take)", h.name)
+                } else {
+                    format!("{}: removed; its own file in this take ends here", h.name)
+                });
+            }
+            self.status.lock().unwrap().offline.remove(&h.name);
+        }
+        if recording {
+            for (i, sc) in new.sources.iter().enumerate() {
+                if keep[i].is_none() && sc.record && !old.sources.iter().any(|o| o.uid == sc.uid) {
+                    notes.push(format!("{}: recorded to its own file from the next take (it's in the program now)", sc.name));
+                }
+            }
+        }
+        self.sources = sources;
+        self.masks = masks;
+        *self.cutouts.lock().unwrap() = cutouts;
+
+        // The compositor and switcher follow between two frames.
+        let generation = self.comp_lineups.fetch_add(1, Ordering::Relaxed) + 1;
+        let aspects: Vec<f32> = new.sources.iter().map(|s| s.look.cropped_aspect(s.width as f32 / s.height as f32)).collect();
+        *self.comp_lineup.lock().unwrap() = Some(CompLineup {
+            generation,
+            from: keep.clone(),
+            sizes: new.sources.iter().map(|s| (s.width, s.height)).collect(),
+            slots: self.sources.iter().map(|s| s.slot.clone()).collect(),
+            thumbs: self.sources.iter().map(|s| s.preview.clone()).collect(),
+            masks: self.masks.clone(),
+            looks: new.sources.iter().map(|s| s.look.clone()).collect(),
+            style: new.style.clone(),
+            aspects,
+            uids: new.sources.iter().map(|s| s.uid).collect(),
+        });
+        let until = Instant::now() + Duration::from_secs(2);
+        while self.comp_done.load(Ordering::Acquire) < generation && Instant::now() < until && !self.stop.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        {
+            // Looks by the new numbers (the compositor already has them).
+            let mut l = self.looks.lock().unwrap();
+            l.looks = new.sources.iter().map(|s| s.look.clone()).collect();
+            l.style = new.style.clone();
+            l.generation += 1;
+        }
+        {
+            let mut t = self.tall.lock().unwrap();
+            t.names = new.sources.iter().map(|s| s.name.clone()).collect();
+            t.generation += 1;
+        }
+
+        // ---- audio inputs ------------------------------------------------------
+        let mut akeep: Vec<Option<usize>> = new
+            .audio
+            .iter()
+            .map(|ac| {
+                let j = self.audio.iter().position(|h| h.uid == ac.uid)?;
+                old.audio.get(j).filter(|o| audio_key(o) == audio_key(ac)).map(|_| j)
+            })
+            .collect();
+        let mut old_audio: Vec<Option<AudioHandle>> = std::mem::take(&mut self.audio).into_iter().map(Some).collect();
+        let mut audio = Vec::new();
+        let mut mix_slots = Vec::new();
+        let mut audio_to_open = Vec::new();
+        for (i, ac) in new.audio.iter().enumerate() {
+            match akeep[i].and_then(|j| old_audio[j].take().map(|h| (j, h))) {
+                Some((j, mut h)) => {
+                    h.record = ac.record;
+                    h.split = ac.split_channels;
+                    mix_slots.push(audio::MixSlot::Keep(j, h.shared.clone()));
+                    audio.push(h);
+                }
+                None => {
+                    akeep[i] = None;
+                    let (tx, rx) = bounded(1000);
+                    let shared = InputShared::new(ac);
+                    let input = inputs::AudioInputDev::new(i, ac.clone(), tx, shared.clone(), self.hub.clone());
+                    mix_slots.push(audio::MixSlot::New(MixInput {
+                        rx,
+                        left: ac.program_left,
+                        right: ac.program_right,
+                        delay: ac.delay_ms as i64 * 1_000_000,
+                        shared: shared.clone(),
+                        gaps_expected: input.gaps_expected(),
+                    }));
+                    audio_to_open.push(input.clone());
+                    audio.push(AudioHandle { uid: ac.uid, name: ac.name.clone(), record: ac.record, split: ac.split_channels, shared, input });
+                }
+            }
+        }
+        let audio_gone: Vec<AudioHandle> = old_audio.into_iter().flatten().collect();
+        for h in &audio_gone {
+            let still = new.audio.iter().any(|a| a.uid == h.uid);
+            if recording {
+                h.shared.stop_raw_tap();
+            }
+            if recording && h.record {
+                notes.push(if still {
+                    format!("{}: changed, so its WAV in this take ends here (it's recorded again from the next take)", h.name)
+                } else {
+                    format!("{}: removed; its WAV in this take ends here", h.name)
+                });
+            }
+            self.status.lock().unwrap().offline.remove(&h.name);
+        }
+        if recording {
+            for (i, ac) in new.audio.iter().enumerate() {
+                if akeep[i].is_none() && ac.record && !old.audio.iter().any(|o| o.uid == ac.uid) {
+                    notes.push(format!("{}: in the mix now; its own WAV starts with the next take", ac.name));
+                }
+            }
+        }
+        self.audio = audio;
+        self.mix.set_lineup(mix_slots, new.audio.iter().map(|a| a.name.clone()).collect());
+        self.mix.set_talkback_input(talkback_index(&new));
+        *self.auto_inputs.lock().unwrap() = self.audio.iter().map(|a| (a.name.clone(), a.shared.clone())).collect();
+        guests::hub().set_engine_inputs(new.audio.iter().enumerate().map(|(i, a)| (a.device.clone(), i)).collect());
+        // Outputs that leave out an input by name (one that's new, too).
+        {
+            let outs = self.outputs.lock().unwrap();
+            let kinds: Vec<(u64, audio::MixKind)> = outs.iter().map(|o| (o.tap, self.output_kind_in(&o.cfg, &new.audio))).collect();
+            drop(outs);
+            for t in self.mix_taps.lock().unwrap().iter_mut() {
+                if let Some((_, k)) = kinds.iter().find(|(id, _)| *id == t.0) {
+                    t.1 = *k;
+                }
+            }
+        }
+
+        // ---- the rest follows ---------------------------------------------------
+        {
+            let mut l = self.lineup.lock().unwrap();
+            l.generation += 1;
+            l.video = self.sources.iter().map(|s| s.input.clone()).collect();
+            l.audio = self.audio.iter().map(|a| a.input.clone()).collect();
+        }
+        // Open what's new, and close what went, without the window waiting.
+        for input in to_open {
+            let (status, waker) = (self.status.clone(), self.waker.clone());
+            let _ = std::thread::Builder::new().name("opening".into()).spawn(move || {
+                let devs = inputs::DeviceCache::default().video(&input.cfg.device).to_vec();
+                match input.open(&devs) {
+                    Ok(desc) => status.lock().unwrap().push(LogLevel::Info, format!("{}: {desc}", input.cfg.name)),
+                    Err(e) => {
+                        let mut st = status.lock().unwrap();
+                        st.push(LogLevel::Error, format!("{}: {e:#}. It will connect automatically when available.", input.cfg.name));
+                        st.offline.insert(input.cfg.name.clone());
+                    }
+                }
+                waker();
+            });
+        }
+        for input in audio_to_open {
+            let (status, waker) = (self.status.clone(), self.waker.clone());
+            let _ = std::thread::Builder::new().name("opening".into()).spawn(move || {
+                let devs = inputs::DeviceCache::default().audio(&input.cfg.device).to_vec();
+                match input.open(&devs) {
+                    Ok((_, Some(note))) => status.lock().unwrap().push(LogLevel::Warning, format!("{}: {note}", input.cfg.name)),
+                    Ok(_) => {}
+                    Err(e) => {
+                        let mut st = status.lock().unwrap();
+                        st.push(LogLevel::Error, format!("{}: {e:#}. It will connect automatically when available.", input.cfg.name));
+                        st.offline.insert(input.cfg.name.clone());
+                    }
+                }
+                waker();
+            });
+        }
+        if !gone.is_empty() || !audio_gone.is_empty() || !old_cutouts.is_empty() {
+            let _ = std::thread::Builder::new().name("closing".into()).spawn(move || {
+                drop(old_cutouts);
+                for h in gone {
+                    h.input.close();
+                }
+                for a in audio_gone {
+                    a.input.close();
+                }
+            });
+        }
+        {
+            // The engine's own copy in the new order, each kept one as it was
+            // (so `update_config` then applies what changed live: looks,
+            // framing, levels, processing...), the new ones as they are.
+            let mut c = self.cfg.lock().unwrap();
+            c.sources = new.sources.iter().enumerate().map(|(i, sc)| keep[i].and_then(|j| old.sources.get(j).cloned()).unwrap_or_else(|| sc.clone())).collect();
+            c.audio = new.audio.iter().enumerate().map(|(i, ac)| akeep[i].and_then(|j| old.audio.get(j).cloned()).unwrap_or_else(|| ac.clone())).collect();
+            c.scenes = new.scenes.clone();
+        }
+        // Background removal for new sources; NDI's per-source outputs, the
+        // headphones and captions where they named an input.
+        self.apply_cutouts(&new.sources);
+        if new.ndi_out.sources {
+            if let Some((_, outs)) = self.ndi_out.lock().unwrap().take() {
+                self.stop_ndi_outputs(outs);
+            }
+            self.apply_ndi_out(&new.ndi_out);
+        }
+        let solo = new.mix.monitor_source.trim();
+        if !solo.is_empty() && !solo.eq_ignore_ascii_case("stream") {
+            if let Some((_, _, id, running)) = self.monitor.lock().unwrap().take() {
+                self.mix_taps.lock().unwrap().retain(|(i, ..)| *i != id);
+                drop(running);
+            }
+            self.apply_monitor(&new.mix);
+        }
+        let heard = new.captions.source.trim().to_lowercase();
+        if new.captions.enabled && !heard.is_empty() && heard != "recording" && heard != "stream" {
+            *self.captions_cfg.lock().unwrap() = None;
+            self.apply_captions(&new.captions);
+        }
+        (self.waker)();
+        notes
     }
 
     pub fn encoder_description(&self) -> String {
@@ -1437,6 +1826,9 @@ fn describe_encoder(codec: crate::media::VideoCodec, wanted: &str) -> String {
 // The compositor thread
 
 struct CompositorLoop {
+    /// A new line-up of sources to take up, and the last one taken up.
+    lineup: Arc<Mutex<Option<CompLineup>>>,
+    lineup_done: Arc<AtomicU64>,
     comp: Compositor,
     slots: Vec<Arc<SourceSlot>>,
     thumbs: Vec<Arc<FrameSlot>>,
@@ -1482,6 +1874,20 @@ impl CompositorLoop {
         while !self.stop.load(Ordering::Relaxed) {
             let t = grid_time(k, fps);
             clock::sleep_until(t + VIDEO_LATENCY);
+            // Sources added, removed or moved: everything follows at once,
+            // between frames.
+            let lineup = self.lineup.lock().unwrap().take();
+            if let Some(l) = lineup {
+                self.comp.set_lineup(&l.from, &l.sizes);
+                for (i, why) in self.comp.set_looks(&l.looks, &l.style) {
+                    self.status.lock().unwrap().push(LogLevel::Warning, format!("Source {}: the LUT wasn't used: {why}", i + 1));
+                }
+                self.switcher.remap_sources(&l.from, l.aspects, l.uids);
+                self.slots = l.slots;
+                self.thumbs = l.thumbs;
+                self.masks = l.masks;
+                self.lineup_done.store(l.generation, Ordering::Release);
+            }
             {
                 let l = self.looks.lock().unwrap();
                 if l.generation != self.looks_generation {
@@ -1738,6 +2144,94 @@ pub fn fmt_duration(d: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Sources and inputs added, removed and moved while recording: what's
+    /// on air stays on air, the recording carries on, and the files say
+    /// what happened.
+    #[test]
+    fn sources_change_while_recording() {
+        use crate::config::{AudioConfig, SourceConfig};
+        let dir = std::env::temp_dir().join(format!("cutaway-lineup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut cfg = Config::default();
+        cfg.program.width = 320;
+        cfg.program.height = 180;
+        cfg.program.fps = 15;
+        cfg.output.folder = dir.clone();
+        let src = |name: &str, device: &str| SourceConfig { name: name.into(), device: device.into(), width: 320, height: 180, fps: 15, ..Default::default() };
+        cfg.sources = vec![src("Dark", "test:ball"), src("Bars", "test:smpte"), src("Snow", "test:snow")];
+        cfg.audio = vec![AudioConfig { name: "Tone".into(), device: "test".into(), ..Default::default() }];
+        cfg.assign_uids();
+        let mut e = match Engine::start(&cfg, Arc::new(|| {})) {
+            Ok(e) => e,
+            Err(err) => {
+                eprintln!("skipping: the engine can't start here ({err:#})");
+                return;
+            }
+        };
+        // The bars on air, watched as the program comes out.
+        let (tx, rx) = bounded::<VideoFrame>(64);
+        e.video_taps.lock().unwrap().listeners.push((999, tx));
+        let bars = cfg.effective_scenes()[1].clone();
+        e.take_scene(&bars, TransitionMode::Cut, 0);
+        std::thread::sleep(Duration::from_millis(800));
+        let luma = |rx: &crossbeam_channel::Receiver<VideoFrame>| {
+            let f = rx.try_iter().last().expect("program frames");
+            f.pixels.with_planes(|p| (0..p.y.len()).step_by(97).map(|i| p.y[i] as f64).sum::<f64>() / (p.y.len() / 97) as f64)
+        };
+        let on_air = luma(&rx);
+        assert!(on_air > 40.0, "the bars (not the dark one): {on_air}");
+        if let Err(err) = e.start_recording() {
+            eprintln!("skipping the recording part: {err:#}");
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(1000));
+
+        // Dark goes, Bars and Snow move up, Flat (and a second tone) join.
+        let mut new = cfg.clone();
+        new.sources.remove(0);
+        new.sources.push(src("Flat", "test:gradient"));
+        new.audio.push(AudioConfig { name: "Tone 2".into(), device: "test".into(), ..Default::default() });
+        new.assign_uids();
+        let notes = e.apply_lineup(&new);
+        e.update_config(&new).unwrap();
+        assert_eq!(e.sources.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), vec!["Bars", "Snow", "Flat"]);
+        assert_eq!(e.audio.len(), 2);
+        assert!(notes.iter().any(|n| n.starts_with("Dark: removed")), "{notes:?}");
+        assert!(notes.iter().any(|n| n.starts_with("Flat: recorded") && n.contains("next take")), "{notes:?}");
+        assert!(notes.iter().any(|n| n.starts_with("Tone 2")), "{notes:?}");
+        // Still the bars on air, now number 1.
+        assert_eq!(e.switcher.live().layers.iter().map(|l| l.source).collect::<Vec<_>>(), vec![0]);
+        let _ = rx.try_iter().count();
+        std::thread::sleep(Duration::from_millis(600));
+        let still = luma(&rx);
+        assert!((still - on_air).abs() < 12.0, "the bars, still: {on_air} then {still}");
+        // The new source and input come up.
+        std::thread::sleep(Duration::from_millis(1200));
+        assert!(e.sources[2].input.alive(), "Flat is running");
+        assert!(e.status.lock().unwrap().meters.contains_key("a1"), "Tone 2 is in the mix");
+
+        // The take: every file there was at the start, finished cleanly.
+        e.stop_recording();
+        e.wait_finalized();
+        let report = e.status.lock().unwrap().last_take.clone().expect("a take");
+        let names: Vec<String> = report.files.iter().map(|f| f.0.file_name().unwrap().to_string_lossy().to_string()).collect();
+        for want in ["ISO_01_Dark", "ISO_02_Bars", "ISO_03_Snow", "Program", "Audio_01_Tone"] {
+            assert!(names.iter().any(|n| n.starts_with(want)), "{want} in {names:?}");
+        }
+        assert!(!names.iter().any(|n| n.contains("Flat") || n.contains("Tone_2")), "new ones wait for the next take: {names:?}");
+        assert!(report.problems.iter().all(|p| !p.contains("crashed")), "{:?}", report.problems);
+        // Dark's file ends where it left; the others run to the end.
+        let seconds = |want: &str| {
+            let path = &report.files.iter().find(|f| f.0.file_name().unwrap().to_string_lossy().starts_with(want)).unwrap().0;
+            // (Every track: the sound stops with the picture.)
+            crate::media::demux::Mp4Reader::open(path).unwrap().duration() as f64 / 1e9
+        };
+        let (dark, bars) = (seconds("ISO_01_Dark"), seconds("ISO_02_Bars"));
+        assert!(dark > 0.6 && dark < bars - 1.5, "Dark {dark:.2} s, Bars {bars:.2} s");
+        e.shutdown();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn draws_only_what_it_needs() {

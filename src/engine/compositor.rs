@@ -772,6 +772,26 @@ impl Compositor {
         self.sources.len() - 1
     }
 
+    /// Sources added, removed or moved while running: `from[new] = Some(old)`
+    /// keeps a source's textures (and its picture until the next frame
+    /// arrives); new ones start empty at `sizes[new]`. Looks follow with
+    /// `set_looks`.
+    pub fn set_lineup(&mut self, from: &[Option<usize>], sizes: &[(u32, u32)]) {
+        let mut old: Vec<Option<SourceGpu>> = std::mem::take(&mut self.sources).into_iter().map(Some).collect();
+        let mut fresh = Vec::with_capacity(from.len());
+        for (i, f) in from.iter().enumerate() {
+            match f.and_then(|j| old.get_mut(j)).and_then(Option::take) {
+                Some(s) => fresh.push(s),
+                None => {
+                    let (w, h) = sizes.get(i).copied().unwrap_or((1920, 1080));
+                    fresh.push(self.make_source(w, h, None));
+                }
+            }
+        }
+        self.sources = fresh;
+        self.looks.truncate(self.sources.len());
+    }
+
     fn make_source(&self, width: u32, height: u32, lut: Option<Arc<LutGpu>>) -> SourceGpu {
         let (width, height) = (width.max(2) & !1, height.max(2) & !1);
         let mk = |label: &str, w: u32, h: u32, format| {
@@ -1752,6 +1772,41 @@ mod tests {
         assert!(prev[0] > 240 && prev[1] < 15, "preview top-left should be red");
         assert_eq!(r.thumbs.len(), 1);
         assert!(r.thumbs[0].3[0] > 240);
+    }
+
+    /// Sources moved, removed and added while it runs keep their pictures.
+    #[test]
+    fn keeps_pictures_when_sources_move() {
+        let settings = CompositorSettings { canvas: (320, 180), background_rgb: [0, 0, 0], background_image: None, preview_width: 160, thumb_width: 64 };
+        let mut c = match Compositor::new(&settings) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("skipping GPU test: {e:#}");
+                return;
+            }
+        };
+        c.add_source(64, 36);
+        c.add_source(64, 36);
+        c.add_source(64, 36);
+        c.upload(0, &solid(64, 36, (1.0, 0.0, 0.0), 1));
+        c.upload(1, &solid(64, 36, (0.0, 1.0, 0.0), 1));
+        c.upload(2, &solid(64, 36, (0.0, 0.0, 1.0), 1));
+        // The first goes, the others move up, a new one joins at the end.
+        c.set_lineup(&[Some(1), Some(2), None], &[(64, 36), (64, 36), (128, 72)]);
+        let full = PadState { x: 0, y: 0, w: 320, h: 180, alpha: 1.0, zorder: 1 };
+        let draw = |c: &mut Compositor, which: usize| {
+            let mut states = vec![PadState::HIDDEN; 3];
+            states[which] = full;
+            let r = c.render(&Layout::One(states), None, &[], 0, 0, &Wants { program: true, ..Default::default() }).unwrap();
+            r.program.unwrap().pixels.with_planes(|pl| (pl.y[90 * pl.y_stride + 160], pl.uv[45 * pl.uv_stride + 160], pl.uv[45 * pl.uv_stride + 161]))
+        };
+        let near = |a: (u8, u8, u8), b: (u8, u8, u8)| (a.0 as i32 - b.0 as i32).abs() <= 3 && (a.1 as i32 - b.1 as i32).abs() <= 3 && (a.2 as i32 - b.2 as i32).abs() <= 3;
+        assert!(near(draw(&mut c, 0), rgb_to_yuv(0.0, 1.0, 0.0)), "green is first now");
+        assert!(near(draw(&mut c, 1), rgb_to_yuv(0.0, 0.0, 1.0)), "blue second");
+        // The new one shows nothing until its first picture, then that.
+        assert!(near(draw(&mut c, 2), rgb_to_yuv(0.0, 0.0, 0.0)), "new: background until it sends");
+        c.upload(2, &solid(128, 72, (1.0, 1.0, 1.0), 5));
+        assert!(near(draw(&mut c, 2), rgb_to_yuv(1.0, 1.0, 1.0)));
     }
 
     /// The vertical version: the scene's tall layout, each source cropped

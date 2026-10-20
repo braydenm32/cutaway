@@ -187,7 +187,7 @@ impl SettingsUi {
             self.draft.audio.push(AudioConfig { name: name.clone(), device: format!("source:{name}"), channels: 2, program_left: 1, program_right: 2, ..Default::default() });
             self.draft.guests.enabled = true;
         }
-        hint(ui, "Adding or removing a spot restarts the video engine (stop recording first). Guests already on stay connected.");
+        hint(ui, "Spots you add or remove change on Apply, even while recording or live. Guests already on stay connected.");
 
         ui.add_space(14.0);
         self.phone_cameras(ui, info);

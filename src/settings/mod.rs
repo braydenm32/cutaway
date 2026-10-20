@@ -154,6 +154,19 @@ pub struct SettingsContext {
     pub guest_status: Vec<crate::engine::guests::GuestInfo>,
     /// NDI receivers watching the program (None: not sending).
     pub ndi_watchers: Option<u32>,
+    /// The sources on the program right now (by uid).
+    pub on_air: Vec<u64>,
+}
+
+/// Applying would take sources or inputs out of a show that's recording or
+/// live: asked first.
+struct RemoveCheck {
+    names: Vec<String>,
+    /// Of those, the ones on the program right now.
+    on_air: Vec<String>,
+    recording: bool,
+    streaming: bool,
+    close: bool,
 }
 
 type EncoderLists = (Vec<String>, Vec<String>);
@@ -174,6 +187,7 @@ pub struct SettingsUi {
     scanning: bool,
     confirm_discard: bool,
     confirm_reset: bool,
+    confirm_remove: Option<RemoveCheck>,
     message: Option<(String, bool)>,
     outputs: Vec<DeviceInfo>,
     sel_graphic: usize,
@@ -234,6 +248,7 @@ impl SettingsUi {
             scanning: false,
             confirm_discard: false,
             confirm_reset: false,
+            confirm_remove: None,
             message: None,
             outputs: crate::platform::list_output_devices(),
             sel_graphic: 0,
@@ -274,10 +289,23 @@ impl SettingsUi {
         self.draft != self.original
     }
 
-    /// Called by the app after it tried to apply.
-    pub fn applied(&mut self, result: Result<(), String>) {
+    /// Called by the app after it tried to apply (`now`: the settings in
+    /// effect).
+    pub fn applied(&mut self, result: Result<(), String>, now: &Config) {
         match result {
             Ok(()) => {
+                // New sources and inputs got their identities: keep them, so
+                // applying again finds them rather than opening them anew.
+                if self.draft.sources.len() == now.sources.len() {
+                    for (d, n) in self.draft.sources.iter_mut().zip(&now.sources) {
+                        d.uid = n.uid;
+                    }
+                }
+                if self.draft.audio.len() == now.audio.len() {
+                    for (d, n) in self.draft.audio.iter_mut().zip(&now.audio) {
+                        d.uid = n.uid;
+                    }
+                }
                 self.original = self.draft.clone();
                 self.message = Some(("Saved".into(), false));
             }
@@ -365,14 +393,20 @@ impl SettingsUi {
                 // ---- bottom bar
                 let valid = self.draft.validate();
                 let restart = self.original.needs_restart(&self.draft);
-                let blocked = restart && (info.recording || info.streaming);
+                let live = info.recording || info.streaming;
+                let blocked = restart && live;
+                let lineup = !restart && self.original.lineup_changed(&self.draft);
                 ui.horizontal(|ui| {
                     if let Err(e) = &valid {
                         ui.label(RichText::new(format!("⚠ {e}")).color(AMBER));
                     } else if blocked {
-                        ui.label(RichText::new("Stop recording and streaming to apply these changes (they restart the video engine).").color(AMBER));
+                        ui.label(RichText::new("Stop recording and streaming to change the program's size or frame rate.").color(AMBER));
                     } else if restart {
                         ui.label(RichText::new("Applying restarts the video engine (previews blink for a moment).").color(TEXT_DIM));
+                    } else if lineup && live {
+                        ui.label(RichText::new("Unsaved changes. Sources you added, removed or changed update on Apply; the show carries on.").color(TEXT_DIM));
+                    } else if lineup {
+                        ui.label(RichText::new("Unsaved changes. Sources you added, removed or changed update on Apply; the rest carries on.").color(TEXT_DIM));
                     } else if self.dirty() {
                         ui.label(RichText::new("Unsaved changes. These apply without interrupting anything.").color(TEXT_DIM));
                     } else if let Some((m, err)) = &self.message {
@@ -381,14 +415,10 @@ impl SettingsUi {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let can_apply = self.dirty() && valid.is_ok() && !blocked;
                         if ui.add_enabled(can_apply || (!self.dirty() && valid.is_ok()), egui::Button::new("OK").min_size(vec2(72.0, 28.0))).clicked() {
-                            action = if self.dirty() {
-                                SettingsAction::Apply { cfg: self.draft.clone(), close: true }
-                            } else {
-                                SettingsAction::Close
-                            };
+                            action = if self.dirty() { self.apply(true, info) } else { SettingsAction::Close };
                         }
                         if ui.add_enabled(can_apply, egui::Button::new("Apply").min_size(vec2(72.0, 28.0))).clicked() {
-                            action = SettingsAction::Apply { cfg: self.draft.clone(), close: false };
+                            action = self.apply(false, info);
                         }
                         if ui.button("Cancel").clicked() {
                             if self.dirty() {
@@ -406,7 +436,10 @@ impl SettingsUi {
         if let Some(a) = self.pending.take() {
             action = a;
         }
-        if (!open || esc) && !self.confirm_discard && !self.confirm_reset {
+        if let Some(a) = self.confirm_remove_window(ctx) {
+            action = a;
+        }
+        if (!open || esc) && !self.confirm_discard && !self.confirm_reset && self.confirm_remove.is_none() {
             if self.dirty() {
                 self.confirm_discard = true;
             } else {
@@ -454,6 +487,72 @@ impl SettingsUi {
             if r.should_close() {
                 self.confirm_reset = false;
             }
+        }
+        action
+    }
+
+    /// Apply the draft, unless that takes sources or inputs out of a show
+    /// that's recording or live: then ask first.
+    fn apply(&mut self, close: bool, info: &SettingsContext) -> SettingsAction {
+        if info.recording || info.streaming {
+            let (names, on_air) = self.leaving(&info.on_air);
+            if !names.is_empty() {
+                self.confirm_remove = Some(RemoveCheck { names, on_air, recording: info.recording, streaming: info.streaming, close });
+                return SettingsAction::None;
+            }
+        }
+        SettingsAction::Apply { cfg: self.draft.clone(), close }
+    }
+
+    /// The sources and inputs applying would remove, and which of them are
+    /// on the program now.
+    fn leaving(&self, on_air: &[u64]) -> (Vec<String>, Vec<String>) {
+        let video: HashSet<u64> = self.draft.sources.iter().map(|s| s.uid).collect();
+        let audio: HashSet<u64> = self.draft.audio.iter().map(|a| a.uid).collect();
+        let gone_video: Vec<&SourceConfig> = self.original.sources.iter().filter(|s| s.uid != 0 && !video.contains(&s.uid)).collect();
+        let mut names: Vec<String> = gone_video.iter().map(|s| s.name.clone()).collect();
+        names.extend(self.original.audio.iter().filter(|a| a.uid != 0 && !audio.contains(&a.uid)).map(|a| a.name.clone()));
+        let live = gone_video.iter().filter(|s| on_air.contains(&s.uid)).map(|s| s.name.clone()).collect();
+        (names, live)
+    }
+
+    fn confirm_remove_window(&mut self, ctx: &egui::Context) -> Option<SettingsAction> {
+        let check = self.confirm_remove.as_ref()?;
+        let mut action = None;
+        let mut done = false;
+        let what = match (check.recording, check.streaming) {
+            (true, true) => "recording and live",
+            (true, false) => "recording",
+            _ => "live",
+        };
+        let r = egui::Modal::new(egui::Id::unique("confirm_remove_sources")).show(ctx, |ui| {
+            ui.set_width(420.0);
+            let one = check.names.len() == 1;
+            ui.heading(format!("Remove {} while {what}?", if one { "this" } else { "these" }));
+            ui.add_space(4.0);
+            ui.label(format!("{} {} the show as soon as you apply.", list_names(&check.names), if one { "leaves" } else { "leave" }));
+            if check.recording {
+                ui.label(if one { "Its recording ends there; everything else keeps recording." } else { "Their recordings end there; everything else keeps recording." });
+            }
+            if !check.on_air.is_empty() {
+                ui.add_space(4.0);
+                let on = list_names(&check.on_air);
+                let is = if check.on_air.len() == 1 { "is" } else { "are" };
+                ui.label(RichText::new(format!("⚠ {on} {is} on the program right now: take another scene first, or that part of the picture goes empty.")).color(AMBER));
+            }
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if ui.button(RichText::new("Remove and apply").color(RED)).clicked() {
+                    action = Some(SettingsAction::Apply { cfg: self.draft.clone(), close: check.close });
+                    done = true;
+                }
+                if ui.button("Keep editing").clicked() {
+                    done = true;
+                }
+            });
+        });
+        if done || r.should_close() {
+            self.confirm_remove = None;
         }
         action
     }
@@ -1527,6 +1626,16 @@ pub(super) fn container_label(c: Container) -> &'static str {
     }
 }
 
+/// "A", "A and B", "A, B and C" (in quotes).
+fn list_names(names: &[String]) -> String {
+    let q: Vec<String> = names.iter().map(|n| format!("\u{201c}{n}\u{201d}")).collect();
+    match q.len() {
+        0 => String::new(),
+        1 => q[0].clone(),
+        n => format!("{} and {}", q[..n - 1].join(", "), q[n - 1]),
+    }
+}
+
 /// Rough, commonly published ranges for live streaming bitrates.
 pub(super) fn recommended_kbps(w: u32, h: u32, fps: u32) -> (u32, u32) {
     let pixels = w.max(h) as u64 * w.min(h) as u64;
@@ -1667,4 +1776,75 @@ pub fn qr_code(ui: &mut egui::Ui, text: &str, size: f32) -> egui::Response {
         }
     }
     resp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctx(recording: bool) -> SettingsContext {
+        SettingsContext {
+            recording,
+            streaming: false,
+            engine_facts: Vec::new(),
+            log: Vec::new(),
+            config_path: None,
+            profiles_dir: None,
+            midi_last: None,
+            midi_connected: Vec::new(),
+            remote_port: None,
+            osc_port: None,
+            captions_status: None,
+            vcam_on: false,
+            input_levels: Vec::new(),
+            stinger: None,
+            guest_reach: Default::default(),
+            guest_base: None,
+            guest_status: Vec::new(),
+            ndi_watchers: None,
+            on_air: Vec::new(),
+        }
+    }
+
+    /// Taking a source out while recording asks first; while not, it doesn't.
+    #[test]
+    fn asks_before_removing_while_recording() {
+        let mut cfg = Config::default();
+        cfg.sources = vec![
+            SourceConfig { name: "Wide".into(), device: "test:bars".into(), ..Default::default() },
+            SourceConfig { name: "Close".into(), device: "test:gradient".into(), ..Default::default() },
+        ];
+        cfg.assign_uids();
+        let close_uid = cfg.sources[1].uid;
+        let mut win = SettingsUi::new(cfg.clone());
+        win.draft.sources.remove(1);
+        win.draft.audio.clear();
+        let mut info = ctx(true);
+        info.on_air = vec![close_uid];
+        assert!(matches!(win.apply(false, &info), SettingsAction::None));
+        let check = win.confirm_remove.take().expect("asks");
+        assert!(check.names.contains(&"Close".to_string()), "{:?}", check.names);
+        assert_eq!(check.on_air, vec!["Close".to_string()]);
+        assert!(matches!(win.apply(false, &ctx(false)), SettingsAction::Apply { .. }));
+        assert!(win.confirm_remove.is_none());
+        // Adding one while recording just applies.
+        let mut win = SettingsUi::new(cfg.clone());
+        win.draft.sources.push(SourceConfig { name: "New".into(), device: "test:smpte".into(), ..Default::default() });
+        assert!(matches!(win.apply(false, &ctx(true)), SettingsAction::Apply { .. }));
+    }
+
+    /// After applying, a source added in the window keeps the identity it
+    /// was given, so applying again doesn't open it a second time.
+    #[test]
+    fn new_sources_keep_their_identity() {
+        let mut cfg = Config::default();
+        cfg.assign_uids();
+        let mut win = SettingsUi::new(cfg.clone());
+        win.draft.sources.push(SourceConfig { name: "New".into(), device: "test:smpte".into(), ..Default::default() });
+        let mut now = win.draft.clone();
+        now.assign_uids();
+        win.applied(Ok(()), &now);
+        assert_eq!(win.draft.sources.last().unwrap().uid, now.sources.last().unwrap().uid);
+        assert!(!win.dirty());
+    }
 }

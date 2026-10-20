@@ -88,6 +88,9 @@ pub fn tc_frame(seconds: f64, fps: u32) -> u32 {
 
 pub enum MuxMsg {
     Video(VideoPacket),
+    /// The video ended before the take did (its source left the show): the
+    /// file ends there, audio included.
+    VideoEnd(Ns),
     Audio(Ns, Arc<Vec<u8>>),
     /// The audio's real length (its last frame is padded).
     AudioEnd(Ns),
@@ -127,6 +130,7 @@ pub fn spawn_mp4(
             let mut track_ends: Vec<(usize, Ns)> = Vec::new();
             let mut failed: Option<anyhow::Error> = None;
             let mut audio_end = None;
+            let mut video_end: Option<Ns> = None;
             for msg in rx {
                 if let Some(c) = &clips {
                     c.push(&msg);
@@ -172,12 +176,14 @@ pub fn spawn_mp4(
                                 report_backup(w);
                             }
                         }
+                        MuxMsg::Audio(t, _) if video_end.is_some_and(|end| t >= end) => {}
                         MuxMsg::Audio(t, d) => match writer.as_mut() {
                             Some((w, _, Some(a))) => w.write(*a, t, &d, true)?,
                             Some(_) => {}
                             None => early_audio.push((t, d)),
                         },
                         MuxMsg::AudioEnd(ns) => audio_end = Some(ns),
+                        MuxMsg::VideoEnd(ns) => video_end = Some(ns),
                         MuxMsg::Track(k, t, d) => match writer.as_mut() {
                             Some((w, ..)) => {
                                 if let Some(&id) = track_ids.get(k) {
@@ -206,6 +212,10 @@ pub fn spawn_mp4(
             }
             match writer {
                 Some((mut w, _, a)) => {
+                    let audio_end = match (audio_end, video_end) {
+                        (Some(a), Some(v)) => Some(a.min(v)),
+                        (a, v) => a.or(v),
+                    };
                     if let (Some(a), Some(ns)) = (a, audio_end) {
                         w.set_duration(a, ns);
                     }
@@ -274,6 +284,11 @@ impl Retimer {
         self.next += 1;
         self.last = Some(frame);
         out
+    }
+
+    /// Where the frames so far end (relative to T0).
+    pub fn end(&self) -> Ns {
+        self.slot_time(self.next)
     }
 
     /// Repeat the last frame up to `end` (relative to T0).
@@ -414,11 +429,22 @@ pub fn spawn_video(
                 }
                 stats.backlog.store((held.len() + rx.len()) as u64, Ordering::Relaxed);
             }
+            // Frames stopped coming before the take's end was decided: the
+            // source left the show, and its file ends here.
+            let left = t1.load(Ordering::Relaxed) > crate::media::clock::now();
             if result.is_ok() {
                 if let Some(r) = retimer.as_mut() {
-                    let end = t1.load(Ordering::Relaxed) - t0;
+                    let end = if left { crate::media::clock::now() } else { t1.load(Ordering::Relaxed) } - t0;
                     for (pts, f) in r.finish(end) {
                         run(&f, pts, &mut enc)?;
+                    }
+                }
+            }
+            if left {
+                if let Some(r) = &retimer {
+                    let _ = mux.send(MuxMsg::VideoEnd(r.end()));
+                    if let Some(p) = &proxy {
+                        let _ = p.mux.send(MuxMsg::VideoEnd(r.end()));
                     }
                 }
             }
@@ -678,6 +704,10 @@ pub struct Take {
     pub export_files: Vec<super::export::ExportFile>,
     /// Time of day at the first frame (seconds since midnight).
     pub tc_seconds: f64,
+    /// The sources and inputs being recorded, as they were when the take
+    /// started (they may be removed from the show before it ends).
+    pub iso_slots: Vec<(String, Arc<super::sources::SourceSlot>)>,
+    pub raw_inputs: Vec<Arc<super::audio::InputShared>>,
 }
 
 impl Take {

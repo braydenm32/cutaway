@@ -14,7 +14,9 @@ pub struct SwitchEvent {
     pub scene: String,
     pub mode: TransitionMode,
     pub duration_ms: u32,
-    /// The single source shown full frame, if the scene is one.
+    /// The single source shown full frame, if the scene is one: its
+    /// identity (`SourceConfig::uid`), which stays put when sources are
+    /// added, removed or moved during a take.
     pub angle: Option<usize>,
 }
 
@@ -69,6 +71,8 @@ impl Fade {
 pub struct Switcher {
     canvas: (u32, u32),
     state: Mutex<State>,
+    /// Each source's identity, by number (for the switch log's angles).
+    uids: Mutex<Vec<u64>>,
     events: Mutex<Vec<SwitchEvent>>,
     black: Mutex<Fade>,
 }
@@ -83,6 +87,7 @@ impl Switcher {
         Switcher {
             canvas,
             state: Mutex::new(State { current: initial, active: None, preview: None, aspects, direction: Direction::Right, dip: [0.0; 3] }),
+            uids: Mutex::new(Vec::new()),
             events: Mutex::new(Vec::new()),
             black: Mutex::new(Fade { from: 0.0, to: 0.0, start: Instant::now(), dur: Duration::ZERO }),
         }
@@ -118,6 +123,46 @@ impl Switcher {
         self.state.lock().unwrap().aspects = aspects;
     }
 
+    /// Each source's identity, by number.
+    pub fn set_uids(&self, uids: Vec<u64>) {
+        *self.uids.lock().unwrap() = uids;
+    }
+
+    /// How many sources there are.
+    pub fn source_count(&self) -> usize {
+        self.state.lock().unwrap().aspects.len()
+    }
+
+    /// The identity of the source a scene shows full frame, if it does.
+    fn angle_of(&self, scene: &Scene) -> Option<usize> {
+        let i = scene.full_frame_source()?;
+        Some(self.uids.lock().unwrap().get(i).map(|u| *u as usize).unwrap_or(i))
+    }
+
+    /// The identity of the source on air full frame now, if one is.
+    pub fn angle_now(&self) -> Option<usize> {
+        self.angle_of(&self.live())
+    }
+
+    /// Sources were added, removed or moved: `from[new] = Some(old)` for
+    /// those kept. What's live, mid-transition and in preview follows them;
+    /// frames of sources that went are dropped.
+    pub fn remap_sources(&self, from: &[Option<usize>], aspects: Vec<f32>, uids: Vec<u64>) {
+        let new_of = |old: usize| from.iter().position(|f| *f == Some(old));
+        let mut st = self.state.lock().unwrap();
+        st.current.remap_sources(&new_of);
+        if let Some(a) = &mut st.active {
+            a.from.remap_sources(&new_of);
+            a.to.remap_sources(&new_of);
+        }
+        if let Some(p) = &mut st.preview {
+            p.remap_sources(&new_of);
+        }
+        st.aspects = aspects;
+        drop(st);
+        *self.uids.lock().unwrap() = uids;
+    }
+
     /// Go live with `scene`.
     pub fn take(&self, scene: Scene, mode: TransitionMode, duration_ms: u32) {
         // A stinger needs its video (`take_stinger`).
@@ -126,7 +171,8 @@ impl Switcher {
         if let Some(a) = st.active.take() {
             st.current = a.to;
         }
-        self.events.lock().unwrap().push(SwitchEvent { at: clock::now(), scene: scene.name.clone(), mode, duration_ms, angle: scene.full_frame_source() });
+        let angle = self.angle_of(&scene);
+        self.events.lock().unwrap().push(SwitchEvent { at: clock::now(), scene: scene.name.clone(), mode, duration_ms, angle });
         if mode == TransitionMode::Cut || duration_ms == 0 || scene == st.current {
             st.current = scene;
         } else {
@@ -143,7 +189,8 @@ impl Switcher {
             st.current = a.to;
         }
         let duration_ms = (duration / 1_000_000).max(1) as u32;
-        self.events.lock().unwrap().push(SwitchEvent { at: clock::now() + delay + cut, scene: scene.name.clone(), mode: TransitionMode::Stinger, duration_ms, angle: scene.full_frame_source() });
+        let angle = self.angle_of(&scene);
+        self.events.lock().unwrap().push(SwitchEvent { at: clock::now() + delay + cut, scene: scene.name.clone(), mode: TransitionMode::Stinger, duration_ms, angle });
         let from = st.current.clone();
         let ns = |n: Ns| Duration::from_nanos(n.max(0) as u64);
         st.active = Some(Active { from, to: scene, mode: TransitionMode::Stinger, start: Instant::now() + ns(delay), dur: ns(duration.max(1)), cut: ns(cut) });
@@ -281,6 +328,30 @@ mod tests {
         // A plain take asking for a stinger mixes instead.
         sw.take(a, TransitionMode::Stinger, 100);
         assert!(matches!(sw.layout(), Layout::One(_)));
+    }
+
+    #[test]
+    fn follows_sources_that_move_or_go() {
+        let names: Vec<String> = ["A", "B", "C"].iter().map(|s| s.to_string()).collect();
+        let scenes = presets(&names);
+        // Live: C full frame. Preview: B.
+        let sw = Switcher::new((1280, 720), vec![16.0 / 9.0; 3], scenes[2].clone());
+        sw.set_uids(vec![10, 20, 30]);
+        sw.set_preview(Some(scenes[1].clone()));
+        assert_eq!(sw.angle_now(), Some(30));
+        // A is removed, a new D is added at the end: C is now number 1.
+        sw.remap_sources(&[Some(1), Some(2), None], vec![16.0 / 9.0; 3], vec![20, 30, 40]);
+        assert_eq!(sw.live().layers.iter().map(|l| l.source).collect::<Vec<_>>(), vec![1]);
+        assert_eq!(sw.preview().unwrap().layers[0].source, 0, "B moved up too");
+        assert_eq!(sw.angle_now(), Some(30), "the same camera");
+        match sw.layout() {
+            Layout::One(s) => assert!(s[1].alpha > 0.5 && s[0].alpha < 0.5 && s[2].alpha < 0.5),
+            _ => panic!(),
+        }
+        // The camera on air goes: nothing of it is left.
+        sw.remap_sources(&[Some(0), Some(2)], vec![16.0 / 9.0; 2], vec![20, 40]);
+        assert!(sw.live().layers.is_empty());
+        assert_eq!(sw.source_count(), 2);
     }
 
     #[test]

@@ -133,7 +133,12 @@ impl Aligner {
                 for _ in 0..n * 2 {
                     self.buf.push_front(0.0);
                 }
-                self.head -= n as u64;
+                // The silence goes in before the first frame: number the
+                // frames after it on (rather than back from the first, which
+                // can't go below zero for audio that's only just started).
+                for a in &mut self.anchors {
+                    a.0 += n as u64;
+                }
             }
             self.resampler.reset();
             let _ = self.resampler.set_resample_ratio_relative(1.0, false);
@@ -431,6 +436,25 @@ pub struct MixShared {
     /// Fade to black for the recording and stream mixes: (start, length,
     /// from, to) in mix time.
     program_fade: Mutex<(Ns, Ns, f32, f32)>,
+    /// Inputs added, removed or moved: waiting for the mixer to take them
+    /// up, and the last change it has.
+    lineup: Mutex<Option<MixLineup>>,
+    lineup_done: AtomicU64,
+    lineups: AtomicU64,
+}
+
+/// One input in a new line-up: one the mixer already has (by its old
+/// number; its identity is there in case it has gone), or a new one.
+pub enum MixSlot {
+    Keep(usize, Arc<InputShared>),
+    New(MixInput),
+}
+
+/// A new line-up of inputs, with their names.
+pub struct MixLineup {
+    pub slots: Vec<MixSlot>,
+    pub names: Vec<String>,
+    generation: u64,
 }
 
 impl MixShared {
@@ -451,9 +475,23 @@ impl MixShared {
             talkback_on: AtomicBool::new(false),
             talkback_dim_db: AtomicU32::new(0),
             program_fade: Mutex::new((0, 0, 1.0, 1.0)),
+            lineup: Mutex::new(None),
+            lineup_done: AtomicU64::new(0),
+            lineups: AtomicU64::new(0),
         });
         m.apply(cfg);
         m
+    }
+
+    /// Hand the mixer a new line-up of inputs; waits (up to a second) until
+    /// it's using it, so taps made afterwards count inputs the new way.
+    pub fn set_lineup(&self, slots: Vec<MixSlot>, names: Vec<String>) {
+        let generation = self.lineups.fetch_add(1, Ordering::Relaxed) + 1;
+        *self.lineup.lock().unwrap() = Some(MixLineup { slots, names, generation });
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while self.lineup_done.load(Ordering::Acquire) < generation && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
     }
     pub fn apply(&self, cfg: &crate::config::MixConfig) {
         self.limiter.store(cfg.limiter, Ordering::Relaxed);
@@ -581,29 +619,86 @@ struct Strip {
     fed: Option<u64>,
 }
 
+impl Strip {
+    fn new(shared: &InputShared) -> Strip {
+        let on = if shared.is_on() { 1.0 } else { 0.0 };
+        shared.changes.lock().unwrap().clear();
+        Strip {
+            aligner: None,
+            chain: None,
+            chain_version: 0,
+            level: on,
+            target: on,
+            step: 0.0,
+            realigns: 0,
+            warned_at: None,
+            meter: MeterAcc::default(),
+            history: VecDeque::new(),
+            fed: None,
+        }
+    }
+}
+
+/// A mix wanted by input number, after the inputs were renumbered
+/// (`new_of[old]`). An input that's gone gives silence.
+fn renumber(kind: MixKind, new_of: &[Option<usize>]) -> MixKind {
+    let n = |i: usize| new_of.get(i).copied().flatten().unwrap_or(usize::MAX);
+    match kind {
+        MixKind::Input(i) => MixKind::Input(n(i)),
+        MixKind::Track { input, post_fader } => MixKind::Track { input: n(input), post_fader },
+        MixKind::Feed { stream, minus, talkback } => {
+            let mut m = 0u64;
+            for i in 0..64 {
+                if minus & (1 << i) != 0 {
+                    if let Some(k) = new_of.get(i).copied().flatten().filter(|k| *k < 64) {
+                        m |= 1 << k;
+                    }
+                }
+            }
+            MixKind::Feed { stream, minus: m, talkback }
+        }
+        k => k,
+    }
+}
+
+/// Take up a new line-up: inputs kept keep their state (timing, processing,
+/// levels); new ones start fresh; every tap follows the new numbers.
+fn take_lineup(l: MixLineup, inputs: &mut Vec<MixInput>, strips: &mut Vec<Strip>, names: &mut Vec<String>, taps: &MixTaps, status: &Mutex<Status>) {
+    let mut old_inputs: Vec<Option<MixInput>> = std::mem::take(inputs).into_iter().map(Some).collect();
+    let mut old_strips: Vec<Option<Strip>> = std::mem::take(strips).into_iter().map(Some).collect();
+    let mut new_of = vec![None; old_inputs.len()];
+    for (k, slot) in l.slots.into_iter().enumerate() {
+        match slot {
+            MixSlot::Keep(j, shared) => match (old_inputs.get_mut(j).and_then(Option::take), old_strips.get_mut(j).and_then(Option::take)) {
+                (Some(i), Some(s)) => {
+                    inputs.push(i);
+                    strips.push(s);
+                    new_of[j] = Some(k);
+                }
+                _ => {
+                    // (Not expected.) Hold its place with silence.
+                    strips.push(Strip::new(&shared));
+                    inputs.push(MixInput { rx: crossbeam_channel::never(), left: 1, right: 2, delay: 0, shared, gaps_expected: true });
+                }
+            },
+            MixSlot::New(input) => {
+                strips.push(Strip::new(&input.shared));
+                inputs.push(input);
+            }
+        }
+    }
+    *names = l.names;
+    for t in taps.lock().unwrap().iter_mut() {
+        t.1 = renumber(t.1, &new_of);
+    }
+    // Meters are by number: start them again.
+    status.lock().unwrap().meters.retain(|k, _| !(k.len() > 1 && k.starts_with('a') && k[1..].bytes().all(|b| b.is_ascii_digit())));
+}
+
 /// The mixer loop: runs until `stop`.
 #[allow(clippy::too_many_arguments)]
-pub fn run_mixer(inputs: Vec<MixInput>, names: Vec<String>, taps: MixTaps, master: Arc<MixShared>, status: Arc<Mutex<Status>>, stop: Arc<AtomicBool>, latency: Ns) {
-    let mut strips: Vec<Strip> = inputs
-        .iter()
-        .map(|inp| {
-            let on = if inp.shared.is_on() { 1.0 } else { 0.0 };
-            inp.shared.changes.lock().unwrap().clear();
-            Strip {
-                aligner: None,
-                chain: None,
-                chain_version: 0,
-                level: on,
-                target: on,
-                step: 0.0,
-                realigns: 0,
-                warned_at: None,
-                meter: MeterAcc::default(),
-                history: VecDeque::new(),
-                fed: None,
-            }
-        })
-        .collect();
+pub fn run_mixer(mut inputs: Vec<MixInput>, mut names: Vec<String>, taps: MixTaps, master: Arc<MixShared>, status: Arc<Mutex<Status>>, stop: Arc<AtomicBool>, latency: Ns) {
+    let mut strips: Vec<Strip> = inputs.iter().map(|inp| Strip::new(&inp.shared)).collect();
     let mut rec = Master::new();
     let mut stream = Master::new();
     let mut leveller = Leveller::default();
@@ -615,6 +710,12 @@ pub fn run_mixer(inputs: Vec<MixInput>, names: Vec<String>, taps: MixTaps, maste
     let mut n = 0u64;
     while !stop.load(Ordering::Relaxed) {
         clock::sleep_until(t + BLOCK_NS + latency);
+        let lineup = master.lineup.lock().unwrap().take();
+        if let Some(l) = lineup {
+            let generation = l.generation;
+            take_lineup(l, &mut inputs, &mut strips, &mut names, &taps, &status);
+            master.lineup_done.store(generation, Ordering::Release);
+        }
         for (i, inp) in inputs.iter().enumerate() {
             let strip = &mut strips[i];
             let mut fresh = Vec::new();
@@ -970,6 +1071,28 @@ mod tests {
         assert!(beep_offset.abs() < 1_500_000, "beep {beep_offset} ns off");
     }
 
+    /// Audio that starts a few milliseconds into the block being read (an
+    /// input just added, or just started): silence first, then the audio,
+    /// in the right place.
+    #[test]
+    fn audio_starting_mid_block() {
+        let mut a = Aligner::new(MIX_RATE);
+        let t = 10 * NS_PER_SEC;
+        // The first audio is captured 4 ms into the block.
+        let start = t + 4_000_000;
+        for k in 0..30 {
+            a.push(start + k * BLOCK_NS, &vec![0.5f32; BLOCK * 2]);
+        }
+        let mut out = vec![0.0f32; BLOCK * 2];
+        let mut blocks = Vec::new();
+        for k in 0..6 {
+            assert!(a.read(t + k * BLOCK_NS, &mut out) || k == 0);
+            blocks.push(out.clone());
+        }
+        // Once it's going: steady audio, never a panic or a gap.
+        assert!(blocks[4].iter().all(|v| (v - 0.5).abs() < 0.02), "steady: {:?}", &blocks[4][..8]);
+    }
+
     #[test]
     fn converts_44k1() {
         let (err, beep_offset) = run(44_100, -30.0, 120.0);
@@ -1022,6 +1145,71 @@ mod tests {
         let (all, minus) = (out[0][100], out[1][100]);
         assert!((all - 0.35).abs() < 0.01, "everyone: {all}");
         assert!((minus - 0.15).abs() < 0.01, "without input 2: {minus}");
+    }
+
+    /// Inputs removed, moved and added while it runs: kept ones carry on,
+    /// and every tap follows its input to its new number.
+    #[test]
+    fn inputs_change_while_mixing() {
+        let now = clock::now();
+        let feed = |v: f32| {
+            let (tx, rx) = crossbeam_channel::bounded(4000);
+            let mut t = now - 300_000_000;
+            while t < now + 3_000_000_000 {
+                tx.send(AudioBlock { pts: t, rate: MIX_RATE, channels: 2, samples: vec![v; BLOCK * 2] }).unwrap();
+                t += BLOCK_NS;
+            }
+            (tx, rx)
+        };
+        let cfg = input(false);
+        let mut inputs = Vec::new();
+        let mut keep_tx = Vec::new();
+        let mut shared = Vec::new();
+        for v in [0.1, 0.2, 0.05] {
+            let (tx, rx) = feed(v);
+            keep_tx.push(tx);
+            let s = InputShared::new(&cfg);
+            shared.push(s.clone());
+            inputs.push(MixInput { rx, left: 1, right: 2, delay: 0, shared: s, gaps_expected: false });
+        }
+        let master = MixShared::new(&crate::config::MixConfig { limiter: false, ..Default::default() });
+        let taps: MixTaps = Arc::new(Mutex::new(Vec::new()));
+        let kinds = [MixKind::Recording, MixKind::Input(1), MixKind::Feed { stream: false, minus: 0b010, talkback: false }, MixKind::Track { input: 2, post_fader: false }];
+        let mut rxs = Vec::new();
+        for (id, k) in kinds.into_iter().enumerate() {
+            let (tx, rx) = crossbeam_channel::unbounded();
+            taps.lock().unwrap().push((id as u64, k, tx));
+            rxs.push(rx);
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let st = Arc::new(Mutex::new(Status::default()));
+        let (s2, m2, t2, st2) = (stop.clone(), master.clone(), taps.clone(), st.clone());
+        let names = vec!["A".to_string(), "B".to_string(), "C".to_string()];
+        let th = std::thread::spawn(move || run_mixer(inputs, names, t2, m2, st2, s2, 60_000_000));
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        let last = |r: &crossbeam_channel::Receiver<AudioBlock>| r.try_iter().last().map(|b| b.samples[100]).unwrap_or(-1.0);
+        let before: Vec<f32> = rxs.iter().map(last).collect();
+        assert!((before[0] - 0.35).abs() < 0.01 && (before[1] - 0.2).abs() < 0.01 && (before[2] - 0.15).abs() < 0.01 && (before[3] - 0.05).abs() < 0.01, "{before:?}");
+        // A goes; B and C move up; D (0.4) joins at the end.
+        let (_dtx, drx) = feed(0.4);
+        let d = MixInput { rx: drx, left: 1, right: 2, delay: 0, shared: InputShared::new(&cfg), gaps_expected: false };
+        master.set_lineup(vec![MixSlot::Keep(1, shared[1].clone()), MixSlot::Keep(2, shared[2].clone()), MixSlot::New(d)], vec!["B".into(), "C".into(), "D".into()]);
+        let kinds_now: Vec<MixKind> = taps.lock().unwrap().iter().map(|t| t.1).collect();
+        assert_eq!(kinds_now[1], MixKind::Input(0), "B's solo follows B");
+        assert_eq!(kinds_now[2], MixKind::Feed { stream: false, minus: 0b001, talkback: false });
+        assert_eq!(kinds_now[3], MixKind::Track { input: 1, post_fader: false });
+        for r in &rxs {
+            let _ = r.try_iter().count();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        let after: Vec<f32> = rxs.iter().map(last).collect();
+        stop.store(true, Ordering::Relaxed);
+        th.join().unwrap();
+        assert!((after[0] - 0.65).abs() < 0.01, "B + C + D: {after:?}");
+        assert!((after[1] - 0.2).abs() < 0.01, "still B on its own: {after:?}");
+        assert!((after[2] - 0.45).abs() < 0.01, "still without B: {after:?}");
+        assert!((after[3] - 0.05).abs() < 0.01, "still C's track: {after:?}");
+        assert!(!st.lock().unwrap().meters.contains_key("a3"));
     }
 
     #[test]

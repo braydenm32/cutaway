@@ -225,31 +225,37 @@ pub struct HealthMonitor {
     pub cfg: Arc<Mutex<Config>>,
     pub status: Arc<Mutex<Status>>,
     pub take: Arc<Mutex<Option<TakeMonitor>>>,
-    pub sources: Vec<Arc<VideoInput>>,
-    pub audio: Vec<Arc<AudioInputDev>>,
+    /// The sources and inputs (they change when they're added or removed).
+    pub lineup: super::SharedLineup,
     pub compositor_skips: Arc<AtomicU64>,
     pub last_frames: Vec<(Instant, u64)>,
+    pub seen: u64,
 }
 
 impl HealthMonitor {
     pub fn tick(&mut self) {
         let cfg = self.cfg.lock().unwrap().clone();
-        let channels: Vec<(u32, bool)> = self.audio.iter().map(|a| (a.channels(), a.cfg.record)).collect();
+        let (generation, sources, audio): (u64, Vec<Arc<VideoInput>>, Vec<Arc<AudioInputDev>>) = {
+            let l = self.lineup.lock().unwrap();
+            (l.generation, l.video.clone(), l.audio.clone())
+        };
+        let channels: Vec<(u32, bool)> = audio.iter().map(|a| (a.channels(), a.cfg.record)).collect();
         let estimate = estimate_rate(&cfg, &channels);
 
         // Sources: frame rate actually arriving.
-        if self.last_frames.len() != self.sources.len() {
-            self.last_frames = self.sources.iter().map(|s| (Instant::now(), s.slot.frames())).collect();
+        if self.last_frames.len() != sources.len() || self.seen != generation {
+            self.seen = generation;
+            self.last_frames = sources.iter().map(|s| (Instant::now(), s.slot.frames())).collect();
         }
         let mut health = Health { compositor_skips: self.compositor_skips.load(Ordering::Relaxed), ..Default::default() };
-        for (s, last) in self.sources.iter().zip(self.last_frames.iter_mut()) {
+        for (s, last) in sources.iter().zip(self.last_frames.iter_mut()) {
             let frames = s.slot.frames();
             let dt = last.0.elapsed().as_secs_f32().max(0.1);
             let fps = (frames.saturating_sub(last.1)) as f32 / dt;
             *last = (Instant::now(), frames);
             health.sources.push(SourceHealth { name: s.cfg.name.clone(), fps, expected_fps: s.cfg.fps, alive: s.alive() });
         }
-        for a in &self.audio {
+        for a in &audio {
             // Sound from a media player or network input comes and goes.
             health.audio.push(AudioHealth { name: a.cfg.name.clone(), alive: a.alive() || a.from_source(), resyncs: a.shared.resyncs() });
         }

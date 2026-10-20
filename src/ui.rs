@@ -182,7 +182,9 @@ pub struct App {
 }
 
 impl App {
-    fn new(cc: &eframe::CreationContext<'_>, cfg: Config, save_path: Option<PathBuf>) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>, mut cfg: Config, save_path: Option<PathBuf>) -> Self {
+        // Every source and input gets its identity for this session.
+        cfg.assign_uids();
         style(&cc.egui_ctx);
         cc.egui_ctx.set_zoom_factor(cfg.ui.scale.clamp(0.5, 3.0));
         let ctx = cc.egui_ctx.clone();
@@ -313,6 +315,9 @@ impl App {
         if self.scenes_dirty {
             self.cfg.scenes = self.scenes.clone();
             self.scenes_dirty = false;
+            if let Some(e) = &self.engine {
+                e.set_scenes(&self.cfg.scenes);
+            }
         }
         self.cfg_dirty = false;
         if let Some(p) = &self.save_path {
@@ -3255,6 +3260,7 @@ impl App {
             guest_base: crate::engine::guests::hub().base_url(),
             guest_status: crate::engine::guests::hub().guests(),
             ndi_watchers: self.engine.as_ref().and_then(|e| e.ndi_watchers()),
+            on_air: self.engine.as_ref().map(|e| e.switcher.live().layers.iter().filter_map(|l| self.cfg.sources.get(l.source).map(|s| s.uid)).collect()).unwrap_or_default(),
         }
     }
 
@@ -3273,7 +3279,7 @@ impl App {
                 let result = self.apply_settings(cfg, ctx);
                 let ok = result.is_ok();
                 if let Some(win) = self.settings.as_mut() {
-                    win.applied(result);
+                    win.applied(result, &self.cfg);
                 }
                 if ok && close {
                     self.settings = None;
@@ -3287,27 +3293,54 @@ impl App {
     }
 
     /// Apply new settings: live where possible, otherwise rebuild the engine.
-    fn apply_settings(&mut self, new: Config, ctx: &egui::Context) -> Result<(), String> {
+    fn apply_settings(&mut self, mut new: Config, ctx: &egui::Context) -> Result<(), String> {
         new.validate().map_err(|e| e.to_string())?;
+        new.assign_uids();
+        // Only the program's size and rate rebuild everything; sources and
+        // inputs change live, one by one.
         let restart = self.cfg.needs_restart(&new) || self.engine.is_none();
-        let sources_changed = new.sources.len() != self.cfg.sources.len() || new.sources.iter().zip(&self.cfg.sources).any(|(a, b)| a.name != b.name);
+        let lineup = !restart && self.cfg.lineup_changed(&new);
+        let sources_changed = new.sources.len() != self.cfg.sources.len() || new.sources.iter().zip(&self.cfg.sources).any(|(a, b)| a.name != b.name || a.uid != b.uid);
         let control_changed = new.remote != self.cfg.remote || new.midi != self.cfg.midi || new.osc != self.cfg.osc;
-        if restart {
-            if self.engine.as_ref().is_some_and(|e| e.is_recording() || e.is_streaming()) {
-                return Err("Stop recording and streaming first".into());
+        if restart && self.engine.as_ref().is_some_and(|e| e.is_recording() || e.is_streaming()) {
+            return Err("Stop recording and streaming first: the program's size or frame rate changed".into());
+        }
+        // Scenes (the user's own, kept if the settings had none) follow the
+        // sources that moved or went.
+        if new.scenes.is_empty() {
+            new.scenes = self.cfg.scenes.clone();
+        }
+        let old_uids: Vec<u64> = self.cfg.sources.iter().map(|s| s.uid).collect();
+        let new_uids: Vec<u64> = new.sources.iter().map(|s| s.uid).collect();
+        if old_uids != new_uids {
+            let new_of = |old: usize| old_uids.get(old).and_then(|u| new_uids.iter().position(|n| n == u));
+            for sc in &mut new.scenes {
+                sc.remap_sources(&new_of);
             }
-        } else if let Some(e) = &self.engine {
-            e.update_config(&new).map_err(|e| format!("{e:#}"))?;
+        }
+        let mut notes = Vec::new();
+        if !restart {
+            if let Some(e) = self.engine.as_mut() {
+                e.check_config(&new).map_err(|e| format!("{e:#}"))?;
+                if lineup {
+                    notes = e.apply_lineup(&new);
+                }
+                e.update_config(&new).map_err(|e| format!("{e:#}"))?;
+            }
+        }
+        if lineup {
+            // Pictures and meters are by number.
+            self.textures.clear();
+            self.peak_hold.clear();
         }
         let vcam_was = self.engine.as_ref().is_some_and(|e| e.virtual_camera_on()) || self.starting.as_ref().is_some_and(|s| s.vcam);
-        let keep_scenes = std::mem::take(&mut self.cfg.scenes);
         self.cfg = new;
-        if self.cfg.scenes.is_empty() {
-            self.cfg.scenes = keep_scenes;
-        }
         self.scenes = if self.cfg.scenes.is_empty() { self.cfg.effective_scenes() } else { self.cfg.scenes.clone() };
         if sources_changed {
             self.reconcile_scenes();
+            if let Some(e) = &self.engine {
+                e.set_scenes(&self.cfg.scenes);
+            }
         }
         ctx.set_zoom_factor(self.cfg.ui.scale.clamp(0.5, 3.0));
         if restart {
@@ -3319,6 +3352,16 @@ impl App {
             self.apply_control_settings();
         }
         self.save_config();
+        if let Some(e) = &self.engine {
+            let mut st = e.status.lock().unwrap();
+            for n in &notes {
+                st.push(LogLevel::Info, n.clone());
+            }
+        }
+        if let Some(first) = notes.first() {
+            let more = if notes.len() > 1 { format!(" (and {} more in the log)", notes.len() - 1) } else { String::new() };
+            self.toast(format!("{first}{more}"), false);
+        }
         Ok(())
     }
 
