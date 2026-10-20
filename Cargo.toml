@@ -1,6 +1,6 @@
 [package]
 name = "cutaway"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 description = "Multi-camera ISO recorder, live switcher and streamer (software take on a hardware video production console)"
 license = "MIT"
