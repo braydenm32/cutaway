@@ -1133,7 +1133,6 @@ Health window are the places to start:
 - Live captions (the Speech framework) and auto-framing and background
   removal (the Vision framework).
 - The Stream Deck plugin in the real Stream Deck app.
-- Changing the stream's bitrate mid-stream (adaptive bitrate) with
-  VideoToolbox, and NDI output and PTZ control on a real network.
+- NDI output and PTZ control on a real network.
 - Phone cameras from a real iPhone or Android phone, and uploads to the real
   YouTube and Google Drive.
