@@ -445,11 +445,17 @@ impl Engine {
         };
         let slots: Vec<Arc<SourceSlot>> = cfg.sources.iter().enumerate().map(|(i, sc)| SourceSlot::new(i, delay_of(sc), VIDEO_LATENCY)).collect();
         let peers: Arc<Vec<(String, Arc<SourceSlot>)>> = Arc::new(cfg.sources.iter().zip(&slots).map(|(sc, s)| (sc.name.clone(), s.clone())).collect());
-        for (i, sc) in cfg.sources.iter().enumerate() {
+        let inputs: Vec<Arc<inputs::VideoInput>> = cfg.sources.iter().enumerate().map(|(i, sc)| inputs::VideoInput::new(i, sc.clone(), slots[i].clone(), hub.clone(), peers.clone())).collect();
+        let devs: Vec<Vec<crate::devices::DeviceInfo>> = cfg.sources.iter().map(|sc| device_cache.video(&sc.device).to_vec()).collect();
+        // Opened side by side: cameras can take a second or more each to
+        // start, and the window waits for this.
+        let opened: Vec<Result<String>> = std::thread::scope(|scope| {
+            let jobs: Vec<_> = inputs.iter().zip(&devs).map(|(input, devs)| scope.spawn(move || input.open(devs))).collect();
+            jobs.into_iter().map(|j| j.join().unwrap_or_else(|_| Err(anyhow::anyhow!("opening it failed unexpectedly")))).collect()
+        });
+        for (((i, sc), input), opened) in cfg.sources.iter().enumerate().zip(inputs).zip(opened) {
             let slot = slots[i].clone();
-            let input = inputs::VideoInput::new(i, sc.clone(), slot.clone(), hub.clone(), peers.clone());
-            let devs = device_cache.video(&sc.device).to_vec();
-            match input.open(&devs) {
+            match opened {
                 Err(e) => {
                     let mut st = status.lock().unwrap();
                     st.push(LogLevel::Error, format!("{}: {e:#}. It will connect automatically when available.", sc.name));

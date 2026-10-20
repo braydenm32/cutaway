@@ -715,7 +715,7 @@ impl App {
                 })?;
                 self.go_segment(to);
                 Ok(match to {
-                    Some(i) => format!("Segment {}: {}", i + 1, self.cfg.rundown.segments[i].name),
+                    Some(i) => format!("Segment {}: {}", i + 1, self.cfg.rundown.segments.get(i).map(|s| s.name.as_str()).unwrap_or("")),
                     None => "Rundown stopped".into(),
                 })
             }

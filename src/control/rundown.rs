@@ -69,8 +69,9 @@ impl Rundown {
                 Some(i) if i + 1 < n => Some(Some(i + 1)),
                 Some(_) => None,
             },
+            // (Segments may have been removed since: stay inside the list.)
             RundownCmd::Previous => match self.current {
-                Some(i) if i > 0 => Some(Some(i - 1)),
+                Some(i) if i > 0 => Some(Some((i - 1).min(n - 1))),
                 _ => None,
             },
             RundownCmd::Go(t) => {
@@ -166,6 +167,11 @@ mod tests {
         assert_eq!(r.target(&RundownCmd::Next, &s), Some(Some(1)));
         assert_eq!(r.target(&RundownCmd::Go(Target::Name("outro".into())), &s), Some(Some(2)));
         assert_eq!(r.target(&RundownCmd::Go(Target::Index(7)), &s), None);
+        // Segments removed while it runs: back still lands on one that's there.
+        let mut late = Rundown::default();
+        late.go(Some(2));
+        assert_eq!(late.target(&RundownCmd::Previous, &s[..1]), Some(Some(0)));
+        assert_eq!(late.target(&RundownCmd::Next, &s[..1]), None);
         // The intro ran 15 s over.
         r.started = Some(Instant::now() - Duration::from_secs(75));
         r.show_started = r.started;
