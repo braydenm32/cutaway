@@ -68,7 +68,7 @@ impl SettingsUi {
                     }
                 });
                 let one = names.iter().position(|n| n.eq_ignore_ascii_case(&l.source));
-                ui.label(RichText::new(describe(&vertical::arrange(scene, l.mode, one, aspect), &names)).color(TEXT_DIM).size(12.0));
+                ui.label(RichText::new(describe(&vertical::arrange(scene, l.mode, one, aspect), &names)).color(TEXT_DIM).size(13.0));
                 ui.end_row();
                 if l != before {
                     set_layout(&mut self.draft.vertical.layouts, l);
@@ -85,14 +85,14 @@ impl SettingsUi {
                 let before = f.clone();
                 ui.label(RichText::new(n).strong());
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("left").color(TEXT_DIM).size(12.0));
+                    ui.label(RichText::new("left").color(TEXT_DIM).size(13.0));
                     ui.add(egui::Slider::new(&mut f.x, 0.0..=1.0).show_value(false));
-                    ui.label(RichText::new("right").color(TEXT_DIM).size(12.0));
+                    ui.label(RichText::new("right").color(TEXT_DIM).size(13.0));
                 });
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("up").color(TEXT_DIM).size(12.0));
+                    ui.label(RichText::new("up").color(TEXT_DIM).size(13.0));
                     ui.add(egui::Slider::new(&mut f.y, 0.0..=1.0).show_value(false));
-                    ui.label(RichText::new("down").color(TEXT_DIM).size(12.0));
+                    ui.label(RichText::new("down").color(TEXT_DIM).size(13.0));
                 });
                 ui.horizontal(|ui| {
                     ui.add(egui::Slider::new(&mut f.zoom, 1.0..=3.0).step_by(0.05).suffix("×").text("zoom"));

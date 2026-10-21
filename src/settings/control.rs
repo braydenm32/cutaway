@@ -25,7 +25,7 @@ impl SettingsUi {
                         r.pin = format!("{:04}", n % 10_000);
                     }
                     if r.pin.trim().is_empty() {
-                        ui.label(RichText::new("anyone on the network could control the show").color(AMBER).size(11.5));
+                        ui.label(RichText::new("anyone on the network could control the show").color(AMBER).size(12.5));
                     }
                 });
                 ui.end_row();
@@ -50,7 +50,7 @@ impl SettingsUi {
                 hint(ui, "Any button that can open a web address can run a command:");
                 let pin = if r.pin.trim().is_empty() { String::new() } else { format!("&pin={}", r.pin.trim()) };
                 for (cmd, what) in [("scene:1", "take scene 1"), ("preview:2", "preview scene 2"), ("take", "take preview to program"), ("record", "record on/off"), ("marker", "add a marker"), ("graphic:1", "graphic 1 on/off")] {
-                    ui.label(RichText::new(format!("{url}/api/action?do={cmd}{pin}    ({what})")).monospace().size(11.5).color(TEXT_DIM));
+                    ui.label(RichText::new(format!("{url}/api/action?do={cmd}{pin}    ({what})")).monospace().size(12.5).color(TEXT_DIM));
                 }
                 hint(ui, "The full command list is in the README. Scripts can also connect to ws://…/api/ws for live state.");
             }
@@ -112,8 +112,8 @@ impl SettingsUi {
                     ("/cutaway/marker \"Guest arrives\"  ·  /cutaway/source/3", "a marker; a source full screen"),
                 ] {
                     ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new(addr).monospace().size(11.5).color(TEXT_DIM));
-                        ui.label(RichText::new(what).size(11.5).color(TEXT_DIM));
+                        ui.label(RichText::new(addr).monospace().size(12.5).color(TEXT_DIM));
+                        ui.label(RichText::new(what).size(12.5).color(TEXT_DIM));
                     });
                 }
                 hint(ui, "State goes back to the address above whenever it changes: /cutaway/scene/N and /cutaway/preview/N (1 or 0), /cutaway/record, /cutaway/live, /cutaway/graphic/N, /cutaway/audio/N, /cutaway/level/N (0–1), /cutaway/tally/N and more (see the README).");
@@ -223,7 +223,7 @@ impl SettingsUi {
                     let is_current = *name == current;
                     ui.label(RichText::new(name).strong().color(if is_current { GREEN } else { Color32::WHITE }));
                     if is_current {
-                        ui.label(RichText::new("(these settings)").size(11.5).color(TEXT_DIM));
+                        ui.label(RichText::new("(these settings)").size(12.5).color(TEXT_DIM));
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui.small_button("Delete").clicked() {

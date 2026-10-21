@@ -35,7 +35,7 @@ impl SettingsUi {
             {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new(format!("{}.", i + 1)).strong());
-                    ui.label(RichText::new(*step).size(13.0));
+                    ui.label(RichText::new(*step).size(14.0));
                 });
             }
             hint(ui, "YouTube keeps videos uploaded through a project Google hasn't audited private; make them public yourself in YouTube Studio (or apply for Google's audit). Drive uploads have no such limit. Cutaway only sees the Drive files it makes.");

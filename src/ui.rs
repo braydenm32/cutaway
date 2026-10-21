@@ -3612,8 +3612,7 @@ fn fmt_clock(d: Duration) -> String {
 }
 
 fn style(ctx: &egui::Context) {
-    ctx.set_visuals(egui::Visuals::dark());
-    let mut style = (*ctx.global_style()).clone();
+    let mut style = egui::Style { visuals: egui::Visuals::dark(), ..(*ctx.global_style()).clone() };
     style.visuals.panel_fill = PANEL;
     style.visuals.window_fill = PANEL;
     style.visuals.extreme_bg_color = BG;
@@ -3624,5 +3623,10 @@ fn style(ctx: &egui::Context) {
     style.visuals.window_stroke = Stroke::new(1.0, LINE);
     style.spacing.item_spacing = vec2(8.0, 6.0);
     style.spacing.button_padding = vec2(10.0, 5.0);
-    ctx.set_global_style(style);
+    // Cutaway is dark whatever the computer's appearance: its colours are
+    // made for it, and on a light-mode computer windows and pop-ups would
+    // otherwise turn white under light text.
+    ctx.set_style_of(egui::Theme::Dark, style.clone());
+    ctx.set_style_of(egui::Theme::Light, style);
+    ctx.set_theme(egui::ThemePreference::Dark);
 }

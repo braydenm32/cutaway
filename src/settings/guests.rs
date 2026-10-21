@@ -33,7 +33,7 @@ impl SettingsUi {
                     ui.horizontal(|ui| {
                         qr_code(ui, &link, 132.0);
                         ui.vertical(|ui| {
-                            ui.add(egui::Label::new(RichText::new(&link).monospace().size(12.0)).truncate());
+                            ui.add(egui::Label::new(RichText::new(&link).monospace().size(13.0)).truncate());
                             if ui.small_button("Copy link").clicked() {
                                 ui.ctx().copy_text(link.clone());
                                 self.message = Some((format!("Copied {}'s link", s.name), false));
@@ -127,7 +127,7 @@ impl SettingsUi {
                     Some(base) if self.original.sources.iter().any(|o| o.guest_id() == Some(id.as_str())) => {
                         let link = format!("{base}/g/{id}");
                         ui.horizontal(|ui| {
-                            ui.add(egui::Label::new(RichText::new(&link).monospace().size(12.0)).truncate());
+                            ui.add(egui::Label::new(RichText::new(&link).monospace().size(13.0)).truncate());
                             if ui.small_button("Copy").clicked() {
                                 ui.ctx().copy_text(link.clone());
                                 self.message = Some((format!("Copied {}'s link", s.name), false));
@@ -135,7 +135,7 @@ impl SettingsUi {
                         });
                     }
                     _ => {
-                        ui.label(RichText::new("the link appears once guests are on and this is applied").color(TEXT_DIM).size(12.0));
+                        ui.label(RichText::new("the link appears once guests are on and this is applied").color(TEXT_DIM).size(13.0));
                     }
                 }
                 if ui.small_button("Remove").clicked() {

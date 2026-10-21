@@ -83,7 +83,7 @@ impl SettingsUi {
                                     whisper::download(&c.language, c.model);
                                 }
                                 if let Some(e) = d.and_then(|d| d.error) {
-                                    ui.label(RichText::new(e).color(AMBER).size(11.5));
+                                    ui.label(RichText::new(e).color(AMBER).size(12.5));
                                 }
                             });
                         }

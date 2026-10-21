@@ -127,7 +127,7 @@ impl SettingsUi {
                     let s = &self.draft.sources[i];
                     let text = format!("{}  {}", i + 1, s.name);
                     let sub = short_device(&s.device);
-                    let b = egui::Button::selectable(self.sel_source == i, RichText::new(format!("{text}\n{sub}")).size(13.0)).min_size(vec2(220.0, 40.0));
+                    let b = egui::Button::selectable(self.sel_source == i, RichText::new(format!("{text}\n{sub}")).size(14.0)).min_size(vec2(220.0, 40.0));
                     if ui.add(b).clicked() {
                         self.sel_source = i;
                     }
@@ -440,7 +440,7 @@ impl SettingsUi {
                                 qr_code(ui, link, 150.0);
                                 ui.vertical(|ui| {
                                     ui.label(RichText::new("Scan with the phone's camera app").strong());
-                                    ui.add(egui::Label::new(RichText::new(link).monospace().size(12.0)).truncate());
+                                    ui.add(egui::Label::new(RichText::new(link).monospace().size(13.0)).truncate());
                                     if ui.small_button("Copy link").clicked() {
                                         ui.ctx().copy_text(link.clone());
                                     }
@@ -453,7 +453,7 @@ impl SettingsUi {
                 } else {
                     if let Some(link) = &link {
                         ui.horizontal(|ui| {
-                            ui.add(egui::Label::new(RichText::new(link).monospace().size(12.0)).truncate());
+                            ui.add(egui::Label::new(RichText::new(link).monospace().size(13.0)).truncate());
                             if ui.small_button("Copy link").clicked() {
                                 ui.ctx().copy_text(link.clone());
                             }
@@ -626,7 +626,7 @@ fn media_editor(ui: &mut egui::Ui, m: &mut MediaConfig) {
                 let missing = !f.exists();
                 ui.label(RichText::new(&name).color(if missing { AMBER } else { Color32::WHITE })).on_hover_text(f.display().to_string());
                 if missing {
-                    ui.label(RichText::new("missing").color(AMBER).size(11.0));
+                    ui.label(RichText::new("missing").color(AMBER).size(12.0));
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.small_button("✕").clicked() {

@@ -370,6 +370,20 @@ impl SettingsUi {
     }
 
     pub fn show(&mut self, ctx: &egui::Context, info: &SettingsContext) -> SettingsAction {
+        // Settings' text is a little larger than the main window's (its
+        // drop-downs and explanations too, which take the app's style).
+        let normal = ctx.global_style();
+        let mut larger = (*normal).clone();
+        for f in larger.text_styles.values_mut() {
+            f.size = (f.size * TEXT_SCALE * 2.0).round() / 2.0;
+        }
+        ctx.set_global_style(larger);
+        let action = self.show_window(ctx, info);
+        ctx.set_global_style(normal);
+        action
+    }
+
+    fn show_window(&mut self, ctx: &egui::Context, info: &SettingsContext) -> SettingsAction {
         let mut action = SettingsAction::None;
         let mut open = true;
         if self.scanning && self.encoders.lock().unwrap().is_some() {
@@ -381,7 +395,7 @@ impl SettingsUi {
         let esc = ctx.input(|i| i.key_pressed(egui::Key::Escape));
 
         let screen = ctx.content_rect();
-        let size = vec2((screen.width() - 80.0).clamp(640.0, 1040.0), (screen.height() - 80.0).clamp(420.0, 720.0));
+        let size = vec2((screen.width() - 80.0).clamp(640.0, 1120.0), (screen.height() - 80.0).clamp(420.0, 780.0));
         egui::Window::new("Settings")
             .open(&mut open)
             .collapsible(false)
@@ -393,16 +407,16 @@ impl SettingsUi {
                 ui.horizontal_top(|ui| {
                     // ---- sidebar: the groups
                     ui.vertical(|ui| {
-                        ui.set_width(190.0);
+                        ui.set_width(204.0);
                         ui.set_min_height(body_h);
                         let here = self.section.group();
                         for g in Group::ALL {
                             let changed = g.sections().iter().any(|s| self.section_dirty(*s));
                             let mut text = egui::text::LayoutJob::default();
                             let name = if changed { format!("{}  •\n", g.label()) } else { format!("{}\n", g.label()) };
-                            text.append(&name, 0.0, egui::TextFormat::simple(egui::FontId::proportional(15.0), if g == here { Color32::WHITE } else { Color32::from_rgb(214, 218, 226) }));
-                            text.append(g.summary(), 0.0, egui::TextFormat::simple(egui::FontId::proportional(11.5), TEXT_DIM));
-                            let b = egui::Button::selectable(g == here, text).min_size(vec2(190.0, 46.0));
+                            text.append(&name, 0.0, egui::TextFormat::simple(egui::FontId::proportional(16.0), if g == here { Color32::WHITE } else { Color32::from_rgb(214, 218, 226) }));
+                            text.append(g.summary(), 0.0, egui::TextFormat::simple(egui::FontId::proportional(12.5), TEXT_DIM));
+                            let b = egui::Button::selectable(g == here, text).min_size(vec2(204.0, 50.0));
                             if ui.add(b).clicked() && g != here {
                                 self.last_tab.insert(here, self.section);
                                 self.section = self.last_tab.get(&g).copied().unwrap_or(g.sections()[0]);
@@ -413,7 +427,7 @@ impl SettingsUi {
                     ui.separator();
                     // ---- content: the group's pages as tabs, then the page
                     ui.vertical(|ui| {
-                        ui.set_width(size.x - 220.0);
+                        ui.set_width(size.x - 234.0);
                         let tabs = self.section.group().sections();
                         let mut tabs_h = 0.0;
                         if tabs.len() > 1 {
@@ -421,7 +435,7 @@ impl SettingsUi {
                                 for &t in tabs {
                                     let text = if self.section_dirty(t) { format!("{}  •", t.label()) } else { t.label().to_string() };
                                     let on = self.section == t;
-                                    let b = egui::Button::selectable(on, RichText::new(text).size(13.5)).min_size(vec2(0.0, 28.0));
+                                    let b = egui::Button::selectable(on, RichText::new(text).size(14.5)).min_size(vec2(0.0, 30.0));
                                     if ui.add(b).clicked() {
                                         self.section = t;
                                     }
@@ -757,7 +771,7 @@ impl SettingsUi {
                     let a = &self.draft.audio[i];
                     let b = egui::Button::selectable(
                         self.sel_audio == i,
-                        RichText::new(format!("{}\n{} · {} ch", a.name, short_audio_device(&a.device), a.channels)).size(13.0),
+                        RichText::new(format!("{}\n{} · {} ch", a.name, short_audio_device(&a.device), a.channels)).size(14.0),
                     )
                     .min_size(vec2(220.0, 40.0));
                     if ui.add(b).clicked() {
@@ -1057,7 +1071,7 @@ impl SettingsUi {
                         });
                     }
                     if !prores_ok {
-                        ui.label(RichText::new("ProRes needs a Mac").color(TEXT_DIM).size(11.5));
+                        ui.label(RichText::new("ProRes needs a Mac").color(TEXT_DIM).size(12.5));
                     }
                 });
                 ui.end_row();
@@ -1141,7 +1155,7 @@ impl SettingsUi {
                         }
                     });
                     if let Some((note, err)) = &self.resolve_note {
-                        ui.label(RichText::new(note).color(if *err { AMBER } else { GREEN }).size(12.0));
+                        ui.label(RichText::new(note).color(if *err { AMBER } else { GREEN }).size(13.0));
                     }
                 });
                 ui.end_row();
@@ -1232,7 +1246,7 @@ impl SettingsUi {
                         let warn = if d.problem().is_some() { "  ⚠" } else { "" };
                         let b = egui::Button::selectable(
                             self.sel_dest == i,
-                            RichText::new(format!("{}{warn}\n{}", d.name, d.service.label())).size(13.0),
+                            RichText::new(format!("{}{warn}\n{}", d.name, d.service.label())).size(14.0),
                         )
                         .min_size(vec2(186.0, 40.0));
                         if ui.add(b).clicked() {
@@ -1440,7 +1454,7 @@ impl SettingsUi {
             for d in list {
                 ui.label(format!("• {}", d.name));
                 if !d.summary.is_empty() {
-                    ui.label(RichText::new(format!("    {}", d.summary)).size(11.5).color(TEXT_DIM));
+                    ui.label(RichText::new(format!("    {}", d.summary)).size(12.5).color(TEXT_DIM));
                 }
             }
             ui.add_space(4.0);
@@ -1465,7 +1479,7 @@ impl SettingsUi {
                     LogLevel::Warning => AMBER,
                     LogLevel::Error => RED,
                 };
-                ui.label(RichText::new(format!("{}  {}", l.time, l.text)).monospace().size(11.0).color(color));
+                ui.label(RichText::new(format!("{}  {}", l.time, l.text)).monospace().size(12.0).color(color));
             }
         });
     }
@@ -1490,9 +1504,9 @@ pub(super) fn title(ui: &mut egui::Ui, _text: &str, sub: &str) {
 /// A part of a page that folds away, with how it's set when folded.
 pub(super) fn part<R>(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, name: &str, state: &str, open: bool, body: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
     let mut job = egui::text::LayoutJob::default();
-    job.append(name, 0.0, egui::TextFormat::simple(egui::FontId::proportional(14.5), Color32::WHITE));
+    job.append(name, 0.0, egui::TextFormat::simple(egui::FontId::proportional(15.5), Color32::WHITE));
     if !state.is_empty() {
-        job.append(&format!("   {state}"), 0.0, egui::TextFormat::simple(egui::FontId::proportional(12.5), TEXT_DIM));
+        job.append(&format!("   {state}"), 0.0, egui::TextFormat::simple(egui::FontId::proportional(13.5), TEXT_DIM));
     }
     let r = egui::CollapsingHeader::new(job).id_salt(id).default_open(open).show(ui, |ui| {
         ui.add_space(4.0);
@@ -1505,12 +1519,15 @@ pub(super) fn part<R>(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::De
 }
 
 pub(super) fn subtitle(ui: &mut egui::Ui, text: &str) {
-    ui.label(RichText::new(text.to_uppercase()).size(11.5).strong().color(TEXT_DIM).extra_letter_spacing(1.0));
+    ui.label(RichText::new(text.to_uppercase()).size(12.5).strong().color(TEXT_DIM).extra_letter_spacing(1.0));
     ui.add_space(2.0);
 }
 
 /// The width every setting's name takes, so rows line up down a page.
-const LABEL_W: f32 = 176.0;
+const LABEL_W: f32 = 196.0;
+
+/// How much larger Settings' text is than the main window's.
+const TEXT_SCALE: f32 = 1.12;
 
 /// A setting's name, with an ⓘ that explains it (on hover) when there's
 /// more to say.
@@ -1532,15 +1549,15 @@ pub(super) fn label(ui: &mut egui::Ui, text: &str) {
 }
 
 fn help_text(ui: &mut egui::Ui, text: &str) {
-    ui.set_max_width(340.0);
-    ui.label(RichText::new(text).size(13.0));
+    ui.set_max_width(360.0);
+    ui.label(RichText::new(text).size(14.0));
 }
 
 /// A table's column heading, explained on hover like a setting's name.
 pub(super) fn column_head(ui: &mut egui::Ui, text: &str) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        ui.label(RichText::new(text).color(TEXT_DIM).size(12.0));
+        ui.label(RichText::new(text).color(TEXT_DIM).size(13.0));
         if let Some(h) = help::get(text) {
             let i = info_icon(ui);
             if i.hovered() {
@@ -1552,11 +1569,11 @@ pub(super) fn column_head(ui: &mut egui::Ui, text: &str) {
 
 /// A small ⓘ.
 pub(super) fn info_icon(ui: &mut egui::Ui) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(14.0, 14.0), egui::Sense::hover());
+    let (rect, resp) = ui.allocate_exact_size(vec2(15.0, 15.0), egui::Sense::hover());
     let c = if resp.hovered() { ACCENT } else { Color32::from_rgb(120, 128, 142) };
     let p = ui.painter();
-    p.circle_stroke(rect.center(), 6.0, egui::Stroke::new(1.1, c));
-    p.text(rect.center() + vec2(0.0, 0.5), egui::Align2::CENTER_CENTER, "i", egui::FontId::proportional(10.0), c);
+    p.circle_stroke(rect.center(), 6.5, egui::Stroke::new(1.1, c));
+    p.text(rect.center() + vec2(0.0, 0.5), egui::Align2::CENTER_CENTER, "i", egui::FontId::proportional(10.5), c);
     resp
 }
 
@@ -1572,7 +1589,7 @@ pub(super) fn check(ui: &mut egui::Ui, value: &mut bool, text: impl Into<egui::W
 }
 
 pub(super) fn hint(ui: &mut egui::Ui, text: &str) {
-    ui.add(egui::Label::new(RichText::new(text).size(12.0).color(TEXT_DIM)).wrap());
+    ui.add(egui::Label::new(RichText::new(text).size(13.0).color(TEXT_DIM)).wrap());
 }
 
 pub(super) fn short_audio_device(device: &str) -> String {
@@ -1648,7 +1665,7 @@ pub(super) fn audio_device_combo(ui: &mut egui::Ui, value: &mut String, devices:
         }
         if crate::platform::app_audio::available() {
             ui.separator();
-            ui.label(RichText::new("Sound from an app").color(TEXT_DIM).size(12.0));
+            ui.label(RichText::new("Sound from an app").color(TEXT_DIM).size(13.0));
             match apps {
                 None => {
                     ui.spinner();
@@ -1710,7 +1727,7 @@ pub(super) fn fps_picker(ui: &mut egui::Ui, id: &str, fps: &mut u32, allowed: Op
         ui.add(egui::DragValue::new(fps).range(1..=120).suffix(" fps"));
         if let Some(a) = allowed {
             if !a.contains(fps) {
-                ui.label(RichText::new("(converted from the device's rate)").size(11.5).color(TEXT_DIM));
+                ui.label(RichText::new("(converted from the device's rate)").size(12.5).color(TEXT_DIM));
             }
         }
     });
@@ -1887,8 +1904,8 @@ pub fn ndi_offer(ui: &mut egui::Ui) {
 pub fn ndi_credit(ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        ui.label(RichText::new(crate::net::ndi_install::TRADEMARK).size(11.0).color(TEXT_DIM));
-        ui.hyperlink_to(RichText::new("ndi.video").size(11.0), crate::net::ndi_install::SITE);
+        ui.label(RichText::new(crate::net::ndi_install::TRADEMARK).size(12.0).color(TEXT_DIM));
+        ui.hyperlink_to(RichText::new("ndi.video").size(12.0), crate::net::ndi_install::SITE);
     });
 }
 

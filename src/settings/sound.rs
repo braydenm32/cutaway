@@ -249,7 +249,7 @@ impl SettingsUi {
                             egui::Grid::new("items").num_columns(3).spacing([12.0, 4.0]).striped(true).show(ui, |ui| {
                                 for it in items {
                                     let kind = if it.kind == SyrinKind::Mood { "mood".to_string() } else if it.what.is_empty() { "sound".to_string() } else { it.what.clone() };
-                                    ui.label(RichText::new(kind).color(TEXT_DIM).size(12.0));
+                                    ui.label(RichText::new(kind).color(TEXT_DIM).size(13.0));
                                     ui.label(&it.name);
                                     let added = have.contains(&(it.kind, it.id));
                                     if ui.add_enabled(!added, egui::Button::new(if added { "added" } else { "＋ Add" }).small()).clicked() {

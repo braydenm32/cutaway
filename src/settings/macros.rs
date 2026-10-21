@@ -17,7 +17,7 @@ impl SettingsUi {
                 ui.set_width(220.0);
                 for i in 0..n {
                     let m = &self.draft.macros[i];
-                    let b = egui::Button::selectable(self.sel_macro == i, RichText::new(format!("{}. {}", i + 1, m.name)).size(13.0)).min_size(vec2(220.0, 30.0));
+                    let b = egui::Button::selectable(self.sel_macro == i, RichText::new(format!("{}. {}", i + 1, m.name)).size(14.0)).min_size(vec2(220.0, 30.0));
                     if ui.add(b).clicked() {
                         self.sel_macro = i;
                     }

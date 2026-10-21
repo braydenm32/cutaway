@@ -28,7 +28,7 @@ impl SettingsUi {
                         GraphicKind::Clock => "clock",
                         GraphicKind::Ticker => "ticker",
                     };
-                    let b = egui::Button::selectable(self.sel_graphic == i, RichText::new(format!("{}\n{kind}{}", g.name, if i < 9 { format!(" · Alt+{}", i + 1) } else { String::new() })).size(13.0))
+                    let b = egui::Button::selectable(self.sel_graphic == i, RichText::new(format!("{}\n{kind}{}", g.name, if i < 9 { format!(" · Alt+{}", i + 1) } else { String::new() })).size(14.0))
                         .min_size(vec2(220.0, 40.0));
                     if ui.add(b).clicked() {
                         self.sel_graphic = i;

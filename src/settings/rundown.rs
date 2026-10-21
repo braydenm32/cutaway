@@ -29,10 +29,10 @@ pub(super) fn commands_editor(ui: &mut egui::Ui, id: &str, cues: &mut Vec<String
             let parsed = crate::control::Action::parse(c);
             match parsed {
                 Ok(_) => {
-                    ui.label(RichText::new(label_of(c)).color(TEXT_DIM).size(12.0));
+                    ui.label(RichText::new(label_of(c)).color(TEXT_DIM).size(13.0));
                 }
                 Err(e) => {
-                    ui.label(RichText::new(format!("⚠ {e}")).color(AMBER).size(12.0));
+                    ui.label(RichText::new(format!("⚠ {e}")).color(AMBER).size(13.0));
                 }
             }
             if ui.small_button("✕").clicked() {
@@ -87,7 +87,7 @@ impl SettingsUi {
                 ui.set_width(240.0);
                 for i in 0..n {
                     let s = &self.draft.rundown.segments[i];
-                    let b = egui::Button::selectable(self.sel_segment == i, RichText::new(format!("{}. {}\n{}", i + 1, s.name, fmt_len(s.seconds))).size(13.0)).min_size(vec2(240.0, 40.0));
+                    let b = egui::Button::selectable(self.sel_segment == i, RichText::new(format!("{}. {}\n{}", i + 1, s.name, fmt_len(s.seconds))).size(14.0)).min_size(vec2(240.0, 40.0));
                     if ui.add(b).clicked() {
                         self.sel_segment = i;
                     }
