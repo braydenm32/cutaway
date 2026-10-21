@@ -700,7 +700,11 @@ impl SettingsUi {
             ui.checkbox(&mut self.draft.ui.check_before_start, "before recording or going live");
             ui.end_row();
             label(ui, "Updates");
-            ui.checkbox(&mut self.draft.ui.check_updates, "look for a newer Cutaway when it starts");
+            ui.vertical(|ui| {
+                ui.checkbox(&mut self.draft.ui.check_updates, "look for a newer Cutaway when it starts");
+                let can = self.draft.ui.check_updates;
+                ui.add_enabled(can, egui::Checkbox::new(&mut self.draft.ui.auto_update, "download it by itself, and put it in when I quit"));
+            });
             ui.end_row();
         });
         ui.add_space(14.0);

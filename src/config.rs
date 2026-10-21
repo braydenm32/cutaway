@@ -1210,13 +1210,15 @@ pub struct UiConfig {
     pub check_before_start: bool,
     /// Ask GitHub whether there's a newer Cutaway, at start.
     pub check_updates: bool,
+    /// Download a newer Cutaway by itself and put it in when Cutaway closes.
+    pub auto_update: bool,
     /// A newer version you chose not to hear about again.
     pub skip_version: String,
 }
 
 impl Default for UiConfig {
     fn default() -> Self {
-        UiConfig { scale: 1.0, confirm_stop_recording: false, confirm_end_stream: true, profile: String::new(), check_before_start: false, check_updates: true, skip_version: String::new() }
+        UiConfig { scale: 1.0, confirm_stop_recording: false, confirm_end_stream: true, profile: String::new(), check_before_start: false, check_updates: true, auto_update: false, skip_version: String::new() }
     }
 }
 

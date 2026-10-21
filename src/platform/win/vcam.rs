@@ -55,6 +55,16 @@ pub fn installed() -> bool {
     registered_path().is_some_and(|p| p.exists())
 }
 
+/// Installed, but not the camera that came with this version of Cutaway
+/// (after an update that changed it).
+pub fn needs_reinstall() -> bool {
+    let (Some(installed), Ok(ours)) = (registered_path(), source_dll()) else { return false };
+    match (std::fs::read(&installed), std::fs::read(&ours)) {
+        (Ok(a), Ok(b)) => a != b,
+        _ => false,
+    }
+}
+
 /// Install (or remove) the camera source. Asks Windows for administrator
 /// rights (a UAC prompt) and does it in an elevated copy of Cutaway.
 pub fn install(remove: bool) -> Result<String> {

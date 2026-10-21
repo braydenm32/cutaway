@@ -176,6 +176,11 @@ fn main() {
 }
 
 fn run() -> Result<()> {
+    // --version (as the updater asks a new version) answers without touching
+    // the log.
+    if std::env::args().skip(1).any(|a| a == "--version" || a == "-V") {
+        Args::parse();
+    }
     logging::init();
     let args = Args::parse();
 

@@ -42,6 +42,17 @@ The apps aren't signed yet, so the first launch takes one extra step:
 
 When a newer version comes out, Cutaway says so in its header (it asks
 GitHub once when it starts; turn that off in Settings → General & shows).
+From 0.8 on, **Update now** in that notice downloads it inside Cutaway,
+checks it against the release's fingerprints and makes sure it starts; then
+**Restart to update** (once recording and streaming have stopped) or **When
+I quit** puts it in place. The previous version is kept until the new one
+has run for a few seconds, and comes back by itself if the new one doesn't
+start. Tick **download it by itself, and put it in when I quit** (Settings →
+General & shows → Updates) to have every update arrive that way. If Cutaway
+can't change its own folder (an account without administrator rights on a
+Mac, say), the notice takes you to the download page instead. On Windows, an
+update that changes the virtual camera asks you to reinstall it (Settings →
+Screens & webcam), which needs administrator rights once.
 Your settings, shows and recordings stay as they are when you update.
 To build Cutaway yourself instead, see [Install on a Mac](#install-on-a-mac)
 and [Install on Windows](#install-on-windows).
@@ -1009,7 +1020,7 @@ source that drops can't stall the cameras, the program or the other outputs.
 | `src/engine/framing.rs`, `cutout.rs` | Auto-framing; background removal |
 | `src/control/` | Command language, web remote and WebSocket API, OSC, MIDI, Stream Deck key pictures, show profiles |
 | `src/media/` | MP4/MOV, WAV, FLV, MPEG-TS writers and readers; crash recovery |
-| `src/net/` | RTMP/RTMPS and SRT clients, RTMP server; live chat; Google sign-in and uploads; the update check |
+| `src/net/` | RTMP/RTMPS and SRT clients, RTMP server; live chat; Google sign-in and uploads; the update check and updating in place |
 | `src/platform/macos/` | AVFoundation, ScreenCaptureKit, VideoToolbox, AudioToolbox, CoreMediaIO, Speech, Vision |
 | `src/platform/win/` | Media Foundation capture, encoders and decoders, Windows Graphics Capture, the virtual camera |
 | `src/platform/audio_*.rs` | Audio devices on both (CoreAudio; WASAPI and ASIO) |
@@ -1124,7 +1135,7 @@ and a software GPU:
 - **Whisper captions:** the streaming logic (partial and settled words,
   timing, long speech) with a stand-in recogniser, and whisper.cpp itself
   loading and running a model.
-- **Unit tests:** `cargo test` (193 tests, plus Windows-only ones that run there), including the compositor's
+- **Unit tests:** `cargo test` (200 tests, plus Windows-only ones that run there), including the compositor's
   styling, keying, person masks, transitions and graphics, the voice
   processing, loudness, limiters and leveller, automatic switching,
   auto-framing, captions, lip sync, the podcast, OSC, the WebSocket, the

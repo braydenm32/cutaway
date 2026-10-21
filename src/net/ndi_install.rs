@@ -4,11 +4,9 @@
 //! NDI's licence in NDI's installer. Cutaway picks the runtime up as soon as
 //! it's installed (`engine::ndi`).
 
-use anyhow::{anyhow, bail, Context, Result};
-use std::io::{Read, Write};
+use anyhow::{anyhow, Result};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::Duration;
 
 /// NDI's links to its runtime installers.
 pub const WINDOWS_URL: &str = "https://ndi.link/NDIRedistV6";
@@ -126,61 +124,13 @@ pub fn progress_text(got: u64, total: Option<u64>) -> String {
 /// file, reporting progress. The file must start with `magic`, so an error
 /// page is never opened as an installer.
 pub fn download(url: &str, to: &Path, magic: &[u8], progress: &mut dyn FnMut(u64, Option<u64>)) -> Result<PathBuf> {
-    let agent = crate::util::https_agent(Duration::from_secs(30 * 60));
-    let mut resp = agent
-        .get(url)
-        .header("User-Agent", concat!("Cutaway/", env!("CARGO_PKG_VERSION")))
-        .call()
-        .map_err(|e| anyhow!("couldn't reach NDI's website ({e})"))?;
-    let status = resp.status().as_u16();
-    if status != 200 {
-        bail!("NDI's website answered with error {status}");
-    }
-    let total = resp.body().content_length();
-    if let Some(dir) = to.parent() {
-        std::fs::create_dir_all(dir).with_context(|| format!("couldn't make {}", dir.display()))?;
-    }
-    let part = to.with_extension("part");
-    let r = (|| -> Result<u64> {
-        let mut file = std::fs::File::create(&part).with_context(|| format!("couldn't write {}", part.display()))?;
-        let mut reader = resp.body_mut().as_reader();
-        let mut buf = vec![0u8; 256 * 1024];
-        let mut got = 0u64;
-        progress(0, total);
-        loop {
-            let n = reader.read(&mut buf).map_err(|e| anyhow!("the download was cut off ({e})"))?;
-            if n == 0 {
-                break;
-            }
-            if got == 0 && !buf[..n].starts_with(magic) {
-                bail!("NDI's website sent something other than its installer");
-            }
-            file.write_all(&buf[..n]).context("couldn't save the download")?;
-            got += n as u64;
-            progress(got, total);
-        }
-        file.flush()?;
-        Ok(got)
-    })();
-    let got = match r {
-        Ok(got) => got,
-        Err(e) => {
-            let _ = std::fs::remove_file(&part);
-            return Err(e);
-        }
-    };
-    if got == 0 || total.is_some_and(|t| t != got) {
-        let _ = std::fs::remove_file(&part);
-        bail!("the download was cut off");
-    }
-    std::fs::rename(&part, to).with_context(|| format!("couldn't save {}", to.display()))?;
-    Ok(to.to_path_buf())
+    super::fetch::fetch(url, to, magic, "NDI's website", "its installer", &std::sync::atomic::AtomicBool::new(false), progress)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{BufRead, BufReader};
+    use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
 
     /// A tiny web server: `/get` redirects to `/file`, which answers with

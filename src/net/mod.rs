@@ -5,7 +5,9 @@ pub mod rtmp_server;
 pub mod srt;
 pub mod chat;
 pub mod google;
+pub mod fetch;
 pub mod ndi_install;
+pub mod self_update;
 pub mod update;
 pub mod tunnel;
 

@@ -147,6 +147,8 @@ pub struct App {
     /// A newer Cutaway, once GitHub has said so; and its window.
     update: Arc<std::sync::Mutex<Option<crate::net::update::Release>>>,
     update_open: bool,
+    /// When this (just updated) version counts as started properly.
+    settle_at: Option<Instant>,
     /// Uploads to YouTube and Google Drive.
     uploads: uploads::Uploads,
     /// The live chat, the comment on screen, and the newest one shown.
@@ -203,6 +205,7 @@ impl App {
             qr_for: None,
             update: Arc::new(std::sync::Mutex::new(None)),
             update_open: false,
+            settle_at: None,
             uploads: Default::default(),
             chat: None,
             comment_on: None,
@@ -253,13 +256,55 @@ impl App {
         app.vcam_wanted = app.cfg.display.virtual_camera;
         app.start_engine();
         app.apply_control_settings();
+        // How the last update went (and the old version let go of, once
+        // this one has run a while).
+        if let Ok(me) = crate::net::self_update::Install::here() {
+            use crate::net::self_update::Outcome;
+            match crate::net::self_update::after_start(&me, env!("CARGO_PKG_VERSION")) {
+                Some(Outcome::Updated { from }) => {
+                    let mut text = format!("Updated to {} (from {from})", env!("CARGO_PKG_VERSION"));
+                    if crate::platform::vcam::needs_reinstall() {
+                        text.push_str(". The virtual camera changed too: reinstall it in Settings → Screens & webcam");
+                    }
+                    app.toast(text, false);
+                    app.settle_at = Some(Instant::now() + crate::net::self_update::SETTLE);
+                }
+                Some(Outcome::RolledBack { to }) => {
+                    app.toast(format!("{to} didn't start properly, so Cutaway went back to {}. Its download page has it if you'd like to try again.", env!("CARGO_PKG_VERSION")), true);
+                    app.cfg.ui.skip_version = to;
+                    app.cfg_dirty = true;
+                }
+                Some(Outcome::NotInstalled { to, why }) => {
+                    app.toast(format!("{to} wasn't put in: {why}"), true);
+                }
+                None => {}
+            }
+        }
+        // For scripted screenshots: a pretend newer version, its window open.
+        if let Ok(v) = std::env::var("CUTAWAY_UI_TEST_UPDATE") {
+            use crate::net::self_update::{self as su, Finish, Stage, Staged};
+            *app.update.lock().unwrap() = Some(crate::net::update::Release { version: v.clone(), url: "https://github.com".into(), notes: "• Something new\n• A fix".into(), assets: Vec::new() });
+            app.update_open = true;
+            match std::env::var("CUTAWAY_UI_TEST_UPDATE_STAGE").as_deref() {
+                Ok("downloading") => su::show_stage(Stage::Downloading { got: 12_400_000, total: Some(36_700_000) }, Finish::Ask),
+                Ok("ready") => su::show_stage(Stage::Ready(Staged { version: v, new_item: PathBuf::new() }), Finish::Ask),
+                Ok("quit") => su::show_stage(Stage::Ready(Staged { version: v, new_item: PathBuf::new() }), Finish::OnQuit),
+                Ok("failed") => su::show_stage(Stage::Failed("the download was cut off".into()), Finish::Ask),
+                _ => {}
+            }
+        }
         if app.cfg.ui.check_updates {
             let (slot, waker) = (app.update.clone(), app.waker.clone());
+            let (auto, skip) = (app.cfg.ui.auto_update, app.cfg.ui.skip_version.clone());
             let _ = std::thread::Builder::new().name("update check".into()).spawn(move || {
                 // Not in the way of starting up.
                 std::thread::sleep(Duration::from_secs(5));
                 match crate::net::update::check(env!("CARGO_PKG_VERSION")) {
                     Ok(Some(r)) => {
+                        // Fetched by itself, to go in when Cutaway closes.
+                        if auto && r.version != skip && crate::net::self_update::Install::this().is_ok() {
+                            crate::net::self_update::start(r.clone(), crate::net::self_update::Finish::OnQuit, waker.clone());
+                        }
                         *slot.lock().unwrap() = Some(r);
                         waker();
                     }
@@ -269,6 +314,96 @@ impl App {
             });
         }
         app
+    }
+
+    /// The update window: what's new, then getting it, then putting it in.
+    fn update_window(&mut self, ui: &mut egui::Ui, r: &crate::net::update::Release, live: bool, skip: &mut bool, restart: &mut bool) {
+        use crate::net::self_update::{self as su, Finish, Stage};
+        ui.label(format!("You have {}.", env!("CARGO_PKG_VERSION")));
+        if !r.notes.is_empty() {
+            ui.add_space(6.0);
+            egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+                ui.label(RichText::new(&r.notes).size(12.5).color(TEXT_DIM));
+            });
+        }
+        ui.add_space(8.0);
+        let page = |ui: &mut egui::Ui, text: &str| {
+            if ui.button(text).on_hover_text(&r.url).clicked() {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(&r.url));
+            }
+        };
+        let can = su::Install::this();
+        match su::stage() {
+            Stage::Idle => {
+                ui.horizontal(|ui| match &can {
+                    Ok(_) => {
+                        if ui.button(RichText::new("Update now").strong()).on_hover_text("Download it here; Cutaway restarts to put it in when you say").clicked() {
+                            su::start(r.clone(), Finish::Ask, self.waker.clone());
+                        }
+                        page(ui, "Download page");
+                        if ui.button("Skip this version").clicked() {
+                            *skip = true;
+                        }
+                    }
+                    Err(_) => {
+                        page(ui, "Download");
+                        if ui.button("Skip this version").clicked() {
+                            *skip = true;
+                        }
+                    }
+                });
+                if let Err(why) = &can {
+                    ui.label(RichText::new(format!("Get it from the download page: {why}.")).size(11.5).color(TEXT_DIM));
+                }
+            }
+            Stage::Downloading { got, total } => {
+                let k = total.filter(|t| *t > 0).map(|t| got as f32 / t as f32).unwrap_or(0.0);
+                ui.add(egui::ProgressBar::new(k).desired_width(300.0).text(format!("Downloading… {}", crate::net::ndi_install::progress_text(got, total))));
+                ui.horizontal(|ui| {
+                    if ui.button("Stop").clicked() {
+                        su::cancel();
+                    }
+                    ui.label(RichText::new("Carry on with the show meanwhile.").size(11.5).color(TEXT_DIM));
+                });
+            }
+            Stage::Preparing => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Checking the download and getting it ready…");
+                });
+            }
+            Stage::Ready(s) => {
+                ui.label(RichText::new(format!("✓ {} is downloaded and checked.", s.version)).color(GREEN));
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    let b = ui.add_enabled(!live, egui::Button::new(RichText::new("Restart to update").strong()));
+                    let b = if live { b.on_disabled_hover_text("Stop recording and streaming first (or choose When I quit)") } else { b.on_hover_text("Cutaway closes, updates and opens again") };
+                    if b.clicked() {
+                        *restart = true;
+                    }
+                    let on_quit = su::finish() == Finish::OnQuit;
+                    if ui.add(egui::Button::selectable(on_quit, "When I quit")).on_hover_text("Update the next time Cutaway is closed").clicked() {
+                        su::choose(if on_quit { Finish::Ask } else { Finish::OnQuit });
+                    }
+                });
+                if su::finish() == Finish::OnQuit {
+                    ui.label(RichText::new("It goes in when you close Cutaway.").size(11.5).color(TEXT_DIM));
+                } else if live {
+                    ui.label(RichText::new("Restarting waits until recording and streaming have stopped.").size(11.5).color(TEXT_DIM));
+                }
+            }
+            Stage::Failed(e) => {
+                ui.label(RichText::new(format!("⚠ Couldn't update: {e}")).color(AMBER));
+                ui.horizontal(|ui| {
+                    if ui.button("Try again").clicked() {
+                        su::reset();
+                        su::start(r.clone(), Finish::Ask, self.waker.clone());
+                    }
+                    page(ui, "Download page");
+                });
+            }
+        }
+        ui.label(RichText::new("Your settings and shows stay as they are when you update.").size(11.5).color(TEXT_DIM));
     }
 
     /// Start or stop the remote server and MIDI to match the settings.
@@ -1223,36 +1358,33 @@ impl App {
         }
         let update = self.update.lock().unwrap().clone().filter(|r| r.version != self.cfg.ui.skip_version);
         if let Some(r) = &update {
-            if ui.add(egui::Button::selectable(self.update_open, RichText::new(format!("⬆ {} is out", r.version)).color(ACCENT))).on_hover_text("A newer Cutaway is ready to download").clicked() {
+            use crate::net::self_update::{self as su, Finish, Stage};
+            let text = match (su::stage(), su::finish()) {
+                (Stage::Downloading { .. } | Stage::Preparing, _) => format!("⬆ Getting {}…", r.version),
+                (Stage::Ready(_), Finish::OnQuit) => format!("⬆ {} installs when you quit", r.version),
+                (Stage::Ready(_), _) => format!("⬆ {} is ready", r.version),
+                _ => format!("⬆ {} is out", r.version),
+            };
+            if ui.add(egui::Button::selectable(self.update_open, RichText::new(text).color(ACCENT))).on_hover_text("A newer Cutaway").clicked() {
                 self.update_open = !self.update_open;
             }
         }
         if let (true, Some(r)) = (self.update_open, update) {
             let mut open = true;
             let mut skip = false;
-            egui::Window::new(format!("Cutaway {}", r.version)).open(&mut open).collapsible(false).resizable(false).default_width(420.0).show(ui.ctx(), |ui| {
-                ui.label(format!("You have {}.", env!("CARGO_PKG_VERSION")));
-                if !r.notes.is_empty() {
-                    ui.add_space(6.0);
-                    egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
-                        ui.label(RichText::new(&r.notes).size(12.5).color(TEXT_DIM));
-                    });
-                }
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if ui.button(RichText::new("Download").strong()).on_hover_text(&r.url).clicked() {
-                        ui.ctx().open_url(egui::OpenUrl::new_tab(&r.url));
-                    }
-                    if ui.button("Skip this version").clicked() {
-                        skip = true;
-                    }
-                });
-                ui.label(RichText::new("Your settings and shows stay as they are when you update.").size(11.5).color(TEXT_DIM));
+            let live = self.engine.as_ref().is_some_and(|e| e.is_recording() || e.is_streaming());
+            let mut restart = false;
+            egui::Window::new(format!("Cutaway {}", r.version)).open(&mut open).collapsible(false).resizable(false).default_width(440.0).show(ui.ctx(), |ui| {
+                self.update_window(ui, &r, live, &mut skip, &mut restart);
             });
             if skip {
                 self.cfg.ui.skip_version = r.version.clone();
                 self.cfg_dirty = true;
                 open = false;
+            }
+            if restart {
+                crate::net::self_update::choose(crate::net::self_update::Finish::Restart);
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
             }
             self.update_open = open;
         }
@@ -3421,6 +3553,12 @@ impl eframe::App for App {
         self.tick_comments(&ctx);
         self.tick_uploads();
         self.tick_ndi(&ctx);
+        if self.settle_at.is_some_and(|t| Instant::now() >= t) {
+            self.settle_at = None;
+            if let Ok(me) = crate::net::self_update::Install::here() {
+                crate::net::self_update::settled(&me, env!("CARGO_PKG_VERSION"));
+            }
+        }
         self.tick_prompter(&ctx);
         self.handle_keys(&ctx);
         self.poll_status();
@@ -3496,6 +3634,11 @@ impl eframe::App for App {
         }
         if self.cfg_dirty || self.scenes_dirty {
             self.save_config();
+        }
+        // An update that's ready and told to go in: the helper takes over
+        // once Cutaway has closed.
+        if let Some(e) = crate::net::self_update::on_exit() {
+            eprintln!("update: {e}");
         }
     }
 }

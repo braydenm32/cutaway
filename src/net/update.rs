@@ -15,6 +15,16 @@ pub struct Release {
     pub url: String,
     /// What's new (as written on GitHub, trimmed).
     pub notes: String,
+    /// Its files.
+    pub assets: Vec<Asset>,
+}
+
+/// A file attached to a release.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Asset {
+    pub name: String,
+    pub url: String,
+    pub size: u64,
 }
 
 /// The numbers in a version ("v0.6.0" → [0, 6, 0]); anything after a '-'
@@ -43,10 +53,19 @@ pub fn parse(json: &str, current: &str) -> Result<Option<Release>> {
         return Ok(None);
     }
     let notes = readable_notes(v["body"].as_str().unwrap_or(""));
+    let assets = v["assets"]
+        .as_array()
+        .map(|list| {
+            list.iter()
+                .filter_map(|a| Some(Asset { name: a["name"].as_str()?.to_string(), url: a["browser_download_url"].as_str()?.to_string(), size: a["size"].as_u64().unwrap_or(0) }))
+                .collect()
+        })
+        .unwrap_or_default();
     Ok(Some(Release {
         version: tag.trim_start_matches(['v', 'V']).to_string(),
         url: v["html_url"].as_str().map(str::to_string).unwrap_or_else(|| format!("https://github.com/{REPO}/releases/latest")),
         notes,
+        assets,
     }))
 }
 
@@ -166,5 +185,11 @@ mod tests {
         let pre = json.replace("\"prerelease\":false", "\"prerelease\":true");
         assert_eq!(parse(&pre, "0.6.0").unwrap(), None, "pre-releases aren't offered");
         assert!(parse("{}", "0.6.0").is_err());
+        assert!(r.assets.is_empty());
+        let with = json.replace("\"body\"", r#""assets":[{"name":"Cutaway-0.7.0-macos-arm64.zip","browser_download_url":"https://github.com/x/a.zip","size":1234},{"name":"SHA256SUMS.txt","browser_download_url":"https://github.com/x/s.txt","size":99}],"body""#);
+        let r = parse(&with, "0.6.0").unwrap().unwrap();
+        assert_eq!(r.assets.len(), 2);
+        assert_eq!((r.assets[0].name.as_str(), r.assets[0].size), ("Cutaway-0.7.0-macos-arm64.zip", 1234));
+        assert_eq!(r.assets[1].url, "https://github.com/x/s.txt");
     }
 }

@@ -58,6 +58,8 @@ jobs:
         run: |
           version="${TAG#v}"
           cp streamdeck/Cutaway.streamDeckPlugin dist/
+          # Fingerprints of the downloads: Cutaway's own updater checks them.
+          (cd dist && sha256sum *.zip > SHA256SUMS.txt && cat SHA256SUMS.txt)
           ls -la dist
           if gh release view "$TAG" > /dev/null 2>&1; then
             # Already there (a re-run): replace the files.

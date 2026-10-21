@@ -70,6 +70,14 @@ jobs:
           mkdir -p dist
           ditto -c -k --keepParent target/Cutaway.app "dist/Cutaway-$version-macos-arm64.zip"
 
+      - name: The zip unpacks and starts the way Cutaway's updater does it
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          rm -rf "$RUNNER_TEMP/unpack" && mkdir -p "$RUNNER_TEMP/unpack"
+          ditto -x -k "dist/Cutaway-$version-macos-arm64.zip" "$RUNNER_TEMP/unpack"
+          "$RUNNER_TEMP/unpack/Cutaway.app/Contents/MacOS/Cutaway" --version | tee ci-logs/5-unpack.log
+          grep -q "$version" ci-logs/5-unpack.log
+
       - uses: actions/upload-artifact@v4
         with:
           name: Cutaway-macos-arm64

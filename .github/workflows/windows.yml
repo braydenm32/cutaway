@@ -55,6 +55,21 @@ jobs:
       - name: Build and package
         run: powershell.exe -ExecutionPolicy Bypass -File windows/build.ps1 -NoAsio 2>&1 | tee ci-logs/3-build.log
 
+      - name: The zip unpacks and starts the way Cutaway's updater does it
+        shell: pwsh
+        run: |
+          $zip = (Get-ChildItem dist\*.zip | Select-Object -First 1).FullName
+          $to = Join-Path $env:RUNNER_TEMP "unpack"
+          if (Test-Path $to) { Remove-Item $to -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $to | Out-Null
+          & "$env:SystemRoot\System32\tar.exe" -x -f $zip -C $to
+          $exe = Join-Path $to "Cutaway\Cutaway.exe"
+          $out = Join-Path $env:RUNNER_TEMP "version.txt"
+          Start-Process -FilePath $exe -ArgumentList "--version" -Wait -NoNewWindow -RedirectStandardOutput $out
+          $v = Get-Content $out -Raw
+          "tar: $(Get-ChildItem $to -Recurse | Measure-Object | Select-Object -ExpandProperty Count) files; --version: $v" | Tee-Object -FilePath ci-logs\5-unpack.log
+          if ($v -notmatch [regex]::Escape((Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value)) { exit 1 }
+
       - name: A test recording (test pictures and tone, Windows encoders)
         shell: pwsh
         run: |

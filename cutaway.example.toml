@@ -397,6 +397,7 @@ confirm_end_stream = true
 check_before_start = false  # run the pre-show check before recording / going live
 profile = ""                # the show these settings belong to
 check_updates = true        # ask GitHub for a newer Cutaway when it starts
+auto_update = false         # download it by itself and put it in when Cutaway closes
 
 # ---- fade to black and instant replay -------------------------------------------
 # (in [transition]: ftb_ms = 1000, ftb_audio = true — the sound fades too)

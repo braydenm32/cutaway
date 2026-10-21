@@ -142,6 +142,19 @@ pub mod vcam {
         }
     }
 
+    /// Installed, but not the one that came with this version (Windows,
+    /// where the camera lives in Program Files, apart from the app).
+    pub fn needs_reinstall() -> bool {
+        #[cfg(windows)]
+        {
+            super::win::vcam::needs_reinstall()
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
+    }
+
     pub fn install(remove: bool) -> Result<String> {
         #[cfg(target_os = "macos")]
         {
