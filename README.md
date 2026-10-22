@@ -94,7 +94,9 @@ and [Install on Windows](#install-on-windows).
   browser (computer, tablet or phone), allow the camera and mic, and join —
   no app, no account. Each guest spot is a source and an audio input. They
   hear the show without their own voice (mix-minus, plus talkback) and can
-  watch the program. Cutaway reaches them through a free Cloudflare tunnel,
+  watch the program. A guest can share their screen too (the whole screen,
+  one window or a browser tab), arriving as a source of its own while their
+  camera stays on. Cutaway reaches them through a free Cloudflare tunnel,
   so there's no router setup (see [Remote guests](#remote-guests)).
 - **Media player.** A source that plays a playlist of video files and still
   images, with sound: intros, stings, holding slides, B-roll. Play, pause,
@@ -758,6 +760,15 @@ one in preview, recording, live, auto, graphics and inputs that are on.
 4. **During the show:** take their spot like any camera; their level is on
    their audio strip; **✕** disconnects them. If they reload the page they
    simply rejoin.
+
+- **Screen share:** tick **Screen share** beside a guest's spot and apply.
+  That adds a source called "*Name*'s screen", and their page gets a
+  **Share screen** button. They pick the whole screen, one window or a
+  browser tab, and it arrives on that source (sharp for slides and text, up
+  to 1080p), separate from their camera, so a scene can show both side by
+  side. **Stop sharing** on their page, or **✕** on the screen's row in the
+  guests panel, ends it. Sharing needs a computer (Chrome, Edge or Safari);
+  phones and tablets don't offer it.
 
 - **Firewalls:** guests connect directly to Cutaway (WebRTC), which works on
   almost every home and mobile network. A few office, school and hotel

@@ -1621,6 +1621,12 @@ impl SourceConfig {
         self.device.trim().strip_prefix("phone:").map(str::trim).filter(|s| !s.is_empty())
     }
 
+    /// A remote guest's shared screen, for a "guest-screen:ID" source (ID
+    /// is the guest's own link: they share from the page they joined on).
+    pub fn guest_screen_id(&self) -> Option<&str> {
+        self.device.trim().strip_prefix("guest-screen:").map(str::trim).filter(|s| !s.is_empty())
+    }
+
     /// Either kind of link: (id, whether it's a phone camera).
     pub fn link_id(&self) -> Option<(&str, bool)> {
         self.guest_id().map(|i| (i, false)).or_else(|| self.phone_id().map(|i| (i, true)))

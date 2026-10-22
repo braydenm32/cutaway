@@ -60,9 +60,11 @@
     <div class="row">
       <button id="mute">Mute</button>
       <button id="camoff">Camera off</button>
+      <button id="share" hidden>Share screen</button>
       <button id="leave">Leave</button>
       <span id="status2" class="note"></span>
     </div>
+    <div id="sharestat" class="note" hidden></div>
     <div id="bkstat" class="note" hidden></div>
     <audio id="ret" autoplay></audio>
   </section>
@@ -230,7 +232,89 @@ async function join() {
   $('self').classList.toggle('big', !info.returnVideo);
   if (!info.returnVideo) $('program').hidden = true;
   if (info.backup) { pollState(); poller = setInterval(pollState, 1500); }
+  // Sharing needs a computer: phones and tablets can't.
+  $('share').hidden = !info.screen || !(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
 }
+
+// ---- screen sharing ----------------------------------------------------------------
+// The screen goes on a second connection of its own, so the camera stays on.
+let spc = null, sstream = null;
+
+async function share() {
+  if (spc) return stopShare();
+  // Cutaway takes H.264 video; without it the screen couldn't reach the show.
+  try {
+    if (!RTCRtpSender.getCapabilities('video').codecs.some(c => c.mimeType.toLowerCase() === 'video/h264')) {
+      shareSay('This browser can\'t send the kind of video the show uses. Chrome, Edge or Safari can share a screen.', true);
+      return;
+    }
+  } catch (e) {}
+  $('share').disabled = true;
+  try {
+    sstream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 30 }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false });
+  } catch (e) {
+    $('share').disabled = false;
+    if (e.name !== 'NotAllowedError') shareSay('Couldn\'t share the screen (' + e.message + ').', true);
+    return;
+  }
+  const t = sstream.getVideoTracks()[0];
+  // Text and slides: keep them sharp rather than smooth.
+  try { t.contentHint = 'detail'; } catch (e) {}
+  t.onended = () => stopShare();
+  shareSay('Starting to share…');
+  spc = new RTCPeerConnection({ iceServers: info.iceServers });
+  const tr = spc.addTransceiver(t, { direction: 'sendonly', streams: [sstream], sendEncodings: [{ maxBitrate: 4000000, maxFramerate: 30 }] });
+  try {
+    const caps = RTCRtpSender.getCapabilities('video').codecs;
+    const h264 = caps.filter(c => c.mimeType.toLowerCase() === 'video/h264' && /packetization-mode=1/.test(c.sdpFmtpLine || ''));
+    if (h264.length && tr.setCodecPreferences) tr.setCodecPreferences(h264);
+  } catch (e) {}
+  const mine = spc;
+  spc.onconnectionstatechange = () => {
+    if (spc !== mine) return;
+    const s = mine.connectionState;
+    if (s === 'connected') shareSay('● You\'re sharing your screen with the show.');
+    if (s === 'disconnected') shareSay('Screen share: connection trouble… trying to recover.', true);
+    if (s === 'failed') { shareSay('The screen share was cut off. Press Share screen to try again.', true); stopShare(true); }
+  };
+  try {
+    await spc.setLocalDescription(await spc.createOffer());
+    await new Promise((done) => {
+      if (mine.iceGatheringState === 'complete') return done();
+      const tm = setTimeout(done, 3000);
+      mine.onicegatheringstatechange = () => { if (mine.iceGatheringState === 'complete') { clearTimeout(tm); done(); } };
+    });
+    const r = await fetch(base + '/screen', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sdp: mine.localDescription.sdp, name: $('name').value.trim() }) });
+    const body = await r.json().catch(() => ({ error: 'no answer from the show' }));
+    if (!r.ok || !body.sdp) throw new Error(body.error || ('HTTP ' + r.status));
+    await mine.setRemoteDescription({ type: 'answer', sdp: body.sdp });
+    // Not through after a while: say so rather than wait quietly.
+    setTimeout(() => { if (spc === mine && mine.connectionState !== 'connected') shareSay('The screen share is taking a while to connect…', true); }, 15000);
+  } catch (e) {
+    shareSay('Couldn\'t share the screen: ' + e.message, true);
+    stopShare(true);
+    return;
+  }
+  $('share').disabled = false;
+  $('share').textContent = 'Stop sharing'; $('share').className = 'off';
+}
+
+function stopShare(keepMessage) {
+  const had = spc;
+  if (spc) { spc.close(); spc = null; }
+  if (sstream) { sstream.getTracks().forEach(t => t.stop()); sstream = null; }
+  if (had) fetch(base + '/screen-stop', { method: 'POST' }).catch(() => {});
+  $('share').disabled = false;
+  $('share').textContent = 'Share screen'; $('share').className = '';
+  if (!keepMessage) shareSay('');
+}
+
+function shareSay(t, warn) {
+  const el = $('sharestat');
+  el.textContent = t; el.hidden = !t;
+  el.className = 'note' + (warn ? ' warn' : '');
+}
+$('share').onclick = share;
 
 // ---- backup recording ----------------------------------------------------------
 // While the show records, this browser records you too (as your camera and
@@ -331,6 +415,7 @@ $('leave').onclick = () => {
   left = true;
   clearInterval(poller);
   finishBackup();
+  stopShare();
   if (pc) pc.close(); pc = null;
   if (stream) stream.getTracks().forEach(t => t.stop());
   $('onair').hidden = true; $('setup').hidden = true;

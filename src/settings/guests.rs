@@ -106,7 +106,10 @@ impl SettingsUi {
         }
         let mut remove = None;
         let mut rename: Option<(String, String)> = None;
-        egui::Grid::new("guest_spots").num_columns(4).spacing([12.0, 8.0]).striped(true).show(ui, |ui| {
+        // (link id, guest's name, share their screen)
+        let mut screen: Option<(String, String, bool)> = None;
+        let screens: Vec<String> = self.draft.sources.iter().filter_map(|s| s.guest_screen_id().map(str::to_string)).collect();
+        egui::Grid::new("guest_spots").num_columns(5).spacing([12.0, 8.0]).striped(true).show(ui, |ui| {
             for &i in &guests {
                 let s = &mut self.draft.sources[i];
                 let id = s.guest_id().unwrap_or("").to_string();
@@ -138,13 +141,32 @@ impl SettingsUi {
                         ui.label(RichText::new("the link appears once guests are on and this is applied").color(TEXT_DIM).size(13.0));
                     }
                 }
+                let mut on = screens.contains(&id);
+                if ui.checkbox(&mut on, "Screen share").on_hover_text("Adds a source for their screen: they can share it (or one window) from their page, as well as their camera.").changed() {
+                    screen = Some((id.clone(), s.name.clone(), on));
+                }
                 if ui.small_button("Remove").clicked() {
                     remove = Some(i);
                 }
                 ui.end_row();
             }
         });
-        // The audio input follows its source's name.
+        if let Some((id, name, on)) = screen {
+            if on {
+                let taken: Vec<String> = self.draft.sources.iter().map(|s| s.name.clone()).collect();
+                self.draft.sources.push(screen_source(&unique(taken, &screen_name(&name)), &id));
+            } else {
+                self.draft.sources.retain(|s| s.guest_screen_id() != Some(id.as_str()));
+            }
+        }
+        // The audio input follows its source's name (and so does their screen's).
+        if let Some((old, new)) = &rename {
+            for s in self.draft.sources.iter_mut() {
+                if s.guest_screen_id().is_some() && s.name == screen_name(old) {
+                    s.name = screen_name(new);
+                }
+            }
+        }
         if let Some((old, new)) = rename {
             for a in self.draft.audio.iter_mut() {
                 if a.device.trim().strip_prefix("source:").is_some_and(|n| n.trim().eq_ignore_ascii_case(&old)) {
@@ -157,7 +179,10 @@ impl SettingsUi {
         }
         if let Some(i) = remove {
             let name = self.draft.sources[i].name.clone();
+            let id = self.draft.sources[i].guest_id().map(str::to_string);
             self.draft.sources.remove(i);
+            // Their screen goes with them.
+            self.draft.sources.retain(|s| s.guest_screen_id().is_none() || s.guest_screen_id() != id.as_deref());
             self.draft.audio.retain(|a| !a.device.trim().strip_prefix("source:").is_some_and(|n| n.trim().eq_ignore_ascii_case(&name)));
         }
         ui.add_space(6.0);
@@ -204,6 +229,16 @@ impl SettingsUi {
         ui.add_space(4.0);
         hint(ui, "Guests need Chrome, Edge, Safari or Firefox; headphones help.");
     }
+}
+
+/// What a guest's screen source is called.
+fn screen_name(guest: &str) -> String {
+    format!("{guest}'s screen")
+}
+
+/// A source for a guest's shared screen (`id` is their link).
+pub(super) fn screen_source(name: &str, id: &str) -> SourceConfig {
+    SourceConfig { name: name.to_string(), device: format!("guest-screen:{id}"), width: 1920, height: 1080, fps: 30, network_latency_ms: 250, ..Default::default() }
 }
 
 /// A new phone camera source.
