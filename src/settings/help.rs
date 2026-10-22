@@ -163,7 +163,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Graphics, "Corner") => "Puts it in a corner in one click.",
         (Graphics, "Width") => "How wide it is, as a share of the picture; the height follows.",
         (Graphics, "Opacity") => "How solid it is. Lower lets the picture show through, as for a watermark.",
-        (Graphics, "Fade") => "How long it takes to fade in and out.",
+        (Graphics, "Comes on") => "How it arrives and leaves: a fade, a slide in from the nearer side, a wipe from left to right, a gentle rise, or a pop. And how long that takes (0 for straight on and off).",
         (Graphics, "Showing at start") => "Whether it's on screen when Cutaway starts. Its button (or Alt + its number) turns it on and off.",
 
         // ---- Captions
