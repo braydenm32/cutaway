@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 mod panels;
 mod production;
 mod starting;
+mod undo;
 mod uploads;
 
 pub mod theme {
@@ -148,6 +149,8 @@ pub struct App {
     waker: Waker,
     edit_mode: bool,
     selected_layer: Option<usize>,
+    /// Undo and redo for scene layouts and settings.
+    history: undo::History,
     drag: Option<Drag>,
     settings: Option<SettingsUi>,
     confirm: Option<Confirm>,
@@ -286,6 +289,7 @@ impl App {
             waker,
             edit_mode: false,
             selected_layer: None,
+            history: undo::History::default(),
             drag: None,
             settings: None,
             confirm: None,
@@ -565,6 +569,101 @@ impl App {
 
     fn toast(&mut self, text: String, error: bool) {
         self.toast = Some((text, Instant::now(), error));
+    }
+
+    // ---- undo ---------------------------------------------------------------------------
+
+    fn snapshot(&self, kind: undo::Kind, label: impl Into<String>) -> undo::Snapshot {
+        let live = self.engine.as_ref().map(|e| e.switcher.live().name).unwrap_or_default();
+        undo::Snapshot::new(kind, label, &self.cfg, &self.scenes, &live)
+    }
+
+    /// Remember how things are, before a change.
+    fn remember(&mut self, kind: undo::Kind, label: impl Into<String>) {
+        let s = self.snapshot(kind, label);
+        self.history.record(s);
+    }
+
+    fn undo(&mut self, ctx: &egui::Context) {
+        let now = self.snapshot(undo::Kind::Scenes, "");
+        let Some(back) = self.history.undo(now) else {
+            self.toast("Nothing to undo".into(), false);
+            return;
+        };
+        match self.restore(&back, ctx) {
+            Ok(()) => self.toast(format!("Undone: {}", back.label), false),
+            Err(e) => {
+                self.toast(format!("Can't undo {} now: {e}", back.label.to_lowercase()), true);
+                self.history.put_back_undo(back);
+            }
+        }
+    }
+
+    fn redo(&mut self, ctx: &egui::Context) {
+        let now = self.snapshot(undo::Kind::Scenes, "");
+        let Some(fwd) = self.history.redo(now) else {
+            self.toast("Nothing to redo".into(), false);
+            return;
+        };
+        match self.restore(&fwd, ctx) {
+            Ok(()) => self.toast(format!("Redone: {}", fwd.label), false),
+            Err(e) => {
+                self.toast(format!("Can't redo {} now: {e}", fwd.label.to_lowercase()), true);
+                self.history.put_back_redo(fwd);
+            }
+        }
+    }
+
+    /// Put back settings and scenes as they were. The scene on air keeps
+    /// going; only its layout changes (or, if it was renamed, the old one
+    /// takes its place).
+    fn restore(&mut self, s: &undo::Snapshot, ctx: &egui::Context) -> Result<(), String> {
+        match s.kind {
+            undo::Kind::Settings if s.settings_differ(&self.cfg) => {
+                self.apply_settings(s.cfg.clone(), ctx)?;
+                if let Some(win) = self.settings.as_mut() {
+                    win.applied(Ok(()), &self.cfg);
+                }
+            }
+            undo::Kind::Titles => {
+                for (i, g) in s.cfg.graphics.iter().enumerate() {
+                    let Some(now) = self.cfg.graphics.get_mut(i) else { continue };
+                    if (now.title != g.title || now.subtitle != g.subtitle) && now.name == g.name {
+                        (now.title, now.subtitle) = (g.title.clone(), g.subtitle.clone());
+                        if let Some(e) = &self.engine {
+                            if now.kind == crate::config::GraphicKind::Ticker {
+                                e.graphics.set_ticker_text(i, &g.title);
+                            } else {
+                                e.graphics.set_text(i, &g.title, &g.subtitle);
+                            }
+                        }
+                    }
+                }
+                if let Some(e) = &self.engine {
+                    let _ = e.update_config(&self.cfg);
+                }
+                self.cfg_dirty = true;
+                return Ok(());
+            }
+            _ => {}
+        }
+        let live = self.engine.as_ref().map(|e| e.switcher.live().name);
+        self.scenes = s.scenes.clone();
+        // (Sources taken away since can't come back with a scene.)
+        let n = self.cfg.sources.len();
+        for sc in &mut self.scenes {
+            sc.retain_sources(n);
+        }
+        self.scenes_dirty = true;
+        let on_air = live.and_then(|n| self.scenes.iter().find(|x| x.name == n)).or_else(|| self.scenes.iter().find(|x| x.name == s.live)).cloned();
+        if let (Some(e), Some(sc)) = (&self.engine, on_air) {
+            e.switcher.set_live(sc);
+        }
+        if let Some(e) = &self.engine {
+            e.set_scenes(&self.scenes);
+        }
+        self.selected_layer = None;
+        Ok(())
     }
 
     fn mode(&self) -> TransitionMode {
@@ -1246,6 +1345,19 @@ impl App {
             self.open_settings();
             return;
         }
+        // Undo: Cmd/Ctrl+Z. Redo: Cmd/Ctrl+Shift+Z, or Ctrl+Y.
+        let (undo, redo) = ctx.input(|i| {
+            let z = i.modifiers.command && i.key_pressed(Key::Z);
+            (z && !i.modifiers.shift, (z && i.modifiers.shift) || (i.modifiers.command && i.key_pressed(Key::Y)))
+        });
+        if undo {
+            self.undo(ctx);
+            return;
+        }
+        if redo {
+            self.redo(ctx);
+            return;
+        }
         let (pressed, shift, alt, cmd_r) = ctx.input(|i| (keys.iter().position(|k| i.key_pressed(*k)), i.modifiers.shift, i.modifiers.alt, i.modifiers.command && i.key_pressed(Key::R)));
         let (t, e, m, a, space, enter) = ctx.input(|i| {
             let plain = !i.modifiers.command && !i.modifiers.alt;
@@ -1698,9 +1810,13 @@ impl App {
         }
         match profiles::load(&dir, name) {
             Ok(cfg) => {
+                let before = self.snapshot(undo::Kind::Settings, format!("Switch to \"{name}\""));
                 self.scenes = cfg.effective_scenes();
                 match self.apply_settings(cfg, ctx) {
-                    Ok(()) => self.toast(format!("Switched to \"{name}\""), false),
+                    Ok(()) => {
+                        self.history.record(before);
+                        self.toast(format!("Switched to \"{name}\""), false)
+                    }
                     Err(e) => self.toast(e, true),
                 }
             }
@@ -1934,6 +2050,7 @@ impl App {
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
         if resp.hovered() && scroll.abs() > 0.1 {
             if let Some(i) = pointer.and_then(|p| hit_at(&scene.layers, p)) {
+                self.remember(undo::Kind::Scenes, format!("Zoom {}", names.get(scene.layers[i].source).map(String::as_str).unwrap_or("frame")));
                 let l = &mut scene.layers[i];
                 l.zoom = (l.zoom * (scroll * 0.004).exp()).clamp(1.0, crate::scene::MAX_ZOOM);
                 self.selected_layer = Some(i);
@@ -1942,6 +2059,8 @@ impl App {
         }
         if resp.double_clicked() {
             if let Some(i) = pointer.and_then(|p| hit_at(&scene.layers, p)) {
+                let name = names.get(scene.layers[i].source).cloned().unwrap_or_default();
+                self.remember(undo::Kind::Scenes, if scene.layers[i].fill { format!("Fit {name}") } else { format!("Fill with {name}") });
                 scene.layers[i].fill = !scene.layers[i].fill;
                 self.selected_layer = Some(i);
                 self.apply_live_edit(scene.clone());
@@ -1965,6 +2084,11 @@ impl App {
                 if resp.drag_started() {
                     let pan = ui.input(|i| i.modifiers.alt);
                     self.drag = hit.map(|(layer, resize)| Drag { layer, resize: resize && !pan, pan });
+                    if let Some(d) = &self.drag {
+                        let name = scene.layers.get(d.layer).and_then(|l| names.get(l.source)).cloned().unwrap_or_default();
+                        let label = if d.pan { format!("Move the picture of {name}") } else if d.resize { format!("Resize {name}") } else { format!("Move {name}") };
+                        self.remember(undo::Kind::Scenes, label);
+                    }
                 }
             }
         }
@@ -2056,6 +2180,7 @@ impl App {
         let mut changed = false;
         let mut new_scene: Option<Scene> = None;
         let mut delete = false;
+        let (mut undo_clicked, mut redo_clicked) = (false, false);
         let old_name = scene.name.clone();
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("EDIT LAYOUT").color(AMBER).strong());
@@ -2187,6 +2312,19 @@ impl App {
             if ui.button("Delete scene").clicked() {
                 delete = true;
             }
+            let cmd = if cfg!(target_os = "macos") { "⌘" } else { "Ctrl+" };
+            if ui.add_enabled(self.history.can_undo().is_some(), egui::Button::new("↶ Undo")).on_hover_text(match self.history.can_undo() {
+                Some(l) => format!("Undo: {l} ({cmd}Z)"),
+                None => format!("Nothing to undo ({cmd}Z)"),
+            }).clicked() {
+                undo_clicked = true;
+            }
+            if ui.add_enabled(self.history.can_redo().is_some(), egui::Button::new("↷ Redo")).on_hover_text(match self.history.can_redo() {
+                Some(l) => format!("Redo: {l} ({cmd}Shift+Z)"),
+                None => format!("Nothing to redo ({cmd}Shift+Z)"),
+            }).clicked() {
+                redo_clicked = true;
+            }
             if ui.add_enabled(self.scenes_dirty, egui::Button::new("Save scenes")).clicked() {
                 self.save_config();
             }
@@ -2194,6 +2332,18 @@ impl App {
                 self.edit_mode = false;
             }
         });
+        if changed || new_scene.is_some() || (delete && self.scenes.len() > 1) {
+            let label = if delete {
+                format!("Delete scene {old_name}")
+            } else if new_scene.is_some() {
+                format!("Duplicate scene {old_name}")
+            } else if scene.name != old_name {
+                format!("Rename scene {old_name}")
+            } else {
+                format!("Edit scene {old_name}")
+            };
+            self.remember(undo::Kind::Scenes, label);
+        }
         if changed {
             if let Some(e) = &self.engine {
                 e.switcher.set_live(scene.clone());
@@ -2216,6 +2366,13 @@ impl App {
             if let Some(s) = self.scenes.first().cloned() {
                 self.take_scene(&s, true);
             }
+        }
+        let ctx = ui.ctx().clone();
+        if undo_clicked {
+            self.undo(&ctx);
+        }
+        if redo_clicked {
+            self.redo(&ctx);
         }
     }
 
@@ -2777,6 +2934,8 @@ impl App {
             });
         });
         if apply {
+            let what = if ticker { "ticker" } else { "title" };
+            self.remember(undo::Kind::Titles, format!("Change the {what} text"));
             if let Some(e) = &self.engine {
                 if ticker {
                     e.graphics.set_ticker_text(i, &title);
@@ -3624,8 +3783,12 @@ impl App {
                 self.sync = Some(SyncWizard::default());
             }
             SettingsAction::Apply { cfg, close } => {
+                let before = self.snapshot(undo::Kind::Settings, "Settings change");
                 let result = self.apply_settings(cfg, ctx);
                 let ok = result.is_ok();
+                if ok && before.settings_differ(&self.cfg) {
+                    self.history.record(before);
+                }
                 if let Some(win) = self.settings.as_mut() {
                     win.applied(result, &self.cfg);
                 }
