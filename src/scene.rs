@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 
 /// One frame on the canvas. Coordinates are fractions of the canvas
 /// (0.0..1.0). The source is fitted inside the frame keeping its aspect
-/// ratio; any leftover area shows the background.
+/// ratio (any leftover area shows the background), or fills it, cropped;
+/// either way it can be zoomed into, showing the part around `focus`.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct Layer {
     /// Index into the source list (0-based).
@@ -14,6 +15,48 @@ pub struct Layer {
     pub y: f32,
     pub w: f32,
     pub h: f32,
+    /// Fill the frame, cropping the picture to its shape, instead of
+    /// fitting the whole picture inside it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fill: bool,
+    /// How far zoomed in (1: the whole picture).
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub zoom: f32,
+    /// The point of the picture (0..1 across and down) the view centres
+    /// on when it's cropped or zoomed.
+    #[serde(default = "centre", skip_serializing_if = "is_centre")]
+    pub focus: [f32; 2],
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+fn one() -> f32 {
+    1.0
+}
+fn is_one(z: &f32) -> bool {
+    (*z - 1.0).abs() < 1e-4
+}
+fn centre() -> [f32; 2] {
+    [0.5, 0.5]
+}
+fn is_centre(f: &[f32; 2]) -> bool {
+    (f[0] - 0.5).abs() < 1e-4 && (f[1] - 0.5).abs() < 1e-4
+}
+
+/// The most a frame can be zoomed into.
+pub const MAX_ZOOM: f32 = 4.0;
+
+impl Layer {
+    /// A frame showing all of `source`'s picture, fitted.
+    pub const fn at(source: usize, x: f32, y: f32, w: f32, h: f32) -> Layer {
+        Layer { source, x, y, w, h, fill: false, zoom: 1.0, focus: [0.5, 0.5] }
+    }
+
+    /// Whether only part of the picture shows (filled or zoomed).
+    pub fn crops(&self) -> bool {
+        self.fill || !is_one(&self.zoom)
+    }
 }
 
 /// Layers are drawn in order: later layers sit on top.
@@ -79,22 +122,22 @@ pub fn presets(names: &[String]) -> Vec<Scene> {
     let mut out: Vec<Scene> = names
         .iter()
         .enumerate()
-        .map(|(i, name)| Scene { name: name.clone(), layers: vec![Layer { source: i, x: 0.0, y: 0.0, w: 1.0, h: 1.0 }], ..Default::default() })
+        .map(|(i, name)| Scene { name: name.clone(), layers: vec![Layer::at(i, 0.0, 0.0, 1.0, 1.0)], ..Default::default() })
         .collect();
     if n >= 2 {
         out.push(Scene {
             name: "Side by side".into(),
             layers: vec![
-                Layer { source: 0, x: 0.01, y: 0.2525, w: 0.485, h: 0.485 },
-                Layer { source: 1, x: 0.505, y: 0.2525, w: 0.485, h: 0.485 },
+                Layer::at(0, 0.01, 0.2525, 0.485, 0.485),
+                Layer::at(1, 0.505, 0.2525, 0.485, 0.485),
             ],
             ..Default::default()
         });
         out.push(Scene {
             name: "Picture in picture".into(),
             layers: vec![
-                Layer { source: 0, x: 0.0, y: 0.0, w: 1.0, h: 1.0 },
-                Layer { source: 1, x: 0.70, y: 0.68, w: 0.27, h: 0.27 },
+                Layer::at(0, 0.0, 0.0, 1.0, 1.0),
+                Layer::at(1, 0.70, 0.68, 0.27, 0.27),
             ],
             ..Default::default()
         });
@@ -118,13 +161,7 @@ pub fn grid(n: usize) -> Scene {
             // Centre a short last row.
             let in_row = if r == rows - 1 { n - r * cols } else { cols };
             let row_offset = (cols - in_row) as f32 * (cw + gap) / 2.0;
-            Layer {
-                source: i,
-                x: gap + c as f32 * (cw + gap) + row_offset,
-                y: gap + r as f32 * (ch + gap),
-                w: cw,
-                h: ch,
-            }
+            Layer::at(i, gap + c as f32 * (cw + gap) + row_offset, gap + r as f32 * (ch + gap), cw, ch)
         })
         .collect();
     Scene { name: "Grid".into(), layers, ..Default::default() }
@@ -139,10 +176,40 @@ pub struct PadState {
     pub h: i32,
     pub alpha: f64,
     pub zorder: u32,
+    /// The part of the source's picture shown, [x0, y0, x1, y1] as
+    /// fractions of it (after its own crop in Picture adjustments).
+    pub crop: [f32; 4],
 }
 
 impl PadState {
-    pub const HIDDEN: PadState = PadState { x: 0, y: 0, w: 16, h: 16, alpha: 0.0, zorder: 1 };
+    pub const WHOLE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+    pub const HIDDEN: PadState = PadState { x: 0, y: 0, w: 16, h: 16, alpha: 0.0, zorder: 1, crop: PadState::WHOLE };
+}
+
+/// Where a source of aspect `src_aspect` goes in its frame, (x, y, w, h)
+/// in pixels, and which part of its picture shows there, [x0, y0, x1, y1]
+/// as fractions of the picture: fitted or filling, zoomed around its focus.
+pub fn place(layer: &Layer, canvas: (u32, u32), src_aspect: f32) -> ((f32, f32, f32, f32), [f32; 4]) {
+    let z = layer.zoom.clamp(1.0, MAX_ZOOM);
+    let (rect, part) = if layer.fill && src_aspect > 0.0 {
+        let (cw, ch) = (canvas.0 as f32, canvas.1 as f32);
+        let rect = (layer.x * cw, layer.y * ch, (layer.w * cw).max(0.0), (layer.h * ch).max(0.0));
+        let frame_aspect = rect.2 / rect.3.max(1e-3);
+        // The part of the picture that has the frame's shape.
+        let part = if src_aspect > frame_aspect { (frame_aspect / src_aspect, 1.0) } else { (1.0, src_aspect / frame_aspect) };
+        (rect, part)
+    } else {
+        (fit(layer, canvas, src_aspect), (1.0, 1.0))
+    };
+    (rect, view(part.0 / z, part.1 / z, layer.focus))
+}
+
+/// A `w`×`h` window on the picture centred on `focus`, kept inside it.
+fn view(w: f32, h: f32, focus: [f32; 2]) -> [f32; 4] {
+    let (w, h) = (w.clamp(0.0, 1.0), h.clamp(0.0, 1.0));
+    let x0 = (focus[0] - w / 2.0).clamp(0.0, 1.0 - w);
+    let y0 = (focus[1] - h / 2.0).clamp(0.0, 1.0 - h);
+    [x0, y0, x0 + w, y0 + h]
 }
 
 /// Fit a source of aspect `src_aspect` (width/height) inside a frame,
@@ -186,8 +253,8 @@ pub fn compose(
         .map(|(s, &aspect)| {
             let a = if done { None } else { from.and_then(|f| f.layer_for(s)) };
             let b = to.layer_for(s);
-            let px = |l: &Layer| fit(l, canvas, aspect);
-            let (rect, alpha, z) = match (a, b) {
+            let px = |l: &Layer| place(l, canvas, aspect);
+            let ((rect, crop), alpha, z) = match (a, b) {
                 (None, None) => return PadState::HIDDEN,
                 (None, Some((ib, lb))) => {
                     let alpha = if done { 1.0 } else { e };
@@ -196,9 +263,11 @@ pub fn compose(
                 }
                 (Some((ia, la)), None) => (px(la), 1.0 - e, 10 + ia),
                 (Some((_, la)), Some((ib, lb))) => {
-                    let (ra, rb) = (px(la), px(lb));
+                    // The frame glides, and the picture's crop with it.
+                    let ((ra, ca), (rb, cb)) = (px(la), px(lb));
                     let r = (lerp(ra.0, rb.0, e), lerp(ra.1, rb.1, e), lerp(ra.2, rb.2, e), lerp(ra.3, rb.3, e));
-                    (r, 1.0, 100 + ib)
+                    let c = [lerp(ca[0], cb[0], e), lerp(ca[1], cb[1], e), lerp(ca[2], cb[2], e), lerp(ca[3], cb[3], e)];
+                    ((r, c), 1.0, 100 + ib)
                 }
             };
             let (x, y, w, h) = rect;
@@ -211,6 +280,7 @@ pub fn compose(
                 h: (y1 - y0).max(2),
                 alpha: alpha as f64,
                 zorder: z as u32 + 1,
+                crop,
             }
         })
         .collect()
@@ -255,12 +325,68 @@ mod tests {
 
     #[test]
     fn fit_letterboxes() {
-        let full = Layer { source: 0, x: 0.0, y: 0.0, w: 1.0, h: 1.0 };
+        let full = Layer::at(0, 0.0, 0.0, 1.0, 1.0);
         // 16:9 on 16:9 fills exactly.
         assert_eq!(fit(&full, CANVAS, 16.0 / 9.0), (0.0, 0.0, 1920.0, 1080.0));
         // 4:3 gets pillarboxed and centred.
         let (x, y, w, h) = fit(&full, CANVAS, 4.0 / 3.0);
         assert_eq!((x, y, w, h), (240.0, 0.0, 1440.0, 1080.0));
+    }
+
+    #[test]
+    fn fill_crops_to_the_frame() {
+        // A 16:9 picture in a square frame, filled: the middle 9/16 shows.
+        let mut l = Layer::at(0, 0.0, 0.0, 0.5, 960.0 / 1080.0);
+        l.fill = true;
+        let (r, c) = place(&l, CANVAS, 16.0 / 9.0);
+        assert_eq!(r, (0.0, 0.0, 960.0, 960.0));
+        assert!((c[2] - c[0] - 0.5625).abs() < 1e-4 && (c[3] - c[1] - 1.0).abs() < 1e-4, "{c:?}");
+        assert!((c[0] - (1.0 - 0.5625) / 2.0).abs() < 1e-4, "centred {c:?}");
+        // Focused on the left edge: the view stops at the picture's edge.
+        l.focus = [0.0, 0.5];
+        assert!(place(&l, CANVAS, 16.0 / 9.0).1[0].abs() < 1e-6);
+        // Fitted (the default), the whole picture shows, letterboxed.
+        let fitted = Layer::at(0, 0.0, 0.0, 0.5, 960.0 / 1080.0);
+        let (r, c) = place(&fitted, CANVAS, 16.0 / 9.0);
+        assert_eq!(c, PadState::WHOLE);
+        assert_eq!(r, (0.0, 210.0, 960.0, 540.0));
+    }
+
+    #[test]
+    fn zoom_shows_less_around_the_focus() {
+        let mut l = Layer::at(0, 0.0, 0.0, 1.0, 1.0);
+        l.zoom = 2.0;
+        l.focus = [0.75, 0.25];
+        let (r, c) = place(&l, CANVAS, 16.0 / 9.0);
+        assert_eq!(r, (0.0, 0.0, 1920.0, 1080.0));
+        assert_eq!(c, [0.5, 0.0, 1.0, 0.5]);
+        // Never more than the most zoom.
+        l.zoom = 50.0;
+        let c = place(&l, CANVAS, 16.0 / 9.0).1;
+        assert!((c[2] - c[0] - 1.0 / MAX_ZOOM).abs() < 1e-5);
+    }
+
+    #[test]
+    fn old_scenes_load_and_new_fields_stay_out_when_unused() {
+        let l: Layer = toml::from_str("source = 1\nx = 0.0\ny = 0.0\nw = 1.0\nh = 1.0").unwrap();
+        assert_eq!(l, Layer::at(1, 0.0, 0.0, 1.0, 1.0));
+        let text = toml::to_string(&l).unwrap();
+        assert!(!text.contains("fill") && !text.contains("zoom") && !text.contains("focus"), "{text}");
+        let mut z = l;
+        z.fill = true;
+        z.zoom = 1.5;
+        let back: Layer = toml::from_str(&toml::to_string(&z).unwrap()).unwrap();
+        assert_eq!(back, z);
+    }
+
+    #[test]
+    fn a_mix_glides_the_crop_too() {
+        let a = Scene { name: "a".into(), layers: vec![Layer::at(0, 0.0, 0.0, 1.0, 1.0)], ..Default::default() };
+        let mut b = a.clone();
+        b.layers[0].zoom = 2.0;
+        let mid = compose(Some(&a), &b, 0.5, CANVAS, &[16.0 / 9.0]);
+        let w = mid[0].crop[2] - mid[0].crop[0];
+        assert!(w < 1.0 && w > 0.5, "{w}");
     }
 
     #[test]

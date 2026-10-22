@@ -213,6 +213,12 @@ Take_2026-10-16_19-30-02/
 - **Scenes.** Preset scenes (each source full screen, side by side,
   picture-in-picture, grid) plus your own: drag and resize frames live, then
   save them.
+- **Fill, crop and zoom per scene.** Each frame in a scene can show the whole
+  picture (fit) or fill the frame, cropped to its shape, so a camera in a tall
+  half-screen box has no black bars. Zoom in (scroll over the frame, up to
+  4×) and move the picture inside its frame (Option/Alt-drag), so the same
+  camera can be a close-up in one scene and wide in another. Mixes glide the
+  crop along with the frame.
 - **Transitions:** Cut, Mix (shared frames glide to their new places while
   others fade), Wipe, Push and Dip to a colour, with a direction and length.
 - **Stinger transitions:** a short video (a logo sweep, a burst of colour)
@@ -555,7 +561,7 @@ Video Extensions** on some PCs.
 | Media player | ⟲ ⏯ ⏭ on its tile; right-click the tile for the playlist |
 | Record / stop | ⌘R, or the record button |
 | Go live / end stream | The **GO LIVE** button. This is mouse-only on purpose, so a stray key can't start or end a broadcast |
-| Edit layout | `E`, or **Edit layout**: drag frames, drag the corner to resize (Shift keeps shape), add/remove sources, scene audio, duplicate, rename, **Save scenes** |
+| Edit layout | `E`, or **Edit layout**: drag frames, drag the corner to resize (Shift keeps shape), **Fit/Fill** and **Zoom** for the selected frame (or double-click a frame to fill it, scroll to zoom, Option/Alt-drag to move the picture), add/remove sources, scene audio, duplicate, rename, **Save scenes** |
 | Audio strip | Fader = level (double-click resets), **ON** = in the mixes, 🎧 = solo in the headphones |
 | Second screen | **Screen** in the header. On that window: double-click or `F` for full screen, Esc to leave full screen, Esc again (or ✕, or Cmd/Ctrl+W) to close |
 | Switch show | The show name next to the logo |
