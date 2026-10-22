@@ -216,7 +216,10 @@ impl Engine {
             self.video_taps.lock_ok().tall = Some(ProgramTap { tx: vtx, from: t0 });
         }
 
-        // One file per source.
+        // One file per source; the last stretch of each is kept for replays
+        // from that camera (not ProRes: far too big to keep in memory).
+        let keep_angles = !matches!(codec, crate::media::VideoCodec::ProRes(_));
+        let mut angles = Vec::new();
         let mut iso_slots = Vec::new();
         for (i, s) in self.sources.iter().enumerate() {
             if !s.record {
@@ -230,7 +233,13 @@ impl Engine {
             // Short queue: these can be camera buffers, and holding many
             // starves the camera's buffer pool.
             let retimer = Some(recorder::Retimer::new(t0, s.fps, s.slot.delay));
-            let (path, vtx, _) = add_video(label, file, s.fps, s.size, with_audio, rate, retimer, 8, Vec::new(), None);
+            let angle = keep_angles.then(|| {
+                let b = super::clips::ClipBuffer::new();
+                b.start(folder.clone(), s.fps, brand, None, cfg.replay.seconds.ceil() as u32);
+                angles.push((s.name.clone(), b.clone()));
+                b
+            });
+            let (path, vtx, _) = add_video(label, file, s.fps, s.size, with_audio, rate, retimer, 8, Vec::new(), angle);
             // (By identity: the switch log's angles stay right if sources move.)
             export_files.push(ExportFile { path, name: s.name.clone(), width: s.size.0, height: s.size.1, fps: s.fps, has_audio: with_audio, source: Some(s.uid as usize), tc_frame: tc_for(s.fps), length: None });
             s.slot.start_iso_tap(vtx, t0);
@@ -306,6 +315,7 @@ impl Engine {
                 st.push(LogLevel::Info, format!("Backup copy to {}", b.display()));
             }
         }
+        *self.angles.lock_ok() = angles;
         *guard = Some(take);
         self.mix.reset_recording_loudness();
         (self.waker)();
@@ -362,11 +372,14 @@ impl Engine {
     pub fn stop_recording(&self) {
         let Some(take) = self.take.lock_ok().take() else { return };
         self.clips.stop();
+        for (_, a) in self.angles.lock_ok().drain(..) {
+            a.stop();
+        }
         let fps = self.info.fps;
         let t1 = next_boundary(fps);
         take.t1.store(t1, Ordering::Relaxed);
         let folder = take.folder.clone();
-        self.status.lock_ok().rec = RecState::Finalizing { folder: folder.clone() };
+        self.status.lock_ok().rec = RecState::Finalizing { folder: folder.clone(), step: "Catching the last frames".into(), done: 0.0 };
         (self.waker)();
 
         let taps = self.video_taps.clone();
@@ -411,10 +424,21 @@ impl Engine {
                 export_files: take.export_files.clone(),
                 tc_seconds: take.tc_seconds,
             };
-            let mut report = take.collect();
+            // What the window shows while it saves.
+            let saving = |what: String, done: f32| {
+                if let RecState::Finalizing { step, done: d, .. } = &mut status.lock_ok().rec {
+                    *step = what;
+                    *d = done;
+                }
+                waker();
+            };
+            // Most of the work: the encoders finish and the files close
+            // (90% of the bar); then the notes and timelines.
+            let mut report = take.collect_with(|what, f| saving(what, f * 0.9));
             *monitor.lock_ok() = None;
             // The last words of the take, once recognised.
             let cues = captions.map(|c| {
+                saving("Waiting for the last captions".into(), 0.9);
                 c.settle(t1, Duration::from_secs(8));
                 c.cues_between(t0, t1)
             });
@@ -422,6 +446,7 @@ impl Engine {
             report.duration = Duration::from_nanos((t1 - t0).max(0) as u64);
             report.markers = side.markers.iter().map(|m| (m.at as f64 / NS_PER_SEC as f64, m.name.clone())).collect();
             let events = switcher.events_between(t0 + VIDEO_LATENCY, t1 + VIDEO_LATENCY);
+            saving("Writing the timeline and notes".into(), 0.95);
             let written = side.write(&cfg, &report, &summary, &events, t0, t1, fps, (cw, ch), stream_since, cues.as_deref());
             let mut st = status.lock_ok();
             let total: u64 = report.files.iter().map(|f| f.1).sum();

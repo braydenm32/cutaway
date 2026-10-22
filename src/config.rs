@@ -507,7 +507,9 @@ pub struct SourceConfig {
     ///   - the device name as listed by `cutaway --list-devices` (a partial,
     ///     case-insensitive match is fine), e.g. "Cam Link 4K"
     ///   - "#2" for the second detected video device
-    ///   - "screen" to capture the main display
+    ///   - "screen" to capture the main display; "screen:display:<name>",
+    ///     "screen:window:<app>|<title>" or "screen:app:<app>" for another
+    ///     display, a window or an app (see `platform::capture`)
     ///   - "test" or "test:<pattern>" for a generated test picture
     ///     (patterns: smpte, ball, pinwheel, spokes, gradient, snow, colors)
     ///   - "frame:<source name>" for an auto-framed close-up cut from
@@ -1483,6 +1485,41 @@ impl ClockKind {
     }
 }
 
+/// How a graphic comes on and goes off.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Motion {
+    /// Fades in and out where it is.
+    #[default]
+    Fade,
+    /// Slides in from the nearest side, and back out.
+    Slide,
+    /// Drawn on from left to right; off the same way back.
+    Wipe,
+    /// Rises a little into place as it fades in.
+    Rise,
+    /// Grows into place from slightly smaller.
+    Pop,
+}
+
+impl Motion {
+    pub fn is_fade(&self) -> bool {
+        *self == Motion::Fade
+    }
+
+    pub const ALL: [Motion; 5] = [Motion::Fade, Motion::Slide, Motion::Wipe, Motion::Rise, Motion::Pop];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Motion::Fade => "Fade",
+            Motion::Slide => "Slide in from the side",
+            Motion::Wipe => "Wipe on",
+            Motion::Rise => "Rise into place",
+            Motion::Pop => "Pop in",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Graphic {
@@ -1497,7 +1534,11 @@ pub struct Graphic {
     /// Width as a fraction of the program picture (height follows).
     pub width: f32,
     pub opacity: f32,
+    /// How long it takes to come on or go off.
     pub fade_ms: u32,
+    /// How it comes on and goes off.
+    #[serde(skip_serializing_if = "Motion::is_fade")]
+    pub motion: Motion,
     /// Shown when the app starts.
     pub visible: bool,
     pub text_color: String,
@@ -1542,6 +1583,7 @@ impl Default for Graphic {
             width: 0.11,
             opacity: 1.0,
             fade_ms: 300,
+            motion: Motion::Fade,
             visible: false,
             text_color: "#ffffff".into(),
             box_color: "#101820".into(),
@@ -1641,6 +1683,12 @@ impl SourceConfig {
         self.device.trim().strip_prefix("phone:").map(str::trim).filter(|s| !s.is_empty())
     }
 
+    /// A remote guest's shared screen, for a "guest-screen:ID" source (ID
+    /// is the guest's own link: they share from the page they joined on).
+    pub fn guest_screen_id(&self) -> Option<&str> {
+        self.device.trim().strip_prefix("guest-screen:").map(str::trim).filter(|s| !s.is_empty())
+    }
+
     /// Either kind of link: (id, whether it's a phone camera).
     pub fn link_id(&self) -> Option<(&str, bool)> {
         self.guest_id().map(|i| (i, false)).or_else(|| self.phone_id().map(|i| (i, true)))
@@ -1694,6 +1742,9 @@ pub enum DisplayOutput {
 pub struct DisplayConfig {
     pub output: DisplayOutput,
     pub fullscreen: bool,
+    /// Which display it goes on, by name (as `platform::displays` names
+    /// them); empty: another display than Cutaway's, if there is one.
+    pub screen: String,
     /// Turn the virtual camera on when Cutaway starts.
     pub virtual_camera: bool,
     /// Show the time and the rundown segment's time left on this screen
@@ -1703,7 +1754,7 @@ pub struct DisplayConfig {
 
 impl Default for DisplayConfig {
     fn default() -> Self {
-        DisplayConfig { output: DisplayOutput::Off, fullscreen: true, virtual_camera: false, clocks: false }
+        DisplayConfig { output: DisplayOutput::Off, fullscreen: true, screen: String::new(), virtual_camera: false, clocks: false }
     }
 }
 
@@ -2100,11 +2151,15 @@ pub struct ReplayConfig {
     pub slow_speed: f32,
     /// Show "REPLAY" in a corner while it plays.
     pub label: bool,
+    /// What the Replay button shows: "" for the program, a source's name
+    /// (from its own recording), or "quad" for four at once.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub angle: String,
 }
 
 impl Default for ReplayConfig {
     fn default() -> Self {
-        ReplayConfig { seconds: 8.0, slow_speed: 0.5, label: true }
+        ReplayConfig { seconds: 8.0, slow_speed: 0.5, label: true, angle: String::new() }
     }
 }
 

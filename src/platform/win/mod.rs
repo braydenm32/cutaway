@@ -10,7 +10,7 @@ pub mod screen;
 pub mod vcam;
 
 pub use camera::{list_video_devices, open_camera};
-pub use screen::open_screen;
+pub use screen::{capture_targets, open_screen};
 
 use anyhow::{anyhow, Result};
 use std::sync::OnceLock;

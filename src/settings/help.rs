@@ -31,7 +31,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
 
         // ---- Video sources
         (Sources, "Name") => "What this source is called on its button, in the multiview and scenes, and in the name of its own file (ISO_01_Name).",
-        (Sources, "Type") => "Where the picture comes from: a camera or capture card on this computer, the screen, a test picture, a media player, a network feed (SRT, RTMP or NDI), a phone, or a close-up or virtual camera cut out of another source.",
+        (Sources, "Type") => "Where the picture comes from: a camera or capture card on this computer, a screen, window or app on this computer, a test picture, a media player, a network feed (SRT, RTMP or NDI), a phone, or a close-up or virtual camera cut out of another source.",
         (Sources, "Device") => "Which camera or capture card. If it's unplugged, the source waits and connects by itself when it's back.",
         (Sources, "Device modes") => "The sizes and frame rates the device says it can send. Picking one sets the capture size and frame rate to match.",
         (Sources, "Pattern") => "Which generated picture to show. Test pictures are for trying layouts and checking that sources line up; each flashes once a second.",
@@ -99,6 +99,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Guests, "Port") => "The port the guest page runs on, on this computer. With the tunnel only this computer uses it; with your own address, forward it here.",
         (Guests, "Guests see") => "Sends guests a small copy of the program, so they can see what's on air without much of their connection.",
         (Guests, "Backup recordings") => "While you record, each guest's browser also records their camera and mic as captured, before the internet gets at it, and sends it in pieces into the take's Guests folder. It uses more of their upload, so it suits decent connections; their page tells them it's happening.",
+        (Guests, "Screen share") => "Adds a source for the guest's screen. Their page gets a Share screen button: they choose the whole screen, a window or a tab, and it arrives on its own source while their camera stays on.",
         (Guests, "TURN server") => "A relay for guests on strict networks (some offices, schools and hotels) that block direct connections: Cloudflare Calls, Twilio or your own coturn. Most guests never need one.",
         (Guests, "Username") | (Guests, "Password") => "The TURN server's login.",
 
@@ -165,7 +166,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Graphics, "Corner") => "Puts it in a corner in one click.",
         (Graphics, "Width") => "How wide it is, as a share of the picture; the height follows.",
         (Graphics, "Opacity") => "How solid it is. Lower lets the picture show through, as for a watermark.",
-        (Graphics, "Fade") => "How long it takes to fade in and out.",
+        (Graphics, "Comes on") => "How it arrives and leaves: a fade, a slide in from the nearer side, a wipe from left to right, a gentle rise, or a pop. And how long that takes (0 for straight on and off).",
         (Graphics, "Showing at start") => "Whether it's on screen when Cutaway starts. Its button (or Alt + its number) turns it on and off.",
 
         // ---- Captions
@@ -192,6 +193,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Switching, "Fade length") => "How long Fade to black takes. FTB in the bottom bar (or ftb from the Stream Deck, MIDI or the remote) fades everything, graphics included; press it again to come back.",
         (Switching, "Sound fades too") => "The recording and the stream fade out with the picture. Headphones and callers keep hearing.",
         (Switching, "Replay the last") => "How much of the program a replay plays again. Press ⟲ Replay in the header while recording (or replay from the Stream Deck, MIDI or the remote); it fades in over the live picture while the show's sound carries on.",
+        (Switching, "Shows") => "What ⟲ Replay plays again: the program as it went out, one camera (from its own recording, so a moment the program missed), or up to four cameras at once in a grid. Right-click ⟲ Replay to pick another each time. Cameras need \"Record to its own file\" on, and files that aren't ProRes.",
         (Switching, "Slow motion") => "The speed of a slow-motion replay (right-click ⟲ Replay, or replay:slow).",
         (Switching, "Label") => "Shows REPLAY in the corner while a replay plays.",
         (Switching, "At start") => "Whether automatic switching is on when Cutaway starts. The AUTO button and the A key turn it on and off.",
@@ -247,7 +249,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Recording, "WAV files") => "The bit depth of the WAV files. 24-bit suits most; 32-bit float can't clip, even if a level was too hot.",
         (Recording, "Backup copy") => "Records a second copy of every file into another folder as you go. Pick one on a different drive, so a full or failing drive can't lose the show.",
         (Recording, "Instant clips") => "The Clip button (or K) saves the last few seconds of the program into the take's Clips folder, to share straight away.",
-        (Recording, "Crash protection") => "Files are written so that after a crash or a power cut they keep everything up to the last second.",
+        (Recording, "Crash protection") => "Files are written so that after a crash or a power cut they keep everything up to the last second. Next time Cutaway opens, it mends them and tells you when the take is safe.",
         (Recording, "Timecode") => "Stamps every file with the time of day as timecode, so editors can line the files up by it.",
         (Recording, "Editor timelines") => "Saves the live edit as a multicam timeline for Final Cut Pro, DaVinci Resolve and Premiere Pro, with every angle and your cuts.",
         (Recording, "Audio sessions") => "Saves a REAPER session and a DAWproject (Fender Studio Pro, Bitwig, Cubase) with every WAV on its own track, lined up.",
@@ -303,8 +305,8 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Upload, "When") => "Upload as each take is saved, or wait for you to press Upload. Uploads go one at a time in the background, and pick up again if the connection drops.",
 
         // ---- Screens & webcam
-        (Outputs, "Show") => "What the second-screen window shows: the program, the multiview or the teleprompter. Drag it to the projector, TV or monitor, then double-click it (or press F) to fill that screen; Esc leaves full screen. The header's Screen button turns it on and off.",
-        (Outputs, "Full screen") => "Fills the screen the window is on.",
+        (Outputs, "Show") => "What the second-screen window shows: the program, the multiview or the teleprompter. It opens on the screen chosen below. Double-click it (or press F) to fill the screen; Esc leaves full screen, and Esc again (or its ✕) closes it. The header's Screen button turns it on and off.",
+        (Outputs, "Full screen") => "Opens it filling its screen. Never over Cutaway itself: on the screen Cutaway is on (or with only one screen) it opens in a window.",
         (Outputs, "Clocks") => "Shows the time and the rundown segment's time left, on this screen only: for presenters, not viewers.",
         (Outputs, "Program") => "Sends the program, with the recording mix, as an NDI source that other computers, OBS, vMix, NDI Studio Monitor and NDI recorders on the network can use.",
         (Outputs, "Name") => "Its NDI name (NDI adds this computer's name in front).",

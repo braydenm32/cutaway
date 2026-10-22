@@ -175,7 +175,9 @@ impl App {
                 let (dot, color) = if g.connected { ("●", GREEN) } else if g.connecting { ("●", AMBER) } else { ("○", TEXT_DIM) };
                 ui.label(RichText::new(dot).color(color));
                 ui.label(RichText::new(&g.source).strong());
-                let mut detail = if g.connected && g.camera {
+                let mut detail = if g.screen {
+                    if g.connected { "sharing" } else if g.connecting { "starting…" } else { "not sharing" }.to_string()
+                } else if g.connected && g.camera {
                     "phone on".to_string()
                 } else if g.connected {
                     let t = g.since.map(|s| crate::engine::timers::fmt_span(s.elapsed(), false)).unwrap_or_default();
@@ -197,11 +199,13 @@ impl App {
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if g.connected || g.connecting {
-                        if ui.small_button("✕").on_hover_text(if g.camera { "Disconnect the phone" } else { "Disconnect them" }).clicked() {
+                        let tip = if g.screen { "Stop their screen share" } else if g.camera { "Disconnect the phone" } else { "Disconnect them" };
+                        if ui.small_button("✕").on_hover_text(tip).clicked() {
                             kick = Some(g.id.clone());
                         }
                     }
-                    if let Some(link) = hub.link(&g.id) {
+                    // (A screen is shared from the guest's own link.)
+                    if let Some(link) = hub.link(&g.id).filter(|_| !g.screen) {
                         if g.camera {
                             if ui.small_button("QR").on_hover_text("Show the code to scan with the phone").clicked() {
                                 qr = Some(g.id.clone());

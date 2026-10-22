@@ -252,10 +252,14 @@ pub fn start_video(
         let r = super::guests::start_source(cfg, slot, hub.clone())?;
         return Ok((r, if phone { "phone camera" } else { "remote guest" }.into()));
     }
+    if cfg.guest_screen_id().is_some() {
+        let r = super::guests::start_source(cfg, slot, hub.clone())?;
+        return Ok((r, "guest's screen".into()));
+    }
     let sink: platform::FrameSink = Arc::new(move |f| slot.push(f));
-    if lower == "screen" {
-        let r = platform::open_screen(cfg.width, cfg.height, cfg.fps, sink)?;
-        return Ok((r, "screen".into()));
+    if let Some(target) = platform::capture::ScreenTarget::parse(spec) {
+        let r = platform::open_screen(&target, cfg.width, cfg.height, cfg.fps, sink)?;
+        return Ok((r, target.describe()));
     }
     let dev = crate::devices::find(spec, devices)?;
     let r = platform::open_camera(dev, cfg.width, cfg.height, cfg.fps, sink)?;

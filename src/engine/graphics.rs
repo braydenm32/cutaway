@@ -317,7 +317,10 @@ impl Graphics {
             }
             let w = it.cfg.width.clamp(0.01, 1.0);
             let h = w * cw / ch * img.height() as f32 / img.width() as f32;
-            out.push(GraphicLayer { key: (i, it.version), image: img.clone(), rect: [it.cfg.x, it.cfg.y, w, h], alpha, stream_only: false, uv: FULL_UV });
+            // How far on it is (0 off, 1 on), for the motion.
+            let k = if it.cfg.opacity > 0.001 { (alpha / it.cfg.opacity.clamp(0.0, 1.0)).clamp(0.0, 1.0) } else { 1.0 };
+            let m = motion(it.cfg.motion, k, [it.cfg.x, it.cfg.y, w, h], it.cfg.opacity.clamp(0.0, 1.0));
+            out.push(GraphicLayer { key: (i, it.version), image: img.clone(), rect: m.rect, alpha: m.alpha, stream_only: false, uv: m.uv });
             // A ticker's text slides along inside its band, right of the label.
             if let Some(strip) = &it.strip {
                 let band_px = w * cw;
@@ -328,8 +331,22 @@ impl Graphics {
                 let phase = ((t as f64 / 1e9 * speed as f64) % strip.cycle.max(1.0) as f64) as f32;
                 let u0 = phase / sw;
                 let u1 = (phase + shown) / sw;
-                let x = it.cfg.x + label_px / cw;
-                out.push(GraphicLayer { key: (STRIP_KEY + i, strip.version), image: strip.image.clone(), rect: [x, it.cfg.y, shown / cw, h], alpha, stream_only: false, uv: [u0, 0.0, u1, 1.0] });
+                // It moves (and grows) with its band; a wipe shows as much
+                // of it as of the band.
+                let wipe = it.cfg.motion == crate::config::Motion::Wipe;
+                let scale = if wipe { 1.0 } else { m.rect[2] / w };
+                let x = m.rect[0] + label_px / cw * scale;
+                let full = shown / cw * scale;
+                let mut sw_frac = full;
+                let mut u1 = u1;
+                if wipe {
+                    let edge = m.rect[0] + m.rect[2];
+                    sw_frac = (edge - x).clamp(0.0, full);
+                    u1 = u0 + (u1 - u0) * sw_frac / full.max(1e-6);
+                }
+                if sw_frac > 0.0 {
+                    out.push(GraphicLayer { key: (STRIP_KEY + i, strip.version), image: strip.image.clone(), rect: [x, m.rect[1], sw_frac, m.rect[3]], alpha: m.alpha, stream_only: false, uv: [u0, 0.0, u1, 1.0] });
+                }
             }
         }
         drop(items);
@@ -347,6 +364,38 @@ impl Graphics {
 /// A web graphic's page, opened in the background.
 fn open_page(cfg: &Graphic) -> Option<super::web::WebPage> {
     (cfg.kind == GraphicKind::Web).then(|| super::web::WebPage::open(&cfg.url, (cfg.page_size[0], cfg.page_size[1]), Arc::new(|| {})))
+}
+
+/// Where a graphic is, how solid, and how much of it shows, `k` of the way
+/// on (0 to 1), for its motion.
+struct Placed {
+    rect: [f32; 4],
+    alpha: f32,
+    uv: [f32; 4],
+}
+
+fn motion(kind: crate::config::Motion, k: f32, rect: [f32; 4], opacity: f32) -> Placed {
+    use crate::config::Motion;
+    let [x, y, w, h] = rect;
+    // Quick to start, gentle to land (and the reverse going off).
+    let e = 1.0 - (1.0 - k).powi(3);
+    match kind {
+        Motion::Fade => Placed { rect, alpha: opacity * k, uv: FULL_UV },
+        Motion::Slide => {
+            // From whichever side is nearer, all the way off the picture.
+            let from_left = x + w / 2.0 <= 0.5;
+            let off = if from_left { -(x + w) } else { 1.0 - x };
+            // (Fully solid soon after it starts, so it doesn't look like a fade.)
+            Placed { rect: [x + off * (1.0 - e), y, w, h], alpha: opacity * (k * 4.0).min(1.0), uv: FULL_UV }
+        }
+        Motion::Wipe => Placed { rect: [x, y, w * e, h], alpha: if e > 0.0 { opacity } else { 0.0 }, uv: [0.0, 0.0, e, 1.0] },
+        Motion::Rise => Placed { rect: [x, y + h * 0.5 * (1.0 - e), w, h], alpha: opacity * k, uv: FULL_UV },
+        Motion::Pop => {
+            // A touch past full size, then settling.
+            let s = 0.82 + 0.18 * e + 0.06 * (std::f32::consts::PI * k).sin() * (1.0 - k);
+            Placed { rect: [x + w * (1.0 - s) / 2.0, y + h * (1.0 - s) / 2.0, w * s, h * s], alpha: opacity * (k * 2.0).min(1.0), uv: FULL_UV }
+        }
+    }
 }
 
 fn load_image(path: &Path) -> Result<RgbaImage, String> {
@@ -544,6 +593,29 @@ mod tests {
         let before = g.layers(t + 2_000_000_000)[0].key;
         g.set_text(0, "Sam Lee", "Guest");
         assert_ne!(g.layers(t + 2_000_000_000)[0].key, before);
+    }
+
+    #[test]
+    fn motions_land_in_place() {
+        use crate::config::Motion;
+        let rect = [0.05, 0.75, 0.3, 0.1];
+        for m in Motion::ALL {
+            let on = motion(m, 1.0, rect, 0.9);
+            assert_eq!((on.rect, on.uv), (rect, FULL_UV), "{m:?} ends where it's set");
+            assert!((on.alpha - 0.9).abs() < 1e-6, "{m:?} at its opacity");
+            assert!(motion(m, 0.0, rect, 0.9).alpha == 0.0 || m == Motion::Slide, "{m:?} starts unseen");
+        }
+        // A slide starts off the picture, from the nearer side.
+        let s = motion(Motion::Slide, 0.0, rect, 1.0);
+        assert!(s.rect[0] + s.rect[2] <= 0.0, "{:?}", s.rect);
+        let s = motion(Motion::Slide, 0.0, [0.7, 0.05, 0.25, 0.1], 1.0);
+        assert!(s.rect[0] >= 1.0, "{:?}", s.rect);
+        // A wipe shows the left part, unstretched.
+        let w = motion(Motion::Wipe, 0.5, rect, 1.0);
+        assert!((w.rect[2] / rect[2] - w.uv[2]).abs() < 1e-6 && w.uv[2] > 0.5 && w.uv[2] < 1.0);
+        // Halfway, a slide is mostly there (it lands gently).
+        let s = motion(Motion::Slide, 0.5, rect, 1.0);
+        assert!(s.rect[0] > -0.05 && s.rect[0] < rect[0]);
     }
 
     #[test]

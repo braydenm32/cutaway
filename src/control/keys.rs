@@ -194,7 +194,7 @@ mod tests {
             background: [10, 10, 10],
             scenes: vec![Scene {
                 name: "Side by side".into(),
-                layers: vec![Layer { source: 0, x: 0.0, y: 0.25, w: 0.5, h: 0.5 }, Layer { source: 1, x: 0.5, y: 0.25, w: 0.5, h: 0.5 }],
+                layers: vec![Layer::at(0, 0.0, 0.25, 0.5, 0.5), Layer::at(1, 0.5, 0.25, 0.5, 0.5)],
                 ..Default::default()
             }],
             previews: vec![slot([0, 0, 255]), slot([255, 255, 0])],

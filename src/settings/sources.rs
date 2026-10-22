@@ -41,7 +41,7 @@ impl SourceKind {
 
     fn of(device: &str) -> SourceKind {
         let d = device.trim().to_lowercase();
-        if d == "screen" {
+        if crate::platform::capture::is_screen(&d) {
             SourceKind::Screen
         } else if d == "test" || d.starts_with("test:") {
             SourceKind::Test
@@ -55,7 +55,7 @@ impl SourceKind {
             SourceKind::VirtualPtz
         } else if d.starts_with("phone:") {
             SourceKind::Phone
-        } else if d.starts_with("guest:") {
+        } else if d.starts_with("guest:") || d.starts_with("guest-screen:") {
             SourceKind::Guest
         } else {
             match netsrc::parse_spec(device) {
@@ -70,7 +70,7 @@ impl SourceKind {
     fn label(self) -> &'static str {
         match self {
             SourceKind::Device => "Camera or capture card",
-            SourceKind::Screen => "Screen",
+            SourceKind::Screen => "Screen, window or app",
             SourceKind::Test => "Test picture",
             SourceKind::Media => "Media player (video files, images)",
             SourceKind::SrtListen => "SRT input (wait for a sender)",
@@ -403,7 +403,14 @@ impl SettingsUi {
                     ui.label(RichText::new("⚠ This device isn't connected right now. It will connect by itself when plugged in.").color(AMBER));
                 }
             }
-            SourceKind::Screen => hint(ui, if cfg!(windows) { "Captures your main display." } else { "Captures your main display (allow Screen Recording for Cutaway in System Settings → Privacy & Security)." }),
+            SourceKind::Screen => {
+                if let Some(d) = self.capture.show(ui, &src.device) {
+                    src.device = d;
+                }
+                if !cfg!(windows) {
+                    hint(ui, "Allow Screen Recording for Cutaway in System Settings → Privacy & Security if macOS asks.");
+                }
+            }
             SourceKind::Test => {}
             SourceKind::Media => {
                 media_editor(ui, &mut src.media);
@@ -451,6 +458,9 @@ impl SettingsUi {
                         None => hint(ui, "Its QR code appears here once Remote guests is on and this is applied."),
                     }
                     hint(ui, "Picture only, up to 1080p, straight over your network; hold the phone sideways. Safari on iPhone, Chrome on Android.");
+                } else if src.guest_screen_id().is_some() {
+                    let whose = src.guest_screen_id().and_then(|id| self.original.sources.iter().find(|s| s.guest_id() == Some(id))).map(|s| s.name.clone()).unwrap_or_else(|| "the guest".into());
+                    hint(ui, &format!("{whose}'s screen: they share it (the whole screen, a window or a tab) with the Share screen button on their page, and it arrives here. Turn it off in Remote guests."));
                 } else {
                     if let Some(link) = &link {
                         ui.horizontal(|ui| {

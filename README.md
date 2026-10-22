@@ -68,6 +68,12 @@ and [Install on Windows](#install-on-windows).
 - **Any source, many at once.** Webcams, USB/Thunderbolt capture cards and
   cameras over HDMI capture (if QuickTime Player can see it, Cutaway can), the
   screen, or test patterns. There is no fixed limit; 4K sources are supported.
+- **Screen capture: a screen, a window or an app.** Pick it like sharing your
+  screen in a video call: your displays drawn as they're arranged, or cards
+  with a picture of each open window and app. A window keeps its shape (black
+  around it), is found again by its title after a restart, and comes back by
+  itself if it's closed and reopened. (An app on Windows is its biggest
+  window; on a Mac, every window it has on that screen.)
 - **Change the line-up mid-show.** Add, remove or change sources and audio
   inputs while recording or live: only what changed opens or closes, and the
   rest never blinks. Removing one while recording or streaming asks first; its
@@ -88,7 +94,9 @@ and [Install on Windows](#install-on-windows).
   browser (computer, tablet or phone), allow the camera and mic, and join —
   no app, no account. Each guest spot is a source and an audio input. They
   hear the show without their own voice (mix-minus, plus talkback) and can
-  watch the program. Cutaway reaches them through a free Cloudflare tunnel,
+  watch the program. A guest can share their screen too (the whole screen,
+  one window or a browser tab), arriving as a source of its own while their
+  camera stays on. Cutaway reaches them through a free Cloudflare tunnel,
   so there's no router setup (see [Remote guests](#remote-guests)).
 - **Media player.** A source that plays a playlist of video files and still
   images, with sound: intros, stings, holding slides, B-roll. Play, pause,
@@ -96,7 +104,9 @@ and [Install on Windows](#install-on-windows).
   it goes on air.
 - **Devices that come back.** A camera, capture card or interface that's
   unplugged is marked offline and reopened automatically when it returns,
-  without touching anything else.
+  without touching anything else. Its tile says what's happening: "Connecting"
+  while a camera starts, "Reconnecting" for the first 20 seconds after its
+  picture stops, and "NO SIGNAL" only once it really isn't there.
 - **Auto-framing:** a virtual close-up cut from one wide (ideally 4K)
   camera that follows the people in it — everyone, the closest person, or
   whoever is on the left, in the middle or on the right — and glides to a
@@ -174,7 +184,11 @@ and [Install on Windows](#install-on-windows).
   10 minutes, and finishes the files cleanly before the drive is full.
 - **Crash-safe.** Video files are written in one-second pieces. After a crash
   or power cut, the next start turns them back into normal files and repairs
-  the WAVs, so you keep everything up to the last second.
+  the WAVs, so you keep everything up to the last second. A card shows which
+  file it's mending while you carry on setting up, then says the take is safe
+  with a button to show the folder.
+- **Saving files** after you stop shows what it's finishing (each video, the
+  sound, the timeline) and how far along it is, on the Record button.
 
 A take looks like this:
 
@@ -207,6 +221,12 @@ Take_2026-10-16_19-30-02/
 - **Scenes.** Preset scenes (each source full screen, side by side,
   picture-in-picture, grid) plus your own: drag and resize frames live, then
   save them.
+- **Fill, crop and zoom per scene.** Each frame in a scene can show the whole
+  picture (fit) or fill the frame, cropped to its shape, so a camera in a tall
+  half-screen box has no black bars. Zoom in (scroll over the frame, up to
+  4×) and move the picture inside its frame (Option/Alt-drag), so the same
+  camera can be a close-up in one scene and wide in another. Mixes glide the
+  crop along with the frame.
 - **Transitions:** Cut, Mix (shared frames glide to their new places while
   others fade), Wipe, Push and Dip to a colour, with a direction and length.
 - **Stinger transitions:** a short video (a logo sweep, a burst of colour)
@@ -222,8 +242,11 @@ Take_2026-10-16_19-30-02/
 - **Frame styling:** rounded corners, borders and drop shadows on framed
   sources (they disappear smoothly as a frame grows to full screen).
 - **Graphics:** logos/watermarks (PNG with transparency) and name titles
-  (lower thirds) above every scene, each with its own button and fade. Title
-  text can be changed live between guests.
+  (lower thirds) above every scene, each with its own button. Each comes on
+  its own way: a fade, a slide in from the nearer side, a wipe from left to
+  right, a gentle rise, or a pop (**Comes on** in its settings, with how long
+  it takes), and leaves the same way back. Title text can be changed live
+  between guests.
 - **Web page overlays:** any web page or HTML file over the picture, see-through
   wherever the page has no background, like a browser source in OBS:
   StreamElements or Streamlabs alerts and chat boxes, scoreboards, animated
@@ -243,7 +266,8 @@ Take_2026-10-16_19-30-02/
   in) over a time you choose; the recording and stream carry on.
 - **Instant replay:** **⟲ Replay** plays the last few seconds of the program
   again over it, in slow motion if you like, with a "REPLAY" label, then
-  fades back to live (while recording).
+  fades back to live (while recording). It can show the moment from any
+  camera instead, or up to four cameras at once.
 - **Macros:** a button that runs several commands in order, with waits
   between (e.g. take a scene, start a pad, show a title, wait 5 seconds,
   hide it).
@@ -310,7 +334,10 @@ Take_2026-10-16_19-30-02/
 - **NDI output:** the program (with its sound), and optionally every source,
   as NDI on your network for other computers, OBS, vMix or recorders.
 - **Second screen:** the program, the multiview or the teleprompter, full
-  screen on a projector, TV or confidence monitor.
+  screen on a projector, TV or confidence monitor. Pick the screen from a
+  picture of your displays (or leave it on Automatic: any screen but
+  Cutaway's). It never fills the screen Cutaway is on by itself, and Esc
+  always gets you out: once to leave full screen, twice to close it.
 - **Live captions:** speech recognised on the Mac (nothing leaves it),
   shown on the stream (and optionally burned into the recording), from the
   mix or any one input.
@@ -321,6 +348,11 @@ Take_2026-10-16_19-30-02/
 ### Control
 
 - **Keyboard** shortcuts for everything you do during a show.
+- **Undo and redo** (Cmd/Ctrl+Z, Cmd/Ctrl+Shift+Z, or the buttons in Edit
+  layout) for what you build: moving, resizing, filling and zooming frames,
+  adding, renaming, duplicating and deleting scenes, a title's text, and
+  changes applied in Settings or by switching shows. The show itself (taking
+  scenes, recording, going live) is never undone.
 - **Phone and tablet remote:** a web page served by Cutaway, on any device on
   the same network, with a PIN. Program picture, scenes, take/cut, record,
   live, markers, clips, replay, fade to black, graphics, macros, PTZ presets
@@ -539,7 +571,7 @@ Video Extensions** on some PCs.
 | Who an auto-framed source follows | Right-click its tile: follow and shot size |
 | Marker | `M`, or **◆ Marker** while recording |
 | Save a clip | `K`, or **✂ Clip** while recording (the last 30 seconds, or as set) |
-| Instant replay | **⟲ Replay** while recording (right-click it for slow motion) |
+| Instant replay | **⟲ Replay** while recording (right-click it for slow motion or another camera) |
 | Fade to black | **FTB** under the transitions; again to come back |
 | Macros, PTZ, teleprompter, comments | Their panels on the right, the Stream Deck, the remote, MIDI or OSC |
 | Sound pads 1–12 | F1–F12, or the pad buttons in the sound panel (hold for "while held" pads) |
@@ -550,9 +582,9 @@ Video Extensions** on some PCs.
 | Media player | ⟲ ⏯ ⏭ on its tile; right-click the tile for the playlist |
 | Record / stop | ⌘R, or the record button |
 | Go live / end stream | The **GO LIVE** button. This is mouse-only on purpose, so a stray key can't start or end a broadcast |
-| Edit layout | `E`, or **Edit layout**: drag frames, drag the corner to resize (Shift keeps shape), add/remove sources, scene audio, duplicate, rename, **Save scenes** |
+| Edit layout | `E`, or **Edit layout**: drag frames, drag the corner to resize (Shift keeps shape), **Fit/Fill** and **Zoom** for the selected frame (or double-click a frame to fill it, scroll to zoom, Option/Alt-drag to move the picture), add/remove sources, scene audio, duplicate, rename, **Save scenes** |
 | Audio strip | Fader = level (double-click resets), **ON** = in the mixes, 🎧 = solo in the headphones |
-| Second screen | **Screen** in the header. On that window: double-click or `F` for full screen, Esc to leave |
+| Second screen | **Screen** in the header. On that window: double-click or `F` for full screen, Esc to leave full screen, Esc again (or ✕, or Cmd/Ctrl+W) to close |
 | Switch show | The show name next to the logo |
 | Settings | ⌘, |
 
@@ -569,8 +601,9 @@ Video Extensions** on some PCs.
 3. **Go live:** press **◉ GO LIVE**. With **Pre-show check** turned on in
    Settings → General & shows, the check runs first and only stops you if
    something looks wrong.
-   - The button turns pink with a timer while you're live, orange if any
-     destination isn't live.
+   - The button pulses **GOING LIVE…** while it connects (the line beside
+     it names where to), turns pink with a timer once you're live, and
+     orange if any destination isn't live.
    - The **Stream** panel shows each destination's state and bitrate, and why
      a destination is reconnecting.
 4. **End the stream:** press the button again. By default it asks first.
@@ -616,7 +649,7 @@ is **Sound from <source name>**.
 | `media` | The media player; files are set in its settings | — |
 
 Senders can use H.264 or HEVC video with AAC sound. Network sources show
-"NO SIGNAL" until a sender connects, and pick up again if it reconnects. The
+"Standing by" until a sender connects, and pick up again if it reconnects. The
 source's **Buffer** of 300 ms (the default) suits a wired local network;
 raise it for Wi-Fi or the internet.
 
@@ -702,6 +735,7 @@ for button feedback.
 | `rundown:next`, `rundown:previous`, `rundown:3`, `rundown:Interview`, `rundown:stop` | The rundown |
 | `ftb`, `ftb:on`, `ftb:off` | Fade to black and back |
 | `replay`, `replay:slow`, `replay:10`, `replay:stop` | Instant replay (the last seconds as set, or 10) |
+| `replay:Cam 2`, `replay:quad:slow`, `replay:program` | Replay from one camera, every angle at once, or the program |
 | `macro:2`, `macro:Open the show` | Run a macro |
 | `wait:2.5` | In macros and cues: wait 2.5 seconds before the next command |
 | `ptz:Cam 2:preset:1`, `ptz:2:home`, `ptz:2:left:0.5`, `ptz:2:in`, `ptz:2:stop`, `ptz:2:store:3` | PTZ cameras: presets, home, moves (`left`, `right`, `up`, `down`, `in`, `out`, with a speed) until `stop` |
@@ -735,6 +769,15 @@ one in preview, recording, live, auto, graphics and inputs that are on.
 4. **During the show:** take their spot like any camera; their level is on
    their audio strip; **✕** disconnects them. If they reload the page they
    simply rejoin.
+
+- **Screen share:** tick **Screen share** beside a guest's spot and apply.
+  That adds a source called "*Name*'s screen", and their page gets a
+  **Share screen** button. They pick the whole screen, one window or a
+  browser tab, and it arrives on that source (sharp for slides and text, up
+  to 1080p), separate from their camera, so a scene can show both side by
+  side. **Stop sharing** on their page, or **✕** on the screen's row in the
+  guests panel, ends it. Sharing needs a computer (Chrome, Edge or Safari);
+  phones and tablets don't offer it.
 
 - **Firewalls:** guests connect directly to Cutaway (WebRTC), which works on
   almost every home and mobile network. A few office, school and hotel
@@ -789,6 +832,12 @@ source.
   seconds (Settings → Switching → Instant replay sets how many, and the slow
   motion speed) over the program, labelled "REPLAY", and fades back to live.
   It comes from the recording itself, so it costs nothing extra.
+  - **From any camera:** right-click **⟲ Replay** and pick a camera to see
+    the moment from its angle, even one the program wasn't showing, or
+    **Every angle at once** for up to four cameras in a grid. **Shows** in
+    the replay settings sets what a plain click plays. It uses each camera's
+    own file, so the camera needs **Record to its own file** on (and files
+    that aren't ProRes, which are too big to keep in memory).
 - **Macros:** **Settings → Macros:** a name, a colour and a list of commands
   (any from the table above, with `wait:` between). They're buttons in the
   main window, Stream Deck keys and remote buttons, and can be cues.

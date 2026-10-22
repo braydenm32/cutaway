@@ -23,7 +23,9 @@ use std::time::{Duration, Instant};
 mod panels;
 mod production;
 mod starting;
+mod undo;
 mod uploads;
+mod waiting;
 
 pub mod theme {
     use eframe::egui::Color32;
@@ -88,6 +90,9 @@ pub fn run(cfg: Config, save_path: Option<PathBuf>, self_test: bool) -> anyhow::
 struct Drag {
     layer: usize,
     resize: bool,
+    /// Moving the picture inside its frame (Alt/Option held) rather than
+    /// the frame.
+    pan: bool,
 }
 
 #[derive(PartialEq, Clone)]
@@ -145,6 +150,8 @@ pub struct App {
     waker: Waker,
     edit_mode: bool,
     selected_layer: Option<usize>,
+    /// Undo and redo for scene layouts and settings.
+    history: undo::History,
     drag: Option<Drag>,
     settings: Option<SettingsUi>,
     confirm: Option<Confirm>,
@@ -170,6 +177,8 @@ pub struct App {
     ptz_zoom: Option<f32>,
     /// The last replay problem shown.
     replay_problem: Option<String>,
+    /// Slow motion ticked in the Replay button's menu.
+    replay_slow: bool,
     /// A phone camera's QR code on show: its link id.
     qr_for: Option<String>,
     /// A newer Cutaway, once GitHub has said so; and its window.
@@ -207,9 +216,19 @@ pub struct App {
     /// and F reach it once it opens or goes full screen).
     display_focus_frames: u8,
     display_was_open: bool,
+    /// Where the output window was put when it opened: the display (by
+    /// index, for full screen) and whether it opened full screen. Fixed
+    /// while it's open; choosing another screen opens a new window
+    /// (`display_generation`).
+    display_monitor: Option<usize>,
+    display_open_full: bool,
+    display_screen_applied: String,
+    display_generation: u32,
     sync: Option<SyncWizard>,
     /// The transition T toggles back to from Cut.
     last_transition: TransitionMode,
+    /// Takes left unfinished by a crash, being rescued.
+    rescue: Option<waiting::Rescue>,
     /// Scripted actions for automated screenshots (hidden --ui-test flag).
     self_test: Option<(Instant, u8)>,
 }
@@ -218,6 +237,9 @@ impl App {
     fn new(cc: &eframe::CreationContext<'_>, mut cfg: Config, save_path: Option<PathBuf>) -> Self {
         // Every source and input gets its identity for this session.
         cfg.assign_uids();
+        // The displays' names (macOS only gives them on this thread; screen
+        // captures opened later find their display by name).
+        crate::platform::displays::list();
         style(&cc.egui_ctx);
         cc.egui_ctx.set_zoom_factor(cfg.ui.scale.clamp(0.5, 3.0));
         let ctx = cc.egui_ctx.clone();
@@ -225,7 +247,10 @@ impl App {
         let (requests_tx, requests_rx) = unbounded();
         let remote_shared = remote::RemoteShared::new(requests_tx.clone(), waker.clone());
         let syrinscape = control::syrinscape::Syrinscape::new(&cfg.syrinscape, waker.clone());
+        // A crash mid-take: put the files back together while the window opens.
+        let rescue = crate::recovery::start_rescue(&crate::recovery::folders(&cfg), waker.clone()).map(waiting::Rescue::new);
         let mut app = App {
+            rescue,
             syrinscape,
             rundown: Default::default(),
             queued: Vec::new(),
@@ -233,6 +258,7 @@ impl App {
             ptz_drive: None,
             ptz_zoom: None,
             replay_problem: None,
+            replay_slow: false,
             qr_for: None,
             update: Arc::new(std::sync::Mutex::new(None)),
             update_open: false,
@@ -252,6 +278,10 @@ impl App {
             display_controls_until: None,
             display_focus_frames: 0,
             display_was_open: false,
+            display_monitor: None,
+            display_open_full: false,
+            display_screen_applied: String::new(),
+            display_generation: 0,
             sync: None,
             last_transition: if cfg.transition.mode == TransitionMode::Cut { TransitionMode::Mix } else { cfg.transition.mode },
             cfg,
@@ -268,6 +298,7 @@ impl App {
             waker,
             edit_mode: false,
             selected_layer: None,
+            history: undo::History::default(),
             drag: None,
             settings: None,
             confirm: None,
@@ -547,6 +578,101 @@ impl App {
 
     fn toast(&mut self, text: String, error: bool) {
         self.toast = Some((text, Instant::now(), error));
+    }
+
+    // ---- undo ---------------------------------------------------------------------------
+
+    fn snapshot(&self, kind: undo::Kind, label: impl Into<String>) -> undo::Snapshot {
+        let live = self.engine.as_ref().map(|e| e.switcher.live().name).unwrap_or_default();
+        undo::Snapshot::new(kind, label, &self.cfg, &self.scenes, &live)
+    }
+
+    /// Remember how things are, before a change.
+    fn remember(&mut self, kind: undo::Kind, label: impl Into<String>) {
+        let s = self.snapshot(kind, label);
+        self.history.record(s);
+    }
+
+    fn undo(&mut self, ctx: &egui::Context) {
+        let now = self.snapshot(undo::Kind::Scenes, "");
+        let Some(back) = self.history.undo(now) else {
+            self.toast("Nothing to undo".into(), false);
+            return;
+        };
+        match self.restore(&back, ctx) {
+            Ok(()) => self.toast(format!("Undone: {}", back.label), false),
+            Err(e) => {
+                self.toast(format!("Can't undo {} now: {e}", back.label.to_lowercase()), true);
+                self.history.put_back_undo(back);
+            }
+        }
+    }
+
+    fn redo(&mut self, ctx: &egui::Context) {
+        let now = self.snapshot(undo::Kind::Scenes, "");
+        let Some(fwd) = self.history.redo(now) else {
+            self.toast("Nothing to redo".into(), false);
+            return;
+        };
+        match self.restore(&fwd, ctx) {
+            Ok(()) => self.toast(format!("Redone: {}", fwd.label), false),
+            Err(e) => {
+                self.toast(format!("Can't redo {} now: {e}", fwd.label.to_lowercase()), true);
+                self.history.put_back_redo(fwd);
+            }
+        }
+    }
+
+    /// Put back settings and scenes as they were. The scene on air keeps
+    /// going; only its layout changes (or, if it was renamed, the old one
+    /// takes its place).
+    fn restore(&mut self, s: &undo::Snapshot, ctx: &egui::Context) -> Result<(), String> {
+        match s.kind {
+            undo::Kind::Settings if s.settings_differ(&self.cfg) => {
+                self.apply_settings(s.cfg.clone(), ctx)?;
+                if let Some(win) = self.settings.as_mut() {
+                    win.applied(Ok(()), &self.cfg);
+                }
+            }
+            undo::Kind::Titles => {
+                for (i, g) in s.cfg.graphics.iter().enumerate() {
+                    let Some(now) = self.cfg.graphics.get_mut(i) else { continue };
+                    if (now.title != g.title || now.subtitle != g.subtitle) && now.name == g.name {
+                        (now.title, now.subtitle) = (g.title.clone(), g.subtitle.clone());
+                        if let Some(e) = &self.engine {
+                            if now.kind == crate::config::GraphicKind::Ticker {
+                                e.graphics.set_ticker_text(i, &g.title);
+                            } else {
+                                e.graphics.set_text(i, &g.title, &g.subtitle);
+                            }
+                        }
+                    }
+                }
+                if let Some(e) = &self.engine {
+                    let _ = e.update_config(&self.cfg);
+                }
+                self.cfg_dirty = true;
+                return Ok(());
+            }
+            _ => {}
+        }
+        let live = self.engine.as_ref().map(|e| e.switcher.live().name);
+        self.scenes = s.scenes.clone();
+        // (Sources taken away since can't come back with a scene.)
+        let n = self.cfg.sources.len();
+        for sc in &mut self.scenes {
+            sc.retain_sources(n);
+        }
+        self.scenes_dirty = true;
+        let on_air = live.and_then(|n| self.scenes.iter().find(|x| x.name == n)).or_else(|| self.scenes.iter().find(|x| x.name == s.live)).cloned();
+        if let (Some(e), Some(sc)) = (&self.engine, on_air) {
+            e.switcher.set_live(sc);
+        }
+        if let Some(e) = &self.engine {
+            e.set_scenes(&self.scenes);
+        }
+        self.selected_layer = None;
+        Ok(())
     }
 
     fn mode(&self) -> TransitionMode {
@@ -1228,6 +1354,19 @@ impl App {
             self.open_settings();
             return;
         }
+        // Undo: Cmd/Ctrl+Z. Redo: Cmd/Ctrl+Shift+Z, or Ctrl+Y.
+        let (undo, redo) = ctx.input(|i| {
+            let z = i.modifiers.command && i.key_pressed(Key::Z);
+            (z && !i.modifiers.shift, (z && i.modifiers.shift) || (i.modifiers.command && i.key_pressed(Key::Y)))
+        });
+        if undo {
+            self.undo(ctx);
+            return;
+        }
+        if redo {
+            self.redo(ctx);
+            return;
+        }
         let (pressed, shift, alt, cmd_r) = ctx.input(|i| (keys.iter().position(|k| i.key_pressed(*k)), i.modifiers.shift, i.modifiers.alt, i.modifiers.command && i.key_pressed(Key::R)));
         let (t, e, m, a, space, enter) = ctx.input(|i| {
             let plain = !i.modifiers.command && !i.modifiers.alt;
@@ -1467,7 +1606,7 @@ impl App {
             self.start_precheck(None);
         }
         let screen_on = self.cfg.display.output != DisplayOutput::Off;
-        if ui.add(egui::Button::selectable(screen_on, "Screen")).on_hover_text("Program or multiview on another screen (Settings → Screens & webcam)").clicked() {
+        if ui.add(egui::Button::selectable(screen_on, "Screen")).on_hover_text("Program, multiview or prompter on another screen (Settings → Screens & webcam). Esc closes it.").clicked() {
             self.cfg.display.output = if screen_on { DisplayOutput::Off } else { DisplayOutput::Program };
             self.cfg_dirty = true;
         }
@@ -1507,8 +1646,8 @@ impl App {
         let mut status_line: Option<(String, Color32)> = None;
         let mut marker_clicked = false;
         let mut clip_clicked = false;
-        // Some(Some(slow)): replay; Some(None): stop it.
-        let mut replay_clicked: Option<Option<bool>> = None;
+        // Some(Some((slow, angle))): replay; Some(None): stop it.
+        let mut replay_clicked: Option<Option<(bool, Option<control::ReplayAngle>)>> = None;
 
         // ---- record
         match &rec {
@@ -1535,34 +1674,55 @@ impl App {
                 let rb = egui::Button::new(RichText::new(if replaying { "⟲ Replaying" } else { "⟲ Replay" }).color(if replaying { Color32::WHITE } else { ui.visuals().text_color() }))
                     .fill(if replaying { RED_DIM } else { ui.visuals().widgets.inactive.weak_bg_fill })
                     .min_size(vec2(0.0, 30.0));
-                let r = ui.add(rb).on_hover_text(format!("Play the last {:.0} seconds again, on air. Right-click for slow motion.", self.cfg.replay.seconds));
+                let r = ui.add(rb).on_hover_text(format!("Play the last {:.0} seconds again, on air. Right-click for slow motion or another camera.", self.cfg.replay.seconds));
                 if r.clicked() {
-                    replay_clicked = Some(if replaying { None } else { Some(false) });
+                    replay_clicked = Some(if replaying { None } else { Some((false, None)) });
                 }
+                let angles: Vec<String> = self.engine.as_ref().map(|e| e.sources.iter().filter(|s| s.record).map(|s| s.name.clone()).collect()).unwrap_or_default();
+                let mut slow = self.replay_slow;
                 r.context_menu(|ui| {
-                    if ui.button("Replay in slow motion").clicked() {
-                        replay_clicked = Some(Some(true));
-                        ui.close();
+                    ui.checkbox(&mut slow, "Slow motion");
+                    ui.separator();
+                    let mut pick = |ui: &mut egui::Ui, text: &str, angle: control::ReplayAngle| {
+                        if ui.button(text).clicked() {
+                            replay_clicked = Some(Some((slow, Some(angle))));
+                            ui.close();
+                        }
+                    };
+                    pick(ui, "Replay the program", control::ReplayAngle::Program);
+                    if !angles.is_empty() {
+                        ui.label(RichText::new("From one camera").size(11.0).color(TEXT_DIM));
+                        for a in &angles {
+                            pick(ui, &format!("   {a}"), control::ReplayAngle::Source(control::Target::Name(a.clone())));
+                        }
                     }
-                    if ui.button("Replay at normal speed").clicked() {
-                        replay_clicked = Some(Some(false));
-                        ui.close();
+                    if angles.len() >= 2 {
+                        pick(ui, &format!("Every angle at once ({})", angles.len().min(4)), control::ReplayAngle::Quad);
                     }
-                    if replaying && ui.button("Stop the replay").clicked() {
-                        replay_clicked = Some(None);
-                        ui.close();
+                    if replaying {
+                        ui.separator();
+                        if ui.button("Stop the replay").clicked() {
+                            replay_clicked = Some(None);
+                            ui.close();
+                        }
                     }
                 });
+                self.replay_slow = slow;
                 if let Some(d) = &disk {
                     let left = d.seconds_left().map(crate::engine::health::fmt_left).unwrap_or_default();
                     status_line = Some((format!("{} free · {left} left", crate::util::human_size(d.free)), if d.seconds_left().is_some_and(|s| s < 1800.0) { AMBER } else { TEXT_DIM }));
                 }
                 ui.ctx().request_repaint_after(Duration::from_millis(250));
             }
-            RecState::Finalizing { folder } => {
-                ui.add_enabled(false, pill(RichText::new("Saving files…").size(15.0).color(Color32::WHITE), RAISED));
-                status_line = Some((folder.display().to_string(), TEXT_DIM));
-                ui.ctx().request_repaint_after(Duration::from_millis(250));
+            RecState::Finalizing { folder, step, done } => {
+                let t = ui.input(|i| i.time) as f32;
+                let r = ui.add_enabled(false, pill(RichText::new(format!("Saving files  {:.0}%", done * 100.0)).size(15.0).color(Color32::WHITE), RAISED));
+                // A bar along the bottom of the button fills as it goes.
+                let bar = Rect::from_min_size(r.rect.left_bottom() - vec2(0.0, 3.0), vec2(r.rect.width(), 3.0));
+                ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * done.clamp(0.02, 1.0), bar.height())), 1.5, ACCENT);
+                status_line = Some((format!("{step}{}", waiting::ellipsis(t)), ACCENT));
+                r.on_disabled_hover_text(format!("Finishing the take in {}", folder.display()));
+                ui.ctx().request_repaint_after(Duration::from_millis(100));
             }
             RecState::Idle => {
                 let btn = pill(RichText::new("●  RECORD").size(15.0).strong().color(RED), RAISED).stroke(Stroke::new(1.5, RED_DIM));
@@ -1591,12 +1751,26 @@ impl App {
             let live = stream.destinations.iter().filter(|d| d.state == DestState::Live).count();
             let total = stream.destinations.iter().filter(|d| d.state != DestState::Off).count();
             let healthy = live == total && total > 0;
-            let fill = if healthy { LIVE } else { Color32::from_rgb(170, 90, 20) };
-            let btn = pill(RichText::new(format!("◉  LIVE  {}", fmt_clock(t))).size(15.0).strong().color(Color32::WHITE), fill);
-            if ui.add(btn).on_hover_text("End the stream").clicked() {
-                self.toggle_stream();
+            // Nothing's live yet, but it's trying: say so, not "LIVE".
+            let connecting: Vec<&str> = stream.destinations.iter().filter(|d| matches!(d.state, DestState::Connecting | DestState::Retrying { .. })).map(|d| d.name.as_str()).collect();
+            let going = live == 0 && !connecting.is_empty();
+            if going {
+                let pulse = ((ui.input(|i| i.time) as f32 * 3.0).sin() + 1.0) * 0.5;
+                let fill = Color32::from_rgb(60, 24, 44).lerp_to_gamma(Color32::from_rgb(150, 30, 90), pulse);
+                let btn = pill(RichText::new(format!("◉  GOING LIVE{}", waiting::ellipsis(ui.input(|i| i.time) as f32))).size(15.0).strong().color(Color32::WHITE), fill).min_size(vec2(150.0, 0.0));
+                if ui.add(btn).on_hover_text("Connecting. Click to stop.").clicked() {
+                    self.toggle_stream();
+                }
+                status_line = Some((format!("Connecting to {}", connecting.join(", ")), Color32::from_rgb(230, 120, 170)));
+                ui.ctx().request_repaint_after(Duration::from_millis(50));
+            } else {
+                let fill = if healthy { LIVE } else { Color32::from_rgb(170, 90, 20) };
+                let btn = pill(RichText::new(format!("◉  LIVE  {}", fmt_clock(t))).size(15.0).strong().color(Color32::WHITE), fill);
+                if ui.add(btn).on_hover_text("End the stream").clicked() {
+                    self.toggle_stream();
+                }
             }
-            if !healthy {
+            if !healthy && !going {
                 status_line = Some((format!("{live} of {total} destinations live — see Stream panel"), AMBER));
             }
             ui.ctx().request_repaint_after(Duration::from_millis(250));
@@ -1626,7 +1800,7 @@ impl App {
         }
         if let Some(r) = replay_clicked {
             let cmd = match r {
-                Some(slow) => control::ReplayCmd::Play { seconds: None, slow },
+                Some((slow, angle)) => control::ReplayCmd::Play { seconds: None, slow, angle },
                 None => control::ReplayCmd::Stop,
             };
             if let Err(e) = self.run_action(Action::Replay(cmd)) {
@@ -1680,9 +1854,13 @@ impl App {
         }
         match profiles::load(&dir, name) {
             Ok(cfg) => {
+                let before = self.snapshot(undo::Kind::Settings, format!("Switch to \"{name}\""));
                 self.scenes = cfg.effective_scenes();
                 match self.apply_settings(cfg, ctx) {
-                    Ok(()) => self.toast(format!("Switched to \"{name}\""), false),
+                    Ok(()) => {
+                        self.history.record(before);
+                        self.toast(format!("Switched to \"{name}\""), false)
+                    }
                     Err(e) => self.toast(e, true),
                 }
             }
@@ -1901,11 +2079,37 @@ impl App {
         let engine = self.engine.as_ref().unwrap();
         let names: Vec<String> = engine.sources.iter().map(|s| s.name.clone()).collect();
         let mut scene = live;
+        // Each source's shape (after its own crop), for moving its picture.
+        let aspects: Vec<f32> = engine.sources.iter().enumerate().map(|(i, s)| self.cfg.sources.get(i).map(|c| c.look.cropped_aspect(s.size.0 as f32 / s.size.1.max(1) as f32)).unwrap_or(16.0 / 9.0)).collect();
+        let canvas = engine.info.canvas;
         let to_screen = |l: &Layer| Rect::from_min_size(rect.min + vec2(l.x * rect.width(), l.y * rect.height()), vec2(l.w * rect.width(), l.h * rect.height()));
         let handle = 12.0;
         let id = ui.scope_id().with("program_edit");
         let resp = ui.interact(rect, id, Sense::click_and_drag());
         let pointer = resp.interact_pointer_pos().or(resp.hover_pos());
+        let hit_at = |layers: &[Layer], p: egui::Pos2| layers.iter().enumerate().rev().find(|(_, l)| to_screen(l).contains(p)).map(|(i, _)| i);
+
+        // Scrolling over a frame zooms its picture; double-clicking it
+        // switches between fitting and filling the frame.
+        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+        if resp.hovered() && scroll.abs() > 0.1 {
+            if let Some(i) = pointer.and_then(|p| hit_at(&scene.layers, p)) {
+                self.remember(undo::Kind::Scenes, format!("Zoom {}", names.get(scene.layers[i].source).map(String::as_str).unwrap_or("frame")));
+                let l = &mut scene.layers[i];
+                l.zoom = (l.zoom * (scroll * 0.004).exp()).clamp(1.0, crate::scene::MAX_ZOOM);
+                self.selected_layer = Some(i);
+                self.apply_live_edit(scene.clone());
+            }
+        }
+        if resp.double_clicked() {
+            if let Some(i) = pointer.and_then(|p| hit_at(&scene.layers, p)) {
+                let name = names.get(scene.layers[i].source).cloned().unwrap_or_default();
+                self.remember(undo::Kind::Scenes, if scene.layers[i].fill { format!("Fit {name}") } else { format!("Fill with {name}") });
+                scene.layers[i].fill = !scene.layers[i].fill;
+                self.selected_layer = Some(i);
+                self.apply_live_edit(scene.clone());
+            }
+        }
 
         if resp.drag_started() || resp.clicked() {
             if let Some(p) = pointer {
@@ -1922,7 +2126,13 @@ impl App {
                 });
                 self.selected_layer = hit.map(|h| h.0);
                 if resp.drag_started() {
-                    self.drag = hit.map(|(layer, resize)| Drag { layer, resize });
+                    let pan = ui.input(|i| i.modifiers.alt);
+                    self.drag = hit.map(|(layer, resize)| Drag { layer, resize: resize && !pan, pan });
+                    if let Some(d) = &self.drag {
+                        let name = scene.layers.get(d.layer).and_then(|l| names.get(l.source)).cloned().unwrap_or_default();
+                        let label = if d.pan { format!("Move the picture of {name}") } else if d.resize { format!("Resize {name}") } else { format!("Move {name}") };
+                        self.remember(undo::Kind::Scenes, label);
+                    }
                 }
             }
         }
@@ -1932,7 +2142,20 @@ impl App {
                 let (dx, dy) = (delta.x / rect.width(), delta.y / rect.height());
                 let keep_aspect = ui.input(|i| i.modifiers.shift);
                 if let Some(l) = scene.layers.get_mut(d.layer) {
-                    if d.resize {
+                    if d.pan {
+                        // The picture follows the pointer: the view moves
+                        // the other way, by the part of it that shows.
+                        let aspect = aspects.get(l.source).copied().unwrap_or(16.0 / 9.0);
+                        let (frame, part) = crate::scene::place(l, canvas, aspect);
+                        let k = rect.width() / canvas.0 as f32;
+                        let (fw, fh) = ((frame.2 * k).max(1.0), (frame.3 * k).max(1.0));
+                        l.focus[0] = (l.focus[0] - delta.x / fw * (part[2] - part[0])).clamp(0.0, 1.0);
+                        l.focus[1] = (l.focus[1] - delta.y / fh * (part[3] - part[1])).clamp(0.0, 1.0);
+                        // Kept where the view can actually be, so moving back
+                        // responds at once.
+                        let (pw, ph) = ((part[2] - part[0]) / 2.0, (part[3] - part[1]) / 2.0);
+                        l.focus = [l.focus[0].clamp(pw, 1.0 - pw), l.focus[1].clamp(ph, 1.0 - ph)];
+                    } else if d.resize {
                         let aspect = l.w / l.h.max(1e-4);
                         l.w = (l.w + dx).clamp(0.05, 1.5);
                         l.h = if keep_aspect { l.w / aspect } else { (l.h + dy).clamp(0.05, 1.5) };
@@ -1958,9 +2181,27 @@ impl App {
             painter.text(r.min + vec2(6.0, 5.0), Align2::LEFT_TOP, &name, FontId::proportional(12.0), Color32::WHITE);
             let corner = Rect::from_min_max(r.right_bottom() - vec2(handle, handle), r.right_bottom());
             painter.rect_filled(corner, 2.0, color);
+            if l.crops() {
+                let text = match (l.fill, l.zoom > 1.0001) {
+                    (true, true) => format!("FILL · {:.1}×", l.zoom),
+                    (true, false) => "FILL".to_string(),
+                    _ => format!("{:.1}×", l.zoom),
+                };
+                let at = pos2(r.right() - 6.0, r.top() + 5.0);
+                let tag = painter.text(at, Align2::RIGHT_TOP, &text, FontId::proportional(11.0), Color32::WHITE);
+                painter.rect_filled(tag.expand(3.0), 2.0, Color32::from_black_alpha(150));
+                painter.text(at, Align2::RIGHT_TOP, &text, FontId::proportional(11.0), Color32::WHITE);
+            }
         }
         if resp.hovered() {
-            ctx.set_cursor_icon(if self.drag.as_ref().is_some_and(|d| d.resize) { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::Grab });
+            let panning = self.drag.as_ref().is_some_and(|d| d.pan) || (self.drag.is_none() && ui.input(|i| i.modifiers.alt));
+            ctx.set_cursor_icon(if panning {
+                egui::CursorIcon::Move
+            } else if self.drag.as_ref().is_some_and(|d| d.resize) {
+                egui::CursorIcon::ResizeNwSe
+            } else {
+                egui::CursorIcon::Grab
+            });
         }
     }
 
@@ -1983,10 +2224,11 @@ impl App {
         let mut changed = false;
         let mut new_scene: Option<Scene> = None;
         let mut delete = false;
+        let (mut undo_clicked, mut redo_clicked) = (false, false);
         let old_name = scene.name.clone();
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("EDIT LAYOUT").color(AMBER).strong());
-            ui.label(RichText::new("drag frames · corner to resize · Shift keeps shape").color(TEXT_DIM).size(11.5));
+            ui.label(RichText::new(if cfg!(target_os = "macos") { "drag frames · corner to resize · Shift keeps shape · scroll to zoom · Option-drag moves the picture" } else { "drag frames · corner to resize · Shift keeps shape · scroll to zoom · Alt-drag moves the picture" }).color(TEXT_DIM).size(11.5));
             ui.separator();
             ui.label("Name");
             let mut name = scene.name.clone();
@@ -1997,7 +2239,7 @@ impl App {
             egui::ComboBox::from_id_salt("add_layer").selected_text("Add source").show_ui(ui, |ui| {
                 for (i, n) in names.iter().enumerate() {
                     if ui.selectable_label(false, n).clicked() {
-                        scene.layers.push(Layer { source: i, x: 0.3, y: 0.3, w: 0.4, h: 0.4 });
+                        scene.layers.push(Layer::at(i, 0.3, 0.3, 0.4, 0.4));
                         changed = true;
                     }
                 }
@@ -2018,6 +2260,27 @@ impl App {
                 let l = &mut scene.layers[sel.unwrap()];
                 (l.x, l.y, l.w, l.h) = (0.0, 0.0, 1.0, 1.0);
                 changed = true;
+            }
+            // The picture in the selected frame: fitted or filling, and zoom.
+            if let Some(i) = sel {
+                ui.separator();
+                let l = &mut scene.layers[i];
+                if ui.selectable_label(!l.fill, "Fit").on_hover_text("Show the whole picture (bars where the frame is another shape)").clicked() {
+                    l.fill = false;
+                    changed = true;
+                }
+                if ui.selectable_label(l.fill, "Fill").on_hover_text("Fill the frame, cropping the picture to its shape (or double-click the frame)").clicked() {
+                    l.fill = true;
+                    changed = true;
+                }
+                ui.label("Zoom");
+                if ui.add(egui::Slider::new(&mut l.zoom, 1.0..=crate::scene::MAX_ZOOM).step_by(0.05).fixed_decimals(1).suffix("×")).on_hover_text("Or scroll over the frame").changed() {
+                    changed = true;
+                }
+                if ui.add_enabled(l.crops() || l.focus != [0.5, 0.5], egui::Button::new("Reset picture")).on_hover_text("Fit, no zoom, centred").clicked() {
+                    (l.fill, l.zoom, l.focus) = (false, 1.0, [0.5, 0.5]);
+                    changed = true;
+                }
             }
             // Scene audio: inputs this scene turns on or off.
             let n_audio = scene.audio_on.len() + scene.audio_off.len();
@@ -2093,6 +2356,19 @@ impl App {
             if ui.button("Delete scene").clicked() {
                 delete = true;
             }
+            let cmd = if cfg!(target_os = "macos") { "⌘" } else { "Ctrl+" };
+            if ui.add_enabled(self.history.can_undo().is_some(), egui::Button::new("↶ Undo")).on_hover_text(match self.history.can_undo() {
+                Some(l) => format!("Undo: {l} ({cmd}Z)"),
+                None => format!("Nothing to undo ({cmd}Z)"),
+            }).clicked() {
+                undo_clicked = true;
+            }
+            if ui.add_enabled(self.history.can_redo().is_some(), egui::Button::new("↷ Redo")).on_hover_text(match self.history.can_redo() {
+                Some(l) => format!("Redo: {l} ({cmd}Shift+Z)"),
+                None => format!("Nothing to redo ({cmd}Shift+Z)"),
+            }).clicked() {
+                redo_clicked = true;
+            }
             if ui.add_enabled(self.scenes_dirty, egui::Button::new("Save scenes")).clicked() {
                 self.save_config();
             }
@@ -2100,6 +2376,18 @@ impl App {
                 self.edit_mode = false;
             }
         });
+        if changed || new_scene.is_some() || (delete && self.scenes.len() > 1) {
+            let label = if delete {
+                format!("Delete scene {old_name}")
+            } else if new_scene.is_some() {
+                format!("Duplicate scene {old_name}")
+            } else if scene.name != old_name {
+                format!("Rename scene {old_name}")
+            } else {
+                format!("Edit scene {old_name}")
+            };
+            self.remember(undo::Kind::Scenes, label);
+        }
         if changed {
             if let Some(e) = &self.engine {
                 e.switcher.set_live(scene.clone());
@@ -2122,6 +2410,13 @@ impl App {
             if let Some(s) = self.scenes.first().cloned() {
                 self.take_scene(&s, true);
             }
+        }
+        let ctx = ui.ctx().clone();
+        if undo_clicked {
+            self.undo(&ctx);
+        }
+        if redo_clicked {
+            self.redo(&ctx);
         }
     }
 
@@ -2175,11 +2470,11 @@ impl App {
             if let Some(tex) = self.texture(&ctx, &format!("src{i}"), slot) {
                 painter.image(tex, pic, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
             }
-            if *offline || slot.stale(Duration::from_secs(2)) {
-                painter.rect_filled(pic, 3.0, Color32::from_black_alpha(170));
-                painter.text(pic.center() - vec2(0.0, 8.0), Align2::CENTER_CENTER, "NO SIGNAL", FontId::proportional(16.0), AMBER);
-                if let Some(d) = detail {
-                    painter.text(pic.center() + vec2(0.0, 12.0), Align2::CENTER_CENTER, d, FontId::proportional(11.0), TEXT_DIM);
+            let wait = waiting::TileWait::of(slot, *offline, detail.is_some());
+            if wait != waiting::TileWait::Fine {
+                waiting::draw_tile_wait(&painter, pic, wait, detail.as_deref(), ctx.input(|i| i.time) as f32);
+                if wait != waiting::TileWait::NoSignal {
+                    ctx.request_repaint_after(Duration::from_millis(50));
                 }
             }
             let on_air = live_sources.contains(&i);
@@ -2318,7 +2613,7 @@ impl App {
             Some(idx) => self.press_scene(idx, cut),
             None => {
                 let name = self.cfg.sources.get(i).map(|s| s.name.clone()).unwrap_or_else(|| format!("Source {}", i + 1));
-                let scene = Scene { name, layers: vec![Layer { source: i, x: 0.0, y: 0.0, w: 1.0, h: 1.0 }], ..Default::default() };
+                let scene = Scene { name, layers: vec![Layer::at(i, 0.0, 0.0, 1.0, 1.0)], ..Default::default() };
                 if self.preview_mode() && !cut {
                     if let Some(e) = &self.engine {
                         e.switcher.set_preview(Some(scene));
@@ -2689,6 +2984,8 @@ impl App {
             });
         });
         if apply {
+            let what = if ticker { "ticker" } else { "title" };
+            self.remember(undo::Kind::Titles, format!("Change the {what} text"));
             if let Some(e) = &self.engine {
                 if ticker {
                     e.graphics.set_ticker_text(i, &title);
@@ -3242,23 +3539,41 @@ impl App {
             self.display_was_open = false;
             return;
         }
+        if self.display_was_open && self.display_screen_applied != self.cfg.display.screen {
+            // Another screen chosen: a new window there.
+            self.display_was_open = false;
+            self.display_generation = self.display_generation.wrapping_add(1);
+        }
+        let mut position = None;
         if !self.display_was_open {
-            // Just opened: it gets the keyboard, and shows its button a moment.
+            // Just opened: on its screen, with the keyboard, showing its
+            // buttons a moment.
             self.display_was_open = true;
-            self.display_fullscreen = self.cfg.display.fullscreen;
+            self.display_screen_applied = self.cfg.display.screen.clone();
+            let place = output_placement(ctx, &self.cfg.display);
+            self.display_monitor = place.monitor;
+            self.display_open_full = place.fullscreen;
+            self.display_fullscreen = place.fullscreen;
+            position = place.position;
             self.display_focus_frames = 3;
             self.display_controls_until = Some(Instant::now() + Duration::from_secs(3));
         }
-        let viewport = egui::ViewportId::from_hash_of("cutaway_output");
+        let viewport = egui::ViewportId::from_hash_of(("cutaway_output", self.display_generation));
         let full_now = self.display_fullscreen;
         let controls_until = self.display_controls_until;
         let mut moved = false;
         let mut actual_full = None;
         let multiview = self.cfg.display.output == DisplayOutput::Multiview;
         let prompter = (self.cfg.display.output == DisplayOutput::Prompter).then(|| (self.cfg.prompter.clone(), self.prompter.script.clone(), self.prompter.pos));
-        let mut builder = egui::ViewportBuilder::default().with_title("Cutaway — Output").with_icon(app_icon()).with_inner_size([960.0, 540.0]).with_fullscreen(self.cfg.display.fullscreen);
-        // (The setting only says how it opens: after that, full screen goes on
-        // and off by command, following the window's real state.)
+        let mut builder = egui::ViewportBuilder::default().with_title("Cutaway — Output").with_icon(app_icon()).with_inner_size([960.0, 540.0]).with_fullscreen(self.display_open_full);
+        // (How it opens stays the same while it's open: after that, full
+        // screen goes on and off by command, following the window's real
+        // state.)
+        if let (true, Some(m)) = (self.display_open_full, self.display_monitor) {
+            builder = builder.with_monitor(m);
+        } else if let Some(p) = position {
+            builder = builder.with_position(p);
+        }
         if self.self_test.is_some() {
             // Screenshots: beside the main window rather than under it.
             builder = builder.with_position([1500.0, 60.0]);
@@ -3356,28 +3671,48 @@ impl App {
                 if resp.double_clicked() {
                     toggle_full = true;
                 }
-                // The corner button, while the mouse is moving over the
-                // window (or over the button), like a video player's.
+                // The corner buttons, while the mouse is moving over the
+                // window (or over them), like a video player's.
                 let button = Rect::from_min_size(area.right_top() + vec2(-60.0, 16.0), vec2(44.0, 44.0));
+                let close_button = button.translate(vec2(-54.0, 0.0));
                 let b = ui.interact(button, ui.scope_id().with("full screen button"), Sense::click());
-                let showing = b.hovered() || controls_until.is_some_and(|t| Instant::now() < t);
+                let c = ui.interact(close_button, ui.scope_id().with("close button"), Sense::click());
+                let showing = b.hovered() || c.hovered() || controls_until.is_some_and(|t| Instant::now() < t);
                 if showing {
-                    let fill = if b.hovered() { Color32::from_black_alpha(220) } else { Color32::from_black_alpha(150) };
-                    painter.rect_filled(button, 8.0, fill);
+                    for (r, hovered) in [(button, b.hovered()), (close_button, c.hovered())] {
+                        painter.rect_filled(r, 8.0, if hovered { Color32::from_black_alpha(220) } else { Color32::from_black_alpha(150) });
+                    }
                     full_screen_icon(&painter, button.shrink(12.0), !full_now, Color32::WHITE);
+                    let x = close_button.shrink(14.0);
+                    let s = Stroke::new(2.5, Color32::WHITE);
+                    painter.line_segment([x.left_top(), x.right_bottom()], s);
+                    painter.line_segment([x.right_top(), x.left_bottom()], s);
                     if b.clicked() {
                         toggle_full = true;
                     }
+                    if c.clicked() {
+                        close = true;
+                    }
                     b.on_hover_text(if full_now { "Leave full screen (Esc)" } else { "Full screen (F, or double-click)" });
+                    c.on_hover_text(if full_now { "Close this screen (Esc twice)" } else { "Close this screen (Esc)" });
                 } else {
-                    resp.on_hover_text("Double-click (or F): full screen. Esc: leave full screen.");
+                    resp.on_hover_text(if full_now { "Esc: leave full screen (twice: close). F or double-click: full screen." } else { "Double-click (or F): full screen. Esc: close." });
                 }
             });
             if ctx.input(|i| i.key_pressed(Key::F)) {
                 toggle_full = true;
             }
-            if ctx.input(|i| i.key_pressed(Key::Escape)) && full_now {
-                toggle_full = true;
+            // Esc always gets you out: first out of full screen, then
+            // closing the window. Cmd/Ctrl+W closes it straight away.
+            if ctx.input(|i| i.key_pressed(Key::Escape)) {
+                if full_now {
+                    toggle_full = true;
+                } else {
+                    close = true;
+                }
+            }
+            if ctx.input(|i| i.modifiers.command && i.key_pressed(Key::W)) {
+                close = true;
             }
             if ctx.input(|i| i.viewport().close_requested()) {
                 close = true;
@@ -3415,6 +3750,8 @@ impl App {
         if close {
             self.cfg.display.output = DisplayOutput::Off;
             self.cfg_dirty = true;
+            // The main window takes the keyboard back.
+            ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
         }
     }
 
@@ -3496,8 +3833,12 @@ impl App {
                 self.sync = Some(SyncWizard::default());
             }
             SettingsAction::Apply { cfg, close } => {
+                let before = self.snapshot(undo::Kind::Settings, "Settings change");
                 let result = self.apply_settings(cfg, ctx);
                 let ok = result.is_ok();
+                if ok && before.settings_differ(&self.cfg) {
+                    self.history.record(before);
+                }
                 if let Some(win) = self.settings.as_mut() {
                     win.applied(result, &self.cfg);
                 }
@@ -3701,6 +4042,7 @@ impl eframe::App for App {
         self.title_dialog(&ctx);
         self.precheck_dialog(&ctx);
         self.sync_dialog(&ctx);
+        self.rescue_card(&ctx);
         if let Some((text, at, error)) = self.toast.clone() {
             if at.elapsed() < Duration::from_secs(6) {
                 egui::Area::new(egui::Id::unique("toast")).anchor(Align2::CENTER_BOTTOM, vec2(0.0, -120.0)).show(&ctx, |ui| {
@@ -3831,6 +4173,35 @@ fn snap(v: f32, size: f32) -> f32 {
 
 /// The full-screen icon of video players: four corners pointing out (go
 /// full screen) or in (leave it).
+/// Where the second-screen window opens.
+struct OutputPlacement {
+    /// The display (by index) to fill, when it opens full screen.
+    monitor: Option<usize>,
+    fullscreen: bool,
+    /// Its top-left corner when it opens in a window.
+    position: Option<egui::Pos2>,
+}
+
+/// The output goes on the chosen screen, or another one than Cutaway's.
+/// It only opens full screen where that doesn't cover Cutaway's own window:
+/// with one screen it opens in a window (F still fills the screen, and Esc
+/// gets back out).
+fn output_placement(ctx: &egui::Context, d: &crate::config::DisplayConfig) -> OutputPlacement {
+    use crate::platform::displays;
+    let list = displays::list();
+    let (outer, native) = ctx.input(|i| (i.viewport().outer_rect, i.viewport().native_pixels_per_point.unwrap_or(1.0)));
+    let zoom = ctx.zoom_factor();
+    let ours = outer.and_then(|r| displays::containing(&list, displays::window_units([r.center().x * zoom, r.center().y * zoom], native)));
+    let target = displays::pick_output(&list, &d.screen, ours);
+    let fullscreen = d.fullscreen && displays::output_can_fill(&list, target, ours);
+    let position = target.map(|t| {
+        let scale = if cfg!(windows) { native } else { 1.0 } * zoom;
+        let c = list[t].center();
+        pos2(c[0] / scale - 480.0, c[1] / scale - 270.0)
+    });
+    OutputPlacement { monitor: target, fullscreen, position }
+}
+
 fn full_screen_icon(p: &egui::Painter, r: Rect, enter: bool, color: Color32) {
     let s = Stroke::new(2.5, color);
     let arm = r.width() * 0.36;

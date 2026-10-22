@@ -712,10 +712,19 @@ pub struct Take {
 }
 
 impl Take {
-    /// Wait for every job and collect the files (taps must be removed first).
-    pub fn collect(self) -> TakeReport {
+    /// Wait for every job and collect the files (taps must be removed
+    /// first), saying what it's waiting for and how far along it is (0 to 1)
+    /// as it goes.
+    pub fn collect_with(self, mut step: impl FnMut(String, f32)) -> TakeReport {
         let mut report = TakeReport { folder: self.folder.clone(), duration: self.started.elapsed(), ..Default::default() };
+        let total = (self.video_jobs.len() + self.audio_job.is_some() as usize + self.track_jobs.len() + self.writers.len() + self.wavs.len()).max(1);
+        let mut k = 0;
+        let mut next = |what: String| {
+            step(what, k as f32 / total as f32);
+            k += 1;
+        };
         for (label, h) in self.video_jobs {
+            next(format!("Finishing the {label} video"));
             match h.join() {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => report.problems.push(format!("{label}: {e:#}")),
@@ -723,16 +732,19 @@ impl Take {
             }
         }
         if let Some(h) = self.audio_job {
+            next("Finishing the sound".into());
             if let Ok(Err(e)) = h.join() {
                 report.problems.push(format!("audio: {e:#}"));
             }
         }
         for (label, h) in self.track_jobs {
+            next(format!("Finishing {label}'s track"));
             if let Ok(Err(e)) = h.join() {
                 report.problems.push(format!("{label} track: {e:#}"));
             }
         }
         for (label, h) in self.writers {
+            next(format!("Saving {label}"));
             match h.join() {
                 Ok(Ok(f)) => report.files.push(f),
                 Ok(Err(e)) => report.problems.push(format!("{e:#}")),
@@ -740,6 +752,7 @@ impl Take {
             }
         }
         for (label, h) in self.wavs {
+            next(format!("Saving {label}'s audio"));
             match h.join() {
                 Ok(Ok(files)) => report.files.extend(files),
                 Ok(Err(e)) => report.problems.push(format!("{label}: {e:#}")),

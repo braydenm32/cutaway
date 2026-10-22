@@ -4,7 +4,7 @@
 use crate::util::LockExt;
 use super::theme::*;
 use super::App;
-use crate::control::{Action, CommentCmd, PrompterCmd, PtzCmd, ReplayCmd, Target};
+use crate::control::{Action, CommentCmd, PrompterCmd, PtzCmd, ReplayAngle, ReplayCmd, Target};
 use crate::settings::Section;
 use eframe::egui::{self, vec2, Color32, RichText};
 use std::time::{Duration, Instant};
@@ -313,9 +313,16 @@ impl App {
                 e.replay.stop();
                 Ok("Replay stopped".into())
             }
-            ReplayCmd::Play { seconds, slow } => {
-                let d = e.start_replay(seconds, slow).map_err(|e| format!("{e:#}"))?;
-                Ok(format!("Replay{} ({:.0} s)", if slow { " in slow motion" } else { "" }, d.as_secs_f32()))
+            ReplayCmd::Play { seconds, slow, angle } => {
+                // A plain replay shows the angle chosen in the settings.
+                let angle = angle.unwrap_or_else(|| ReplayAngle::parse(&self.cfg.replay.angle));
+                let d = e.start_replay(seconds, slow, &angle).map_err(|e| format!("{e:#}"))?;
+                let from = match &angle {
+                    ReplayAngle::Program => String::new(),
+                    ReplayAngle::Source(t) => format!(" from {t}"),
+                    ReplayAngle::Quad => " from every angle".into(),
+                };
+                Ok(format!("Replay{from}{} ({:.0} s)", if slow { " in slow motion" } else { "" }, d.as_secs_f32()))
             }
         }
     }

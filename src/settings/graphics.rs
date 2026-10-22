@@ -242,8 +242,16 @@ impl SettingsUi {
             label(ui, "Opacity");
             ui.add(egui::Slider::new(&mut g.opacity, 0.05..=1.0));
             ui.end_row();
-            label(ui, "Fade");
-            ui.add(egui::DragValue::new(&mut g.fade_ms).range(0..=3000).speed(10).suffix(" ms"));
+            label(ui, "Comes on");
+            ui.horizontal(|ui| {
+                egui::ComboBox::from_id_salt("motion").selected_text(g.motion.label()).show_ui(ui, |ui| {
+                    for m in crate::config::Motion::ALL {
+                        ui.selectable_value(&mut g.motion, m, m.label());
+                    }
+                });
+                ui.label("taking");
+                ui.add(egui::DragValue::new(&mut g.fade_ms).range(0..=3000).speed(10).suffix(" ms"));
+            });
             ui.end_row();
             label(ui, "Showing at start");
             ui.checkbox(&mut g.visible, "");
