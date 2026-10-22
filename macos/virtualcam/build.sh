@@ -20,7 +20,8 @@ work=target/virtualcam
 rm -rf "$work" && mkdir -p "$work"
 
 ext="$app/Contents/Library/SystemExtensions/app.cutaway.Cutaway.Camera.systemextension"
-rm -rf "$ext" && mkdir -p "$ext/Contents/MacOS"
+rm -rf "$ext" && mkdir -p "$ext/Contents/MacOS" "$ext/Contents/Resources"
+cp macos/Cutaway.icns "$ext/Contents/Resources/"
 swiftc -O -target arm64-apple-macos13.0 -o "$ext/Contents/MacOS/app.cutaway.Cutaway.Camera" macos/virtualcam/CameraExtension.swift
 sed -e "s/__VERSION__/$version/g" -e "s/__TEAM__/$team/g" macos/virtualcam/Info.plist > "$ext/Contents/Info.plist"
 swiftc -O -target arm64-apple-macos13.0 -o "$app/Contents/MacOS/cutaway-camera" macos/virtualcam/Installer.swift

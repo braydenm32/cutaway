@@ -325,6 +325,14 @@ pub struct Compositor {
     bg_view: Option<(wgpu::TextureView, (u32, u32))>,
 }
 
+/// Tests that open the GPU take turns: Windows' software GPU on the test
+/// machines (WARP) can crash when several devices are made and used at once.
+#[cfg(test)]
+pub(crate) fn test_gpu_turn() -> std::sync::MutexGuard<'static, ()> {
+    static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    TURN.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Create a GPU device for compositing.
 pub fn create_device() -> Result<(wgpu::Device, wgpu::Queue, String)> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
@@ -1736,6 +1744,7 @@ mod tests {
 
     #[test]
     fn composites_layers() {
+        let _gpu = super::test_gpu_turn();
         let settings = CompositorSettings { canvas: (320, 180), background_rgb: [0, 0, 255], background_image: None, preview_width: 160, thumb_width: 64 };
         let mut c = match Compositor::new(&settings) {
             Ok(c) => c,
@@ -1777,6 +1786,7 @@ mod tests {
     /// Sources moved, removed and added while it runs keep their pictures.
     #[test]
     fn keeps_pictures_when_sources_move() {
+        let _gpu = super::test_gpu_turn();
         let settings = CompositorSettings { canvas: (320, 180), background_rgb: [0, 0, 0], background_image: None, preview_width: 160, thumb_width: 64 };
         let mut c = match Compositor::new(&settings) {
             Ok(c) => c,
@@ -1813,6 +1823,7 @@ mod tests {
     /// to its framing, over everything the program has (fade to black too).
     #[test]
     fn draws_the_vertical_version() {
+        let _gpu = super::test_gpu_turn();
         use crate::config::VerticalMode;
         let settings = CompositorSettings { canvas: (320, 180), background_rgb: [0, 0, 0], background_image: None, preview_width: 160, thumb_width: 64 };
         let mut c = match Compositor::new(&settings) {
@@ -1870,6 +1881,7 @@ mod tests {
 
     #[test]
     fn colour_luts_and_fade_to_black() {
+        let _gpu = super::test_gpu_turn();
         let settings = CompositorSettings { canvas: (320, 180), background_rgb: [0, 0, 0], background_image: None, preview_width: 160, thumb_width: 64 };
         let mut c = match Compositor::new(&settings) {
             Ok(c) => c,
@@ -1932,6 +1944,7 @@ mod tests {
 
     #[test]
     fn draws_a_stinger_over_the_program() {
+        let _gpu = super::test_gpu_turn();
         let settings = CompositorSettings { canvas: (320, 180), background_rgb: [0, 0, 255], background_image: None, preview_width: 320, thumb_width: 64 };
         let mut c = match Compositor::new(&settings) {
             Ok(c) => c,
@@ -2016,6 +2029,7 @@ mod tests {
 
     #[test]
     fn styles_keys_transitions_and_graphics() {
+        let _gpu = super::test_gpu_turn();
         let settings = CompositorSettings { canvas: (320, 180), background_rgb: [0, 0, 255], background_image: None, preview_width: 320, thumb_width: 64 };
         let mut c = match Compositor::new(&settings) {
             Ok(c) => c,

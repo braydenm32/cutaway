@@ -52,6 +52,19 @@ fn app_icon() -> Arc<egui::IconData> {
     Arc::new(eframe::icon_data::from_png_bytes(png).unwrap_or_default())
 }
 
+/// The logo's letters (assets/logo/mark.png), for the top bar and the
+/// About and update windows.
+fn logo_texture(ctx: &egui::Context) -> egui::TextureHandle {
+    let image = match image::load_from_memory(include_bytes!("../assets/logo/mark.png")) {
+        Ok(i) => {
+            let i = i.into_rgba8();
+            egui::ColorImage::from_rgba_unmultiplied([i.width() as usize, i.height() as usize], i.as_raw())
+        }
+        Err(_) => egui::ColorImage::filled([1, 1], Color32::TRANSPARENT),
+    };
+    ctx.load_texture("cutaway-logo", image, egui::TextureOptions::LINEAR)
+}
+
 pub fn run(cfg: Config, save_path: Option<PathBuf>, self_test: bool) -> anyhow::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_title("Cutaway").with_icon(app_icon()).with_inner_size([1480.0, 920.0]).with_min_inner_size([1000.0, 640.0]),
@@ -157,6 +170,9 @@ pub struct App {
     /// A newer Cutaway, once GitHub has said so; and its window.
     update: Arc<std::sync::Mutex<Option<crate::net::update::Release>>>,
     update_open: bool,
+    /// The logo beside the name in the top bar; clicking it opens About.
+    logo: egui::TextureHandle,
+    about_open: bool,
     /// When this (just updated) version counts as started properly.
     settle_at: Option<Instant>,
     /// Uploads to YouTube and Google Drive.
@@ -215,6 +231,8 @@ impl App {
             qr_for: None,
             update: Arc::new(std::sync::Mutex::new(None)),
             update_open: false,
+            logo: logo_texture(&cc.egui_ctx),
+            about_open: false,
             settle_at: None,
             uploads: Default::default(),
             chat: None,
@@ -327,9 +345,38 @@ impl App {
     }
 
     /// The update window: what's new, then getting it, then putting it in.
+    /// About Cutaway: the logo, this version, and where to read more.
+    fn about_window(&mut self, ctx: &egui::Context) {
+        let mut open = true;
+        egui::Window::new("About Cutaway").open(&mut open).collapsible(false).resizable(false).default_width(380.0).show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.add(egui::Image::new(&self.logo).max_height(64.0));
+                ui.vertical(|ui| {
+                    ui.label(RichText::new("Cutaway").size(22.0).strong().color(Color32::WHITE));
+                    ui.label(RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).color(TEXT_DIM));
+                    ui.label(RichText::new("Record, switch and stream your show.").color(TEXT_DIM));
+                });
+            });
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                let repo = format!("https://github.com/{}", crate::net::update::REPO);
+                if ui.button("What's new").on_hover_text("Every version's release notes").clicked() {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(format!("{repo}/releases")));
+                }
+                if ui.button("Help and source").on_hover_text("Cutaway's guide and code on GitHub").clicked() {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(&repo));
+                }
+            });
+        });
+        self.about_open &= open;
+    }
+
     fn update_window(&mut self, ui: &mut egui::Ui, r: &crate::net::update::Release, live: bool, skip: &mut bool, restart: &mut bool) {
         use crate::net::self_update::{self as su, Finish, Stage};
-        ui.label(format!("You have {}.", env!("CARGO_PKG_VERSION")));
+        ui.horizontal(|ui| {
+            ui.add(egui::Image::new(&self.logo).max_height(32.0));
+            ui.label(format!("Cutaway {} is out. You have {}.", r.version, env!("CARGO_PKG_VERSION")));
+        });
         if !r.notes.is_empty() {
             ui.add_space(6.0);
             egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
@@ -1432,7 +1479,17 @@ impl App {
 
     fn header_left(&mut self, ui: &mut egui::Ui) {
         let pill = |text: RichText, fill: Color32| egui::Button::new(text).fill(fill).min_size(vec2(150.0, 34.0)).corner_radius(17.0);
-        ui.label(RichText::new("CUTAWAY").size(17.0).strong().color(Color32::WHITE).extra_letter_spacing(3.0));
+        let name = egui::Button::image_and_text(
+            egui::Image::new(&self.logo).max_height(20.0),
+            RichText::new("CUTAWAY").size(17.0).strong().color(Color32::WHITE).extra_letter_spacing(3.0),
+        )
+        .frame(false);
+        if ui.add(name).on_hover_text("About Cutaway").clicked() {
+            self.about_open = !self.about_open;
+        }
+        if self.about_open {
+            self.about_window(ui.ctx());
+        }
         self.show_menu(ui);
         ui.add_space(10.0);
         let Some(engine) = &self.engine else { return };
