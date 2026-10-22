@@ -216,7 +216,10 @@ impl Engine {
             self.video_taps.lock_ok().tall = Some(ProgramTap { tx: vtx, from: t0 });
         }
 
-        // One file per source.
+        // One file per source; the last stretch of each is kept for replays
+        // from that camera (not ProRes: far too big to keep in memory).
+        let keep_angles = !matches!(codec, crate::media::VideoCodec::ProRes(_));
+        let mut angles = Vec::new();
         let mut iso_slots = Vec::new();
         for (i, s) in self.sources.iter().enumerate() {
             if !s.record {
@@ -230,7 +233,13 @@ impl Engine {
             // Short queue: these can be camera buffers, and holding many
             // starves the camera's buffer pool.
             let retimer = Some(recorder::Retimer::new(t0, s.fps, s.slot.delay));
-            let (path, vtx, _) = add_video(label, file, s.fps, s.size, with_audio, rate, retimer, 8, Vec::new(), None);
+            let angle = keep_angles.then(|| {
+                let b = super::clips::ClipBuffer::new();
+                b.start(folder.clone(), s.fps, brand, None, cfg.replay.seconds.ceil() as u32);
+                angles.push((s.name.clone(), b.clone()));
+                b
+            });
+            let (path, vtx, _) = add_video(label, file, s.fps, s.size, with_audio, rate, retimer, 8, Vec::new(), angle);
             // (By identity: the switch log's angles stay right if sources move.)
             export_files.push(ExportFile { path, name: s.name.clone(), width: s.size.0, height: s.size.1, fps: s.fps, has_audio: with_audio, source: Some(s.uid as usize), tc_frame: tc_for(s.fps), length: None });
             s.slot.start_iso_tap(vtx, t0);
@@ -306,6 +315,7 @@ impl Engine {
                 st.push(LogLevel::Info, format!("Backup copy to {}", b.display()));
             }
         }
+        *self.angles.lock_ok() = angles;
         *guard = Some(take);
         self.mix.reset_recording_loudness();
         (self.waker)();
@@ -362,6 +372,9 @@ impl Engine {
     pub fn stop_recording(&self) {
         let Some(take) = self.take.lock_ok().take() else { return };
         self.clips.stop();
+        for (_, a) in self.angles.lock_ok().drain(..) {
+            a.stop();
+        }
         let fps = self.info.fps;
         let t1 = next_boundary(fps);
         take.t1.store(t1, Ordering::Relaxed);

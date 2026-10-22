@@ -1,7 +1,8 @@
-//! Instant replay: the last few seconds of the program, played again over
-//! it (optionally in slow motion), fading in and out. The pictures come
-//! from the recording's program (already encoded, so nothing extra is
-//! kept), decoded a few frames ahead of what's showing.
+//! Instant replay: the last few seconds of the program (or of one camera,
+//! or four cameras at once), played again over the program (optionally in
+//! slow motion), fading in and out. The pictures come from the recording's
+//! files as they're encoded (so nothing extra is kept), decoded a few
+//! frames ahead of what's showing.
 
 use crate::util::LockExt;
 use super::decode::{create_video_decoder, DecoderSetup, Reorder, VideoDecoder};
@@ -17,11 +18,16 @@ const AHEAD: usize = 8;
 /// Fades in and out.
 const FADE: f32 = 0.3;
 
-struct Job {
+/// One angle's pictures.
+struct Lane {
     packets: Vec<VideoPacket>,
     setup: DecoderSetup,
     reorder: bool,
-    /// Picture times are measured from here.
+}
+
+struct Job {
+    lanes: Vec<Lane>,
+    /// Picture times are measured from here (the same moment for every angle).
     t0: Ns,
 }
 
@@ -33,10 +39,14 @@ struct State {
     speed: f32,
     /// How much of the recording it shows.
     span: Ns,
-    ahead: VecDeque<VideoFrame>,
+    /// Each angle's pictures, decoded ahead.
+    ahead: Vec<VecDeque<VideoFrame>>,
     playhead: Ns,
     stop: bool,
     problem: Option<String>,
+    /// Four angles at once: the last picture put together, and what it was
+    /// made from.
+    quad: Option<(Vec<u64>, VideoFrame)>,
 }
 
 struct Shared {
@@ -56,6 +66,13 @@ pub struct ReplayFrame {
     pub alpha: f32,
 }
 
+/// Where each of up to four angles goes: the canvas split in four, each
+/// picture's size (even), and its top-left corner.
+fn tiles(canvas: (u32, u32)) -> ((u32, u32), [(u32, u32); 4]) {
+    let (w, h) = ((canvas.0 / 2) & !1, (canvas.1 / 2) & !1);
+    ((w, h), [(0, 0), (canvas.0 - w, 0), (0, canvas.1 - h), (canvas.0 - w, canvas.1 - h)])
+}
+
 impl ReplayPlayer {
     pub fn new(canvas: (u32, u32)) -> ReplayPlayer {
         let shared = Arc::new(Shared { st: Mutex::new(State::default()), cond: Condvar::new() });
@@ -66,29 +83,49 @@ impl ReplayPlayer {
 
     /// Play these pictures again at `speed` (1 = as recorded). Returns how
     /// long it'll be on air.
+    #[cfg(test)]
     pub fn start(&self, packets: Vec<VideoPacket>, speed: f32) -> Result<Duration> {
-        let first = packets.first().ok_or_else(|| anyhow!("nothing to replay"))?;
-        let cfg = first.config.clone();
-        let setup = DecoderSetup { codec: cfg.codec, parameter_sets: cfg.parameter_sets.clone(), width: cfg.width, height: cfg.height, output: self.canvas };
-        let t0 = packets.iter().map(|p| p.pts).min().unwrap_or(first.pts);
-        let end = packets.iter().map(|p| p.pts).max().unwrap_or(t0);
-        let frame = if packets.len() > 1 { (end - t0) / (packets.len() as Ns - 1) } else { 33_000_000 };
-        let span = end - t0 + frame;
-        let reorder = packets.iter().any(|p| p.pts != p.dts);
+        self.start_lanes(vec![packets], speed)
+    }
+
+    /// The same for one angle or several (up to four, shown as a grid),
+    /// all from the same moment.
+    pub fn start_lanes(&self, angles: Vec<Vec<VideoPacket>>, speed: f32) -> Result<Duration> {
+        let angles: Vec<Vec<VideoPacket>> = angles.into_iter().filter(|a| !a.is_empty()).take(4).collect();
+        if angles.is_empty() {
+            return Err(anyhow!("nothing to replay"));
+        }
+        let output = if angles.len() > 1 { tiles(self.canvas).0 } else { self.canvas };
+        let mut lanes = Vec::new();
+        // Every angle starts at its keyframe; the replay starts once they all have.
+        let mut t0 = Ns::MIN;
+        let mut end = Ns::MAX;
+        for packets in angles {
+            let first = &packets[0];
+            let cfg = first.config.clone();
+            let start = packets.iter().map(|p| p.pts).min().unwrap_or(first.pts);
+            let last = packets.iter().map(|p| p.pts).max().unwrap_or(start);
+            let frame = if packets.len() > 1 { (last - start) / (packets.len() as Ns - 1) } else { 33_000_000 };
+            t0 = t0.max(start);
+            end = end.min(last + frame);
+            let reorder = packets.iter().any(|p| p.pts != p.dts);
+            lanes.push(Lane { setup: DecoderSetup { codec: cfg.codec, parameter_sets: cfg.parameter_sets.clone(), width: cfg.width, height: cfg.height, output }, packets, reorder });
+        }
+        let span = (end - t0).max(33_000_000);
         let speed = speed.clamp(0.1, 1.0);
         let mut st = self.shared.st.lock_ok();
-        st.job = Some(Arc::new(Job { packets, setup, reorder, t0 }));
+        st.ahead = vec![VecDeque::new(); lanes.len()];
+        st.job = Some(Arc::new(Job { lanes, t0 }));
         st.gen += 1;
         st.started = Some(Instant::now());
         st.speed = speed;
         st.span = span;
-        st.ahead.clear();
         st.playhead = 0;
         st.problem = None;
+        st.quad = None;
         self.shared.cond.notify_all();
         Ok(Duration::from_nanos((span as f64 / speed as f64) as u64))
     }
-
     /// Stop it now (it fades out quickly).
     pub fn stop(&self) {
         let mut st = self.shared.st.lock_ok();
@@ -123,19 +160,61 @@ impl ReplayPlayer {
             st.started = None;
             st.job = None;
             st.ahead.clear();
+            st.quad = None;
             self.shared.cond.notify_all();
             return None;
         }
         let playhead = (elapsed * st.speed * 1e9) as Ns;
         st.playhead = playhead;
-        while st.ahead.len() >= 2 && st.ahead[1].pts <= playhead {
-            st.ahead.pop_front();
+        for lane in st.ahead.iter_mut() {
+            while lane.len() >= 2 && lane[1].pts <= playhead {
+                lane.pop_front();
+            }
         }
         self.shared.cond.notify_all();
-        let frame = st.ahead.front().filter(|f| f.pts <= playhead + 20_000_000).cloned()?;
+        let now: Vec<Option<VideoFrame>> = st.ahead.iter().map(|l| l.front().filter(|f| f.pts <= playhead + 20_000_000).cloned()).collect();
+        let frame = if now.len() == 1 {
+            now.into_iter().next().flatten()?
+        } else {
+            // Four angles at once, put together when one of them moves on.
+            now.iter().any(|f| f.is_some()).then_some(())?;
+            let serials: Vec<u64> = now.iter().map(|f| f.as_ref().map(|f| f.serial).unwrap_or(0)).collect();
+            if st.quad.as_ref().is_none_or(|(s, _)| *s != serials) {
+                let f = grid(&now, self.canvas, playhead);
+                st.quad = Some((serials, f));
+            }
+            st.quad.as_ref().unwrap().1.clone()
+        };
         let alpha = (elapsed / FADE).min((on_air - elapsed) / FADE).clamp(0.0, 1.0);
         Some(ReplayFrame { frame, alpha })
     }
+}
+
+/// Up to four pictures in a grid, on black.
+fn grid(pictures: &[Option<VideoFrame>], canvas: (u32, u32), pts: Ns) -> VideoFrame {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SERIAL: AtomicU64 = AtomicU64::new(5 << 60);
+    let (w, h) = ((canvas.0 & !1) as usize, (canvas.1 & !1) as usize);
+    let mut y = vec![16u8; w * h];
+    let mut uv = vec![128u8; w * h / 2];
+    let (_, corners) = tiles(canvas);
+    for (pic, &(x0, y0)) in pictures.iter().zip(corners.iter()) {
+        let Some(pic) = pic else { continue };
+        let (pw, ph) = ((pic.width as usize).min(w - x0 as usize), (pic.height as usize).min(h - y0 as usize));
+        let (x0, y0) = (x0 as usize & !1, y0 as usize & !1);
+        pic.pixels.with_planes(|p| {
+            for row in 0..ph {
+                let src = &p.y[row * p.y_stride..row * p.y_stride + pw];
+                y[(y0 + row) * w + x0..(y0 + row) * w + x0 + pw].copy_from_slice(src);
+            }
+            for row in 0..ph / 2 {
+                let n = pw & !1;
+                let src = &p.uv[row * p.uv_stride..row * p.uv_stride + n];
+                uv[(y0 / 2 + row) * w + x0..(y0 / 2 + row) * w + x0 + n].copy_from_slice(src);
+            }
+        });
+    }
+    VideoFrame::new_nv12(w as u32, h as u32, pts, y, uv, SERIAL.fetch_add(1, Ordering::Relaxed))
 }
 
 impl Drop for ReplayPlayer {
@@ -149,7 +228,6 @@ impl Drop for ReplayPlayer {
 }
 
 fn worker(shared: Arc<Shared>) {
-    let mut serial = 3u64 << 60;
     let mut done_gen = 0u64;
     loop {
         // Wait for a new replay.
@@ -166,59 +244,76 @@ fn worker(shared: Arc<Shared>) {
             }
         };
         done_gen = gen;
-        let mut dec: Box<dyn VideoDecoder> = match create_video_decoder(&job.setup) {
-            Ok(d) => d,
-            Err(e) => {
-                let mut st = shared.st.lock_ok();
+        // Each angle decodes on its own thread.
+        std::thread::scope(|scope| {
+            for (k, lane) in job.lanes.iter().enumerate() {
+                let (shared, t0) = (&shared, job.t0);
+                scope.spawn(move || decode_lane(shared, gen, k, lane, t0));
+            }
+        });
+    }
+}
+
+/// Decode one angle a few pictures ahead of the playhead, until the replay
+/// ends or another starts.
+fn decode_lane(shared: &Shared, gen: u64, k: usize, lane: &Lane, t0: Ns) {
+    let mut serial = (3u64 << 60) + ((k as u64) << 56) + (gen << 32);
+    let mut dec: Box<dyn VideoDecoder> = match create_video_decoder(&lane.setup) {
+        Ok(d) => d,
+        Err(e) => {
+            let mut st = shared.st.lock_ok();
+            if st.gen == gen {
                 st.problem = Some(format!("the replay can't be decoded: {e:#}"));
                 st.started = None;
                 st.job = None;
+            }
+            return;
+        }
+    };
+    let mut reorder = Reorder::new(if lane.reorder { 4 } else { 0 });
+    let mut out = Vec::new();
+    let mut next = 0;
+    let mut flushed = false;
+    loop {
+        {
+            let st = shared.st.lock_ok();
+            if st.stop || st.gen != gen || st.job.is_none() {
+                break;
+            }
+            let waiting = st.ahead.get(k).map(|a| a.iter().filter(|f| f.pts > st.playhead).count()).unwrap_or(0);
+            if waiting >= AHEAD || flushed {
+                let _ = shared.cond.wait_timeout(st, Duration::from_millis(5));
                 continue;
             }
-        };
-        let mut reorder = Reorder::new(if job.reorder { 4 } else { 0 });
-        let mut out = Vec::new();
-        let mut next = 0;
-        let mut flushed = false;
-        loop {
-            {
-                let st = shared.st.lock_ok();
-                if st.stop || st.gen != gen || st.job.is_none() {
-                    break;
-                }
-                let waiting = st.ahead.iter().filter(|f| f.pts > st.playhead).count();
-                if waiting >= AHEAD || flushed {
-                    let _ = shared.cond.wait_timeout(st, Duration::from_millis(5));
-                    continue;
-                }
-            }
-            let mut ready = Vec::new();
-            if next < job.packets.len() {
-                let p = &job.packets[next];
-                next += 1;
-                let _ = dec.decode(&p.data, p.pts - job.t0, &mut out);
-                for f in out.drain(..) {
-                    if let Some(f) = reorder.push(f) {
-                        ready.push(f);
-                    }
-                }
-            } else {
-                flushed = true;
-                let _ = dec.flush(&mut out);
-                for f in out.drain(..) {
-                    reorder.push_hold(f);
-                }
-                while let Some(f) = reorder.pop() {
+        }
+        let mut ready = Vec::new();
+        if next < lane.packets.len() {
+            let p = &lane.packets[next];
+            next += 1;
+            let _ = dec.decode(&p.data, p.pts - t0, &mut out);
+            for f in out.drain(..) {
+                if let Some(f) = reorder.push(f) {
                     ready.push(f);
                 }
             }
-            for f in ready.iter_mut() {
-                serial += 1;
-                f.serial = serial;
+        } else {
+            flushed = true;
+            let _ = dec.flush(&mut out);
+            for f in out.drain(..) {
+                reorder.push_hold(f);
             }
-            let mut st = shared.st.lock_ok();
-            if st.gen == gen {
-                st.ahead.extend(ready);
+            while let Some(f) = reorder.pop() {
+                ready.push(f);
+            }
+        }
+        for f in ready.iter_mut() {
+            serial += 1;
+            f.serial = serial;
+        }
+        let mut st = shared.st.lock_ok();
+        if st.gen == gen {
+            if let Some(a) = st.ahead.get_mut(k) {
+                a.extend(ready);
             }
         }
     }
@@ -286,5 +381,34 @@ mod tests {
         std::thread::sleep(Duration::from_millis(400));
         assert!(r.frame().is_none(), "stopped");
         assert!(!r.playing());
+    }
+
+    #[test]
+    fn replays_several_angles_in_a_grid() {
+        let (Some(a), Some(b)) = (packets(30, 30), packets(30, 30)) else {
+            eprintln!("no encoder here; skipping");
+            return;
+        };
+        let r = ReplayPlayer::new((320, 180));
+        let on_air = r.start_lanes(vec![a, b], 1.0).unwrap();
+        assert!((on_air.as_secs_f32() - 1.0).abs() < 0.1, "{on_air:?}");
+        let mut got = None;
+        for _ in 0..100 {
+            std::thread::sleep(Duration::from_millis(10));
+            if let Some(f) = r.frame() {
+                got = Some(f);
+                if got.as_ref().unwrap().frame.serial != 0 && got.as_ref().unwrap().alpha > 0.0 {
+                    std::thread::sleep(Duration::from_millis(300));
+                    got = r.frame();
+                    break;
+                }
+            }
+        }
+        let f = got.expect("a picture").frame;
+        assert_eq!((f.width, f.height), (320, 180), "the whole picture");
+        let luma = |x: usize, y: usize| f.pixels.with_planes(|p| p.y[p.y_stride * y + x]);
+        // Both angles show (top left and top right); the empty corners are black.
+        assert!(luma(80, 45) > 40 && luma(240, 45) > 40, "{} {}", luma(80, 45), luma(240, 45));
+        assert!(luma(80, 135) <= 17 && luma(240, 135) <= 17, "{} {}", luma(80, 135), luma(240, 135));
     }
 }

@@ -2078,11 +2078,15 @@ pub struct ReplayConfig {
     pub slow_speed: f32,
     /// Show "REPLAY" in a corner while it plays.
     pub label: bool,
+    /// What the Replay button shows: "" for the program, a source's name
+    /// (from its own recording), or "quad" for four at once.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub angle: String,
 }
 
 impl Default for ReplayConfig {
     fn default() -> Self {
-        ReplayConfig { seconds: 8.0, slow_speed: 0.5, label: true }
+        ReplayConfig { seconds: 8.0, slow_speed: 0.5, label: true, angle: String::new() }
     }
 }
 

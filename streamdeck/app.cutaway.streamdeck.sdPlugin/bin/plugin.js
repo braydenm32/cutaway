@@ -503,7 +503,11 @@ function press(ctx) {
     case "replay":
       if (st && st.replaying) run(ctx, "replay:stop");
       else if (!st || !st.recording) sdSend({ event: "showAlert", context: ctx });
-      else run(ctx, s.slow ? "replay:slow" : "replay");
+      else {
+        // (A camera's name, "quad" or "program"; a number would be read as seconds.)
+        const angle = String(s.angle || "").trim().replace(/:/g, " ");
+        run(ctx, "replay" + (s.slow ? ":slow" : "") + (angle && !/^\d+(\.\d+)?s?$/.test(angle) ? ":" + angle : ""));
+      }
       break;
     case "macro":
       run(ctx, `macro:${target(s.macro)}`);

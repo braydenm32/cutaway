@@ -109,6 +109,7 @@ impl SettingsUi {
             });
         });
 
+        let recorded: Vec<String> = self.draft.sources.iter().filter(|s| s.record).map(|s| s.name.clone()).collect();
         let r = &mut self.draft.replay;
         let state = format!("the last {:.0} s", r.seconds);
         part(ui, "replay", "Instant replay", &state, false, |ui| {
@@ -118,6 +119,22 @@ impl SettingsUi {
                 ui.end_row();
                 label(ui, "Slow motion");
                 ui.add(egui::Slider::new(&mut r.slow_speed, 0.25..=0.75).step_by(0.05).custom_formatter(|v, _| format!("{:.0}% speed", v * 100.0)));
+                ui.end_row();
+                label(ui, "Shows");
+                let shown = match crate::control::ReplayAngle::parse(&r.angle) {
+                    crate::control::ReplayAngle::Program => "the program".to_string(),
+                    crate::control::ReplayAngle::Quad => "every angle at once".to_string(),
+                    crate::control::ReplayAngle::Source(_) => r.angle.clone(),
+                };
+                egui::ComboBox::from_id_salt("replay_angle").selected_text(shown).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut r.angle, String::new(), "the program");
+                    for name in &recorded {
+                        ui.selectable_value(&mut r.angle, name.clone(), name);
+                    }
+                    if recorded.len() >= 2 {
+                        ui.selectable_value(&mut r.angle, "quad".to_string(), "every angle at once");
+                    }
+                });
                 ui.end_row();
                 label(ui, "Label");
                 ui.checkbox(&mut r.label, "REPLAY in the corner");

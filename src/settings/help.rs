@@ -189,6 +189,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Switching, "Fade length") => "How long Fade to black takes. FTB in the bottom bar (or ftb from the Stream Deck, MIDI or the remote) fades everything, graphics included; press it again to come back.",
         (Switching, "Sound fades too") => "The recording and the stream fade out with the picture. Headphones and callers keep hearing.",
         (Switching, "Replay the last") => "How much of the program a replay plays again. Press ⟲ Replay in the header while recording (or replay from the Stream Deck, MIDI or the remote); it fades in over the live picture while the show's sound carries on.",
+        (Switching, "Shows") => "What ⟲ Replay plays again: the program as it went out, one camera (from its own recording, so a moment the program missed), or up to four cameras at once in a grid. Right-click ⟲ Replay to pick another each time. Cameras need \"Record to its own file\" on, and files that aren't ProRes.",
         (Switching, "Slow motion") => "The speed of a slow-motion replay (right-click ⟲ Replay, or replay:slow).",
         (Switching, "Label") => "Shows REPLAY in the corner while a replay plays.",
         (Switching, "At start") => "Whether automatic switching is on when Cutaway starts. The AUTO button and the A key turn it on and off.",
