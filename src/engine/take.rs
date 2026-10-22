@@ -366,7 +366,7 @@ impl Engine {
         let t1 = next_boundary(fps);
         take.t1.store(t1, Ordering::Relaxed);
         let folder = take.folder.clone();
-        self.status.lock_ok().rec = RecState::Finalizing { folder: folder.clone() };
+        self.status.lock_ok().rec = RecState::Finalizing { folder: folder.clone(), step: "Catching the last frames".into(), done: 0.0 };
         (self.waker)();
 
         let taps = self.video_taps.clone();
@@ -411,10 +411,21 @@ impl Engine {
                 export_files: take.export_files.clone(),
                 tc_seconds: take.tc_seconds,
             };
-            let mut report = take.collect();
+            // What the window shows while it saves.
+            let saving = |what: String, done: f32| {
+                if let RecState::Finalizing { step, done: d, .. } = &mut status.lock_ok().rec {
+                    *step = what;
+                    *d = done;
+                }
+                waker();
+            };
+            // Most of the work: the encoders finish and the files close
+            // (90% of the bar); then the notes and timelines.
+            let mut report = take.collect_with(|what, f| saving(what, f * 0.9));
             *monitor.lock_ok() = None;
             // The last words of the take, once recognised.
             let cues = captions.map(|c| {
+                saving("Waiting for the last captions".into(), 0.9);
                 c.settle(t1, Duration::from_secs(8));
                 c.cues_between(t0, t1)
             });
@@ -422,6 +433,7 @@ impl Engine {
             report.duration = Duration::from_nanos((t1 - t0).max(0) as u64);
             report.markers = side.markers.iter().map(|m| (m.at as f64 / NS_PER_SEC as f64, m.name.clone())).collect();
             let events = switcher.events_between(t0 + VIDEO_LATENCY, t1 + VIDEO_LATENCY);
+            saving("Writing the timeline and notes".into(), 0.95);
             let written = side.write(&cfg, &report, &summary, &events, t0, t1, fps, (cw, ch), stream_since, cues.as_deref());
             let mut st = status.lock_ok();
             let total: u64 = report.files.iter().map(|f| f.1).sum();

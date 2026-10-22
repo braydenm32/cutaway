@@ -96,7 +96,9 @@ and [Install on Windows](#install-on-windows).
   it goes on air.
 - **Devices that come back.** A camera, capture card or interface that's
   unplugged is marked offline and reopened automatically when it returns,
-  without touching anything else.
+  without touching anything else. Its tile says what's happening: "Connecting"
+  while a camera starts, "Reconnecting" for the first 20 seconds after its
+  picture stops, and "NO SIGNAL" only once it really isn't there.
 - **Auto-framing:** a virtual close-up cut from one wide (ideally 4K)
   camera that follows the people in it — everyone, the closest person, or
   whoever is on the left, in the middle or on the right — and glides to a
@@ -174,7 +176,11 @@ and [Install on Windows](#install-on-windows).
   10 minutes, and finishes the files cleanly before the drive is full.
 - **Crash-safe.** Video files are written in one-second pieces. After a crash
   or power cut, the next start turns them back into normal files and repairs
-  the WAVs, so you keep everything up to the last second.
+  the WAVs, so you keep everything up to the last second. A card shows which
+  file it's mending while you carry on setting up, then says the take is safe
+  with a button to show the folder.
+- **Saving files** after you stop shows what it's finishing (each video, the
+  sound, the timeline) and how far along it is, on the Record button.
 
 A take looks like this:
 
@@ -565,8 +571,9 @@ Video Extensions** on some PCs.
 3. **Go live:** press **◉ GO LIVE**. With **Pre-show check** turned on in
    Settings → General & shows, the check runs first and only stops you if
    something looks wrong.
-   - The button turns pink with a timer while you're live, orange if any
-     destination isn't live.
+   - The button pulses **GOING LIVE…** while it connects (the line beside
+     it names where to), turns pink with a timer once you're live, and
+     orange if any destination isn't live.
    - The **Stream** panel shows each destination's state and bitrate, and why
      a destination is reconnecting.
 4. **End the stream:** press the button again. By default it asks first.
@@ -612,7 +619,7 @@ is **Sound from <source name>**.
 | `media` | The media player; files are set in its settings | — |
 
 Senders can use H.264 or HEVC video with AAC sound. Network sources show
-"NO SIGNAL" until a sender connects, and pick up again if it reconnects. The
+"Standing by" until a sender connects, and pick up again if it reconnects. The
 source's **Buffer** of 300 ms (the default) suits a wired local network;
 raise it for Wi-Fi or the internet.
 
