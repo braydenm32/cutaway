@@ -56,6 +56,8 @@ Mac, say), the notice takes you to the download page instead. On Windows, an
 update that changes the virtual camera asks you to reinstall it (Settings →
 Screens & webcam), which needs administrator rights once.
 Your settings, shows and recordings stay as they are when you update.
+To see which version you have, click the logo at the top left (**About
+Cutaway**, with links to what's new and to this guide).
 To build Cutaway yourself instead, see [Install on a Mac](#install-on-a-mac)
 and [Install on Windows](#install-on-windows).
 

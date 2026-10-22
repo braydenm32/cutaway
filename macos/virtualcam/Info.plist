@@ -10,6 +10,8 @@
     <string>Cutaway</string>
     <key>CFBundleExecutable</key>
     <string>app.cutaway.Cutaway.Camera</string>
+    <key>CFBundleIconFile</key>
+    <string>Cutaway</string>
     <key>CFBundlePackageType</key>
     <string>SYSX</string>
     <key>CFBundleShortVersionString</key>

@@ -12,7 +12,10 @@ This file is the one place it's drawn; everything below is made from it:
     assets/logo/cutaway-mark-light.svg  the letters alone, for light backgrounds
     assets/logo/window-mac.png        what the running app shows in the Dock
     assets/logo/window-square.png     what it shows on the Windows taskbar
+    assets/logo/mark.png              the letters in the app's top bar and About window
     assets/logo/remote.png            the phone remote's home-screen icon
+    assets/logo/social-preview.png    the picture GitHub shows when the repo is linked
+                                      (needs the Inter font; skipped without it)
     macos/Cutaway.icns                Cutaway.app's icon
     windows/cutaway.ico               Cutaway.exe's icon
 
@@ -22,7 +25,7 @@ The Stream Deck plugin's icons use it too (streamdeck/make_icons.py).
 import math
 import os
 
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..", "..")
@@ -160,6 +163,30 @@ def svg_mark(letters=WHITE):
     return "\n".join(out) + "\n"
 
 
+def _font(names, px):
+    for name in names:
+        try:
+            return ImageFont.truetype(name, px)
+        except OSError:
+            pass
+    return None
+
+
+def social_preview():
+    """1280×640, for GitHub's Settings → Social preview. None without Inter."""
+    bold = _font(["Inter-Bold.otf", "/usr/share/fonts/opentype/inter/Inter-Bold.otf", "Inter Bold.ttf", "Inter-Bold.ttf"], 128)
+    regular = _font(["Inter-Regular.otf", "/usr/share/fonts/opentype/inter/Inter-Regular.otf", "Inter.ttc", "Inter-Regular.ttf"], 34)
+    if not bold or not regular:
+        return None
+    img = Image.new("RGBA", (1280, 640), (14, 16, 20, 255))  # the app's background
+    img.alpha_composite(render("mac", 400), (80, 120))
+    d = ImageDraw.Draw(img)
+    d.text((520, 330), "Cutaway", font=bold, fill=WHITE, anchor="ls")
+    d.text((526, 392), "Record, switch and stream your show.", font=regular, fill=(200, 204, 214, 255), anchor="ls")
+    d.text((526, 442), "Mac and Windows", font=regular, fill=(140, 147, 160, 255), anchor="ls")
+    return img.convert("RGB")
+
+
 def write(path, text):
     with open(path, "w", newline="\n") as f:
         f.write(text)
@@ -172,10 +199,17 @@ if __name__ == "__main__":
     write(os.path.join(HERE, "cutaway-mark-light.svg"), svg_mark(TILE))
     render("mac", 512).save(os.path.join(HERE, "window-mac.png"), optimize=True)
     render("square", 256).save(os.path.join(HERE, "window-square.png"), optimize=True)
+    letters = render_mark(256)
+    letters.crop(letters.getbbox()).save(os.path.join(HERE, "mark.png"), optimize=True)
     # A phone puts its own mask on a home-screen icon, so the tile fills it.
     full = Image.new("RGBA", (180, 180), TILE)
     full.alpha_composite(render("square", 196).crop((8, 8, 188, 188)))
     full.convert("RGB").save(os.path.join(HERE, "remote.png"), optimize=True)
+    preview = social_preview()
+    if preview:
+        preview.save(os.path.join(HERE, "social-preview.png"), optimize=True)
+    else:
+        print("social-preview.png skipped: install the Inter font to redraw it")
 
     mac = {n: render("mac", n) for n in (16, 32, 64, 128, 256, 512, 1024)}
     mac[1024].save(os.path.join(ROOT, "macos", "Cutaway.icns"), append_images=[m for n, m in mac.items() if n != 1024])
