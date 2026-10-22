@@ -41,7 +41,7 @@ impl SourceKind {
 
     fn of(device: &str) -> SourceKind {
         let d = device.trim().to_lowercase();
-        if d == "screen" {
+        if crate::platform::capture::is_screen(&d) {
             SourceKind::Screen
         } else if d == "test" || d.starts_with("test:") {
             SourceKind::Test
@@ -70,7 +70,7 @@ impl SourceKind {
     fn label(self) -> &'static str {
         match self {
             SourceKind::Device => "Camera or capture card",
-            SourceKind::Screen => "Screen",
+            SourceKind::Screen => "Screen, window or app",
             SourceKind::Test => "Test picture",
             SourceKind::Media => "Media player (video files, images)",
             SourceKind::SrtListen => "SRT input (wait for a sender)",
@@ -403,7 +403,14 @@ impl SettingsUi {
                     ui.label(RichText::new("⚠ This device isn't connected right now. It will connect by itself when plugged in.").color(AMBER));
                 }
             }
-            SourceKind::Screen => hint(ui, if cfg!(windows) { "Captures your main display." } else { "Captures your main display (allow Screen Recording for Cutaway in System Settings → Privacy & Security)." }),
+            SourceKind::Screen => {
+                if let Some(d) = self.capture.show(ui, &src.device) {
+                    src.device = d;
+                }
+                if !cfg!(windows) {
+                    hint(ui, "Allow Screen Recording for Cutaway in System Settings → Privacy & Security if macOS asks.");
+                }
+            }
             SourceKind::Test => {}
             SourceKind::Media => {
                 media_editor(ui, &mut src.media);

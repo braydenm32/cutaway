@@ -80,6 +80,7 @@ midir = "0.11"
 ort = { version = "=2.0.0-rc.14", default-features = false, features = ["std", "load-dynamic", "api-20", "directml"] }
 windows-core = "0.62"
 windows = { version = "0.62", features = [
+    "Win32_Devices_Display",
     "Foundation",
     "Graphics_Capture",
     "Graphics_DirectX",
@@ -87,6 +88,7 @@ windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dwm",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
@@ -96,6 +98,7 @@ windows = { version = "0.62", features = [
     "Win32_Media_Multimedia",
     "Win32_Security",
     "Win32_Storage_FileSystem",
+    "Win32_Storage_Xps",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Console",
@@ -131,6 +134,8 @@ objc2-screen-capture-kit = "0.3"
 objc2-speech = "0.3"
 objc2-avf-audio = "0.3"
 objc2-vision = "0.3"
+objc2-app-kit = "0.3"
+objc2-core-graphics = "0.3"
 
 [build-dependencies]
 embed-resource = "3"

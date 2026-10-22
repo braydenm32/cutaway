@@ -68,6 +68,12 @@ and [Install on Windows](#install-on-windows).
 - **Any source, many at once.** Webcams, USB/Thunderbolt capture cards and
   cameras over HDMI capture (if QuickTime Player can see it, Cutaway can), the
   screen, or test patterns. There is no fixed limit; 4K sources are supported.
+- **Screen capture: a screen, a window or an app.** Pick it like sharing your
+  screen in a video call: your displays drawn as they're arranged, or cards
+  with a picture of each open window and app. A window keeps its shape (black
+  around it), is found again by its title after a restart, and comes back by
+  itself if it's closed and reopened. (An app on Windows is its biggest
+  window; on a Mac, every window it has on that screen.)
 - **Change the line-up mid-show.** Add, remove or change sources and audio
   inputs while recording or live: only what changed opens or closes, and the
   rest never blinks. Removing one while recording or streaming asks first; its
@@ -308,7 +314,10 @@ Take_2026-10-16_19-30-02/
 - **NDI output:** the program (with its sound), and optionally every source,
   as NDI on your network for other computers, OBS, vMix or recorders.
 - **Second screen:** the program, the multiview or the teleprompter, full
-  screen on a projector, TV or confidence monitor.
+  screen on a projector, TV or confidence monitor. Pick the screen from a
+  picture of your displays (or leave it on Automatic: any screen but
+  Cutaway's). It never fills the screen Cutaway is on by itself, and Esc
+  always gets you out: once to leave full screen, twice to close it.
 - **Live captions:** speech recognised on the Mac (nothing leaves it),
   shown on the stream (and optionally burned into the recording), from the
   mix or any one input.
@@ -550,7 +559,7 @@ Video Extensions** on some PCs.
 | Go live / end stream | The **GO LIVE** button. This is mouse-only on purpose, so a stray key can't start or end a broadcast |
 | Edit layout | `E`, or **Edit layout**: drag frames, drag the corner to resize (Shift keeps shape), add/remove sources, scene audio, duplicate, rename, **Save scenes** |
 | Audio strip | Fader = level (double-click resets), **ON** = in the mixes, 🎧 = solo in the headphones |
-| Second screen | **Screen** in the header. On that window: double-click or `F` for full screen, Esc to leave |
+| Second screen | **Screen** in the header. On that window: double-click or `F` for full screen, Esc to leave full screen, Esc again (or ✕, or Cmd/Ctrl+W) to close |
 | Switch show | The show name next to the logo |
 | Settings | ⌘, |
 

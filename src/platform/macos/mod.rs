@@ -16,7 +16,7 @@ pub mod vtdec;
 
 pub use camera::{check_microphone_access, list_video_devices, open_camera};
 pub use appaudio::{list_apps, open_app_audio};
-pub use screen::open_screen;
+pub use screen::{capture_targets, open_screen};
 
 use crate::media::{clock, Ns, Pixels, VideoFrame, NS_PER_SEC};
 use objc2_core_foundation::CFString;
