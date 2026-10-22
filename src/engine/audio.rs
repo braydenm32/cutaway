@@ -7,6 +7,7 @@
 //! resampler whose ratio is steered so that the audio stays locked to its
 //! capture timestamps.
 
+use crate::util::LockExt;
 use super::dsp::{Leveller, Limiter, LoudnessMeter, VoiceChain};
 use super::{Meter, Status};
 use crate::config::VoiceProcessing;
@@ -314,13 +315,13 @@ impl InputShared {
     }
     pub fn start_raw_tap(&self, tx: Sender<AudioBlock>, from: Ns) {
         let id = self.tap_ids.fetch_add(1, Ordering::Relaxed) + 1;
-        *self.raw_tap.lock().unwrap() = Some(RawTap { tx, from, id });
+        *self.raw_tap.lock_ok() = Some(RawTap { tx, from, id });
     }
     pub fn last_seen(&self) -> Ns {
         self.last_seen.load(Ordering::Relaxed)
     }
     pub fn stop_raw_tap(&self) {
-        *self.raw_tap.lock().unwrap() = None;
+        *self.raw_tap.lock_ok() = None;
     }
     pub fn set_gain_db(&self, db: f64) {
         self.gain.store((10f64.powf(db / 20.0) as f32).to_bits(), Ordering::Relaxed);
@@ -333,7 +334,7 @@ impl InputShared {
     /// timed to match the picture change).
     pub fn set_on_at(&self, on: bool, at: Ns, fade: Ns) {
         self.on.store(on, Ordering::Relaxed);
-        self.changes.lock().unwrap().push_back((at, on, fade.max(5_000_000)));
+        self.changes.lock_ok().push_back((at, on, fade.max(5_000_000)));
     }
     pub fn is_on(&self) -> bool {
         self.on.load(Ordering::Relaxed)
@@ -346,7 +347,7 @@ impl InputShared {
         self.duck.store(on, Ordering::Relaxed);
     }
     pub fn set_processing(&self, p: &VoiceProcessing) {
-        let mut cur = self.processing.lock().unwrap();
+        let mut cur = self.processing.lock_ok();
         if *cur != *p {
             *cur = p.clone();
             self.processing_version.fetch_add(1, Ordering::Relaxed);
@@ -357,7 +358,7 @@ impl InputShared {
     }
     /// Level of each channel of the raw input, in dB.
     pub fn levels_db(&self) -> Vec<f32> {
-        self.levels.lock().unwrap().iter().map(|l| if *l <= 1e-6 { -120.0 } else { 20.0 * l.log10() }).collect()
+        self.levels.lock_ok().iter().map(|l| if *l <= 1e-6 { -120.0 } else { 20.0 * l.log10() }).collect()
     }
     /// Compressor gain reduction in dB (0 when not compressing).
     pub fn reduction_db(&self) -> f32 {
@@ -369,7 +370,7 @@ impl InputShared {
     fn update_levels(&self, b: &AudioBlock) {
         let ch = b.channels.max(1) as usize;
         let frames = b.frames().max(1);
-        let mut lv = self.levels.lock().unwrap();
+        let mut lv = self.levels.lock_ok();
         if lv.len() != ch {
             *lv = vec![0.0; ch];
         }
@@ -487,7 +488,7 @@ impl MixShared {
     /// it's using it, so taps made afterwards count inputs the new way.
     pub fn set_lineup(&self, slots: Vec<MixSlot>, names: Vec<String>) {
         let generation = self.lineups.fetch_add(1, Ordering::Relaxed) + 1;
-        *self.lineup.lock().unwrap() = Some(MixLineup { slots, names, generation });
+        *self.lineup.lock_ok() = Some(MixLineup { slots, names, generation });
         let until = std::time::Instant::now() + std::time::Duration::from_secs(1);
         while self.lineup_done.load(Ordering::Acquire) < generation && std::time::Instant::now() < until {
             std::thread::sleep(std::time::Duration::from_millis(2));
@@ -521,7 +522,7 @@ impl MixShared {
     }
     /// The recording and stream mixes' level (0..1) at mix time `t`.
     pub fn program_gain_at(&self, t: Ns) -> f32 {
-        let (at, dur, from, to) = *self.program_fade.lock().unwrap();
+        let (at, dur, from, to) = *self.program_fade.lock_ok();
         if t <= at {
             return from;
         }
@@ -533,7 +534,7 @@ impl MixShared {
     /// starting at mix time `at`, over `dur`.
     pub fn fade_program(&self, to: f32, at: Ns, dur: Ns) {
         let from = self.program_gain_at(at);
-        *self.program_fade.lock().unwrap() = (at, dur.max(1), from, to.clamp(0.0, 1.0));
+        *self.program_fade.lock_ok() = (at, dur.max(1), from, to.clamp(0.0, 1.0));
     }
 
     /// How far the ducked inputs are turned down right now (dB, 0 = not).
@@ -622,7 +623,7 @@ struct Strip {
 impl Strip {
     fn new(shared: &InputShared) -> Strip {
         let on = if shared.is_on() { 1.0 } else { 0.0 };
-        shared.changes.lock().unwrap().clear();
+        shared.changes.lock_ok().clear();
         Strip {
             aligner: None,
             chain: None,
@@ -688,11 +689,11 @@ fn take_lineup(l: MixLineup, inputs: &mut Vec<MixInput>, strips: &mut Vec<Strip>
         }
     }
     *names = l.names;
-    for t in taps.lock().unwrap().iter_mut() {
+    for t in taps.lock_ok().iter_mut() {
         t.1 = renumber(t.1, &new_of);
     }
     // Meters are by number: start them again.
-    status.lock().unwrap().meters.retain(|k, _| !(k.len() > 1 && k.starts_with('a') && k[1..].bytes().all(|b| b.is_ascii_digit())));
+    status.lock_ok().meters.retain(|k, _| !(k.len() > 1 && k.starts_with('a') && k[1..].bytes().all(|b| b.is_ascii_digit())));
 }
 
 /// The mixer loop: runs until `stop`.
@@ -710,7 +711,7 @@ pub fn run_mixer(mut inputs: Vec<MixInput>, mut names: Vec<String>, taps: MixTap
     let mut n = 0u64;
     while !stop.load(Ordering::Relaxed) {
         clock::sleep_until(t + BLOCK_NS + latency);
-        let lineup = master.lineup.lock().unwrap().take();
+        let lineup = master.lineup.lock_ok().take();
         if let Some(l) = lineup {
             let generation = l.generation;
             take_lineup(l, &mut inputs, &mut strips, &mut names, &taps, &status);
@@ -733,7 +734,7 @@ pub fn run_mixer(mut inputs: Vec<MixInput>, mut names: Vec<String>, taps: MixTap
             }
             let block_end = |b: &AudioBlock| b.pts + b.frames() as i64 * NS_PER_SEC / b.rate.max(1) as i64;
             {
-                let tap = inp.shared.raw_tap.lock().unwrap();
+                let tap = inp.shared.raw_tap.lock_ok();
                 match tap.as_ref() {
                     Some(tap) if strip.fed != Some(tap.id) => {
                         // New tap: replay what's still in history from `from`.
@@ -761,10 +762,10 @@ pub fn run_mixer(mut inputs: Vec<MixInput>, mut names: Vec<String>, taps: MixTap
             let v = inp.shared.processing_version.load(Ordering::Relaxed);
             if v != strip.chain_version {
                 strip.chain_version = v;
-                strip.chain = VoiceChain::new(&inp.shared.processing.lock().unwrap());
+                strip.chain = VoiceChain::new(&inp.shared.processing.lock_ok());
             }
             // On/off changes due by now.
-            let mut changes = inp.shared.changes.lock().unwrap();
+            let mut changes = inp.shared.changes.lock_ok();
             while let Some(&(at, on, fade)) = changes.front() {
                 if at > t {
                     break;
@@ -775,7 +776,7 @@ pub fn run_mixer(mut inputs: Vec<MixInput>, mut names: Vec<String>, taps: MixTap
                 strip.step = 1.0 / (blocks * BLOCK as f32);
             }
         }
-        let wanted: Vec<MixKind> = taps.lock().unwrap().iter().map(|t| t.1).collect();
+        let wanted: Vec<MixKind> = taps.lock_ok().iter().map(|t| t.1).collect();
         // Inputs some feed leaves out: their contributions are kept to subtract.
         let minus_any: u64 = wanted.iter().fold(0, |m, k| if let MixKind::Feed { minus, .. } = k { m | minus } else { m });
         let talkback_input = master.talkback_input();
@@ -792,7 +793,7 @@ pub fn run_mixer(mut inputs: Vec<MixInput>, mut names: Vec<String>, taps: MixTap
                 inp.shared.resyncs.store(a.realigns, Ordering::Relaxed);
                 if !inp.gaps_expected && strip.warned_at.is_none_or(|w| w.elapsed().as_secs() >= 30) {
                     strip.warned_at = Some(std::time::Instant::now());
-                    status.lock().unwrap().push(
+                    status.lock_ok().push(
                         crate::engine::LogLevel::Warning,
                         format!("{}: audio arrived late and had to be re-synced (possible click). Is the computer overloaded?", names.get(i).map(String::as_str).unwrap_or("Audio")),
                     );
@@ -938,7 +939,7 @@ pub fn run_mixer(mut inputs: Vec<MixInput>, mut names: Vec<String>, taps: MixTap
             out
         };
         let (rec_out, stream_out) = (faded(&rec_block), faded(&stream_block));
-        for (_, kind, tap) in taps.lock().unwrap().iter() {
+        for (_, kind, tap) in taps.lock_ok().iter() {
             let block = match kind {
                 MixKind::Recording => rec_out.clone(),
                 MixKind::Stream => stream_out.clone(),
@@ -979,7 +980,7 @@ pub fn run_mixer(mut inputs: Vec<MixInput>, mut names: Vec<String>, taps: MixTap
         }
         n += 1;
         if n.is_multiple_of(5) {
-            let mut st = status.lock().unwrap();
+            let mut st = status.lock_ok();
             for (i, s) in strips.iter_mut().enumerate() {
                 if s.aligner.is_some() {
                     let (peak_db, rms_db) = s.meter.take();
@@ -1122,7 +1123,7 @@ mod tests {
         let mut rxs = Vec::new();
         for (id, k) in kinds.into_iter().enumerate() {
             let (tx, rx) = crossbeam_channel::unbounded();
-            taps.lock().unwrap().push((id as u64, k, tx));
+            taps.lock_ok().push((id as u64, k, tx));
             rxs.push(rx);
         }
         let stop = Arc::new(AtomicBool::new(false));
@@ -1178,7 +1179,7 @@ mod tests {
         let mut rxs = Vec::new();
         for (id, k) in kinds.into_iter().enumerate() {
             let (tx, rx) = crossbeam_channel::unbounded();
-            taps.lock().unwrap().push((id as u64, k, tx));
+            taps.lock_ok().push((id as u64, k, tx));
             rxs.push(rx);
         }
         let stop = Arc::new(AtomicBool::new(false));
@@ -1194,7 +1195,7 @@ mod tests {
         let (_dtx, drx) = feed(0.4);
         let d = MixInput { rx: drx, left: 1, right: 2, delay: 0, shared: InputShared::new(&cfg), gaps_expected: false };
         master.set_lineup(vec![MixSlot::Keep(1, shared[1].clone()), MixSlot::Keep(2, shared[2].clone()), MixSlot::New(d)], vec!["B".into(), "C".into(), "D".into()]);
-        let kinds_now: Vec<MixKind> = taps.lock().unwrap().iter().map(|t| t.1).collect();
+        let kinds_now: Vec<MixKind> = taps.lock_ok().iter().map(|t| t.1).collect();
         assert_eq!(kinds_now[1], MixKind::Input(0), "B's solo follows B");
         assert_eq!(kinds_now[2], MixKind::Feed { stream: false, minus: 0b001, talkback: false });
         assert_eq!(kinds_now[3], MixKind::Track { input: 1, post_fader: false });
@@ -1209,7 +1210,7 @@ mod tests {
         assert!((after[1] - 0.2).abs() < 0.01, "still B on its own: {after:?}");
         assert!((after[2] - 0.45).abs() < 0.01, "still without B: {after:?}");
         assert!((after[3] - 0.05).abs() < 0.01, "still C's track: {after:?}");
-        assert!(!st.lock().unwrap().meters.contains_key("a3"));
+        assert!(!st.lock_ok().meters.contains_key("a3"));
     }
 
     #[test]

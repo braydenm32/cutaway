@@ -1,5 +1,6 @@
 //! Settings → Sound pads and Settings → Syrinscape.
 
+use crate::util::LockExt;
 use super::*;
 use crate::config::{Pad, PadMode, SyrinButton, SyrinKind};
 use crate::control::syrinscape::{parse_link, Syrinscape};
@@ -131,7 +132,7 @@ impl SettingsUi {
         }
         let syrin = self.syrin.as_ref().unwrap();
         syrin.set_token(&token);
-        let st = syrin.state.lock().unwrap().clone();
+        let st = syrin.state.lock_ok().clone();
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             if ui.add_enabled(!token.is_empty() && !st.busy, egui::Button::new("Test")).clicked() {

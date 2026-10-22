@@ -20,6 +20,7 @@
 //! records them as captured and uploads it in pieces into the take's
 //! Guests folder, so a bad connection doesn't spoil the recording.
 
+use crate::util::LockExt;
 use super::audio::{MixKind, MixTaps};
 use super::feed::{AudioHub, Feeder};
 use super::sources::{Running, SourceSlot};
@@ -188,7 +189,7 @@ pub fn hub() -> Arc<GuestHub> {
             keyframe: AtomicBool::new(false),
             me: Mutex::new(Weak::new()),
         });
-        *h.me.lock().unwrap() = Arc::downgrade(&h);
+        *h.me.lock_ok() = Arc::downgrade(&h);
         h
     })
     .clone()
@@ -210,23 +211,23 @@ fn rand_u32() -> u32 {
 
 impl GuestHub {
     fn arc(&self) -> Arc<GuestHub> {
-        self.me.lock().unwrap().upgrade().expect("hub")
+        self.me.lock_ok().upgrade().expect("hub")
     }
 
     fn wake(&self) {
-        if let Some(w) = self.waker.lock().unwrap().as_ref() {
+        if let Some(w) = self.waker.lock_ok().as_ref() {
             w();
         }
-        let e = self.inner.lock().unwrap();
+        let e = self.inner.lock_ok();
         if let Some(l) = &e.engine {
             (l.waker)();
         }
     }
 
     fn log(&self, level: LogLevel, text: String) {
-        let e = self.inner.lock().unwrap();
+        let e = self.inner.lock_ok();
         if let Some(l) = &e.engine {
-            l.status.lock().unwrap().push(level, text);
+            l.status.lock_ok().push(level, text);
         } else {
             eprintln!("{text}");
         }
@@ -234,9 +235,9 @@ impl GuestHub {
 
     /// New settings: start, move or stop the guest page and the tunnel.
     pub fn apply(&self, cfg: &Config, waker: Arc<dyn Fn() + Send + Sync>) {
-        *self.waker.lock().unwrap() = Some(waker.clone());
+        *self.waker.lock_ok() = Some(waker.clone());
         let g = cfg.guests.clone();
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock_ok();
         inner.show = [cfg.podcast.show.trim(), cfg.ui.profile.trim()].into_iter().find(|s| !s.is_empty()).unwrap_or("the show").to_string();
         inner.talkback = cfg.mix.talkback_to_guests;
         let public = g.access == GuestAccess::Custom;
@@ -268,7 +269,7 @@ impl GuestHub {
             for c in conns {
                 self.close_conn(c);
             }
-            self.inner.lock().unwrap().cfg = g;
+            self.inner.lock_ok().cfg = g;
             return;
         }
         inner.cfg = g;
@@ -276,7 +277,7 @@ impl GuestHub {
 
     /// The guest page's public address, once there is one.
     pub fn base_url(&self) -> Option<String> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock_ok();
         inner.server.as_ref()?;
         match inner.cfg.access {
             GuestAccess::Tunnel => inner.tunnel.as_ref().and_then(|(_, t)| t.address()),
@@ -290,7 +291,7 @@ impl GuestHub {
 
     /// The tunnel (or why guests can't reach the page).
     pub fn reach(&self) -> TunnelState {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock_ok();
         if !inner.cfg.enabled {
             return TunnelState::Off;
         }
@@ -298,7 +299,7 @@ impl GuestHub {
             return TunnelState::Failed(format!("the guest page couldn't start: {p}"));
         }
         match inner.cfg.access {
-            GuestAccess::Tunnel => inner.tunnel.as_ref().map(|(_, t)| t.state.lock().unwrap().clone()).unwrap_or_default(),
+            GuestAccess::Tunnel => inner.tunnel.as_ref().map(|(_, t)| t.state.lock_ok().clone()).unwrap_or_default(),
             GuestAccess::Custom => {
                 if inner.cfg.public_url.trim().starts_with("https://") {
                     TunnelState::Up(inner.cfg.public_url.trim().trim_end_matches('/').to_string())
@@ -311,7 +312,7 @@ impl GuestHub {
 
     /// Every guest source, connected or not.
     pub fn guests(&self) -> Vec<GuestInfo> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock_ok();
         let mut v: Vec<GuestInfo> = inner
             .slots
             .iter()
@@ -335,7 +336,7 @@ impl GuestHub {
 
     /// The take being recorded now: (token, folder, how long ago it started).
     fn recording(inner: &mut Inner) -> Option<(String, std::path::PathBuf, Duration)> {
-        let (since, folder) = match &inner.engine.as_ref()?.status.lock().unwrap().rec {
+        let (since, folder) = match &inner.engine.as_ref()?.status.lock_ok().rec {
             RecState::Recording { since, folder } => (*since, folder.clone()),
             _ => return None,
         };
@@ -354,7 +355,7 @@ impl GuestHub {
     }
 
     fn backup_of(inner: &Inner, id: &str) -> Option<BackupInfo> {
-        let current = inner.engine.as_ref().and_then(|e| match &e.status.lock().unwrap().rec {
+        let current = inner.engine.as_ref().and_then(|e| match &e.status.lock_ok().rec {
             RecState::Recording { folder, .. } => Some(folder.clone()),
             _ => None,
         });
@@ -374,7 +375,7 @@ impl GuestHub {
     /// What the guest's page needs to know while they're on: whether the
     /// show is recording (and so whether to record a backup).
     fn state_json(&self, id: &str) -> Option<String> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock_ok();
         if !inner.cfg.enabled {
             return None;
         }
@@ -398,7 +399,7 @@ impl GuestHub {
         }
         let key = (id.to_string(), take.to_string(), part.to_string());
         let (path, next, fresh, source) = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock_ok();
             if !inner.cfg.enabled || !inner.cfg.backup {
                 return Err(("403 Forbidden", "backup recordings are off".into()));
             }
@@ -453,7 +454,7 @@ impl GuestHub {
             }
         }
         let (done_now, bytes) = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock_ok();
             let Some(b) = inner.backups.get_mut(&key) else { return Ok(()) };
             b.next += 1;
             b.bytes += data.len() as u64;
@@ -471,7 +472,7 @@ impl GuestHub {
 
     /// Disconnect a guest (or they left).
     pub fn kick(&self, id: &str) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock_ok();
         let source = inner.slots.get(id).map(|s| s.source.clone()).unwrap_or_default();
         let camera = inner.slots.get(id).is_some_and(|s| s.camera);
         let c = inner.conns.remove(id);
@@ -496,7 +497,7 @@ impl GuestHub {
     }
 
     pub fn attach_engine(&self, link: EngineLink) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock_ok();
         inner.engine = Some(link);
         let feeding = inner.conns.values().any(|c| c.video_out.is_some());
         drop(inner);
@@ -507,13 +508,13 @@ impl GuestHub {
 
     /// The engine's audio inputs changed (added, removed or moved).
     pub fn set_engine_inputs(&self, inputs: Vec<(String, usize)>) {
-        if let Some(e) = self.inner.lock().unwrap().engine.as_mut() {
+        if let Some(e) = self.inner.lock_ok().engine.as_mut() {
             e.inputs = inputs;
         }
     }
 
     pub fn detach_engine(&self) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock_ok();
         inner.engine = None;
         if let Some(stop) = inner.program_feed.take() {
             stop.store(true, Ordering::Relaxed);
@@ -550,7 +551,7 @@ impl GuestHub {
     }
 
     fn ice_servers(&self) -> Vec<RTCIceServer> {
-        let cfg = self.inner.lock().unwrap().cfg.clone();
+        let cfg = self.inner.lock_ok().cfg.clone();
         let mut v = vec![RTCIceServer { urls: STUN.iter().map(|s| s.to_string()).collect(), ..Default::default() }];
         if !cfg.turn_url.trim().is_empty() {
             v.push(RTCIceServer { urls: cfg.turn_url.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(), username: cfg.turn_username.clone(), credential: cfg.turn_password.clone() });
@@ -559,7 +560,7 @@ impl GuestHub {
     }
 
     fn info_json(&self, id: &str) -> Option<String> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock_ok();
         if !inner.cfg.enabled {
             return None;
         }
@@ -582,14 +583,14 @@ impl GuestHub {
     /// A guest's offer in, Cutaway's answer out.
     async fn negotiate(self: Arc<Self>, id: String, offer: String, guest_name: String) -> Result<String> {
         let (return_video, camera) = {
-            let inner = self.inner.lock().unwrap();
+            let inner = self.inner.lock_ok();
             let Some(slot) = inner.slots.get(&id).filter(|_| inner.cfg.enabled) else {
                 bail!("this link isn't active");
             };
             (inner.cfg.return_video && !slot.camera, slot.camera)
         };
         // A guest joining again (reloading the page) replaces their old connection.
-        let old = self.inner.lock().unwrap().conns.remove(&id);
+        let old = self.inner.lock_ok().conns.remove(&id);
         if let Some(c) = old {
             self.close_conn(c);
         }
@@ -683,7 +684,7 @@ impl GuestHub {
             vtx
         });
         let name = guest_name.trim().chars().take(40).collect::<String>();
-        self.inner.lock().unwrap().conns.insert(id, Conn { gen, pc, guest_name: name, connected: false, since: None, video_out, stop });
+        self.inner.lock_ok().conns.insert(id, Conn { gen, pc, guest_name: name, connected: false, since: None, video_out, stop });
         if return_video {
             self.ensure_program_feed();
         }
@@ -693,7 +694,7 @@ impl GuestHub {
 
     /// The program, encoded once for every guest who sees it.
     fn ensure_program_feed(&self) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock_ok();
         if inner.program_feed.is_some() || inner.engine.is_none() {
             return;
         }
@@ -705,7 +706,7 @@ impl GuestHub {
             if let Err(e) = program_feed(&hub, &stop) {
                 hub.log(LogLevel::Warning, format!("Guests can't see the program: {e:#}"));
             }
-            let mut inner = hub.inner.lock().unwrap();
+            let mut inner = hub.inner.lock_ok();
             if inner.program_feed.as_ref().is_some_and(|s| Arc::ptr_eq(s, &stop)) {
                 inner.program_feed = None;
             }
@@ -713,7 +714,7 @@ impl GuestHub {
     }
 
     fn connection_changed(&self, id: &str, gen: u64, state: RTCPeerConnectionState) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock_ok();
         let source = inner.slots.get(id).map(|s| s.source.clone()).unwrap_or_default();
         let Some(c) = inner.conns.get_mut(id).filter(|c| c.gen == gen) else { return };
         match state {
@@ -755,20 +756,20 @@ impl GuestHub {
 
     /// Run `f` on the guest source's decoder, if the engine has it.
     fn with_slot<T>(&self, id: &str, f: impl FnOnce(&Slot) -> T) -> Option<T> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock_ok();
         inner.slots.get(id).map(f)
     }
 
     /// Tap the engine's mix for a guest: everything but their own voice.
     fn feed_tap(&self, id: &str) -> Option<(u64, crossbeam_channel::Receiver<AudioBlock>, MixTaps)> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock_ok();
         let engine = inner.engine.as_ref()?;
         let source = inner.slots.get(id)?.source.to_lowercase();
         let own = engine.inputs.iter().find(|(d, _)| d.trim().to_lowercase().strip_prefix("source:").is_some_and(|n| n.trim() == source)).map(|(_, i)| *i);
         let minus = own.filter(|i| *i < 64).map(|i| 1u64 << i).unwrap_or(0);
         let (tx, rx) = bounded(200);
         let tap = self.tap_ids.fetch_add(1, Ordering::Relaxed);
-        engine.mix_taps.lock().unwrap().push((tap, MixKind::Feed { stream: false, minus, talkback: inner.talkback }, tx));
+        engine.mix_taps.lock_ok().push((tap, MixKind::Feed { stream: false, minus, talkback: inner.talkback }, tx));
         Some((tap, rx, engine.mix_taps.clone()))
     }
 }
@@ -812,7 +813,7 @@ fn return_audio(hub: Arc<GuestHub>, id: String, tx: tokio::sync::mpsc::Sender<by
                 break;
             }
         }
-        taps.lock().unwrap().retain(|t| t.0 != tap);
+        taps.lock_ok().retain(|t| t.0 != tap);
         if tx.is_closed() {
             break;
         }
@@ -848,9 +849,9 @@ fn program_feed(hub: &Arc<GuestHub>, stop: &AtomicBool) -> Result<()> {
     let (ftx, frx) = bounded::<VideoFrame>(2);
     let tap = hub.tap_ids.fetch_add(1, Ordering::Relaxed);
     let taps = {
-        let inner = hub.inner.lock().unwrap();
+        let inner = hub.inner.lock_ok();
         let Some(e) = inner.engine.as_ref() else { return Ok(()) };
-        e.video_taps.lock().unwrap().listeners.push((tap, ftx));
+        e.video_taps.lock_ok().listeners.push((tap, ftx));
         e.video_taps.clone()
     };
     let step = NS_PER_SEC / RETURN_FPS as Ns;
@@ -858,7 +859,7 @@ fn program_feed(hub: &Arc<GuestHub>, stop: &AtomicBool) -> Result<()> {
     let mut t0 = None;
     let mut idle_since = Instant::now();
     while !stop.load(Ordering::Relaxed) {
-        let watching = hub.inner.lock().unwrap().conns.values().any(|c| c.video_out.is_some());
+        let watching = hub.inner.lock_ok().conns.values().any(|c| c.video_out.is_some());
         if watching {
             idle_since = Instant::now();
         } else if idle_since.elapsed() > Duration::from_secs(5) {
@@ -883,7 +884,7 @@ fn program_feed(hub: &Arc<GuestHub>, stop: &AtomicBool) -> Result<()> {
         enc.encode(&small, f.pts - start, key)?;
         while let Ok(p) = prx.try_recv() {
             let data = bytes::Bytes::from(annexb(&p));
-            let inner = hub.inner.lock().unwrap();
+            let inner = hub.inner.lock_ok();
             for c in inner.conns.values().filter(|c| c.connected) {
                 if let Some(v) = &c.video_out {
                     let _ = v.try_send(data.clone());
@@ -891,7 +892,7 @@ fn program_feed(hub: &Arc<GuestHub>, stop: &AtomicBool) -> Result<()> {
             }
         }
     }
-    taps.lock().unwrap().listeners.retain(|l| l.0 != tap);
+    taps.lock_ok().listeners.retain(|l| l.0 != tap);
     Ok(())
 }
 
@@ -987,13 +988,13 @@ async fn receive_video(hub: Arc<GuestHub>, id: String, track: Arc<dyn TrackRemot
             let data = h264::to_avcc(nals.iter().copied().filter(|n| h264::h264_nal_type(n) != h264::NAL_AUD));
             got_key |= key;
             hub.with_slot(&id, |s| {
-                let mut f = s.feeder.lock().unwrap();
+                let mut f = s.feeder.lock_ok();
                 // (A no-op unless they changed or the decoder is new.)
                 if ps.len() >= 2 {
                     f.video_config(VideoCodec::H264, ps.clone());
                 }
                 f.video(VideoCodec::H264, pts, pts, key, &data);
-                *s.last_video.lock().unwrap() = Some(Instant::now());
+                *s.last_video.lock_ok() = Some(Instant::now());
             });
         }
     }
@@ -1024,7 +1025,7 @@ async fn receive_audio(hub: Arc<GuestHub>, id: String, track: Arc<dyn TrackRemot
         if pcm.is_empty() {
             continue;
         }
-        hub.with_slot(&id, |s| s.feeder.lock().unwrap().pcm(pts, 48_000, 2, &pcm, &mut mix));
+        hub.with_slot(&id, |s| s.feeder.lock_ok().pcm(pts, 48_000, 2, &pcm, &mut mix));
     }
 }
 
@@ -1155,7 +1156,7 @@ impl Drop for GuestRunning {
             let _ = t.join();
         }
         let h = hub();
-        h.inner.lock().unwrap().slots.remove(&self.id);
+        h.inner.lock_ok().slots.remove(&self.id);
         h.wake();
     }
 }
@@ -1185,14 +1186,14 @@ pub fn start_source(cfg: &SourceConfig, slot: Arc<SourceSlot>, audio: Arc<AudioH
     let want_key = Arc::new(AtomicBool::new(true));
     let last_video = Arc::new(Mutex::new(None));
     let h = hub();
-    h.inner.lock().unwrap().slots.insert(id.clone(), Slot { source: cfg.name.clone(), camera, feeder: Arc::new(Mutex::new(feeder)), want_key, last_video: last_video.clone() });
+    h.inner.lock_ok().slots.insert(id.clone(), Slot { source: cfg.name.clone(), camera, feeder: Arc::new(Mutex::new(feeder)), want_key, last_video: last_video.clone() });
     h.wake();
     // The slate, until (and whenever) no pictures come.
     let (c2, s2, id2) = (cfg.clone(), stop.clone(), id.clone());
     let thread = std::thread::Builder::new().name(format!("guest {}", cfg.name)).spawn(move || {
         let mut shown: Option<(String, VideoFrame)> = None;
         while !s2.load(Ordering::Relaxed) {
-            let fresh = last_video.lock().unwrap().is_some_and(|t| t.elapsed() < Duration::from_secs(2));
+            let fresh = last_video.lock_ok().is_some_and(|t| t.elapsed() < Duration::from_secs(2));
             if !fresh {
                 let h = hub();
                 let state = h.guests().into_iter().find(|g| g.id == id2);
@@ -1505,7 +1506,7 @@ mod tests {
         assert_eq!(state(id)["recording"], false, "not recording yet");
         assert!(post(port, &format!("/g/{id}/backup?take=nosuchtake&part=a1&seq=0&ext=webm"), b"x").starts_with("HTTP/1.1 404"));
 
-        status.lock().unwrap().rec = RecState::Recording { since: Instant::now() - Duration::from_secs(3), folder: take.clone() };
+        status.lock_ok().rec = RecState::Recording { since: Instant::now() - Duration::from_secs(3), folder: take.clone() };
         let s = state(id);
         assert_eq!(s["recording"], true);
         let token = s["take"].as_str().unwrap().to_string();
@@ -1524,7 +1525,7 @@ mod tests {
         assert!(b.recording && !b.done && b.bytes == 3, "{b:?}");
         assert!(piece(1, "", b"BBB").starts_with("HTTP/1.1 204"));
         // The show stops recording; the last pieces still come in.
-        status.lock().unwrap().rec = RecState::Idle;
+        status.lock_ok().rec = RecState::Idle;
         assert_eq!(state(id)["recording"], false);
         assert!(piece(2, "&last=1", b"").starts_with("HTTP/1.1 204"));
         let file = take.join("Guests").join("Guest_B_backup.webm");

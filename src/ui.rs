@@ -3,6 +3,7 @@
 //! markers, health, the pre-show check, a second-screen output, show
 //! profiles, and commands from the phone remote and MIDI controllers.
 
+use crate::util::LockExt;
 use crate::config::{Config, DisplayOutput, TransitionMode};
 use crate::control::state::{self as show, ShowState};
 use crate::control::{self, midi, osc, profiles, remote, Action, MediaCmd, Request, Toggle};
@@ -94,6 +95,8 @@ enum Confirm {
     StopRecording,
     EndStream,
     SwitchShow(String),
+    /// Closing the window while recording or live.
+    Quit,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -145,6 +148,8 @@ pub struct App {
     drag: Option<Drag>,
     settings: Option<SettingsUi>,
     confirm: Option<Confirm>,
+    /// Closing was confirmed (or nothing was running): let the window go.
+    quit_ok: bool,
     log_open: bool,
     health_open: bool,
     peak_hold: HashMap<String, PeakHold>,
@@ -266,6 +271,7 @@ impl App {
             drag: None,
             settings: None,
             confirm: None,
+            quit_ok: false,
             log_open: false,
             health_open: false,
             peak_hold: HashMap::new(),
@@ -311,7 +317,7 @@ impl App {
         // For scripted screenshots: a pretend newer version, its window open.
         if let Ok(v) = std::env::var("CUTAWAY_UI_TEST_UPDATE") {
             use crate::net::self_update::{self as su, Finish, Stage, Staged};
-            *app.update.lock().unwrap() = Some(crate::net::update::Release { version: v.clone(), url: "https://github.com".into(), notes: "• Something new\n• A fix".into(), assets: Vec::new() });
+            *app.update.lock_ok() = Some(crate::net::update::Release { version: v.clone(), url: "https://github.com".into(), notes: "• Something new\n• A fix".into(), assets: Vec::new() });
             app.update_open = true;
             match std::env::var("CUTAWAY_UI_TEST_UPDATE_STAGE").as_deref() {
                 Ok("downloading") => su::show_stage(Stage::Downloading { got: 12_400_000, total: Some(36_700_000) }, Finish::Ask),
@@ -333,7 +339,7 @@ impl App {
                         if auto && r.version != skip && crate::net::self_update::Install::this().is_ok() {
                             crate::net::self_update::start(r.clone(), crate::net::self_update::Finish::OnQuit, waker.clone());
                         }
-                        *slot.lock().unwrap() = Some(r);
+                        *slot.lock_ok() = Some(r);
                         waker();
                     }
                     Ok(None) => {}
@@ -469,7 +475,7 @@ impl App {
         crate::engine::guests::hub().apply(&self.cfg, self.waker.clone());
         self.apply_chat();
         let r = self.cfg.remote.clone();
-        *self.remote_shared.pin.lock().unwrap() = r.pin.trim().to_string();
+        *self.remote_shared.pin.lock_ok() = r.pin.trim().to_string();
         let running_port = self.remote.as_ref().map(|s| s.port);
         if !r.enabled {
             self.remote = None;
@@ -498,7 +504,7 @@ impl App {
 
     fn log(&mut self, level: LogLevel, text: String) {
         match &self.engine {
-            Some(e) => e.status.lock().unwrap().push(level, text),
+            Some(e) => e.status.lock_ok().push(level, text),
             None => self.toast(text, level == LogLevel::Error),
         }
     }
@@ -983,7 +989,7 @@ impl App {
         let preview = e.switcher.preview();
         let live_sources = live.sources();
         let preview_sources = preview.as_ref().map(|p| p.sources()).unwrap_or_default();
-        let st = e.status.lock().unwrap();
+        let st = e.status.lock_ok();
         let rec_seconds = match &st.rec {
             RecState::Recording { since, .. } => since.elapsed().as_secs_f64(),
             _ => 0.0,
@@ -1034,7 +1040,7 @@ impl App {
             players: (0..e.sources.len())
                 .filter_map(|i| {
                     let p = e.player(i)?;
-                    let s = p.state.lock().unwrap().clone();
+                    let s = p.state.lock_ok().clone();
                     Some(show::PlayerState {
                         name: e.sources[i].name.clone(),
                         source: i + 1,
@@ -1148,7 +1154,7 @@ impl App {
         if self.remote.is_some() {
             if let Some(e) = &self.engine {
                 let bg = crate::config::parse_color(&self.cfg.program.background_color).unwrap_or(0x10131a);
-                *self.remote_shared.keys.lock().unwrap() = control::keys::KeySources {
+                *self.remote_shared.keys.lock_ok() = control::keys::KeySources {
                     canvas: e.info.canvas,
                     background: [(bg >> 16) as u8, (bg >> 8) as u8, bg as u8],
                     scenes: self.scenes.clone(),
@@ -1356,7 +1362,7 @@ impl App {
             self.last_transition = self.cfg.transition.mode;
         }
         let Some(e) = &self.engine else { return };
-        let failed = e.status.lock().unwrap().rec_failed.take();
+        let failed = e.status.lock_ok().rec_failed.take();
         if let Some(f) = failed {
             if e.is_recording() {
                 e.stop_recording();
@@ -1413,7 +1419,7 @@ impl App {
         if ui.button("Settings").on_hover_text("Ctrl/Cmd+,").clicked() {
             self.open_settings();
         }
-        let update = self.update.lock().unwrap().clone().filter(|r| r.version != self.cfg.ui.skip_version);
+        let update = self.update.lock_ok().clone().filter(|r| r.version != self.cfg.ui.skip_version);
         if let Some(r) = &update {
             use crate::net::self_update::{self as su, Finish, Stage};
             let text = match (su::stage(), su::finish()) {
@@ -1449,7 +1455,7 @@ impl App {
             .engine
             .as_ref()
             .map(|e| {
-                let st = e.status.lock().unwrap();
+                let st = e.status.lock_ok();
                 (st.log.iter().filter(|l| l.level != LogLevel::Info).count(), st.health.problems().len())
             })
             .unwrap_or((0, 0));
@@ -1494,7 +1500,7 @@ impl App {
         ui.add_space(10.0);
         let Some(engine) = &self.engine else { return };
         let (rec, last, stream, markers, disk, background) = {
-            let st = engine.status.lock().unwrap();
+            let st = engine.status.lock_ok();
             (st.rec.clone(), st.last_take.clone(), st.stream.clone(), st.markers, st.disk.clone(), st.background.clone())
         };
         let streaming = engine.is_streaming();
@@ -1847,7 +1853,7 @@ impl App {
         // Status chips after the scene name (the top right is where logos usually sit).
         let mut x = name_chip.right() + 8.0;
         let auto = engine.auto_switch_enabled();
-        let auto_st = engine.status.lock().unwrap().auto_switch.clone();
+        let auto_st = engine.status.lock_ok().auto_switch.clone();
         let mut chips: Vec<(String, Color32)> = Vec::new();
         if auto {
             let talking = auto_st.talking.iter().filter(|t| **t).count();
@@ -2141,12 +2147,12 @@ impl App {
         let (cols, tile_w) = best;
         let total_w = cols as f32 * tile_w + gap * (cols as f32 - 1.0);
         let left = area.center().x - total_w / 2.0;
-        let offline_set = engine.status.lock().unwrap().offline.clone();
+        let offline_set = engine.status.lock_ok().offline.clone();
         let infos: Vec<(String, Arc<FrameSlot>, f32, bool, Option<String>)> = engine
             .sources
             .iter()
             .map(|s| {
-                let net = s.input.net.lock().unwrap();
+                let net = s.input.net.lock_ok();
                 let detail = (!net.connected && !net.detail.is_empty()).then(|| net.detail.clone());
                 (s.name.clone(), s.preview.clone(), s.size.1 as f32 / s.size.0 as f32, offline_set.contains(&s.name), detail)
             })
@@ -2183,7 +2189,7 @@ impl App {
             painter.text(bar.left_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, format!("{}  {}", i + 1, name), FontId::proportional(13.0), Color32::WHITE);
             // Media player transport.
             if let Some(p) = &players[i] {
-                let st = p.state.lock().unwrap().clone();
+                let st = p.state.lock_ok().clone();
                 if st.duration > 0 {
                     let k = (st.position as f32 / st.duration as f32).clamp(0.0, 1.0);
                     let track = Rect::from_min_size(pic.left_bottom() - vec2(0.0, 4.0), vec2(tile_w, 4.0));
@@ -2207,9 +2213,9 @@ impl App {
             }
             // Auto-framing: who it's following.
             if let Some(f) = &framers[i] {
-                let cfg = f.cfg.lock().unwrap().clone();
+                let cfg = f.cfg.lock_ok().clone();
                 let people = f.people.load(std::sync::atomic::Ordering::Relaxed);
-                let text = if f.problem.lock().unwrap().is_some() {
+                let text = if f.problem.lock_ok().is_some() {
                     "AUTO-FRAME OFF · whole picture".to_string()
                 } else if people == 0 {
                     "AUTO · looking for people".to_string()
@@ -2257,7 +2263,7 @@ impl App {
                 clicked = Some((i, ui.input(|inp| inp.modifiers.shift)));
             }
             if let Some(p) = &players[i] {
-                let st = p.state.lock().unwrap().clone();
+                let st = p.state.lock_ok().clone();
                 resp.context_menu(|ui| {
                     ui.label(RichText::new("Playlist").strong());
                     for (k, item) in st.items.iter().enumerate() {
@@ -2460,6 +2466,10 @@ impl App {
             Confirm::EndStream => ("End the live stream?".to_string(), "Viewers on every destination will see the broadcast end.".to_string(), "End stream"),
             Confirm::StopRecording => ("Stop recording?".to_string(), "The files for this take will be finished and saved.".to_string(), "Stop recording"),
             Confirm::SwitchShow(n) => (format!("Switch to \"{n}\"?"), "Sources, scenes, audio and everything else change to that show's setup. The current show keeps its changes.".to_string(), "Switch"),
+            Confirm::Quit => {
+                let (rec, live) = self.engine.as_ref().map_or((false, false), |e| (e.is_recording(), e.is_streaming()));
+                quit_text(rec, live)
+            }
         };
         let mut close = false;
         let mut switch_to = None;
@@ -2475,7 +2485,12 @@ impl App {
                             Confirm::EndStream => e.stop_stream(),
                             Confirm::StopRecording => e.stop_recording(),
                             Confirm::SwitchShow(n) => switch_to = Some(n.clone()),
+                            Confirm::Quit => {}
                         }
+                    }
+                    if which == Confirm::Quit {
+                        self.quit_ok = true;
+                        ui.ctx().send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
                     }
                     close = true;
                 }
@@ -2503,7 +2518,7 @@ impl App {
             });
         });
         let Some(engine) = &self.engine else { return };
-        let stream = engine.status.lock().unwrap().stream.clone();
+        let stream = engine.status.lock_ok().stream.clone();
         let dot = |ui: &mut egui::Ui, color: Color32| {
             let (r, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
             ui.painter().circle_filled(r.center(), 4.5, color);
@@ -2697,7 +2712,7 @@ impl App {
         ui.label(RichText::new("AUDIO").color(TEXT_DIM).size(11.0));
         let Some(engine) = &self.engine else { return };
         let (meters, offline, loud) = {
-            let st = engine.status.lock().unwrap();
+            let st = engine.status.lock_ok();
             (st.meters.clone(), st.offline.clone(), st.loudness.clone())
         };
         let strips: Vec<(String, String, bool, f32)> = engine.audio.iter().map(|a| (a.name.clone(), a.description(), a.shared.is_on(), a.shared.reduction_db())).collect();
@@ -2856,7 +2871,7 @@ impl App {
 
     fn log_panel(&mut self, ui: &mut egui::Ui) {
         let Some(engine) = &self.engine else { return };
-        let log: Vec<_> = engine.status.lock().unwrap().log.iter().cloned().collect();
+        let log: Vec<_> = engine.status.lock_ok().log.iter().cloned().collect();
         egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
             for l in log {
                 let color = match l.level {
@@ -2877,7 +2892,7 @@ impl App {
         }
         let Some(engine) = &self.engine else { return };
         let (h, disk, backup) = {
-            let st = engine.status.lock().unwrap();
+            let st = engine.status.lock_ok();
             (st.health.clone(), st.disk.clone(), st.backup_disk.clone())
         };
         // Auto-framing and background removal, per source.
@@ -2888,7 +2903,7 @@ impl App {
             .map(|(i, s)| {
                 let mut parts = Vec::new();
                 if let Some(f) = s.input.framing() {
-                    match f.problem.lock().unwrap().clone() {
+                    match f.problem.lock_ok().clone() {
                         Some(_) => parts.push("auto-framing off".to_string()),
                         None => parts.push(format!("following {}", match f.people.load(std::sync::atomic::Ordering::Relaxed) {
                             0 => "no one".to_string(),
@@ -3096,7 +3111,7 @@ impl App {
             self.sync = None;
             return;
         };
-        let result = w.job.as_ref().and_then(|j| j.result.lock().unwrap().clone());
+        let result = w.job.as_ref().and_then(|j| j.result.lock_ok().clone());
         if let Some(r) = &result {
             let n = r.video.len() + r.audio.len();
             if w.apply.len() != n {
@@ -3262,7 +3277,7 @@ impl App {
         let clocks = self.cfg.display.clocks.then(|| {
             let st = self.rundown.status(&self.cfg.rundown.segments);
             let segment = st.index.map(|_| (st.name.clone(), st.elapsed, st.planned));
-            let rec = match &engine.status.lock().unwrap().rec {
+            let rec = match &engine.status.lock_ok().rec {
                 RecState::Recording { since, .. } => Some(since.elapsed()),
                 _ => None,
             };
@@ -3415,7 +3430,7 @@ impl App {
             streaming = e.is_streaming();
             vcam_on = e.virtual_camera_on();
             levels = e.audio.iter().map(|a| a.shared.levels_db()).collect();
-            let st = e.status.lock().unwrap();
+            let st = e.status.lock_ok();
             log = st.log.iter().cloned().collect();
             facts.push(("Recording encoder".into(), e.encoder_description()));
             if !st.stream.encoder.is_empty() {
@@ -3435,8 +3450,8 @@ impl App {
         }
         let (midi_last, midi_connected) = match &self.midi {
             Some(m) => {
-                let last = m.shared.last.lock().unwrap().filter(|(_, t)| t.elapsed() < Duration::from_secs(2)).map(|(msg, _)| msg.describe());
-                (last, m.shared.connected.lock().unwrap().clone())
+                let last = m.shared.last.lock_ok().filter(|(_, t)| t.elapsed() < Duration::from_secs(2)).map(|(msg, _)| msg.describe());
+                (last, m.shared.connected.lock_ok().clone())
             }
             None => (None, Vec::new()),
         };
@@ -3552,7 +3567,7 @@ impl App {
         }
         self.save_config();
         if let Some(e) = &self.engine {
-            let mut st = e.status.lock().unwrap();
+            let mut st = e.status.lock_ok();
             for n in &notes {
                 st.push(LogLevel::Info, n.clone());
             }
@@ -3611,6 +3626,11 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // Closing the window (or Cmd+Q / Alt+F4) mid-show asks first.
+        if ctx.input(|i| i.viewport().close_requested()) && !self.quit_ok && self.engine.as_ref().is_some_and(|e| e.is_recording() || e.is_streaming()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.confirm = Some(Confirm::Quit);
+        }
         self.tick_starting(&ctx);
         self.handle_requests();
         self.run_queued();
@@ -3708,6 +3728,16 @@ impl eframe::App for App {
             eprintln!("update: {e}");
         }
     }
+}
+
+/// What the quit confirmation says, for what's running.
+fn quit_text(recording: bool, live: bool) -> (String, String, &'static str) {
+    let (title, body) = match (recording, live) {
+        (true, true) => ("Quit while recording and live?", "Cutaway will finish and save this take, and the broadcast ends on every destination."),
+        (false, true) => ("Quit while live?", "The broadcast ends on every destination."),
+        _ => ("Quit while recording?", "Cutaway will finish and save this take."),
+    };
+    (title.to_string(), body.to_string(), "Quit")
 }
 
 // ---- drawing helpers -------------------------------------------------------------
@@ -3842,7 +3872,14 @@ fn style(ctx: &egui::Context) {
 }
 
 #[cfg(test)]
-mod icon_tests {
+mod small_tests {
+    #[test]
+    fn quit_says_what_stops() {
+        assert_eq!(super::quit_text(true, false).0, "Quit while recording?");
+        assert_eq!(super::quit_text(false, true).0, "Quit while live?");
+        assert!(super::quit_text(true, true).1.contains("broadcast ends"));
+    }
+
     #[test]
     fn app_icon_loads() {
         let icon = super::app_icon();

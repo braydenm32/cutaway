@@ -3,6 +3,7 @@
 //! UPLOADS panel. A take is offered once it's saved (or sent straight away
 //! when that's set).
 
+use crate::util::LockExt;
 use super::*;
 use crate::config::{DriveFiles, UploadConfig};
 use crate::engine::recorder::TakeReport;
@@ -213,7 +214,7 @@ fn run(job: &Job, update: &dyn Fn(u64, u64)) -> Result<String, String> {
 impl Uploads {
     /// Queue jobs and make sure they're being worked on.
     fn add(&mut self, jobs: Vec<Job>, status: Option<Arc<Mutex<crate::engine::Status>>>, waker: Waker) {
-        self.jobs.lock().unwrap().extend(jobs);
+        self.jobs.lock_ok().extend(jobs);
         self.work(status, waker);
     }
 
@@ -227,7 +228,7 @@ impl Uploads {
         let spawned = std::thread::Builder::new().name("uploads".into()).spawn(move || {
             loop {
                 let next = {
-                    let mut l = list.lock().unwrap();
+                    let mut l = list.lock_ok();
                     l.iter_mut().find(|j| j.state == JobState::Waiting).map(|j| {
                         j.state = JobState::Uploading;
                         j.clone()
@@ -236,7 +237,7 @@ impl Uploads {
                 let Some(job) = next else { break };
                 waker();
                 let update = |s: u64, t: u64| {
-                    if let Some(j) = list.lock().unwrap().iter_mut().find(|j| j.id == job.id) {
+                    if let Some(j) = list.lock_ok().iter_mut().find(|j| j.id == job.id) {
                         (j.sent, j.total) = (s, t);
                     }
                     waker();
@@ -247,7 +248,7 @@ impl Uploads {
                     Err(_) if job.cancel.load(Ordering::Relaxed) => (crate::engine::LogLevel::Info, format!("Upload of {} to {} cancelled", job.take, job.label)),
                     Err(e) => (crate::engine::LogLevel::Warning, format!("Upload of {} to {} failed: {e}", job.take, job.label)),
                 };
-                if let Some(j) = list.lock().unwrap().iter_mut().find(|j| j.id == job.id) {
+                if let Some(j) = list.lock_ok().iter_mut().find(|j| j.id == job.id) {
                     j.state = match result {
                         Ok(link) => {
                             j.link = Some(link);
@@ -258,7 +259,7 @@ impl Uploads {
                     };
                 }
                 if let Some(st) = &status {
-                    st.lock().unwrap().push(level, text);
+                    st.lock_ok().push(level, text);
                 }
                 waker();
             }
@@ -275,7 +276,7 @@ impl App {
     pub(super) fn tick_uploads(&mut self) {
         let Some(engine) = &self.engine else { return };
         let report = {
-            let st = engine.status.lock().unwrap();
+            let st = engine.status.lock_ok();
             match &st.last_take {
                 Some(r) if self.uploads.seen.as_ref() != Some(&r.folder) => r.clone(),
                 _ => return,
@@ -305,7 +306,7 @@ impl App {
 
     /// UPLOADS: what's going up, and a saved take to send.
     pub(super) fn uploads_panel(&mut self, ui: &mut egui::Ui) {
-        let jobs = self.uploads.jobs.lock().unwrap().clone();
+        let jobs = self.uploads.jobs.lock_ok().clone();
         let offer = self.uploads.offer.clone();
         if jobs.is_empty() && offer.is_none() {
             return;
@@ -347,7 +348,7 @@ impl App {
                     ui.label(RichText::new("waiting").size(11.5).color(TEXT_DIM));
                     if ui.small_button("✕").on_hover_text("Don't upload it").clicked() {
                         j.cancel.store(true, Ordering::Relaxed);
-                        if let Some(x) = self.uploads.jobs.lock().unwrap().iter_mut().find(|x| x.id == j.id && x.state == JobState::Waiting) {
+                        if let Some(x) = self.uploads.jobs.lock_ok().iter_mut().find(|x| x.id == j.id && x.state == JobState::Waiting) {
                             x.state = JobState::Cancelled;
                         }
                     }
@@ -385,7 +386,7 @@ impl App {
         }
         if let Some(id) = retry {
             // Again, in its place, with the sign-in as it is now.
-            if let Some(j) = self.uploads.jobs.lock().unwrap().iter_mut().find(|j| j.id == id) {
+            if let Some(j) = self.uploads.jobs.lock_ok().iter_mut().find(|j| j.id == id) {
                 j.state = JobState::Waiting;
                 (j.sent, j.total) = (0, 0);
                 j.cancel = Arc::new(AtomicBool::new(false));
@@ -396,7 +397,7 @@ impl App {
             self.uploads.work(status, self.waker.clone());
         }
         if clear_done && ui.small_button("Clear finished").clicked() {
-            self.uploads.jobs.lock().unwrap().retain(|j| !matches!(j.state, JobState::Done | JobState::Cancelled));
+            self.uploads.jobs.lock_ok().retain(|j| !matches!(j.state, JobState::Done | JobState::Cancelled));
         }
         ui.add_space(4.0);
         ui.separator();
@@ -462,14 +463,14 @@ mod tests {
         let failed = Job { id: new_id(), state: JobState::Failed("offline".into()), ..job.clone() };
         let (job_id, failed_id) = (job.id, failed.id);
         let mut up = Uploads::default();
-        up.jobs.lock().unwrap().extend([finished, failed]);
+        up.jobs.lock_ok().extend([finished, failed]);
         // As soon as it starts, "Clear finished" (the list shifts under it).
         let list = up.jobs.clone();
         let cleared = Arc::new(AtomicBool::new(false));
         let c2 = cleared.clone();
         let waker: Waker = Arc::new(move || {
             if !c2.swap(true, Ordering::SeqCst) {
-                list.lock().unwrap().retain(|j| !matches!(j.state, JobState::Done | JobState::Cancelled));
+                list.lock_ok().retain(|j| !matches!(j.state, JobState::Done | JobState::Cancelled));
             }
         });
         up.add(vec![job], None, waker);
@@ -477,7 +478,7 @@ mod tests {
         while up.running.load(Ordering::SeqCst) && t0.elapsed() < Duration::from_secs(20) {
             std::thread::sleep(Duration::from_millis(20));
         }
-        let l = up.jobs.lock().unwrap();
+        let l = up.jobs.lock_ok();
         assert_eq!(l.len(), 2);
         assert_eq!(l.iter().find(|j| j.id == job_id).unwrap().state, JobState::Done, "the upload finished in its own entry");
         assert_eq!(l.iter().find(|j| j.id == failed_id).unwrap().state, JobState::Failed("offline".into()), "the others untouched");
@@ -496,17 +497,17 @@ mod tests {
         let mut job = jobs.remove(0);
         job.client = crate::net::google::tests::client(g.port);
         let seen = Mutex::new(Vec::new());
-        let link = run(&job, &|s, t| seen.lock().unwrap().push((s, t))).unwrap();
+        let link = run(&job, &|s, t| seen.lock_ok().push((s, t))).unwrap();
         assert_eq!(link, "https://drive.google.com/drive/folders/folder2", "the take's folder, inside Cutaway's");
         // Every file went up whole, into the right folder.
-        let files = g.files.lock().unwrap();
-        let meta = g.meta.lock().unwrap();
+        let files = g.files.lock_ok();
+        let meta = g.meta.lock_ok();
         assert_eq!(files.len(), 5);
         let sizes: Vec<usize> = { let mut v: Vec<usize> = files.values().map(|f| f.len()).collect(); v.sort(); v };
         assert_eq!(sizes, vec![5, 100_000, 200_000, 300_000, 700_000]);
         assert!(meta.values().any(|m| m.contains("Guest_1_backup.webm") && m.contains("folder3")), "the Guests folder inside the take's");
         assert!(meta.values().any(|m| m.contains("Program.mp4") && m.contains("folder2")));
-        let last = *seen.lock().unwrap().last().unwrap();
+        let last = *seen.lock_ok().last().unwrap();
         assert_eq!(last.0, last.1, "all of it");
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }

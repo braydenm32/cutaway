@@ -1,6 +1,7 @@
 //! A small RTMP server that accepts one publisher (OBS, a phone app, an
 //! encoder, another Cutaway) and hands over its audio and video.
 
+use crate::util::LockExt;
 use crate::media::flv::Amf;
 use crate::media::{h264, Ns, VideoCodec};
 use anyhow::{anyhow, bail, Context, Result};
@@ -425,7 +426,7 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(false));
         let got: Arc<Mutex<Vec<Incoming>>> = Arc::new(Mutex::new(Vec::new()));
         let (s2, g2) = (stop.clone(), got.clone());
-        let server = std::thread::spawn(move || serve(19371, "secret", &s2, &mut |i| g2.lock().unwrap().push(i)));
+        let server = std::thread::spawn(move || serve(19371, "secret", &s2, &mut |i| g2.lock_ok().push(i)));
         std::thread::sleep(Duration::from_millis(300));
         let status = std::process::Command::new("ffmpeg")
             .args(["-v", "error", "-re", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:duration=2", "-f", "lavfi", "-i", "sine=duration=2"])
@@ -436,7 +437,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(300));
         stop.store(true, Ordering::Relaxed);
         server.join().unwrap().unwrap();
-        let got = got.lock().unwrap();
+        let got = got.lock_ok();
         assert!(matches!(got.first(), Some(Incoming::Started(k)) if k == "secret"), "{:?}", got.first());
         let videos: Vec<&Incoming> = got.iter().filter(|i| matches!(i, Incoming::Video { .. })).collect();
         assert_eq!(videos.len(), 50);

@@ -3,6 +3,7 @@
 //! own file in the take's "Clips" folder — for social media, a highlight,
 //! a blooper — while the recording carries on.
 
+use crate::util::LockExt;
 use super::recorder::MuxMsg;
 use crate::media::mp4::{Brand, Mp4Writer};
 use crate::media::{AudioConfig, Ns, VideoPacket, NS_PER_SEC};
@@ -43,13 +44,13 @@ impl ClipBuffer {
 
     /// A take started: keep the last `keep_seconds` of its program.
     pub fn start(&self, folder: PathBuf, fps: u32, brand: Brand, audio_cfg: Option<AudioConfig>, keep_seconds: u32) {
-        let mut i = self.inner.lock().unwrap();
+        let mut i = self.inner.lock_ok();
         *i = Inner { folder: Some(folder), fps, brand: Some(brand), audio_cfg, keep: (keep_seconds.max(5) as Ns + 4) * NS_PER_SEC, ..Default::default() };
     }
 
     /// The take ended.
     pub fn stop(&self) {
-        let mut i = self.inner.lock().unwrap();
+        let mut i = self.inner.lock_ok();
         i.folder = None;
         i.video.clear();
         i.audio.clear();
@@ -57,7 +58,7 @@ impl ClipBuffer {
 
     /// What the Program file is getting.
     pub fn push(&self, msg: &MuxMsg) {
-        let mut i = self.inner.lock().unwrap();
+        let mut i = self.inner.lock_ok();
         if i.folder.is_none() {
             return;
         }
@@ -87,7 +88,7 @@ impl ClipBuffer {
     /// The last `seconds` of the program's pictures (from the keyframe
     /// before), for an instant replay.
     pub fn recent(&self, seconds: f32) -> Result<Vec<VideoPacket>> {
-        let i = self.inner.lock().unwrap();
+        let i = self.inner.lock_ok();
         if i.folder.is_none() {
             return Err(anyhow!("replays come from the recording: start recording first"));
         }
@@ -99,7 +100,7 @@ impl ClipBuffer {
 
     /// The next clip's number (errors when not recording).
     pub fn reserve(&self) -> Result<u32> {
-        let mut i = self.inner.lock().unwrap();
+        let mut i = self.inner.lock_ok();
         if i.folder.is_none() {
             return Err(anyhow!("clips are saved from a recording: start recording first"));
         }
@@ -111,7 +112,7 @@ impl ClipBuffer {
     /// Starts at a keyframe, so it can be up to a couple of seconds longer.
     pub fn save(&self, seconds: u32, number: u32) -> Result<Clip> {
         let (folder, fps, brand, audio_cfg, video, audio) = {
-            let i = self.inner.lock().unwrap();
+            let i = self.inner.lock_ok();
             let folder = i.folder.clone().ok_or_else(|| anyhow!("clips are saved from a recording: start recording first"))?;
             let newest = i.video.back().map(|p| p.dts).ok_or_else(|| anyhow!("nothing recorded yet"))?;
             let want = newest - seconds.max(1) as Ns * NS_PER_SEC;
@@ -176,7 +177,7 @@ mod tests {
         for i in 0..1800 {
             b.push(&MuxMsg::Video(packet(i, 30, &cfg)));
         }
-        let kept = b.inner.lock().unwrap().video.len();
+        let kept = b.inner.lock_ok().video.len();
         assert!((14 * 30..=17 * 30).contains(&kept), "kept {kept} frames (about 14 s)");
         let n = b.reserve().unwrap();
         let clip = b.save(10, n).unwrap();

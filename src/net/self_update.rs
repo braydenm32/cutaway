@@ -9,6 +9,7 @@
 //! until the new one has been running for a few seconds: if the new one
 //! closes before then, the helper puts the old one back and opens that.
 
+use crate::util::LockExt;
 use super::update::Release;
 use crate::engine::Waker;
 use anyhow::{anyhow, bail, Context, Result};
@@ -669,22 +670,22 @@ struct State {
 static STATE: std::sync::LazyLock<Mutex<State>> = std::sync::LazyLock::new(|| Mutex::new(State { stage: Stage::Idle, finish: Finish::Ask, cancel: Arc::new(AtomicBool::new(false)) }));
 
 pub fn stage() -> Stage {
-    STATE.lock().unwrap().stage.clone()
+    STATE.lock_ok().stage.clone()
 }
 
 pub fn finish() -> Finish {
-    STATE.lock().unwrap().finish
+    STATE.lock_ok().finish
 }
 
 /// For scripted screenshots of the update window.
 pub fn show_stage(stage: Stage, finish: Finish) {
-    let mut st = STATE.lock().unwrap();
+    let mut st = STATE.lock_ok();
     st.stage = stage;
     st.finish = finish;
 }
 
 pub fn choose(f: Finish) {
-    STATE.lock().unwrap().finish = f;
+    STATE.lock_ok().finish = f;
 }
 
 /// Fetch and prepare `release` in the background; `then`: when it goes in
@@ -693,13 +694,13 @@ pub fn start(release: Release, then: Finish, waker: Waker) {
     let me = match Install::this() {
         Ok(me) => me,
         Err(e) => {
-            STATE.lock().unwrap().stage = Stage::Failed(e);
+            STATE.lock_ok().stage = Stage::Failed(e);
             waker();
             return;
         }
     };
     let cancel = {
-        let mut st = STATE.lock().unwrap();
+        let mut st = STATE.lock_ok();
         if matches!(st.stage, Stage::Downloading { .. } | Stage::Preparing) || (matches!(st.stage, Stage::Ready(ref s) if s.version == release.version)) {
             return;
         }
@@ -717,7 +718,7 @@ pub fn start(release: Release, then: Finish, waker: Waker) {
             &me,
             &cancel,
             &mut |got, total| {
-                let mut st = STATE.lock().unwrap();
+                let mut st = STATE.lock_ok();
                 if !cancel.load(Ordering::Relaxed) {
                     st.stage = Stage::Downloading { got, total };
                 }
@@ -728,11 +729,11 @@ pub fn start(release: Release, then: Finish, waker: Waker) {
                 }
             },
             &mut || {
-                STATE.lock().unwrap().stage = Stage::Preparing;
+                STATE.lock_ok().stage = Stage::Preparing;
                 waker();
             },
         );
-        let mut st = STATE.lock().unwrap();
+        let mut st = STATE.lock_ok();
         if cancel.load(Ordering::Relaxed) {
             st.stage = Stage::Idle;
             let _ = std::fs::remove_dir_all(me.staging(&release.version));
@@ -751,7 +752,7 @@ pub fn start(release: Release, then: Finish, waker: Waker) {
 }
 
 pub fn cancel() {
-    let mut st = STATE.lock().unwrap();
+    let mut st = STATE.lock_ok();
     st.cancel.store(true, Ordering::Relaxed);
     if !matches!(st.stage, Stage::Ready(_)) {
         st.stage = Stage::Idle;
@@ -760,7 +761,7 @@ pub fn cancel() {
 
 /// Back to the start after a failure (to try again).
 pub fn reset() {
-    let mut st = STATE.lock().unwrap();
+    let mut st = STATE.lock_ok();
     if matches!(st.stage, Stage::Failed(_)) {
         st.stage = Stage::Idle;
     }
@@ -769,7 +770,7 @@ pub fn reset() {
 /// Cutaway is closing: if an update is ready and has been told when to go
 /// in, hand it to the helper. Returns what went wrong, if anything.
 pub fn on_exit() -> Option<String> {
-    let st = STATE.lock().unwrap();
+    let st = STATE.lock_ok();
     let Stage::Ready(staged) = st.stage.clone() else { return None };
     if st.finish == Finish::Ask {
         return None;

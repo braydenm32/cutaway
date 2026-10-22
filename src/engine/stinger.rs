@@ -8,6 +8,7 @@
 //! first frames are decoded ahead of time so it starts the moment it's
 //! triggered; the rest are decoded as it plays.
 
+use crate::util::LockExt;
 use super::decode::{create_video_decoder, DecoderSetup, Reorder, VideoDecoder};
 use crate::config::{Matte, StingerConfig};
 use crate::media::demux::{Mp4Reader, TrackKind};
@@ -96,7 +97,7 @@ impl StingerPlayer {
 
     /// New settings: a changed file (or matte) is loaded in the background.
     pub fn configure(&self, cfg: &StingerConfig) {
-        let mut st = self.shared.state.lock().unwrap();
+        let mut st = self.shared.state.lock_ok();
         let wanted = cfg.file.as_ref().filter(|f| !f.as_os_str().is_empty()).map(|_| cfg.clone());
         if st.wanted != wanted {
             st.wanted = wanted;
@@ -106,7 +107,7 @@ impl StingerPlayer {
     }
 
     pub fn info(&self) -> StingerInfo {
-        let st = self.shared.state.lock().unwrap();
+        let st = self.shared.state.lock_ok();
         let mut i = StingerInfo { loading: st.loading, problem: st.problem.clone(), ..Default::default() };
         if let Some(c) = &st.clip {
             i.loaded = true;
@@ -125,7 +126,7 @@ impl StingerPlayer {
         let start = Instant::now();
         while start.elapsed() < timeout {
             {
-                let st = self.shared.state.lock().unwrap();
+                let st = self.shared.state.lock_ok();
                 if !st.loading && st.wanted.is_some() == st.clip.is_some() && !st.ahead.is_empty() {
                     return true;
                 }
@@ -140,7 +141,7 @@ impl StingerPlayer {
 
     /// Start it playing. None when there's no stinger ready.
     pub fn trigger(&self) -> Option<Started> {
-        let mut st = self.shared.state.lock().unwrap();
+        let mut st = self.shared.state.lock_ok();
         let c = st.clip.clone()?;
         st.triggers += 1;
         st.triggered_at = Some(Instant::now());
@@ -151,7 +152,7 @@ impl StingerPlayer {
 
     /// The picture to show `elapsed` after it started.
     pub fn frame_at(&self, elapsed: Ns) -> Option<VideoFrame> {
-        let mut st = self.shared.state.lock().unwrap();
+        let mut st = self.shared.state.lock_ok();
         st.playhead = elapsed;
         while st.ahead.len() >= 2 && st.ahead[1].pts <= elapsed {
             st.ahead.pop_front();
@@ -164,13 +165,13 @@ impl StingerPlayer {
 
     /// How its see-through parts are stored (Solid when nothing's loaded).
     pub fn matte(&self) -> Matte {
-        self.shared.state.lock().unwrap().clip.as_ref().map(|c| c.matte).unwrap_or(Matte::Solid)
+        self.shared.state.lock_ok().clip.as_ref().map(|c| c.matte).unwrap_or(Matte::Solid)
     }
 }
 
 impl Drop for StingerPlayer {
     fn drop(&mut self) {
-        self.shared.state.lock().unwrap().stop = true;
+        self.shared.state.lock_ok().stop = true;
         self.shared.cond.notify_all();
         if let Some(t) = self.thread.take() {
             let _ = t.join();
@@ -292,7 +293,7 @@ fn worker(shared: Arc<Shared>, canvas: (u32, u32)) {
     loop {
         // Load what's wanted.
         let (wanted, gen) = {
-            let st = shared.state.lock().unwrap();
+            let st = shared.state.lock_ok();
             if st.stop {
                 return;
             }
@@ -301,14 +302,14 @@ fn worker(shared: Arc<Shared>, canvas: (u32, u32)) {
         if gen != loaded_gen {
             loaded_gen = gen;
             {
-                let mut st = shared.state.lock().unwrap();
+                let mut st = shared.state.lock_ok();
                 st.loading = wanted.is_some();
                 st.clip = None;
                 st.problem = None;
                 st.ahead.clear();
             }
             let result = wanted.as_ref().map(|w| load(w, canvas));
-            let mut st = shared.state.lock().unwrap();
+            let mut st = shared.state.lock_ok();
             st.loading = false;
             match result {
                 Some(Ok(c)) => st.clip = Some(Arc::new(c)),
@@ -318,9 +319,9 @@ fn worker(shared: Arc<Shared>, canvas: (u32, u32)) {
             handled = st.triggers;
             continue;
         }
-        let clip = shared.state.lock().unwrap().clip.clone();
+        let clip = shared.state.lock_ok().clip.clone();
         let Some(clip) = clip else {
-            let st = shared.state.lock().unwrap();
+            let st = shared.state.lock_ok();
             if st.wanted_gen == loaded_gen && !st.stop {
                 let _ = shared.cond.wait_timeout(st, Duration::from_millis(500));
             }
@@ -331,26 +332,26 @@ fn worker(shared: Arc<Shared>, canvas: (u32, u32)) {
         let mut d = match Decoding::new(clip.clone(), serial) {
             Ok(d) => d,
             Err(e) => {
-                let mut st = shared.state.lock().unwrap();
+                let mut st = shared.state.lock_ok();
                 st.problem = Some(format!("{} can't be decoded: {e:#}", name(&clip.path)));
                 st.clip = None;
                 continue;
             }
         };
-        shared.state.lock().unwrap().ahead.clear();
+        shared.state.lock_ok().ahead.clear();
         let mut ready = 0;
         while ready < PRE && !d.done() {
             let frames = d.step();
             ready += frames.len();
-            shared.state.lock().unwrap().ahead.extend(frames);
+            shared.state.lock_ok().ahead.extend(frames);
         }
         serial = d.serial;
 
         // Wait for a trigger.
         {
-            let mut st = shared.state.lock().unwrap();
+            let mut st = shared.state.lock_ok();
             while !st.stop && st.wanted_gen == loaded_gen && st.triggers == handled {
-                st = shared.cond.wait(st).unwrap();
+                st = shared.cond.wait(st).unwrap_or_else(|e| e.into_inner());
             }
             if st.stop || st.wanted_gen != loaded_gen {
                 continue;
@@ -361,7 +362,7 @@ fn worker(shared: Arc<Shared>, canvas: (u32, u32)) {
         // Play: keep a few pictures ahead of what's showing.
         loop {
             let (stop, changed, retriggered, playhead, waiting, started) = {
-                let st = shared.state.lock().unwrap();
+                let st = shared.state.lock_ok();
                 let waiting = st.ahead.iter().filter(|f| f.pts > st.playhead).count();
                 (st.stop, st.wanted_gen != loaded_gen, st.triggers != handled, st.playhead, waiting, st.triggered_at)
             };
@@ -374,17 +375,17 @@ fn worker(shared: Arc<Shared>, canvas: (u32, u32)) {
             }
             let over = playhead >= clip.duration || started.is_some_and(|t| t.elapsed() > Duration::from_nanos(clip.duration as u64) + Duration::from_secs(1));
             if over {
-                handled = shared.state.lock().unwrap().triggers;
+                handled = shared.state.lock_ok().triggers;
                 break;
             }
             if waiting >= AHEAD || d.done() {
-                let st = shared.state.lock().unwrap();
+                let st = shared.state.lock_ok();
                 let _ = shared.cond.wait_timeout(st, Duration::from_millis(5));
                 continue;
             }
             let frames = d.step();
             serial = d.serial;
-            shared.state.lock().unwrap().ahead.extend(frames);
+            shared.state.lock_ok().ahead.extend(frames);
         }
     }
 }

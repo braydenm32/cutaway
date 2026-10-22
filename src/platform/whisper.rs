@@ -7,6 +7,7 @@
 //! (like live captions anywhere). The speech model is downloaded once,
 //! from Settings → Captions.
 
+use crate::util::LockExt;
 use super::speech::{Event, Recognizer, Word};
 use crate::config::SpeechModel;
 use anyhow::{anyhow, Context, Result};
@@ -86,14 +87,14 @@ fn downloads() -> &'static Mutex<HashMap<&'static str, Download>> {
 }
 
 pub fn download_state(language: &str, model: SpeechModel) -> Option<Download> {
-    downloads().lock().unwrap().get(model_file(language, model).file).cloned()
+    downloads().lock_ok().get(model_file(language, model).file).cloned()
 }
 
 /// Fetch the model in the background (once at a time).
 pub fn download(language: &str, model: SpeechModel) {
     let m = model_file(language, model);
     {
-        let mut d = downloads().lock().unwrap();
+        let mut d = downloads().lock_ok();
         if d.get(m.file).is_some_and(|x| x.running) {
             return;
         }
@@ -101,7 +102,7 @@ pub fn download(language: &str, model: SpeechModel) {
     }
     std::thread::spawn(move || {
         let r = fetch(m.file);
-        let mut d = downloads().lock().unwrap();
+        let mut d = downloads().lock_ok();
         let s = d.entry(m.file).or_default();
         s.running = false;
         s.error = r.err().map(|e| format!("{e:#}"));
@@ -128,7 +129,7 @@ fn fetch(file: &'static str) -> Result<()> {
         }
         out.write_all(&buf[..n])?;
         got += n as u64;
-        if let Some(s) = downloads().lock().unwrap().get_mut(file) {
+        if let Some(s) = downloads().lock_ok().get_mut(file) {
             s.got = got;
             s.total = total;
         }

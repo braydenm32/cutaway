@@ -10,6 +10,7 @@
 //! All three take the same [`Move`]s, so the PTZ panel, Stream Deck keys,
 //! the remote and commands work the same for any of them.
 
+use crate::util::LockExt;
 use super::sources::{Running, SourceSlot};
 use crate::config::{PtzConfig, PtzControl, SourceConfig};
 use crate::media::{Ns, VideoFrame};
@@ -55,7 +56,7 @@ impl Drop for PtzCamera {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         self.tx = None;
-        if let Some(t) = self.thread.lock().unwrap().take() {
+        if let Some(t) = self.thread.lock_ok().take() {
             let _ = t.join();
         }
     }
@@ -80,14 +81,14 @@ impl PtzCamera {
         if cfg.virtual_ptz_of().is_some() {
             let mut cam = base(PtzControl::None);
             cam.virt = Some(VirtualPtz::new(p));
-            *status.lock().unwrap() = "virtual".into();
+            *status.lock_ok() = "virtual".into();
             return Some(Arc::new(cam));
         }
         match p.control {
             PtzControl::None => None,
             PtzControl::Ndi => {
                 if !cfg.device.trim().to_lowercase().starts_with("ndi:") {
-                    *status.lock().unwrap() = "NDI control needs an NDI source".into();
+                    *status.lock_ok() = "NDI control needs an NDI source".into();
                 }
                 let (tx, rx) = unbounded();
                 let mut cam = base(PtzControl::Ndi);
@@ -100,9 +101,9 @@ impl PtzCamera {
                 let mut cam = base(kind);
                 cam.tx = Some(tx);
                 let (addr, camera, st, s2) = (p.address.trim().to_string(), p.camera.clamp(1, 7), status.clone(), stop.clone());
-                *status.lock().unwrap() = if addr.is_empty() { "no address set".into() } else { format!("{addr} (not used yet)") };
+                *status.lock_ok() = if addr.is_empty() { "no address set".into() } else { format!("{addr} (not used yet)") };
                 let t = std::thread::Builder::new().name(format!("ptz {}", cfg.name)).spawn(move || visca_worker(kind, &addr, camera, rx, st, s2)).ok();
-                *cam.thread.lock().unwrap() = t;
+                *cam.thread.lock_ok() = t;
                 Some(Arc::new(cam))
             }
         }
@@ -111,7 +112,7 @@ impl PtzCamera {
     /// Move the camera. Speeds are scaled by the camera's speed setting and
     /// flipped if it's mounted upside down.
     pub fn send(&self, m: Move) {
-        let (speed, flip_pan, flip_tilt) = *self.options.lock().unwrap();
+        let (speed, flip_pan, flip_tilt) = *self.options.lock_ok();
         let m = match m {
             Move::Drive { pan, tilt } => Move::Drive {
                 pan: pan.clamp(-1.0, 1.0) * speed * if flip_pan { -1.0 } else { 1.0 },
@@ -128,13 +129,13 @@ impl PtzCamera {
     }
 
     pub fn status(&self) -> String {
-        self.status.lock().unwrap().clone()
+        self.status.lock_ok().clone()
     }
 
     /// New settings that don't need it remade (speed, flips, a virtual
     /// camera's presets and limits).
     pub fn configure(&self, p: &PtzConfig) {
-        *self.options.lock().unwrap() = (p.speed.clamp(0.1, 1.0), p.invert_pan, p.invert_tilt);
+        *self.options.lock_ok() = (p.speed.clamp(0.1, 1.0), p.invert_pan, p.invert_tilt);
         if let Some(v) = &self.virt {
             v.configure(p);
         }
@@ -211,7 +212,7 @@ fn connect(kind: PtzControl, addr: &str) -> Result<Link> {
 fn visca_worker(kind: PtzControl, addr: &str, camera: u8, rx: Receiver<Move>, status: Arc<Mutex<String>>, stop: Arc<AtomicBool>) {
     let mut link: Option<Link> = None;
     let mut seq: u32 = 0;
-    let set = |s: String| *status.lock().unwrap() = s;
+    let set = |s: String| *status.lock_ok() = s;
     while !stop.load(Ordering::Relaxed) {
         let m = match rx.recv_timeout(Duration::from_millis(250)) {
             Ok(m) => m,
@@ -315,18 +316,18 @@ impl VirtualPtz {
 
     /// Presets and limits from the settings.
     pub fn configure(&self, cfg: &PtzConfig) {
-        let mut st = self.st.lock().unwrap();
+        let mut st = self.st.lock_ok();
         st.presets = cfg.presets.iter().map(|p| Shot { x: p.x, y: p.y, zoom: p.zoom.max(1.0) }).collect();
         st.max_zoom = cfg.max_zoom.clamp(1.0, 4.0);
         st.glide = cfg.glide_seconds.clamp(0.1, 10.0);
     }
 
     pub fn position(&self) -> Shot {
-        self.st.lock().unwrap().pos
+        self.st.lock_ok().pos
     }
 
     fn apply(&self, m: Move) {
-        let mut st = self.st.lock().unwrap();
+        let mut st = self.st.lock_ok();
         match m {
             Move::Drive { pan, tilt } => {
                 st.drive[0] = pan;
@@ -360,7 +361,7 @@ impl VirtualPtz {
 
     /// Move on by `dt` seconds; returns where the shot is.
     pub fn step(&self, dt: f32) -> Shot {
-        let mut st = self.st.lock().unwrap();
+        let mut st = self.st.lock_ok();
         let dt = dt.clamp(0.0, 0.25);
         let max_zoom = st.max_zoom;
         if st.drive != [0.0; 3] {

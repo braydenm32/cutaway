@@ -7,6 +7,7 @@
 //! moment behind real time, so the mask for each picture is normally ready
 //! by the time it's shown.
 
+use crate::util::LockExt;
 use super::sources::SourceSlot;
 use crate::media::{Ns, VideoFrame};
 use crate::platform::vision::{self, Mask};
@@ -37,7 +38,7 @@ impl MaskSlot {
     }
 
     pub fn push(&self, pts: Ns, mask: Mask) {
-        let mut m = self.masks.lock().unwrap();
+        let mut m = self.masks.lock_ok();
         m.push_back((pts, Arc::new(mask)));
         while m.len() > KEEP {
             m.pop_front();
@@ -47,12 +48,12 @@ impl MaskSlot {
     /// The mask for the picture captured at `pts`: its own, or else the
     /// newest one from before it (or the oldest kept, if all are newer).
     pub fn pick(&self, pts: Ns) -> Option<(Ns, Arc<Mask>)> {
-        let m = self.masks.lock().unwrap();
+        let m = self.masks.lock_ok();
         m.iter().rev().find(|(t, _)| *t <= pts).or(m.front()).cloned()
     }
 
     pub fn clear(&self) {
-        self.masks.lock().unwrap().clear();
+        self.masks.lock_ok().clear();
     }
 }
 
@@ -147,6 +148,6 @@ mod tests {
         for t in 0..20 {
             slot.push(200 + t, mask(0));
         }
-        assert_eq!(slot.masks.lock().unwrap().len(), KEEP);
+        assert_eq!(slot.masks.lock_ok().len(), KEEP);
     }
 }

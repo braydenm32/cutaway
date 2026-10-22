@@ -3,6 +3,7 @@
 //! through their own input strip ("Sound pads"), so they have a fader, can
 //! be ducked under voices and are recorded like any input.
 
+use crate::util::LockExt;
 use crate::config::{Pad, PadMode};
 use crate::engine::sources::Running;
 use crate::media::{clock, AudioBlock};
@@ -74,7 +75,7 @@ impl PadBank {
     pub fn set_pads(&self, pads: &[Pad]) {
         let mut to_load = Vec::new();
         {
-            let mut b = self.bank.lock().unwrap();
+            let mut b = self.bank.lock_ok();
             let old = std::mem::take(&mut b.sounds);
             let mut sounds = Vec::with_capacity(pads.len());
             for (i, p) in pads.iter().enumerate() {
@@ -102,7 +103,7 @@ impl PadBank {
             let bank = self.bank.clone();
             let _ = std::thread::Builder::new().name("loading a pad".into()).spawn(move || {
                 let result = crate::media::audiofile::load(&file);
-                let mut b = bank.lock().unwrap();
+                let mut b = bank.lock_ok();
                 // Still wanted (settings may have changed meanwhile)?
                 if let Some(slot) = b.sounds.get_mut(i) {
                     if matches!(slot, Loaded::Loading(f) if *f == file) {
@@ -121,7 +122,7 @@ impl PadBank {
     pub fn wait_loaded(&self, timeout: std::time::Duration) -> bool {
         let start = std::time::Instant::now();
         while start.elapsed() < timeout {
-            if !self.bank.lock().unwrap().sounds.iter().any(|l| matches!(l, Loaded::Loading(_))) {
+            if !self.bank.lock_ok().sounds.iter().any(|l| matches!(l, Loaded::Loading(_))) {
                 return true;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -130,17 +131,17 @@ impl PadBank {
     }
 
     pub fn names(&self) -> Vec<String> {
-        self.bank.lock().unwrap().pads.iter().map(|p| p.name.clone()).collect()
+        self.bank.lock_ok().pads.iter().map(|p| p.name.clone()).collect()
     }
 
     pub fn is_playing(&self, i: usize) -> bool {
-        self.bank.lock().unwrap().voices.iter().any(|v| v.pad == i && v.fade_step.is_none())
+        self.bank.lock_ok().voices.iter().any(|v| v.pad == i && v.fade_step.is_none())
     }
 
     /// A press: play, or stop if it's playing (once and loop pads). Hold
     /// pads play until `release`.
     pub fn press(&self, i: usize) -> Result<bool, String> {
-        let mode = self.bank.lock().unwrap().pads.get(i).map(|p| p.mode).ok_or("there's no such pad")?;
+        let mode = self.bank.lock_ok().pads.get(i).map(|p| p.mode).ok_or("there's no such pad")?;
         match mode {
             PadMode::Hold => self.play(i).map(|_| true),
             _ if self.is_playing(i) => {
@@ -153,7 +154,7 @@ impl PadBank {
 
     /// Let go of a pad: stops hold pads.
     pub fn release(&self, i: usize) {
-        let hold = self.bank.lock().unwrap().pads.get(i).is_some_and(|p| p.mode == PadMode::Hold);
+        let hold = self.bank.lock_ok().pads.get(i).is_some_and(|p| p.mode == PadMode::Hold);
         if hold {
             self.stop(i);
         }
@@ -161,7 +162,7 @@ impl PadBank {
 
     /// Play from the start (restarting it if it's playing).
     pub fn play(&self, i: usize) -> Result<(), String> {
-        let mut b = self.bank.lock().unwrap();
+        let mut b = self.bank.lock_ok();
         let pad = b.pads.get(i).cloned().ok_or("there's no such pad")?;
         let sound = match b.sounds.get(i) {
             Some(Loaded::Ready(_, s)) => s.clone(),
@@ -179,7 +180,7 @@ impl PadBank {
 
     /// Stop with the pad's fade.
     pub fn stop(&self, i: usize) {
-        let mut b = self.bank.lock().unwrap();
+        let mut b = self.bank.lock_ok();
         let fade = b.pads.get(i).map(|p| p.fade_ms).unwrap_or(300).max(10) as f32 / 1000.0;
         for v in b.voices.iter_mut().filter(|v| v.pad == i && v.fade_step.is_none()) {
             v.fade_step = Some(1.0 / (RATE as f32 * fade));
@@ -188,7 +189,7 @@ impl PadBank {
 
     /// Play a sound that isn't on a pad (a stinger's), replacing the last one.
     pub fn play_extra(&self, sound: Arc<Vec<f32>>, gain_db: f32) {
-        let mut b = self.bank.lock().unwrap();
+        let mut b = self.bank.lock_ok();
         for v in b.voices.iter_mut().filter(|v| v.pad == EXTRA && v.fade_step.is_none()) {
             v.fade_step = Some(1.0 / (RATE as f32 * 0.02));
         }
@@ -196,14 +197,14 @@ impl PadBank {
     }
 
     pub fn stop_all(&self) {
-        let n = self.bank.lock().unwrap().pads.len();
+        let n = self.bank.lock_ok().pads.len();
         for i in 0..n {
             self.stop(i);
         }
     }
 
     pub fn state(&self) -> Vec<PadState> {
-        let b = self.bank.lock().unwrap();
+        let b = self.bank.lock_ok();
         b.pads
             .iter()
             .enumerate()
@@ -230,7 +231,7 @@ impl PadBank {
     /// Mix what's playing into `out` (interleaved 48 kHz stereo).
     pub fn render(&self, out: &mut [f32]) {
         out.fill(0.0);
-        let mut b = self.bank.lock().unwrap();
+        let mut b = self.bank.lock_ok();
         for v in b.voices.iter_mut() {
             let len = v.sound.len() / 2;
             if len == 0 {
@@ -306,7 +307,7 @@ mod tests {
     fn bank_with(sounds: Vec<(PadMode, Vec<f32>)>) -> Arc<PadBank> {
         let pads: Vec<Pad> = sounds.iter().enumerate().map(|(i, (m, _))| Pad { name: format!("P{i}"), file: PathBuf::from(format!("/x{i}.wav")), mode: *m, fade_ms: 10, ..Default::default() }).collect();
         let bank = PadBank { bank: Arc::new(Mutex::new(Bank { pads: pads.clone(), sounds: Vec::new(), voices: Vec::new() })) };
-        bank.bank.lock().unwrap().sounds = sounds.into_iter().zip(pads).map(|((_, s), p)| Loaded::Ready(p.file, Arc::new(s))).collect();
+        bank.bank.lock_ok().sounds = sounds.into_iter().zip(pads).map(|((_, s), p)| Loaded::Ready(p.file, Arc::new(s))).collect();
         Arc::new(bank)
     }
 

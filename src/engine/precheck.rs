@@ -1,5 +1,6 @@
 //! The pre-show check: everything that can be tested without going live.
 
+use crate::util::LockExt;
 use super::{encode, health, recorder, take, Engine};
 use crate::config::StreamDestination;
 use crossbeam_channel::{unbounded, Receiver};
@@ -31,12 +32,12 @@ impl Engine {
     pub fn local_checks(&self) -> Vec<CheckItem> {
         let mut out = Vec::new();
         let cfg = self.config();
-        let offline = self.status.lock().unwrap().offline.clone();
+        let offline = self.status.lock_ok().offline.clone();
         // Pictures.
         for s in &self.sources {
             let what = format!("Video: {}", s.name);
             if offline.contains(&s.name) || !s.input.alive() {
-                let d = s.input.net.lock().unwrap().detail.clone();
+                let d = s.input.net.lock_ok().detail.clone();
                 out.push(item(Level::Fail, what, if d.is_empty() { "no picture".to_string() } else { format!("no picture ({d})") }));
                 continue;
             }
@@ -112,7 +113,7 @@ impl Engine {
             Ok(()) => out.push(item(Level::Ok, "Recording encoder", self.encoder_description())),
             Err(e) => out.push(item(Level::Fail, "Recording encoder", format!("{e:#}"))),
         }
-        if let Some(f) = &self.status.lock().unwrap().fatal {
+        if let Some(f) = &self.status.lock_ok().fatal {
             out.push(item(Level::Fail, "Compositor", f.clone()));
         }
         out

@@ -20,6 +20,7 @@ mod upload;
 mod vertical;
 
 
+use crate::util::LockExt;
 use crate::config::{AudioConfig, Codec, Config, Container, Service, SourceConfig, StreamDestination};
 use crate::devices::{self, DeviceInfo, Kind, Mode, TEST_PATTERN_NAMES};
 use crate::engine::{LogLevel, LogLine};
@@ -386,7 +387,7 @@ impl SettingsUi {
     fn show_window(&mut self, ctx: &egui::Context, info: &SettingsContext) -> SettingsAction {
         let mut action = SettingsAction::None;
         let mut open = true;
-        if self.scanning && self.encoders.lock().unwrap().is_some() {
+        if self.scanning && self.encoders.lock_ok().is_some() {
             self.scanning = false;
         }
         if self.scanning {
@@ -975,7 +976,7 @@ impl SettingsUi {
     fn recording(&mut self, ui: &mut egui::Ui) {
         title(ui, "Recording", "Where takes go, how they're encoded, and what's saved with them for editing.");
         self.poll_encoder_scan();
-        let scan = self.encoders.lock().unwrap().clone();
+        let scan = self.encoders.lock_ok().clone();
         let o = &mut self.draft.output;
         let (pw, ph, pfps) = (self.draft.program.width, self.draft.program.height, self.draft.program.fps);
         egui::Grid::new("recording").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
@@ -1235,7 +1236,7 @@ impl SettingsUi {
     fn streaming(&mut self, ui: &mut egui::Ui) {
         title(ui, "Streaming", "Go live to any number of places at once: the program is encoded once and sent to each.");
         self.poll_encoder_scan();
-        let scan = self.encoders.lock().unwrap().clone();
+        let scan = self.encoders.lock_ok().clone();
         let n = self.draft.streaming.destinations.len();
         if self.sel_dest >= n {
             self.sel_dest = n.saturating_sub(1);
@@ -1491,7 +1492,7 @@ impl SettingsUi {
     // ---- encoder detection ------------------------------------------------------------
 
     fn poll_encoder_scan(&mut self) {
-        if self.scanning && self.encoders.lock().unwrap().is_some() {
+        if self.scanning && self.encoders.lock_ok().is_some() {
             self.scanning = false;
         }
     }

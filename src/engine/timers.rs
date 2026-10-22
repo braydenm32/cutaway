@@ -1,6 +1,7 @@
 //! Clocks, countdowns and stopwatches: the timers behind clock graphics,
 //! Stream Deck keys and the rundown's segment clock.
 
+use crate::util::LockExt;
 use crate::config::{ClockKind, Graphic};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -50,7 +51,7 @@ impl Timers {
     }
 
     pub fn start(&self, name: &str) {
-        let mut i = self.inner.lock().unwrap();
+        let mut i = self.inner.lock_ok();
         let t = i.named.entry(key(name)).or_default();
         if t.since.is_none() {
             t.since = Some(Instant::now());
@@ -58,7 +59,7 @@ impl Timers {
     }
 
     pub fn pause(&self, name: &str) {
-        let mut i = self.inner.lock().unwrap();
+        let mut i = self.inner.lock_ok();
         if let Some(t) = i.named.get_mut(&key(name)) {
             if let Some(s) = t.since.take() {
                 t.banked += s.elapsed();
@@ -79,7 +80,7 @@ impl Timers {
 
     /// Back to the start (keeps running if it was).
     pub fn reset(&self, name: &str) {
-        let mut i = self.inner.lock().unwrap();
+        let mut i = self.inner.lock_ok();
         let t = i.named.entry(key(name)).or_default();
         t.banked = Duration::ZERO;
         if t.since.is_some() {
@@ -89,30 +90,30 @@ impl Timers {
 
     /// Stop and go back to the start.
     pub fn stop(&self, name: &str) {
-        self.inner.lock().unwrap().named.remove(&key(name));
+        self.inner.lock_ok().named.remove(&key(name));
     }
 
     pub fn running(&self, name: &str) -> bool {
-        self.inner.lock().unwrap().named.get(&key(name)).is_some_and(|t| t.since.is_some())
+        self.inner.lock_ok().named.get(&key(name)).is_some_and(|t| t.since.is_some())
     }
 
     pub fn elapsed(&self, name: &str) -> Duration {
-        self.inner.lock().unwrap().named.get(&key(name)).map(|t| t.elapsed(Instant::now())).unwrap_or_default()
+        self.inner.lock_ok().named.get(&key(name)).map(|t| t.elapsed(Instant::now())).unwrap_or_default()
     }
 
     /// The rundown moved on (None: it stopped).
     pub fn set_segment(&self, segment: Option<(String, u32)>) {
-        self.inner.lock().unwrap().segment = segment.map(|(name, secs)| SegmentClock { name, planned: Duration::from_secs(secs as u64), started: Instant::now() });
+        self.inner.lock_ok().segment = segment.map(|(name, secs)| SegmentClock { name, planned: Duration::from_secs(secs as u64), started: Instant::now() });
     }
 
     pub fn segment(&self) -> Option<SegmentClock> {
-        self.inner.lock().unwrap().segment.clone()
+        self.inner.lock_ok().segment.clone()
     }
 
     /// Pretend a timer started `by` earlier (tests).
     #[cfg(test)]
     pub fn inner_for_tests_shift(&self, name: &str, by: Duration) {
-        self.inner.lock().unwrap().named.entry(key(name)).or_default().banked += by;
+        self.inner.lock_ok().named.entry(key(name)).or_default().banked += by;
     }
 }
 
@@ -247,7 +248,7 @@ mod tests {
         assert_eq!(clock_text(&g, &timers, now).0, "--:--");
         timers.set_segment(Some(("Intro".into(), 60)));
         assert_eq!(clock_text(&g, &timers, now), ("1:00".into(), false));
-        timers.inner.lock().unwrap().segment.as_mut().unwrap().started -= Duration::from_secs(75);
+        timers.inner.lock_ok().segment.as_mut().unwrap().started -= Duration::from_secs(75);
         assert_eq!(clock_text(&g, &timers, now), ("-0:15".into(), true));
     }
 }

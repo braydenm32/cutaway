@@ -4,6 +4,7 @@
 //! desktop apps) and keeps the refresh token. Files go up with Google's
 //! resumable uploads, so a dropped connection carries on where it stopped.
 
+use crate::util::LockExt;
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -610,7 +611,7 @@ pub mod tests {
                 let body = data[head_end..].to_vec();
                 let mut first = head.lines().next().unwrap_or("").split_whitespace();
                 let (method, target) = (first.next().unwrap_or("").to_string(), first.next().unwrap_or("").to_string());
-                l2.lock().unwrap().push(format!("{method} {}", target.split('?').next().unwrap_or("")));
+                l2.lock_ok().push(format!("{method} {}", target.split('?').next().unwrap_or("")));
                 let send = |c: &mut TcpStream, status: &str, extra: &str, body: &str| {
                     let _ = write!(c, "HTTP/1.1 {status}\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
                 };
@@ -634,20 +635,20 @@ pub mod tests {
                         folders += 1;
                         let v: Value = serde_json::from_slice(&body).unwrap();
                         assert_eq!(v["mimeType"], "application/vnd.google-apps.folder");
-                        m2.lock().unwrap().insert(format!("folder{folders}"), v.to_string());
+                        m2.lock_ok().insert(format!("folder{folders}"), v.to_string());
                         send(&mut c, "200 OK", "", &format!(r#"{{"id":"folder{folders}"}}"#));
                     }
                     ("POST", "/upload") => {
-                        let id = format!("s{}", f2.lock().unwrap().len() + 1);
-                        f2.lock().unwrap().insert(id.clone(), Vec::new());
-                        m2.lock().unwrap().insert(id.clone(), String::from_utf8_lossy(&body).to_string());
+                        let id = format!("s{}", f2.lock_ok().len() + 1);
+                        f2.lock_ok().insert(id.clone(), Vec::new());
+                        m2.lock_ok().insert(id.clone(), String::from_utf8_lossy(&body).to_string());
                         send(&mut c, "200 OK", &format!("Location: http://127.0.0.1:{port}/session/{id}\r\n"), "");
                     }
                     ("PUT", t) if t.starts_with("/session/") => {
                         let id = t.trim_start_matches("/session/").to_string();
                         let range = header("content-range").unwrap_or_default();
                         let total: usize = range.rsplit('/').next().unwrap().parse().unwrap();
-                        let mut files = f2.lock().unwrap();
+                        let mut files = f2.lock_ok();
                         let have = files.get_mut(&id).unwrap();
                         if !range.contains('*') {
                             puts += 1;
@@ -745,9 +746,9 @@ pub mod tests {
         let meta = youtube_metadata("Show – 20 October 2026", "0:00 Start", "private");
         let v = resumable(&mut auth, &c.ep.youtube_upload, &meta, &path, "video/mp4", 256 * 1024, &mut |s, t| seen.push((s, t)), &AtomicBool::new(false)).unwrap();
         assert_eq!(v["id"], "vid-s1");
-        assert_eq!(g.files.lock().unwrap()["s1"], data, "every byte, once, in order");
+        assert_eq!(g.files.lock_ok()["s1"], data, "every byte, once, in order");
         assert_eq!(seen.last(), Some(&(data.len() as u64, data.len() as u64)));
-        let log = g.log.lock().unwrap().clone();
+        let log = g.log.lock_ok().clone();
         assert!(log.iter().filter(|l| l.starts_with("PUT")).count() > 6, "pieces, and some asked again: {log:?}");
         // Cancelled: stops.
         let cancel = AtomicBool::new(true);

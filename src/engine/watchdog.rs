@@ -1,6 +1,7 @@
 //! Background housekeeping: notices devices that stop delivering and
 //! reopens them, and keeps the health and disk figures up to date.
 
+use crate::util::LockExt;
 use super::inputs::{AudioInputDev, DeviceCache, VideoInput};
 use super::{LogLevel, SharedLineup, Status, Waker};
 use std::collections::HashMap;
@@ -87,7 +88,7 @@ impl Watchdog {
     /// The devices now, each with its reconnect bookkeeping (kept for those
     /// that were there before; new ones get a moment to open).
     fn devices(&self, seen: &mut u64, outages: &mut HashMap<usize, Outage>) -> Vec<Arc<dyn Device + Send + Sync>> {
-        let l = self.lineup.lock().unwrap();
+        let l = self.lineup.lock_ok();
         let mut list: Vec<Arc<dyn Device + Send + Sync>> = Vec::new();
         for v in &l.video {
             list.push(v.clone());
@@ -139,7 +140,7 @@ impl Watchdog {
                 if dev.alive() {
                     out.ever_alive = true;
                     if out.down {
-                        let mut st = self.status.lock().unwrap();
+                        let mut st = self.status.lock_ok();
                         st.offline.remove(&name);
                         st.push(LogLevel::Info, format!("{name}: back"));
                         *out = Outage { ever_alive: true, ..Default::default() };
@@ -155,7 +156,7 @@ impl Watchdog {
                 if !out.down {
                     out.down = true;
                     out.next_try = Some(now); // try straight away
-                    let mut st = self.status.lock().unwrap();
+                    let mut st = self.status.lock_ok();
                     st.offline.insert(name.clone());
                     if out.ever_alive {
                         st.push(LogLevel::Warning, if managed { format!("{name}: no signal (waiting for it to come back)") } else { format!("{name}: no signal. Reconnecting automatically…") });
@@ -174,13 +175,13 @@ impl Watchdog {
                             // Give it time to deliver before judging it.
                             out.attempts = 0;
                             out.next_try = Some(now + Duration::from_secs(6));
-                            self.status.lock().unwrap().push(LogLevel::Info, format!("{name}: reopened ({desc})"));
+                            self.status.lock_ok().push(LogLevel::Info, format!("{name}: reopened ({desc})"));
                         }
                         Err(e) => {
                             out.attempts += 1;
                             out.next_try = Some(now + out.backoff());
                             if out.attempts == 1 && out.ever_alive {
-                                self.status.lock().unwrap().push(LogLevel::Warning, format!("{name}: waiting for it to come back ({e:#})"));
+                                self.status.lock_ok().push(LogLevel::Warning, format!("{name}: waiting for it to come back ({e:#})"));
                             }
                         }
                     }

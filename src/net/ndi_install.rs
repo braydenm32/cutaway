@@ -4,6 +4,7 @@
 //! NDI's licence in NDI's installer. Cutaway picks the runtime up as soon as
 //! it's installed (`engine::ndi`).
 
+use crate::util::LockExt;
 use anyhow::{anyhow, Result};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -47,11 +48,11 @@ pub enum Stage {
 static STAGE: Mutex<Stage> = Mutex::new(Stage::Idle);
 
 pub fn stage() -> Stage {
-    STAGE.lock().unwrap().clone()
+    STAGE.lock_ok().clone()
 }
 
 fn set(s: Stage) {
-    *STAGE.lock().unwrap() = s;
+    *STAGE.lock_ok() = s;
 }
 
 /// The installer has been started, so it's worth looking for NDI again.
@@ -66,7 +67,7 @@ pub fn start() {
         return;
     };
     {
-        let mut s = STAGE.lock().unwrap();
+        let mut s = STAGE.lock_ok();
         if matches!(*s, Stage::Downloading { .. }) {
             return;
         }
@@ -96,7 +97,7 @@ pub fn start() {
 
 /// NDI is installed: nothing more to do.
 pub fn reset() {
-    let mut s = STAGE.lock().unwrap();
+    let mut s = STAGE.lock_ok();
     if !matches!(*s, Stage::Downloading { .. }) {
         *s = Stage::Idle;
     }

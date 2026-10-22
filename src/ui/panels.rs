@@ -1,6 +1,7 @@
 //! Main-window panels for the show's extras: the rundown, sound pads,
 //! Syrinscape and talkback, and the presenters' clocks on the second screen.
 
+use crate::util::LockExt;
 use super::theme::*;
 use super::App;
 use crate::config::{parse_color, ClockKind, GraphicKind, SyrinKind};
@@ -325,7 +326,7 @@ impl App {
         // Syrinscape.
         if syrin_on {
             ui.add_space(4.0);
-            let st = self.syrinscape.state.lock().unwrap().clone();
+            let st = self.syrinscape.state.lock_ok().clone();
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Syrinscape").color(TEXT_DIM).size(11.0));
                 if st.busy {

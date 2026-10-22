@@ -2,6 +2,7 @@
 //! server), e.g. a phone camera app, OBS on another computer, a hardware
 //! encoder or a remote guest's encoder.
 
+use crate::util::LockExt;
 use super::feed::{AudioHub, Feeder};
 use super::sources::{Running, SourceSlot};
 use crate::config::SourceConfig;
@@ -133,7 +134,7 @@ fn srt_loop(spec: NetSpec, latency_ms: u32, mut feeder: Feeder, stop: Arc<Atomic
     let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
         Ok(rt) => rt,
         Err(e) => {
-            state.lock().unwrap().detail = format!("{e}");
+            state.lock_ok().detail = format!("{e}");
             return;
         }
     };
@@ -161,7 +162,7 @@ fn srt_loop(spec: NetSpec, latency_ms: u32, mut feeder: Feeder, stop: Arc<Atomic
                 }
             };
             {
-                let mut st = state.lock().unwrap();
+                let mut st = state.lock_ok();
                 st.connected = true;
                 st.detail = "receiving".into();
             }
@@ -175,7 +176,7 @@ fn srt_loop(spec: NetSpec, latency_ms: u32, mut feeder: Feeder, stop: Arc<Atomic
                     Ok(Some(Ok((_, data)))) => {
                         feed_ts(&mut feeder, demux.push(&data), &mut params);
                         if let Some(e) = feeder.take_error() {
-                            state.lock().unwrap().detail = format!("can't decode the stream: {e}");
+                            state.lock_ok().detail = format!("can't decode the stream: {e}");
                         }
                     }
                     Ok(Some(Err(e))) => bail!("{e}"),
@@ -188,7 +189,7 @@ fn srt_loop(spec: NetSpec, latency_ms: u32, mut feeder: Feeder, stop: Arc<Atomic
         });
         feeder.reset();
         {
-            let mut st = state.lock().unwrap();
+            let mut st = state.lock_ok();
             st.connected = false;
             st.detail = match &r {
                 Ok(()) => "waiting for the sender".into(),
@@ -208,7 +209,7 @@ fn rtmp_loop(port: u16, key: String, mut feeder: Feeder, stop: Arc<AtomicBool>, 
         let r = rtmp_server::serve(port, &key, &stop, &mut |i| match i {
             Incoming::Started(k) => {
                 feeder.reset();
-                let mut st = st2.lock().unwrap();
+                let mut st = st2.lock_ok();
                 st.connected = true;
                 st.detail = format!("receiving \"{k}\"");
             }
@@ -217,20 +218,20 @@ fn rtmp_loop(port: u16, key: String, mut feeder: Feeder, stop: Arc<AtomicBool>, 
                 let codec = feeder_codec(&feeder);
                 feeder.video(codec, pts, dts, keyframe, &data);
                 if let Some(e) = feeder.take_error() {
-                    st2.lock().unwrap().detail = format!("can't decode the stream: {e}");
+                    st2.lock_ok().detail = format!("can't decode the stream: {e}");
                 }
             }
             Incoming::AudioConfig { asc } => feeder.audio_config(&asc),
             Incoming::Audio { pts, data } => feeder.audio(pts, &data),
             Incoming::Ended(why) => {
                 feeder.reset();
-                let mut st = st2.lock().unwrap();
+                let mut st = st2.lock_ok();
                 st.connected = false;
                 st.detail = if why.contains(' ') { why } else { "waiting for the sender".into() };
             }
         });
         if let Err(e) = r {
-            state.lock().unwrap().detail = format!("{e:#}");
+            state.lock_ok().detail = format!("{e:#}");
             std::thread::sleep(Duration::from_secs(2));
         }
     }
@@ -250,7 +251,7 @@ pub fn start(cfg: &SourceConfig, slot: Arc<SourceSlot>, hub: Arc<AudioHub>, stat
         NetSpec::SrtCall { url } => format!("SRT from {url}"),
         NetSpec::RtmpListen { port, .. } => format!("RTMP input on port {port}"),
     };
-    *state.lock().unwrap() = NetState { connected: false, detail: "waiting for the sender".into() };
+    *state.lock_ok() = NetState { connected: false, detail: "waiting for the sender".into() };
     let s2 = stop.clone();
     let latency = cfg.network_latency_ms;
     let thread = std::thread::Builder::new().name(format!("net {}", cfg.name)).spawn(move || match spec {

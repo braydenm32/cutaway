@@ -15,6 +15,7 @@
 //! one reconnects with growing waits. Neither ever holds up the encoder,
 //! the other destinations, the program or a recording.
 
+use crate::util::LockExt;
 use super::encode::{self, Purpose, VideoSettings};
 use super::recorder::{AudioCursor, Retimer};
 use super::{audio::MixTaps, next_boundary, LogLevel, Status, StreamTap, VideoTaps, Waker};
@@ -256,7 +257,7 @@ impl StreamSession {
         let s0 = next_boundary(ctx.program_fps);
 
         {
-            let mut st = ctx.status.lock().unwrap();
+            let mut st = ctx.status.lock_ok();
             st.stream = StreamStatus {
                 since: Some(Instant::now()),
                 stopping: false,
@@ -348,7 +349,7 @@ impl StreamSession {
                             last_check = Instant::now();
                             if let (Some(kbps), Some(e)) = (adapt.step(fan.backlog(), Instant::now()), enc.as_mut()) {
                                 if e.set_bitrate(kbps) {
-                                    let mut st = status.lock().unwrap();
+                                    let mut st = status.lock_ok();
                                     st.stream.lowered_kbps = (kbps < adapt.target).then_some(kbps);
                                     st.push(
                                         LogLevel::Info,
@@ -372,7 +373,7 @@ impl StreamSession {
                     Ok(())
                 })();
                 if let Err(e) = result {
-                    let mut st = status.lock().unwrap();
+                    let mut st = status.lock_ok();
                     st.push(LogLevel::Error, format!("Stream encoder: {e:#}"));
                     st.stream.error = Some(format!("the stream encoder stopped: {e:#}"));
                     drop(st);
@@ -386,13 +387,13 @@ impl StreamSession {
         if any_wide {
             let (vtx, job) = spawn_video("stream video", size, fan.clone(), force_key.clone())?;
             video_job = Some(job);
-            ctx.video_taps.lock().unwrap().stream = Some(StreamTap { tx: vtx, from: s0, size, fps });
+            ctx.video_taps.lock_ok().stream = Some(StreamTap { tx: vtx, from: s0, size, fps });
         }
         let mut tall_job = None;
         if let (true, Some(tall)) = (any_tall, ctx.vertical) {
             let (vtx, job) = spawn_video("stream vertical", tall, tall_fan.clone(), tall_key.clone())?;
             tall_job = Some(job);
-            ctx.video_taps.lock().unwrap().tall_stream = Some(StreamTap { tx: vtx, from: s0, size: tall, fps });
+            ctx.video_taps.lock_ok().tall_stream = Some(StreamTap { tx: vtx, from: s0, size: tall, fps });
         }
 
         // Audio: the program mix, AAC.
@@ -424,7 +425,7 @@ impl StreamSession {
                     match aac.push(&samples) {
                         Ok(frames) => send(frames),
                         Err(e) => {
-                            status.lock().unwrap().push(LogLevel::Error, format!("Stream audio encoder: {e:#}"));
+                            status.lock_ok().push(LogLevel::Error, format!("Stream audio encoder: {e:#}"));
                             for _ in arx.iter() {}
                             return;
                         }
@@ -435,7 +436,7 @@ impl StreamSession {
                 }
             })?
         };
-        ctx.mix_taps.lock().unwrap().push((ctx.tap_id, super::audio::MixKind::Stream, atx));
+        ctx.mix_taps.lock_ok().push((ctx.tap_id, super::audio::MixKind::Stream, atx));
 
         Ok(StreamSession { encoder, ctx, stop, video_job, tall_job, audio_job: Some(audio_job), dests })
     }
@@ -446,12 +447,12 @@ impl StreamSession {
         // Let the last frames through the compositor and mixer.
         std::thread::sleep(Duration::from_millis(150));
         {
-            let mut taps = self.ctx.video_taps.lock().unwrap();
+            let mut taps = self.ctx.video_taps.lock_ok();
             taps.stream = None;
             taps.tall_stream = None;
         }
         let id = self.ctx.tap_id;
-        self.ctx.mix_taps.lock().unwrap().retain(|(i, ..)| *i != id);
+        self.ctx.mix_taps.lock_ok().retain(|(i, ..)| *i != id);
         for j in [self.video_job.take(), self.tall_job.take(), self.audio_job.take()].into_iter().flatten() {
             let _ = j.join();
         }
@@ -633,7 +634,7 @@ enum Ended {
 
 impl Destination {
     fn update(&self, f: impl FnOnce(&mut DestStatus)) {
-        let mut st = self.status.lock().unwrap();
+        let mut st = self.status.lock_ok();
         if let Some(d) = st.stream.destinations.get_mut(self.index) {
             f(d);
         }
@@ -642,7 +643,7 @@ impl Destination {
     }
 
     fn log(&self, level: LogLevel, text: String) {
-        self.status.lock().unwrap().push(level, text);
+        self.status.lock_ok().push(level, text);
     }
 
     fn run(self) {

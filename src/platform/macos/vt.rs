@@ -1,5 +1,6 @@
 //! H.264 / HEVC / ProRes encoding with VideoToolbox (the Mac's media engine).
 
+use crate::util::LockExt;
 use super::pixel_buffer::{PixelBuffer, NV12_VIDEO_RANGE};
 use super::{cmtime_ns, ns_cmtime};
 use crate::engine::encode::{Purpose, VideoEncoder, VideoSettings, VideoSink};
@@ -74,24 +75,24 @@ fn is_keyframe(sample: &CMSampleBuffer) -> bool {
 unsafe extern "C-unwind" fn on_output(refcon: *mut c_void, _frame: *mut c_void, status: i32, _flags: VTEncodeInfoFlags, sample: *mut CMSampleBuffer) {
     let out = unsafe { &*(refcon as *const Output) };
     if status != 0 {
-        *out.error.lock().unwrap() = Some(format!("VideoToolbox couldn't encode a frame (error {status})"));
+        *out.error.lock_ok() = Some(format!("VideoToolbox couldn't encode a frame (error {status})"));
         return;
     }
     let Some(sample) = (unsafe { sample.as_ref() }) else { return }; // frame dropped
     if out.codec.is_prores() {
         // Self-contained frames: no decoder record.
-        let mut cfg = out.config.lock().unwrap();
+        let mut cfg = out.config.lock_ok();
         if cfg.is_none() {
             *cfg = Some(Arc::new(VideoConfig { codec: out.codec, width: out.width, height: out.height, record: Vec::new(), parameter_sets: Vec::new() }));
         }
     } else if let Some(rec) = decoder_record(sample, out.codec) {
-        let mut cfg = out.config.lock().unwrap();
+        let mut cfg = out.config.lock_ok();
         if cfg.as_ref().is_none_or(|c| c.record != rec) {
             let parameter_sets = if out.codec == VideoCodec::H264 { h264::parse_avcc(&rec) } else { h264::parse_hvcc(&rec) };
             *cfg = Some(Arc::new(VideoConfig { codec: out.codec, width: out.width, height: out.height, record: rec, parameter_sets }));
         }
     }
-    let Some(config) = out.config.lock().unwrap().clone() else { return };
+    let Some(config) = out.config.lock_ok().clone() else { return };
     let Some(block) = (unsafe { sample.data_buffer() }) else { return };
     let len = unsafe { block.data_length() };
     let mut data = vec![0u8; len];
@@ -196,7 +197,7 @@ impl VtEncoder {
     }
 
     fn check(&self) -> Result<()> {
-        match unsafe { &*self.output }.error.lock().unwrap().take() {
+        match unsafe { &*self.output }.error.lock_ok().take() {
             Some(e) => Err(anyhow!(e)),
             None => Ok(()),
         }

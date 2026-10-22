@@ -3,6 +3,7 @@
 //! virtual audio cable needed. The app's child processes are included, so
 //! browsers that play sound from a helper process work too.
 
+use crate::util::LockExt;
 use super::com;
 use crate::engine::sources::AudioStarted;
 use crate::media::{clock, AudioBlock, NS_PER_SEC};
@@ -96,7 +97,7 @@ impl IAgileObject_Impl for Completion_Impl {}
 
 impl IActivateAudioInterfaceCompletionHandler_Impl for Completion_Impl {
     fn ActivateCompleted(&self, _op: Ref<IActivateAudioInterfaceAsyncOperation>) -> windows::core::Result<()> {
-        if let Some(tx) = self.done.lock().unwrap().take() {
+        if let Some(tx) = self.done.lock_ok().take() {
             let _ = tx.send(());
         }
         Ok(())

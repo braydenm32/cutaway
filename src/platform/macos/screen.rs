@@ -1,5 +1,6 @@
 //! Screen capture through ScreenCaptureKit (macOS 12.3+).
 
+use crate::util::LockExt;
 use super::frame_from_sample;
 use super::pixel_buffer::NV12_VIDEO_RANGE;
 use crate::engine::sources::Running;
@@ -53,7 +54,7 @@ define_class!(
             if let Some(frame) = frame_from_sample(sample) {
                 let s = &self.ivars().shared;
                 s.last_at.store(clock::now(), Ordering::Relaxed);
-                *s.last.lock().unwrap() = Some(frame.clone());
+                *s.last.lock_ok() = Some(frame.clone());
                 (s.sink)(frame);
             }
         }
@@ -158,7 +159,7 @@ pub fn open_screen(w: u32, h: u32, fps: u32, sink: FrameSink) -> Result<Box<dyn 
                 std::thread::sleep(Duration::from_millis(100));
                 let now = clock::now();
                 if now - shared.last_at.load(Ordering::Relaxed) > 4 * frame_ns {
-                    let last = shared.last.lock().unwrap().clone();
+                    let last = shared.last.lock_ok().clone();
                     if let Some(mut f) = last {
                         f.pts = now;
                         shared.last_at.store(now, Ordering::Relaxed);

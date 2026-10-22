@@ -2,6 +2,7 @@
 //! the old engine stopped) in the background, while the monitors show a
 //! "starting" screen with a line from the studio floor.
 
+use crate::util::LockExt;
 use super::theme::*;
 use super::App;
 use crate::engine::Engine;
@@ -96,7 +97,7 @@ impl App {
         self.starting = None;
         match got {
             Ok(e) => {
-                *self.remote_shared.program.lock().unwrap() = Some(e.program_preview.clone());
+                *self.remote_shared.program.lock_ok() = Some(e.program_preview.clone());
                 self.engine = Some(e);
                 self.engine_error = None;
                 if self.restart_again {

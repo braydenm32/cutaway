@@ -2,6 +2,7 @@
 //! (intros, outros, stings, holding slides, music beds) as a source, with
 //! its sound going to the mixer.
 
+use crate::util::LockExt;
 use super::decode::{create_aac_decoder, create_video_decoder, DecoderSetup, Reorder, ToMix};
 use super::feed::AudioHub;
 use super::sources::{Running, SourceSlot};
@@ -129,7 +130,7 @@ struct Player {
 
 impl Player {
     fn set_state(&self, f: impl FnOnce(&mut PlayerState)) {
-        f(&mut self.control.state.lock().unwrap());
+        f(&mut self.control.state.lock_ok());
     }
 
     /// Keep showing the last picture (so the source stays "live").
@@ -154,7 +155,7 @@ impl Player {
     }
 
     fn command(&mut self, c: PlayerCmd) -> Option<Outcome> {
-        let idx = self.control.state.lock().unwrap().index;
+        let idx = self.control.state.lock_ok().index;
         let n = self.cfg.files.len().max(1);
         match c {
             PlayerCmd::Play => self.playing = true,
@@ -516,7 +517,7 @@ mod tests {
         let started = clock::now();
         let (running, control, _) = start("Media", &cfg, (160, 120), slot.clone(), hub.clone()).unwrap();
         std::thread::sleep(Duration::from_millis(1600));
-        let st = control.state.lock().unwrap().clone();
+        let st = control.state.lock_ok().clone();
         assert!(st.ended, "{st:?}");
         // ~25 frames arrived, at roughly real-time spacing.
         let frames = slot.frames();

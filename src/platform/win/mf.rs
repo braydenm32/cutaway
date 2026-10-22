@@ -9,6 +9,7 @@
 //! Hardware encoders are asynchronous transforms (they say when they want
 //! input and have output); the rest are synchronous. Both are driven here.
 
+use crate::util::LockExt;
 use super::{explain, mf, pack, planes, string_attr, unpack};
 use crate::engine::decode::{AudioDecoder, DecoderSetup, VideoDecoder};
 use crate::engine::encode::{AudioEncoder, Purpose, VideoEncoder, VideoSettings, VideoSink};
@@ -97,7 +98,7 @@ pub fn video_backends(codec: VideoCodec) -> Vec<&'static str> {
         VideoCodec::ProRes(_) => return Vec::new(),
     };
     let cache = CACHE.get_or_init(Default::default);
-    if let Some(v) = cache.lock().unwrap().get(&key) {
+    if let Some(v) = cache.lock_ok().get(&key) {
         return v.clone();
     }
     let mut v: Vec<&'static str> = Vec::new();
@@ -107,7 +108,7 @@ pub fn video_backends(codec: VideoCodec) -> Vec<&'static str> {
             v.push(b);
         }
     }
-    cache.lock().unwrap().insert(key, v.clone());
+    cache.lock_ok().insert(key, v.clone());
     v
 }
 
@@ -945,7 +946,7 @@ mod tests {
         let p2 = packets.clone();
         let backend = video_backends(VideoCodec::H264)[0];
         let s = VideoSettings { codec: VideoCodec::H264, width: 640, height: 360, fps: 30, bitrate_kbps: 2000, purpose: Purpose::Record, backend: backend.into() };
-        let mut enc = MfVideoEncoder::new(&s, backend, Arc::new(move |p| p2.lock().unwrap().push(p))).unwrap();
+        let mut enc = MfVideoEncoder::new(&s, backend, Arc::new(move |p| p2.lock_ok().push(p))).unwrap();
         let mut tp = TestPattern::new("ball", 640, 360);
         for i in 0..60i64 {
             let pts = i * 1_000_000_000 / 30;
@@ -953,7 +954,7 @@ mod tests {
             enc.encode(&VideoFrame::new_nv12(640, 360, pts, img.y, img.uv, i as u64), pts, i == 30).unwrap();
         }
         enc.finish().unwrap();
-        let packets = packets.lock().unwrap();
+        let packets = packets.lock_ok();
         assert!(packets.len() >= 55, "{backend}: {} packets", packets.len());
         assert!(packets[0].keyframe);
         let setup = DecoderSetup { codec: VideoCodec::H264, parameter_sets: packets[0].config.parameter_sets.clone(), width: 640, height: 360, output: (640, 360) };

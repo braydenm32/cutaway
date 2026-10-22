@@ -1,6 +1,7 @@
 //! Turning compressed media (from a file, a network stream or NDI) into
 //! source pictures and mixer audio on the host clock.
 
+use crate::util::LockExt;
 use super::decode::{create_aac_decoder, create_video_decoder, AudioDecoder, DecoderSetup, Reorder, ToMix, VideoDecoder};
 use super::sources::SourceSlot;
 use crate::media::{clock, AudioBlock, Ns, VideoCodec, VideoFrame, NS_PER_SEC};
@@ -30,15 +31,15 @@ impl AudioHub {
     }
 
     pub fn register(&self, name: &str, tx: Sender<AudioBlock>) {
-        self.map.lock().unwrap().insert(Self::key(name), tx);
+        self.map.lock_ok().insert(Self::key(name), tx);
     }
 
     pub fn unregister(&self, name: &str) {
-        self.map.lock().unwrap().remove(&Self::key(name));
+        self.map.lock_ok().remove(&Self::key(name));
     }
 
     pub fn send(&self, name: &str, block: AudioBlock) {
-        if let Some(tx) = self.map.lock().unwrap().get(&Self::key(name)) {
+        if let Some(tx) = self.map.lock_ok().get(&Self::key(name)) {
             let _ = tx.try_send(block);
         }
     }

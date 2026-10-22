@@ -6,6 +6,7 @@
 //! in sound it's the sharp onset of the loudest transient. Times are on
 //! the program clock, so current delays are taken into account.
 
+use crate::util::LockExt;
 use super::audio::MixKind;
 use super::Engine;
 use crate::media::{AudioBlock, Ns, VideoFrame, NS_PER_SEC};
@@ -167,7 +168,7 @@ impl Engine {
         for (i, a) in self.audio.iter().enumerate() {
             let (tx, rx) = bounded(2000);
             let id = self.tap_ids.fetch_add(1, Ordering::Relaxed);
-            self.mix_taps.lock().unwrap().push((id, MixKind::Track { input: i, post_fader: false }, tx));
+            self.mix_taps.lock_ok().push((id, MixKind::Track { input: i, post_fader: false }, tx));
             let delay = cfg.audio.get(i).map(|c| c.delay_ms).unwrap_or(0);
             audios.push((a.name.clone(), delay, id, rx));
         }
@@ -201,9 +202,9 @@ impl Engine {
                 for v in &videos {
                     v.3.remove_watcher(v.2);
                 }
-                taps.lock().unwrap().retain(|t| !audios.iter().any(|a| a.2 == t.0));
+                taps.lock_ok().retain(|t| !audios.iter().any(|a| a.2 == t.0));
                 let result = analyse(&videos.iter().map(|v| (v.0.clone(), v.1)).collect::<Vec<_>>(), &frames, &audios.iter().map(|a| (a.0.clone(), a.1)).collect::<Vec<_>>(), &sound);
-                *j2.result.lock().unwrap() = Some(result);
+                *j2.result.lock_ok() = Some(result);
                 j2.progress.store(1.0f32.to_bits(), Ordering::Relaxed);
                 waker();
             })

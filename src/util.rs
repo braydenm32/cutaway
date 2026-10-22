@@ -89,6 +89,22 @@ pub fn https_agent(timeout: std::time::Duration) -> ureq::Agent {
     ureq::Agent::config_builder().tls_config(tls).timeout_connect(Some(std::time::Duration::from_secs(20))).timeout_global(Some(timeout)).http_status_as_error(false).build().into()
 }
 
+/// Locking that survives a crash elsewhere. When a background part panics
+/// while holding a lock, Rust marks the lock "poisoned" and every later
+/// `lock().unwrap()` panics too, so one failure spreads through the app.
+/// `lock_ok` takes the lock anyway: the data inside is still usable (at worst
+/// it's missing the crashed part's last change), and the crash itself is
+/// already in the log.
+pub trait LockExt<T: ?Sized> {
+    fn lock_ok(&self) -> std::sync::MutexGuard<'_, T>;
+}
+
+impl<T: ?Sized> LockExt<T> for std::sync::Mutex<T> {
+    fn lock_ok(&self) -> std::sync::MutexGuard<'_, T> {
+        self.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
 /// Run `f`, turning an unexpected internal failure (a panic, or a system
 /// framework exception) into an ordinary error, so one misbehaving device
 /// can't take the whole app down. The details go to the log file.
@@ -112,6 +128,20 @@ pub fn guard<T>(what: &str, f: impl FnOnce() -> anyhow::Result<T>) -> anyhow::Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lock_survives_a_crash_while_held() {
+        let m = std::sync::Arc::new(std::sync::Mutex::new(1));
+        let m2 = m.clone();
+        let _ = std::thread::spawn(move || {
+            let mut g = m2.lock_ok();
+            *g = 2;
+            panic!("a background part crashes mid-change");
+        })
+        .join();
+        assert!(m.is_poisoned());
+        assert_eq!(*m.lock_ok(), 2);
+    }
 
     #[test]
     fn crc_and_zip() {

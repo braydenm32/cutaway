@@ -3,6 +3,7 @@
 //! offers to download NDI's own installer (`net::ndi_install`), and Cutaway
 //! picks the runtime up as soon as it's there, without a restart.
 
+use crate::util::LockExt;
 use super::feed::{AudioHub, Feeder};
 use super::netsrc::{NetState, NetStatus};
 use super::sources::{Running, SourceSlot};
@@ -254,7 +255,7 @@ fn api() -> Result<&'static Api> {
     if let Some(api) = API.get() {
         return Ok(api);
     }
-    let mut looked = LOOKED.lock().unwrap();
+    let mut looked = LOOKED.lock_ok();
     if let Some(api) = API.get() {
         return Ok(api);
     }
@@ -539,7 +540,7 @@ pub fn start(
     let mut feeder = Feeder::new(&cfg.name, slot, hub, (cfg.width, cfg.height), cfg.network_latency_ms.min(1000), stop.clone());
     let wanted = source.to_string();
     let recv_name = CString::new(format!("Cutaway {}", cfg.name)).unwrap_or_default();
-    *state.lock().unwrap() = NetState { connected: false, detail: "looking for the NDI source".into() };
+    *state.lock_ok() = NetState { connected: false, detail: "looking for the NDI source".into() };
     let s2 = stop.clone();
     let thread = std::thread::Builder::new().name(format!("ndi {}", cfg.name)).spawn(move || unsafe {
         // A name ("STUDIO (Camera 1)"), or an address ("192.168.1.20:5961")
@@ -556,7 +557,7 @@ pub fn start(
         };
         let recv = (api.recv_create)(&settings);
         if recv.is_null() {
-            state.lock().unwrap().detail = "NDI couldn't create a receiver".into();
+            state.lock_ok().detail = "NDI couldn't create a receiver".into();
             return;
         }
         let mut mix = None;
@@ -594,7 +595,7 @@ pub fn start(
                         }
                     }
                     (api.free_video)(recv, &v);
-                    let mut st = state.lock().unwrap();
+                    let mut st = state.lock_ok();
                     if !st.connected {
                         st.connected = true;
                         st.detail = format!("receiving {}×{}", v.xres, v.yres);
@@ -617,11 +618,11 @@ pub fn start(
                 }
                 FRAME_ERROR => {
                     feeder.reset();
-                    *state.lock().unwrap() = NetState { connected: false, detail: "connection lost; waiting for the NDI source".into() };
+                    *state.lock_ok() = NetState { connected: false, detail: "connection lost; waiting for the NDI source".into() };
                 }
                 _ => {
                     if last_frame.elapsed().as_secs() >= 3 {
-                        let mut st = state.lock().unwrap();
+                        let mut st = state.lock_ok();
                         if st.connected {
                             st.connected = false;
                             st.detail = "waiting for the NDI source".into();
@@ -735,7 +736,7 @@ mod tests {
         stop.store(true, Ordering::Relaxed);
         let _ = sender.join();
         assert!(slot.frames() >= 10, "pictures arrived: {}", slot.frames());
-        assert!(state.lock().unwrap().connected);
+        assert!(state.lock_ok().connected);
         let f = slot.pick(clock::now() + 1_000_000_000).unwrap();
         assert_eq!((f.width, f.height), (320, 180));
         let (top, bottom) = f.pixels.with_planes(|p| (p.y[p.y_stride * 20 + 100], p.y[p.y_stride * 160 + 100]));

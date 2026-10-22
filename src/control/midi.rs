@@ -95,6 +95,7 @@ pub fn available() -> bool {
 #[cfg(any(target_os = "macos", windows))]
 mod imp {
     use super::*;
+    use crate::util::LockExt;
     use midir::{MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
     use std::collections::HashMap;
 
@@ -127,7 +128,7 @@ mod imp {
                 let (map, tx, sh, wk) = (cfg.mappings.clone(), requests.clone(), shared.clone(), waker.clone());
                 let cb = move |_t: u64, bytes: &[u8], _: &mut ()| {
                     let Some((msg, value)) = Msg::from_bytes(bytes) else { return };
-                    *sh.last.lock().unwrap() = Some((msg, std::time::Instant::now()));
+                    *sh.last.lock_ok() = Some((msg, std::time::Instant::now()));
                     for m in map.iter().filter(|m| Msg::parse(&m.message) == Some(msg)) {
                         if let Some(a) = action_for(m, msg, value) {
                             let _ = tx.send(Request { action: a, reply: None });
@@ -138,7 +139,7 @@ mod imp {
                 match input.connect(p, "Cutaway in", cb, ()) {
                     Ok(c) => {
                         inputs.push(c);
-                        shared.connected.lock().unwrap().push(name);
+                        shared.connected.lock_ok().push(name);
                     }
                     Err(e) => eprintln!("MIDI: couldn't open {name}: {e}"),
                 }

@@ -1,6 +1,7 @@
 //! Which scene is live, what's in preview, and the transition between
 //! scenes. The compositor asks for the frame layout every time it renders.
 
+use crate::util::LockExt;
 use crate::config::{parse_color, Direction, TransitionMode};
 use crate::media::{clock, Ns};
 use crate::scene::{compose, PadState, Scene};
@@ -95,48 +96,48 @@ impl Switcher {
 
     /// Fade the program to black (or back up) over `ms`.
     pub fn fade_to_black(&self, on: bool, ms: u32) {
-        let mut f = self.black.lock().unwrap();
+        let mut f = self.black.lock_ok();
         let from = f.level();
         *f = Fade { from, to: if on { 1.0 } else { 0.0 }, start: Instant::now(), dur: Duration::from_millis(ms as u64) };
     }
 
     /// How black the program is now (0..1).
     pub fn black_level(&self) -> f32 {
-        self.black.lock().unwrap().level()
+        self.black.lock_ok().level()
     }
 
     /// Faded (or fading) to black.
     pub fn is_black(&self) -> bool {
-        self.black.lock().unwrap().to > 0.5
+        self.black.lock_ok().to > 0.5
     }
 
     /// Direction for wipes/pushes and the colour for dips.
     pub fn set_style(&self, direction: Direction, dip_color: &str) {
         let c = parse_color(dip_color).unwrap_or(0xff000000);
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.state.lock_ok();
         st.direction = direction;
         st.dip = [((c >> 16) & 255) as f32 / 255.0, ((c >> 8) & 255) as f32 / 255.0, (c & 255) as f32 / 255.0];
     }
 
     /// Source shapes changed (cropping).
     pub fn set_aspects(&self, aspects: Vec<f32>) {
-        self.state.lock().unwrap().aspects = aspects;
+        self.state.lock_ok().aspects = aspects;
     }
 
     /// Each source's identity, by number.
     pub fn set_uids(&self, uids: Vec<u64>) {
-        *self.uids.lock().unwrap() = uids;
+        *self.uids.lock_ok() = uids;
     }
 
     /// How many sources there are.
     pub fn source_count(&self) -> usize {
-        self.state.lock().unwrap().aspects.len()
+        self.state.lock_ok().aspects.len()
     }
 
     /// The identity of the source a scene shows full frame, if it does.
     fn angle_of(&self, scene: &Scene) -> Option<usize> {
         let i = scene.full_frame_source()?;
-        Some(self.uids.lock().unwrap().get(i).map(|u| *u as usize).unwrap_or(i))
+        Some(self.uids.lock_ok().get(i).map(|u| *u as usize).unwrap_or(i))
     }
 
     /// The identity of the source on air full frame now, if one is.
@@ -149,7 +150,7 @@ impl Switcher {
     /// frames of sources that went are dropped.
     pub fn remap_sources(&self, from: &[Option<usize>], aspects: Vec<f32>, uids: Vec<u64>) {
         let new_of = |old: usize| from.iter().position(|f| *f == Some(old));
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.state.lock_ok();
         st.current.remap_sources(&new_of);
         if let Some(a) = &mut st.active {
             a.from.remap_sources(&new_of);
@@ -160,19 +161,19 @@ impl Switcher {
         }
         st.aspects = aspects;
         drop(st);
-        *self.uids.lock().unwrap() = uids;
+        *self.uids.lock_ok() = uids;
     }
 
     /// Go live with `scene`.
     pub fn take(&self, scene: Scene, mode: TransitionMode, duration_ms: u32) {
         // A stinger needs its video (`take_stinger`).
         let mode = if mode == TransitionMode::Stinger { TransitionMode::Mix } else { mode };
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.state.lock_ok();
         if let Some(a) = st.active.take() {
             st.current = a.to;
         }
         let angle = self.angle_of(&scene);
-        self.events.lock().unwrap().push(SwitchEvent { at: clock::now(), scene: scene.name.clone(), mode, duration_ms, angle });
+        self.events.lock_ok().push(SwitchEvent { at: clock::now(), scene: scene.name.clone(), mode, duration_ms, angle });
         if mode == TransitionMode::Cut || duration_ms == 0 || scene == st.current {
             st.current = scene;
         } else {
@@ -184,13 +185,13 @@ impl Switcher {
     /// Go live with `scene` under a stinger `duration` long that starts
     /// `delay` from now, changing scenes `cut` into it.
     pub fn take_stinger(&self, scene: Scene, duration: Ns, cut: Ns, delay: Ns) {
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.state.lock_ok();
         if let Some(a) = st.active.take() {
             st.current = a.to;
         }
         let duration_ms = (duration / 1_000_000).max(1) as u32;
         let angle = self.angle_of(&scene);
-        self.events.lock().unwrap().push(SwitchEvent { at: clock::now() + delay + cut, scene: scene.name.clone(), mode: TransitionMode::Stinger, duration_ms, angle });
+        self.events.lock_ok().push(SwitchEvent { at: clock::now() + delay + cut, scene: scene.name.clone(), mode: TransitionMode::Stinger, duration_ms, angle });
         let from = st.current.clone();
         let ns = |n: Ns| Duration::from_nanos(n.max(0) as u64);
         st.active = Some(Active { from, to: scene, mode: TransitionMode::Stinger, start: Instant::now() + ns(delay), dur: ns(duration.max(1)), cut: ns(cut) });
@@ -198,29 +199,29 @@ impl Switcher {
 
     /// Change the live layout immediately (dragging frames around).
     pub fn set_live(&self, scene: Scene) {
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.state.lock_ok();
         st.active = None;
         st.current = scene;
     }
 
     /// Put a scene in preview (None clears it).
     pub fn set_preview(&self, scene: Option<Scene>) {
-        self.state.lock().unwrap().preview = scene;
+        self.state.lock_ok().preview = scene;
     }
 
     pub fn preview(&self) -> Option<Scene> {
-        self.state.lock().unwrap().preview.clone()
+        self.state.lock_ok().preview.clone()
     }
 
     /// Layout of the preview scene, if there is one.
     pub fn preview_states(&self) -> Option<Vec<PadState>> {
-        let st = self.state.lock().unwrap();
+        let st = self.state.lock_ok();
         st.preview.as_ref().map(|p| compose(None, p, 1.0, self.canvas, &st.aspects))
     }
 
     /// What to draw now.
     pub fn layout(&self) -> Layout {
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.state.lock_ok();
         let Some(a) = &st.active else {
             return Layout::One(compose(None, &st.current, 1.0, self.canvas, &st.aspects));
         };
@@ -253,7 +254,7 @@ impl Switcher {
     /// transition), the scene, and how far (0..1). Wipes, pushes and dips
     /// become a mix there; a stinger changes scenes at its cut point.
     pub fn scenes_now(&self) -> (Option<Scene>, Scene, f32) {
-        let st = self.state.lock().unwrap();
+        let st = self.state.lock_ok();
         let Some(a) = &st.active else { return (None, st.current.clone(), 1.0) };
         let elapsed = Instant::now().saturating_duration_since(a.start);
         let t = (elapsed.as_secs_f32() / a.dur.as_secs_f32().max(1e-3)).min(1.0);
@@ -266,18 +267,18 @@ impl Switcher {
 
     /// The scene that is live (or about to be, mid-transition).
     pub fn live(&self) -> Scene {
-        let st = self.state.lock().unwrap();
+        let st = self.state.lock_ok();
         st.active.as_ref().map(|a| a.to.clone()).unwrap_or_else(|| st.current.clone())
     }
 
     pub fn in_transition(&self) -> bool {
-        let st = self.state.lock().unwrap();
+        let st = self.state.lock_ok();
         st.active.as_ref().is_some_and(|a| Instant::now().saturating_duration_since(a.start) < a.dur)
     }
 
     /// Switches made between two host times.
     pub fn events_between(&self, from: Ns, to: Ns) -> Vec<SwitchEvent> {
-        let mut events = self.events.lock().unwrap();
+        let mut events = self.events.lock_ok();
         let out = events.iter().filter(|e| e.at >= from && e.at <= to).cloned().collect();
         events.retain(|e| e.at >= from);
         out
