@@ -22,7 +22,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -80,7 +80,7 @@ jobs:
           $out | Tee-Object -FilePath ci-logs\4-recording.log
           python .github/check-take.py ci-logs\4-recording.log "$env:USERPROFILE\Videos\Cutaway" $p.ExitCode
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: Cutaway-windows-x64
           path: dist/*.zip

@@ -22,7 +22,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -78,7 +78,7 @@ jobs:
           "$RUNNER_TEMP/unpack/Cutaway.app/Contents/MacOS/Cutaway" --version | tee ci-logs/5-unpack.log
           grep -q "$version" ci-logs/5-unpack.log
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: Cutaway-macos-arm64
           path: dist/*.zip
