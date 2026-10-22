@@ -941,9 +941,12 @@ impl Compositor {
         let to_clip = |x: f32, y: f32| [x / tw * 2.0 - 1.0, 1.0 - y / th * 2.0];
         let a = to_clip(px[0] - margin, px[1] - margin);
         let b = to_clip(px[2] + margin, px[3] + margin);
+        // The part of the (already cropped) picture this frame shows.
+        let (lu, c) = (look.uv, st.crop);
+        let uv = [lu[0] + (lu[2] - lu[0]) * c[0], lu[1] + (lu[3] - lu[1]) * c[1], lu[0] + (lu[2] - lu[0]) * c[2], lu[1] + (lu[3] - lu[1]) * c[3]];
         Quad {
             rect: [a[0], a[1], b[0], b[1]],
-            uv: look.uv,
+            uv,
             params: [st.alpha as f32, 1.0, 0.0, 0.0],
             px,
             style: [s.radius * k, s.border * k, s.shadow, amount],
@@ -1758,8 +1761,8 @@ mod tests {
         c.upload(a, &solid(64, 36, (1.0, 0.0, 0.0), 1));
         c.upload(b, &solid(64, 36, (0.0, 1.0, 0.0), 1));
         let states = [
-            PadState { x: 0, y: 0, w: 160, h: 90, alpha: 1.0, zorder: 2 },
-            PadState { x: 80, y: 45, w: 160, h: 90, alpha: 1.0, zorder: 3 },
+            PadState { x: 0, y: 0, w: 160, h: 90, alpha: 1.0, zorder: 2, crop: PadState::WHOLE },
+            PadState { x: 80, y: 45, w: 160, h: 90, alpha: 1.0, zorder: 3, crop: PadState::WHOLE },
         ];
         let r = c.render(&Layout::One(states.to_vec()), None, &[], 0, 0, &Wants { program: true, stream: Some((160, 90)), preview: true, preview_bus: false, thumbs: vec![0], ..Default::default() }).unwrap();
         let p = r.program.unwrap();
@@ -1803,7 +1806,7 @@ mod tests {
         c.upload(2, &solid(64, 36, (0.0, 0.0, 1.0), 1));
         // The first goes, the others move up, a new one joins at the end.
         c.set_lineup(&[Some(1), Some(2), None], &[(64, 36), (64, 36), (128, 72)]);
-        let full = PadState { x: 0, y: 0, w: 320, h: 180, alpha: 1.0, zorder: 1 };
+        let full = PadState { x: 0, y: 0, w: 320, h: 180, alpha: 1.0, zorder: 1, crop: PadState::WHOLE };
         let draw = |c: &mut Compositor, which: usize| {
             let mut states = vec![PadState::HIDDEN; 3];
             states[which] = full;
@@ -1817,6 +1820,47 @@ mod tests {
         assert!(near(draw(&mut c, 2), rgb_to_yuv(0.0, 0.0, 0.0)), "new: background until it sends");
         c.upload(2, &solid(128, 72, (1.0, 1.0, 1.0), 5));
         assert!(near(draw(&mut c, 2), rgb_to_yuv(1.0, 1.0, 1.0)));
+    }
+
+    /// A frame showing only part of its picture (filled or zoomed in a
+    /// scene) samples just that part.
+    #[test]
+    fn draws_part_of_a_picture() {
+        let _gpu = super::test_gpu_turn();
+        let settings = CompositorSettings { canvas: (320, 180), background_rgb: [0, 0, 0], background_image: None, preview_width: 160, thumb_width: 64 };
+        let mut c = match Compositor::new(&settings) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("skipping GPU test: {e:#}");
+                return;
+            }
+        };
+        // Left half red, right half green.
+        let (w, h) = (64u32, 36u32);
+        let (red, green) = (rgb_to_yuv(1.0, 0.0, 0.0), rgb_to_yuv(0.0, 1.0, 0.0));
+        let mut y = vec![0u8; (w * h) as usize];
+        let mut uv = vec![0u8; (w * h / 2) as usize];
+        for row in 0..h as usize {
+            for x in 0..w as usize {
+                let c = if x < w as usize / 2 { red } else { green };
+                y[row * w as usize + x] = c.0;
+                if row % 2 == 0 && x % 2 == 0 {
+                    uv[(row / 2) * w as usize + x] = c.1;
+                    uv[(row / 2) * w as usize + x + 1] = c.2;
+                }
+            }
+        }
+        let a = c.add_source(w, h);
+        c.upload(a, &VideoFrame::new_nv12(w, h, 0, y, uv, 1));
+        let at = |c: &mut Compositor, crop: [f32; 4], x: usize| {
+            let st = PadState { x: 0, y: 0, w: 320, h: 180, alpha: 1.0, zorder: 1, crop };
+            let r = c.render(&Layout::One(vec![st]), None, &[], 0, 0, &Wants { program: true, ..Default::default() }).unwrap();
+            r.program.unwrap().pixels.with_planes(|pl| (pl.y[90 * pl.y_stride + x], pl.uv[45 * pl.uv_stride + x / 2 * 2], pl.uv[45 * pl.uv_stride + x / 2 * 2 + 1]))
+        };
+        let near = |a: (u8, u8, u8), b: (u8, u8, u8)| (a.0 as i32 - b.0 as i32).abs() <= 4 && (a.1 as i32 - b.1 as i32).abs() <= 4 && (a.2 as i32 - b.2 as i32).abs() <= 4;
+        assert!(near(at(&mut c, PadState::WHOLE, 40), red) && near(at(&mut c, PadState::WHOLE, 280), green), "whole picture: red then green");
+        assert!(near(at(&mut c, [0.5, 0.0, 1.0, 1.0], 40), green), "right half only: all green {:?}", at(&mut c, [0.5, 0.0, 1.0, 1.0], 40));
+        assert!(near(at(&mut c, [0.0, 0.0, 0.5, 1.0], 280), red), "left half only: all red");
     }
 
     /// The vertical version: the scene's tall layout, each source cropped
@@ -1905,7 +1949,7 @@ mod tests {
         }
         let path = std::env::temp_dir().join(format!("cutaway-swap-{}.cube", std::process::id()));
         std::fs::write(&path, cube).unwrap();
-        let states = [PadState { x: 0, y: 0, w: 320, h: 180, alpha: 1.0, zorder: 1 }];
+        let states = [PadState { x: 0, y: 0, w: 320, h: 180, alpha: 1.0, zorder: 1, crop: PadState::WHOLE }];
         let px = |f: &VideoFrame, x: usize, y: usize| -> (u8, u8, u8) {
             f.pixels.with_planes(|pl| (pl.y[y * pl.y_stride + x], pl.uv[(y / 2) * pl.uv_stride + (x / 2) * 2], pl.uv[(y / 2) * pl.uv_stride + (x / 2) * 2 + 1]))
         };
@@ -1979,7 +2023,7 @@ mod tests {
         };
         let near = |a: [u8; 3], b: [u8; 3]| a.iter().zip(b).all(|(x, y)| (*x as i32 - y as i32).abs() <= 12);
         let wants = Wants { preview: true, ..Default::default() };
-        let full = PadState { x: 0, y: 0, w: 320, h: 180, alpha: 1.0, zorder: 2 };
+        let full = PadState { x: 0, y: 0, w: 320, h: 180, alpha: 1.0, zorder: 2, crop: PadState::WHOLE };
         let layout = Layout::Stinger { states: vec![full], elapsed: 0 };
         let (green, red) = ([0, 255, 0], [255, 0, 0]);
 
@@ -2049,9 +2093,9 @@ mod tests {
         };
         let near = |a: [u8; 3], b: [u8; 3]| a.iter().zip(b).all(|(x, y)| (*x as i32 - y as i32).abs() <= 12);
         let wants = Wants { preview: true, ..Default::default() };
-        let full = PadState { x: 0, y: 0, w: 320, h: 180, alpha: 1.0, zorder: 2 };
+        let full = PadState { x: 0, y: 0, w: 320, h: 180, alpha: 1.0, zorder: 2, crop: PadState::WHOLE };
         let hidden = PadState { alpha: 0.0, ..PadState::HIDDEN };
-        let pip = PadState { x: 160, y: 90, w: 128, h: 72, alpha: 1.0, zorder: 3 };
+        let pip = PadState { x: 160, y: 90, w: 128, h: 72, alpha: 1.0, zorder: 3, crop: PadState::WHOLE };
 
         // Mirror: yellow on the left.
         let mut looks = vec![SourceLook { mirror: true, ..Default::default() }, SourceLook::default()];

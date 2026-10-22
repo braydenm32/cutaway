@@ -88,6 +88,9 @@ pub fn run(cfg: Config, save_path: Option<PathBuf>, self_test: bool) -> anyhow::
 struct Drag {
     layer: usize,
     resize: bool,
+    /// Moving the picture inside its frame (Alt/Option held) rather than
+    /// the frame.
+    pan: bool,
 }
 
 #[derive(PartialEq, Clone)]
@@ -1916,11 +1919,34 @@ impl App {
         let engine = self.engine.as_ref().unwrap();
         let names: Vec<String> = engine.sources.iter().map(|s| s.name.clone()).collect();
         let mut scene = live;
+        // Each source's shape (after its own crop), for moving its picture.
+        let aspects: Vec<f32> = engine.sources.iter().enumerate().map(|(i, s)| self.cfg.sources.get(i).map(|c| c.look.cropped_aspect(s.size.0 as f32 / s.size.1.max(1) as f32)).unwrap_or(16.0 / 9.0)).collect();
+        let canvas = engine.info.canvas;
         let to_screen = |l: &Layer| Rect::from_min_size(rect.min + vec2(l.x * rect.width(), l.y * rect.height()), vec2(l.w * rect.width(), l.h * rect.height()));
         let handle = 12.0;
         let id = ui.scope_id().with("program_edit");
         let resp = ui.interact(rect, id, Sense::click_and_drag());
         let pointer = resp.interact_pointer_pos().or(resp.hover_pos());
+        let hit_at = |layers: &[Layer], p: egui::Pos2| layers.iter().enumerate().rev().find(|(_, l)| to_screen(l).contains(p)).map(|(i, _)| i);
+
+        // Scrolling over a frame zooms its picture; double-clicking it
+        // switches between fitting and filling the frame.
+        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+        if resp.hovered() && scroll.abs() > 0.1 {
+            if let Some(i) = pointer.and_then(|p| hit_at(&scene.layers, p)) {
+                let l = &mut scene.layers[i];
+                l.zoom = (l.zoom * (scroll * 0.004).exp()).clamp(1.0, crate::scene::MAX_ZOOM);
+                self.selected_layer = Some(i);
+                self.apply_live_edit(scene.clone());
+            }
+        }
+        if resp.double_clicked() {
+            if let Some(i) = pointer.and_then(|p| hit_at(&scene.layers, p)) {
+                scene.layers[i].fill = !scene.layers[i].fill;
+                self.selected_layer = Some(i);
+                self.apply_live_edit(scene.clone());
+            }
+        }
 
         if resp.drag_started() || resp.clicked() {
             if let Some(p) = pointer {
@@ -1937,7 +1963,8 @@ impl App {
                 });
                 self.selected_layer = hit.map(|h| h.0);
                 if resp.drag_started() {
-                    self.drag = hit.map(|(layer, resize)| Drag { layer, resize });
+                    let pan = ui.input(|i| i.modifiers.alt);
+                    self.drag = hit.map(|(layer, resize)| Drag { layer, resize: resize && !pan, pan });
                 }
             }
         }
@@ -1947,7 +1974,20 @@ impl App {
                 let (dx, dy) = (delta.x / rect.width(), delta.y / rect.height());
                 let keep_aspect = ui.input(|i| i.modifiers.shift);
                 if let Some(l) = scene.layers.get_mut(d.layer) {
-                    if d.resize {
+                    if d.pan {
+                        // The picture follows the pointer: the view moves
+                        // the other way, by the part of it that shows.
+                        let aspect = aspects.get(l.source).copied().unwrap_or(16.0 / 9.0);
+                        let (frame, part) = crate::scene::place(l, canvas, aspect);
+                        let k = rect.width() / canvas.0 as f32;
+                        let (fw, fh) = ((frame.2 * k).max(1.0), (frame.3 * k).max(1.0));
+                        l.focus[0] = (l.focus[0] - delta.x / fw * (part[2] - part[0])).clamp(0.0, 1.0);
+                        l.focus[1] = (l.focus[1] - delta.y / fh * (part[3] - part[1])).clamp(0.0, 1.0);
+                        // Kept where the view can actually be, so moving back
+                        // responds at once.
+                        let (pw, ph) = ((part[2] - part[0]) / 2.0, (part[3] - part[1]) / 2.0);
+                        l.focus = [l.focus[0].clamp(pw, 1.0 - pw), l.focus[1].clamp(ph, 1.0 - ph)];
+                    } else if d.resize {
                         let aspect = l.w / l.h.max(1e-4);
                         l.w = (l.w + dx).clamp(0.05, 1.5);
                         l.h = if keep_aspect { l.w / aspect } else { (l.h + dy).clamp(0.05, 1.5) };
@@ -1973,9 +2013,27 @@ impl App {
             painter.text(r.min + vec2(6.0, 5.0), Align2::LEFT_TOP, &name, FontId::proportional(12.0), Color32::WHITE);
             let corner = Rect::from_min_max(r.right_bottom() - vec2(handle, handle), r.right_bottom());
             painter.rect_filled(corner, 2.0, color);
+            if l.crops() {
+                let text = match (l.fill, l.zoom > 1.0001) {
+                    (true, true) => format!("FILL · {:.1}×", l.zoom),
+                    (true, false) => "FILL".to_string(),
+                    _ => format!("{:.1}×", l.zoom),
+                };
+                let at = pos2(r.right() - 6.0, r.top() + 5.0);
+                let tag = painter.text(at, Align2::RIGHT_TOP, &text, FontId::proportional(11.0), Color32::WHITE);
+                painter.rect_filled(tag.expand(3.0), 2.0, Color32::from_black_alpha(150));
+                painter.text(at, Align2::RIGHT_TOP, &text, FontId::proportional(11.0), Color32::WHITE);
+            }
         }
         if resp.hovered() {
-            ctx.set_cursor_icon(if self.drag.as_ref().is_some_and(|d| d.resize) { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::Grab });
+            let panning = self.drag.as_ref().is_some_and(|d| d.pan) || (self.drag.is_none() && ui.input(|i| i.modifiers.alt));
+            ctx.set_cursor_icon(if panning {
+                egui::CursorIcon::Move
+            } else if self.drag.as_ref().is_some_and(|d| d.resize) {
+                egui::CursorIcon::ResizeNwSe
+            } else {
+                egui::CursorIcon::Grab
+            });
         }
     }
 
@@ -2001,7 +2059,7 @@ impl App {
         let old_name = scene.name.clone();
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("EDIT LAYOUT").color(AMBER).strong());
-            ui.label(RichText::new("drag frames · corner to resize · Shift keeps shape").color(TEXT_DIM).size(11.5));
+            ui.label(RichText::new(if cfg!(target_os = "macos") { "drag frames · corner to resize · Shift keeps shape · scroll to zoom · Option-drag moves the picture" } else { "drag frames · corner to resize · Shift keeps shape · scroll to zoom · Alt-drag moves the picture" }).color(TEXT_DIM).size(11.5));
             ui.separator();
             ui.label("Name");
             let mut name = scene.name.clone();
@@ -2012,7 +2070,7 @@ impl App {
             egui::ComboBox::from_id_salt("add_layer").selected_text("Add source").show_ui(ui, |ui| {
                 for (i, n) in names.iter().enumerate() {
                     if ui.selectable_label(false, n).clicked() {
-                        scene.layers.push(Layer { source: i, x: 0.3, y: 0.3, w: 0.4, h: 0.4 });
+                        scene.layers.push(Layer::at(i, 0.3, 0.3, 0.4, 0.4));
                         changed = true;
                     }
                 }
@@ -2033,6 +2091,27 @@ impl App {
                 let l = &mut scene.layers[sel.unwrap()];
                 (l.x, l.y, l.w, l.h) = (0.0, 0.0, 1.0, 1.0);
                 changed = true;
+            }
+            // The picture in the selected frame: fitted or filling, and zoom.
+            if let Some(i) = sel {
+                ui.separator();
+                let l = &mut scene.layers[i];
+                if ui.selectable_label(!l.fill, "Fit").on_hover_text("Show the whole picture (bars where the frame is another shape)").clicked() {
+                    l.fill = false;
+                    changed = true;
+                }
+                if ui.selectable_label(l.fill, "Fill").on_hover_text("Fill the frame, cropping the picture to its shape (or double-click the frame)").clicked() {
+                    l.fill = true;
+                    changed = true;
+                }
+                ui.label("Zoom");
+                if ui.add(egui::Slider::new(&mut l.zoom, 1.0..=crate::scene::MAX_ZOOM).step_by(0.05).fixed_decimals(1).suffix("×")).on_hover_text("Or scroll over the frame").changed() {
+                    changed = true;
+                }
+                if ui.add_enabled(l.crops() || l.focus != [0.5, 0.5], egui::Button::new("Reset picture")).on_hover_text("Fit, no zoom, centred").clicked() {
+                    (l.fill, l.zoom, l.focus) = (false, 1.0, [0.5, 0.5]);
+                    changed = true;
+                }
             }
             // Scene audio: inputs this scene turns on or off.
             let n_audio = scene.audio_on.len() + scene.audio_off.len();
@@ -2333,7 +2412,7 @@ impl App {
             Some(idx) => self.press_scene(idx, cut),
             None => {
                 let name = self.cfg.sources.get(i).map(|s| s.name.clone()).unwrap_or_else(|| format!("Source {}", i + 1));
-                let scene = Scene { name, layers: vec![Layer { source: i, x: 0.0, y: 0.0, w: 1.0, h: 1.0 }], ..Default::default() };
+                let scene = Scene { name, layers: vec![Layer::at(i, 0.0, 0.0, 1.0, 1.0)], ..Default::default() };
                 if self.preview_mode() && !cut {
                     if let Some(e) = &self.engine {
                         e.switcher.set_preview(Some(scene));
