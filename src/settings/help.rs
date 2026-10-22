@@ -31,7 +31,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
 
         // ---- Video sources
         (Sources, "Name") => "What this source is called on its button, in the multiview and scenes, and in the name of its own file (ISO_01_Name).",
-        (Sources, "Type") => "Where the picture comes from: a camera or capture card on this computer, the screen, a test picture, a media player, a network feed (SRT, RTMP or NDI), a phone, or a close-up or virtual camera cut out of another source.",
+        (Sources, "Type") => "Where the picture comes from: a camera or capture card on this computer, a screen, window or app on this computer, a test picture, a media player, a network feed (SRT, RTMP or NDI), a phone, or a close-up or virtual camera cut out of another source.",
         (Sources, "Device") => "Which camera or capture card. If it's unplugged, the source waits and connects by itself when it's back.",
         (Sources, "Device modes") => "The sizes and frame rates the device says it can send. Picking one sets the capture size and frame rate to match.",
         (Sources, "Pattern") => "Which generated picture to show. Test pictures are for trying layouts and checking that sources line up; each flashes once a second.",
@@ -300,8 +300,8 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Upload, "When") => "Upload as each take is saved, or wait for you to press Upload. Uploads go one at a time in the background, and pick up again if the connection drops.",
 
         // ---- Screens & webcam
-        (Outputs, "Show") => "What the second-screen window shows: the program, the multiview or the teleprompter. Drag it to the projector, TV or monitor, then double-click it (or press F) to fill that screen; Esc leaves full screen. The header's Screen button turns it on and off.",
-        (Outputs, "Full screen") => "Fills the screen the window is on.",
+        (Outputs, "Show") => "What the second-screen window shows: the program, the multiview or the teleprompter. It opens on the screen chosen below. Double-click it (or press F) to fill the screen; Esc leaves full screen, and Esc again (or its ✕) closes it. The header's Screen button turns it on and off.",
+        (Outputs, "Full screen") => "Opens it filling its screen. Never over Cutaway itself: on the screen Cutaway is on (or with only one screen) it opens in a window.",
         (Outputs, "Clocks") => "Shows the time and the rundown segment's time left, on this screen only: for presenters, not viewers.",
         (Outputs, "Program") => "Sends the program, with the recording mix, as an NDI source that other computers, OBS, vMix, NDI Studio Monitor and NDI recorders on the network can use.",
         (Outputs, "Name") => "Its NDI name (NDI adds this computer's name in front).",

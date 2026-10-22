@@ -32,6 +32,29 @@ impl SettingsUi {
                 ui.checkbox(&mut d.clocks, "the time and the segment's time left");
                 ui.end_row();
             });
+            subtitle(ui, "Screen");
+            let displays = crate::platform::displays::list_recent();
+            if displays.len() < 2 {
+                hint(ui, "Only one screen is connected, so it opens in a window over Cutaway (F fills the screen, Esc gets back out). Connect a projector, TV or monitor and it goes there.");
+            } else {
+                let ours = our_display(ui.ctx(), &displays);
+                let chosen = displays.iter().position(|x| x.name == d.screen);
+                let shown = chosen.or_else(|| crate::platform::displays::pick_output(&displays, "", ours));
+                ui.horizontal(|ui| {
+                    if ui.selectable_label(d.screen.is_empty(), "Automatic").on_hover_text("Another screen than the one Cutaway is on").clicked() {
+                        d.screen.clear();
+                    }
+                    if !d.screen.is_empty() && chosen.is_none() {
+                        ui.label(RichText::new(format!("{} isn't connected: using another screen for now", d.screen)).color(AMBER).size(11.5));
+                    }
+                });
+                if let Some(i) = display_map(ui, &displays, shown, ours, 150.0) {
+                    d.screen = displays[i].name.clone();
+                }
+                if shown.is_some() && shown == ours {
+                    hint(ui, "That's the screen Cutaway is on, so it opens in a window there (F fills the screen, Esc gets back out).");
+                }
+            }
         });
 
         let n = &mut self.draft.ndi_out;

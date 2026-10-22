@@ -253,9 +253,9 @@ pub fn start_video(
         return Ok((r, if phone { "phone camera" } else { "remote guest" }.into()));
     }
     let sink: platform::FrameSink = Arc::new(move |f| slot.push(f));
-    if lower == "screen" {
-        let r = platform::open_screen(cfg.width, cfg.height, cfg.fps, sink)?;
-        return Ok((r, "screen".into()));
+    if let Some(target) = platform::capture::ScreenTarget::parse(spec) {
+        let r = platform::open_screen(&target, cfg.width, cfg.height, cfg.fps, sink)?;
+        return Ok((r, target.describe()));
     }
     let dev = crate::devices::find(spec, devices)?;
     let r = platform::open_camera(dev, cfg.width, cfg.height, cfg.fps, sink)?;
