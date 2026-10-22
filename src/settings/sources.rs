@@ -55,7 +55,7 @@ impl SourceKind {
             SourceKind::VirtualPtz
         } else if d.starts_with("phone:") {
             SourceKind::Phone
-        } else if d.starts_with("guest:") {
+        } else if d.starts_with("guest:") || d.starts_with("guest-screen:") {
             SourceKind::Guest
         } else {
             match netsrc::parse_spec(device) {
@@ -451,6 +451,9 @@ impl SettingsUi {
                         None => hint(ui, "Its QR code appears here once Remote guests is on and this is applied."),
                     }
                     hint(ui, "Picture only, up to 1080p, straight over your network; hold the phone sideways. Safari on iPhone, Chrome on Android.");
+                } else if src.guest_screen_id().is_some() {
+                    let whose = src.guest_screen_id().and_then(|id| self.original.sources.iter().find(|s| s.guest_id() == Some(id))).map(|s| s.name.clone()).unwrap_or_else(|| "the guest".into());
+                    hint(ui, &format!("{whose}'s screen: they share it (the whole screen, a window or a tab) with the Share screen button on their page, and it arrives here. Turn it off in Remote guests."));
                 } else {
                     if let Some(link) = &link {
                         ui.horizontal(|ui| {

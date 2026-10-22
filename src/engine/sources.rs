@@ -252,6 +252,10 @@ pub fn start_video(
         let r = super::guests::start_source(cfg, slot, hub.clone())?;
         return Ok((r, if phone { "phone camera" } else { "remote guest" }.into()));
     }
+    if cfg.guest_screen_id().is_some() {
+        let r = super::guests::start_source(cfg, slot, hub.clone())?;
+        return Ok((r, "guest's screen".into()));
+    }
     let sink: platform::FrameSink = Arc::new(move |f| slot.push(f));
     if lower == "screen" {
         let r = platform::open_screen(cfg.width, cfg.height, cfg.fps, sink)?;

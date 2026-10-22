@@ -99,6 +99,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Guests, "Port") => "The port the guest page runs on, on this computer. With the tunnel only this computer uses it; with your own address, forward it here.",
         (Guests, "Guests see") => "Sends guests a small copy of the program, so they can see what's on air without much of their connection.",
         (Guests, "Backup recordings") => "While you record, each guest's browser also records their camera and mic as captured, before the internet gets at it, and sends it in pieces into the take's Guests folder. It uses more of their upload, so it suits decent connections; their page tells them it's happening.",
+        (Guests, "Screen share") => "Adds a source for the guest's screen. Their page gets a Share screen button: they choose the whole screen, a window or a tab, and it arrives on its own source while their camera stays on.",
         (Guests, "TURN server") => "A relay for guests on strict networks (some offices, schools and hotels) that block direct connections: Cloudflare Calls, Twilio or your own coturn. Most guests never need one.",
         (Guests, "Username") | (Guests, "Password") => "The TURN server's login.",
 

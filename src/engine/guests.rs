@@ -16,6 +16,10 @@
 //! A phone camera is a spot of the same kind ("phone:ID"): the phone opens
 //! its link from a QR code and sends its camera only, at up to 1080p.
 //!
+//! A guest can also share their screen, as a source of its own
+//! ("guest-screen:ID", ID being their link): the page opens a second,
+//! picture-only connection for it, so their camera stays on too.
+//!
 //! Backup recordings: while the show records, each guest's browser also
 //! records them as captured and uploads it in pieces into the take's
 //! Guests folder, so a bad connection doesn't spoil the recording.
@@ -78,6 +82,8 @@ pub struct GuestInfo {
     pub since: Option<Instant>,
     /// A phone camera rather than a guest.
     pub camera: bool,
+    /// A guest's shared screen (`id` is then the screen's key).
+    pub screen: bool,
     /// Their backup recording (the latest), if one's coming in.
     pub backup: Option<BackupInfo>,
 }
@@ -118,6 +124,8 @@ struct Slot {
     source: String,
     /// A phone camera (picture only, nothing sent back).
     camera: bool,
+    /// A guest's shared screen (picture only too).
+    screen: bool,
     feeder: Arc<Mutex<Feeder>>,
     /// Ask the browser for a fresh keyframe (a new decoder needs one).
     want_key: Arc<AtomicBool>,
@@ -193,6 +201,12 @@ pub fn hub() -> Arc<GuestHub> {
         h
     })
     .clone()
+}
+
+/// The key of a guest's shared screen, beside their own (link ids are
+/// letters and digits, so this can't be one).
+pub fn screen_key(id: &str) -> String {
+    format!("{id}.screen")
 }
 
 /// A new link id: 12 random letters and digits.
@@ -326,6 +340,7 @@ impl GuestHub {
                     guest_name: c.map(|c| c.guest_name.clone()).unwrap_or_default(),
                     since: c.and_then(|c| c.since),
                     camera: s.camera,
+                    screen: s.screen,
                     backup: Self::backup_of(&inner, id),
                 }
             })
@@ -475,6 +490,7 @@ impl GuestHub {
         let mut inner = self.inner.lock_ok();
         let source = inner.slots.get(id).map(|s| s.source.clone()).unwrap_or_default();
         let camera = inner.slots.get(id).is_some_and(|s| s.camera);
+        let screen = inner.slots.get(id).is_some_and(|s| s.screen);
         let c = inner.conns.remove(id);
         drop(inner);
         if let Some(c) = c {
@@ -482,7 +498,7 @@ impl GuestHub {
             let was_on = c.connected;
             self.close_conn(c);
             if was_on {
-                self.log(LogLevel::Info, format!("{who} left ({source})"));
+                self.log(LogLevel::Info, if screen { format!("{who} stopped sharing their screen ({source})") } else { format!("{who} left ({source})") });
             }
             self.wake();
         }
@@ -569,13 +585,15 @@ impl GuestHub {
         let (show, rv) = (inner.show.clone(), inner.cfg.return_video && !camera);
         let backup = inner.cfg.backup && !camera;
         let source = slot.source.clone();
+        // Whether there's a source for their screen, so the page offers to share it.
+        let screen = !camera && inner.slots.contains_key(&screen_key(id));
         drop(inner);
         let ice: Vec<serde_json::Value> = self
             .ice_servers()
             .into_iter()
             .map(|s| if s.username.is_empty() { serde_json::json!({ "urls": s.urls }) } else { serde_json::json!({ "urls": s.urls, "username": s.username, "credential": s.credential }) })
             .collect();
-        Some(serde_json::json!({ "show": show, "slot": source, "returnVideo": rv, "camera": camera, "backup": backup, "iceServers": ice }).to_string())
+        Some(serde_json::json!({ "show": show, "slot": source, "returnVideo": rv, "camera": camera, "screen": screen, "backup": backup, "iceServers": ice }).to_string())
     }
 
     // ---- connecting --------------------------------------------------------------------
@@ -587,7 +605,7 @@ impl GuestHub {
             let Some(slot) = inner.slots.get(&id).filter(|_| inner.cfg.enabled) else {
                 bail!("this link isn't active");
             };
-            (inner.cfg.return_video && !slot.camera, slot.camera)
+            (inner.cfg.return_video && !slot.camera && !slot.screen, slot.camera || slot.screen)
         };
         // A guest joining again (reloading the page) replaces their old connection.
         let old = self.inner.lock_ok().conns.remove(&id);
@@ -724,13 +742,23 @@ impl GuestHub {
                 c.since.get_or_insert_with(Instant::now);
                 let who = if c.guest_name.is_empty() { "A guest".to_string() } else { c.guest_name.clone() };
                 let camera = inner.slots.get(id).is_some_and(|s| s.camera);
+                let screen = inner.slots.get(id).is_some_and(|s| s.screen);
                 if let Some(s) = inner.slots.get(id) {
                     s.want_key.store(true, Ordering::Relaxed);
                 }
                 drop(inner);
                 self.keyframe.store(true, Ordering::Relaxed);
                 if first {
-                    self.log(LogLevel::Info, if camera { format!("A phone is connected as {source}") } else { format!("{who} joined as {source}") });
+                    self.log(
+                        LogLevel::Info,
+                        if screen {
+                            format!("{who} is sharing their screen ({source})")
+                        } else if camera {
+                            format!("A phone is connected as {source}")
+                        } else {
+                            format!("{who} joined as {source}")
+                        },
+                    );
                 }
             }
             RTCPeerConnectionState::Disconnected => {
@@ -740,11 +768,12 @@ impl GuestHub {
                 let c = inner.conns.remove(id).unwrap();
                 let was = c.connected || c.since.is_some();
                 let camera = inner.slots.get(id).is_some_and(|s| s.camera);
+                let screen = inner.slots.get(id).is_some_and(|s| s.screen);
                 let who = if camera { "The phone".to_string() } else if c.guest_name.is_empty() { "The guest".to_string() } else { c.guest_name.clone() };
                 drop(inner);
                 self.close_conn(c);
                 if was {
-                    self.log(LogLevel::Info, format!("{who} left ({source})"));
+                    self.log(LogLevel::Info, if screen { format!("{who} stopped sharing their screen ({source})") } else { format!("{who} left ({source})") });
                 } else if state == RTCPeerConnectionState::Failed {
                     self.log(LogLevel::Warning, format!("{who} couldn't connect to {source}: their network blocks direct connections. A TURN server (Settings → Remote guests) gets round that."));
                 }
@@ -1107,7 +1136,9 @@ fn handle(mut conn: TcpStream, hub: &Arc<GuestHub>) -> std::io::Result<()> {
             Some(j) => respond(&mut conn, "200 OK", "application/json", j.as_bytes()),
             None => respond(&mut conn, "404 Not Found", "text/plain", b"this link isn't active"),
         },
-        ("POST", Some("offer")) => {
+        ("POST", Some(part @ ("offer" | "screen"))) => {
+            // Their screen comes on a connection of its own.
+            let id = if part == "screen" { screen_key(&id) } else { id };
             if length > 256 * 1024 {
                 return respond(&mut conn, "413 Too Large", "text/plain", b"too large");
             }
@@ -1134,7 +1165,12 @@ fn handle(mut conn: TcpStream, hub: &Arc<GuestHub>) -> std::io::Result<()> {
             }
         }
         ("POST", Some("leave")) => {
+            hub.kick(&screen_key(&id));
             hub.kick(&id);
+            respond(&mut conn, "204 No Content", "text/plain", b"")
+        }
+        ("POST", Some("screen-stop")) => {
+            hub.kick(&screen_key(&id));
             respond(&mut conn, "204 No Content", "text/plain", b"")
         }
         _ => respond(&mut conn, "404 Not Found", "text/plain", b"not found"),
@@ -1176,17 +1212,20 @@ fn slate(cfg: &SourceConfig, line: &str) -> VideoFrame {
     super::player::image_frame(&img, (w, h), clock::now())
 }
 
-/// Start a guest source ("guest:ID").
+/// Start a guest source ("guest:ID", "phone:ID" or "guest-screen:ID").
 pub fn start_source(cfg: &SourceConfig, slot: Arc<SourceSlot>, audio: Arc<AudioHub>) -> Result<Box<dyn Running>> {
-    let (id, camera) = cfg.link_id().ok_or_else(|| anyhow!("{}: the link id is missing", cfg.name))?;
-    let id = id.to_string();
+    let (id, camera, screen) = match (cfg.guest_screen_id(), cfg.link_id()) {
+        (Some(of), _) => (screen_key(of), false, true),
+        (None, Some((id, camera))) => (id.to_string(), camera, false),
+        (None, None) => bail!("{}: the link id is missing", cfg.name),
+    };
     let stop = Arc::new(AtomicBool::new(false));
     let latency = if cfg.network_latency_ms == 0 { 250 } else { cfg.network_latency_ms };
     let feeder = Feeder::new(&cfg.name, slot.clone(), audio, (cfg.width, cfg.height), latency, stop.clone());
     let want_key = Arc::new(AtomicBool::new(true));
     let last_video = Arc::new(Mutex::new(None));
     let h = hub();
-    h.inner.lock_ok().slots.insert(id.clone(), Slot { source: cfg.name.clone(), camera, feeder: Arc::new(Mutex::new(feeder)), want_key, last_video: last_video.clone() });
+    h.inner.lock_ok().slots.insert(id.clone(), Slot { source: cfg.name.clone(), camera, screen, feeder: Arc::new(Mutex::new(feeder)), want_key, last_video: last_video.clone() });
     h.wake();
     // The slate, until (and whenever) no pictures come.
     let (c2, s2, id2) = (cfg.clone(), stop.clone(), id.clone());
@@ -1198,6 +1237,16 @@ pub fn start_source(cfg: &SourceConfig, slot: Arc<SourceSlot>, audio: Arc<AudioH
                 let h = hub();
                 let state = h.guests().into_iter().find(|g| g.id == id2);
                 let line = match state {
+                    Some(g) if screen && (g.connected || g.connecting) => "Their screen is on its way…".to_string(),
+                    _ if screen => {
+                        // Who it belongs to, if they're on.
+                        let owner = id2.strip_suffix(".screen").and_then(|o| h.guests().into_iter().find(|g| g.id == o && g.connected));
+                        match owner {
+                            Some(g) if !g.guest_name.is_empty() => format!("{} can share their screen from their page", g.guest_name),
+                            Some(_) => "The guest can share their screen from their page".to_string(),
+                            None => "Waiting for the guest to share their screen".to_string(),
+                        }
+                    }
                     Some(g) if g.connected && camera => "Connected — waiting for the picture".to_string(),
                     Some(g) if g.connected => format!("{} — waiting for their camera", if g.guest_name.is_empty() { "Connected" } else { &g.guest_name }),
                     Some(g) if g.connecting => "Joining…".to_string(),
@@ -1275,6 +1324,11 @@ mod tests {
     /// send three seconds of H.264 and, unless it's a phone camera, Opus.
     /// Returns Cutaway's answer.
     async fn join_and_send(port: u16, id: &str, sound: bool) -> Result<String> {
+        join_and_send_to(port, id, "offer", sound).await
+    }
+
+    /// The same, to the guest's offer or ("screen") screen share.
+    async fn join_and_send_to(port: u16, id: &str, part: &str, sound: bool) -> Result<String> {
         use crate::media::testsrc::TestPattern;
         let mut me = MediaEngine::default();
         let opus = RTCRtpCodec { mime_type: MIME_TYPE_OPUS.to_owned(), clock_rate: 48_000, channels: 2, sdp_fmtp_line: "minptime=10;useinbandfec=1".into(), rtcp_feedback: vec![] };
@@ -1334,7 +1388,7 @@ mod tests {
         let sdp = pc.local_description().await.unwrap().sdp;
         // Join, as the page does.
         let body = serde_json::json!({ "sdp": sdp, "name": "Robo Guest" }).to_string();
-        let path = format!("/g/{id}/offer");
+        let path = format!("/g/{id}/{part}");
         let answer = tokio::task::spawn_blocking(move || {
             let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
             write!(c, "POST {path} HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len()).unwrap();
@@ -1480,6 +1534,41 @@ mod tests {
         cfg.guests.enabled = false;
         h.apply(&cfg, Arc::new(|| {}));
         drop(running);
+    }
+
+    #[test]
+    fn a_guest_shares_their_screen() {
+        let _turn = turn();
+        let port = 18_793;
+        let id = "e2etestscreen";
+        let (cam_slot, screen_slot) = (SourceSlot::new(0, 0, 0), SourceSlot::new(0, 0, 0));
+        let cam = SourceConfig { name: "Guest E2E".into(), device: format!("guest:{id}"), width: 320, height: 180, fps: 30, network_latency_ms: 100, ..Default::default() };
+        let scr = SourceConfig { name: "Guest E2E's screen".into(), device: format!("guest-screen:{id}"), width: 320, height: 180, fps: 30, network_latency_ms: 100, ..Default::default() };
+        assert_eq!(scr.guest_screen_id(), Some(id));
+        assert_eq!(scr.link_id(), None);
+        let running_cam = start_source(&cam, cam_slot.clone(), AudioHub::new()).unwrap();
+        let mut cfg = guests_on(port, false);
+        let h = hub();
+        assert!(get(port, &format!("/g/{id}/info")).contains("\"screen\":false"), "no screen source yet");
+        let running_screen = start_source(&scr, screen_slot.clone(), AudioHub::new()).unwrap();
+        assert!(get(port, &format!("/g/{id}/info")).contains("\"screen\":true"), "the page offers to share");
+
+        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+        let before = (cam_slot.frames(), screen_slot.frames());
+        let answer = rt.block_on(join_and_send_to(port, id, "screen", false)).unwrap();
+        assert!(!answer.contains("a=sendrecv") && !answer.contains("m=audio"), "nothing goes back on the screen's connection: {answer}");
+        assert!(screen_slot.frames() - before.1 > 40, "the screen arrived");
+        assert!(not_the_slate(&screen_slot, 320, 180) >= 4, "the screen's picture");
+        let g = h.guests().into_iter().find(|g| g.id == screen_key(id)).unwrap();
+        assert!(g.screen && !g.camera);
+        assert!(h.guests().into_iter().find(|g| g.id == id).is_some_and(|g| !g.connected), "their camera spot is separate");
+        // Stopping the share closes only that connection.
+        post(port, &format!("/g/{id}/screen-stop"), b"");
+        assert!(h.guests().into_iter().find(|g| g.id == screen_key(id)).is_some_and(|g| !g.connected && !g.connecting));
+        cfg.guests.enabled = false;
+        h.apply(&cfg, Arc::new(|| {}));
+        drop(running_screen);
+        drop(running_cam);
     }
 
     /// Backup recordings: pieces arrive in order into the take's Guests

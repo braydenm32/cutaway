@@ -1618,6 +1618,7 @@ pub(super) fn short_device(device: &str) -> String {
         d if d.starts_with("frame:") => format!("Auto-framed from {}", d[6..].trim()),
         d if d.starts_with("vptz:") => format!("Virtual PTZ in {}", d[5..].trim()),
         d if d.starts_with("guest:") => "Remote guest (link)".into(),
+        d if d.starts_with("guest-screen:") => "Guest's screen".into(),
         d if d.starts_with("phone:") => "Phone camera".into(),
         d if d.starts_with("srt-in:") => format!("SRT input :{}", &d[7..]),
         d if d.starts_with("rtmp-in:") => format!("RTMP input :{}", d[8..].split('/').next().unwrap_or("")),
