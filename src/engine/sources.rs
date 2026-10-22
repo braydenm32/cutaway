@@ -1,6 +1,7 @@
 //! Video and audio inputs: test generators here, real devices through the
 //! platform layer. Every source hands its frames to a [`SourceSlot`].
 
+use crate::util::LockExt;
 use crate::config::{AudioConfig, SourceConfig};
 use crate::devices::DeviceInfo;
 use crate::media::testsrc::{TestPattern, TestTone, PATTERNS};
@@ -62,13 +63,13 @@ impl SourceSlot {
     /// Called by the source for every captured frame.
     pub fn push(&self, mut frame: VideoFrame) {
         frame.serial = self.serial.fetch_add(1, Ordering::Relaxed) + 1;
-        *self.last_arrival.lock().unwrap() = Some(Instant::now());
+        *self.last_arrival.lock_ok() = Some(Instant::now());
         // A delay means many frames held (here and in the recorder, which
         // waits for their time to come); holding that many camera buffers
         // would starve the capture pool, so they're copied.
         let frame = if self.delay > 0 { frame.detached() } else { frame };
         let newest = frame.pts;
-        let mut g = self.inner.lock().unwrap();
+        let mut g = self.inner.lock_ok();
         if let Some(tap) = g.iso_tap.as_ref() {
             if tap.try_send(frame.clone()).is_err() {
                 g.dropped += 1;
@@ -91,14 +92,14 @@ impl SourceSlot {
     /// The frame to show at host time `t`: the newest one captured (plus
     /// delay) at or before `t`.
     pub fn pick(&self, t: Ns) -> Option<VideoFrame> {
-        let g = self.inner.lock().unwrap();
+        let g = self.inner.lock_ok();
         g.frames.iter().rev().find(|f| f.pts + self.delay <= t).or(g.frames.front()).cloned()
     }
 
     /// Start sending frames to the recorder, beginning with the frame that
     /// is on screen at `from` (so delayed sources start on time too).
     pub fn start_iso_tap(&self, tx: Sender<VideoFrame>, from: Ns) {
-        let mut g = self.inner.lock().unwrap();
+        let mut g = self.inner.lock_ok();
         let start = g.frames.iter().rposition(|f| f.pts + self.delay <= from).unwrap_or(0);
         for f in g.frames.iter().skip(start) {
             let _ = tx.try_send(f.clone());
@@ -110,18 +111,18 @@ impl SourceSlot {
     /// Stop the recorder tap; returns how many frames were dropped because
     /// the encoder couldn't keep up.
     pub fn stop_iso_tap(&self) -> u64 {
-        let mut g = self.inner.lock().unwrap();
+        let mut g = self.inner.lock_ok();
         g.iso_tap = None;
         std::mem::take(&mut g.dropped)
     }
 
     /// Also send every new frame to `tx` (until removed).
     pub fn add_watcher(&self, id: u64, tx: Sender<VideoFrame>) {
-        self.inner.lock().unwrap().watchers.push((id, tx));
+        self.inner.lock_ok().watchers.push((id, tx));
     }
 
     pub fn remove_watcher(&self, id: u64) {
-        self.inner.lock().unwrap().watchers.retain(|w| w.0 != id);
+        self.inner.lock_ok().watchers.retain(|w| w.0 != id);
     }
 
     /// Frames delivered so far.
@@ -131,7 +132,7 @@ impl SourceSlot {
 
     /// No frames for a while.
     pub fn stale(&self, secs: f32) -> bool {
-        self.last_arrival.lock().unwrap().map(|t| t.elapsed().as_secs_f32() > secs).unwrap_or(true)
+        self.last_arrival.lock_ok().map(|t| t.elapsed().as_secs_f32() > secs).unwrap_or(true)
     }
 }
 
@@ -227,7 +228,7 @@ pub fn start_video(
             .find(|(n, _)| n.trim().eq_ignore_ascii_case(from))
             .map(|p| p.1.clone())
             .ok_or_else(|| anyhow::anyhow!("there's no source called \"{from}\" to cut it from"))?;
-        let virt = links.ptz.lock().unwrap().as_ref().and_then(|p| p.virt.clone()).unwrap_or_else(|| super::ptz::VirtualPtz::new(&cfg.ptz));
+        let virt = links.ptz.lock_ok().as_ref().and_then(|p| p.virt.clone()).unwrap_or_else(|| super::ptz::VirtualPtz::new(&cfg.ptz));
         return super::ptz::start_virtual(cfg, from, parent, slot, virt);
     }
     if lower == "test" || lower.starts_with("test:") {
@@ -244,7 +245,7 @@ pub fn start_video(
         return super::netsrc::start(cfg, slot, hub.clone(), net.clone());
     }
     if let Some(name) = spec.strip_prefix("ndi:").or_else(|| spec.strip_prefix("NDI:")) {
-        let ptz_rx = links.ptz.lock().unwrap().as_ref().and_then(|p| p.ndi_rx.clone());
+        let ptz_rx = links.ptz.lock_ok().as_ref().and_then(|p| p.ndi_rx.clone());
         return super::ndi::start(name.trim(), cfg, slot, hub.clone(), net.clone(), ptz_rx);
     }
     if let Some((_, phone)) = cfg.link_id() {
@@ -303,7 +304,7 @@ pub fn start_audio(index: usize, cfg: &AudioConfig, devices: &[DeviceInfo], tx: 
         return platform::app_audio::open(app.trim(), sink);
     }
     if lower == "pads" {
-        let bank = hub.pads.lock().unwrap().clone().ok_or_else(|| anyhow!("the sound pads aren't running"))?;
+        let bank = hub.pads.lock_ok().clone().ok_or_else(|| anyhow!("the sound pads aren't running"))?;
         return Ok(AudioStarted { running: super::pads::start_strip(bank, tx)?, description: "sound pads".into(), rate: 48_000, channels: 2 });
     }
     if lower == "test" || lower.starts_with("test:") {

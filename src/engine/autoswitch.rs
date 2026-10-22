@@ -2,6 +2,7 @@
 //! several people talk at once or a shot has been up a long time, and step
 //! aside whenever the operator switches by hand.
 
+use crate::util::LockExt;
 use super::audio::InputShared;
 use super::switcher::Switcher;
 use super::{LogLevel, Status, Waker};
@@ -34,7 +35,7 @@ impl AutoShared {
 
     /// The operator switched: hold off for a while.
     pub fn manual_switch(&self) {
-        *self.last_manual.lock().unwrap() = Some(Instant::now());
+        *self.last_manual.lock_ok() = Some(Instant::now());
     }
 }
 
@@ -187,10 +188,10 @@ impl AutoSwitcher {
             std::thread::sleep(Duration::from_millis(50));
             let now = Instant::now();
             // Only its own settings (this runs twenty times a second).
-            let a = &self.cfg.lock().unwrap().auto_switch.clone();
+            let a = &self.cfg.lock_ok().auto_switch.clone();
             let enabled = self.shared.enabled.load(Ordering::Relaxed);
-            let pause_left = self.shared.last_manual.lock().unwrap().map(|m| (a.manual_pause_s - now.duration_since(m).as_secs_f32()).max(0.0)).unwrap_or(0.0);
-            let levels = rule_levels(a, &self.inputs.lock().unwrap());
+            let pause_left = self.shared.last_manual.lock_ok().map(|m| (a.manual_pause_s - now.duration_since(m).as_secs_f32()).max(0.0)).unwrap_or(0.0);
+            let levels = rule_levels(a, &self.inputs.lock_ok());
             let live = self.switcher.live();
             let decision = if enabled {
                 director.decide(&Tick { now, cfg: a, levels: &levels, live: &live.name, manual_pause_left: pause_left })
@@ -199,12 +200,12 @@ impl AutoSwitcher {
                 None
             };
             if let Some(name) = decision {
-                let scenes = self.cfg.lock().unwrap().effective_scenes();
+                let scenes = self.cfg.lock_ok().effective_scenes();
                 match scenes.into_iter().find(|s| s.name.eq_ignore_ascii_case(&name)) {
                     Some(scene) => (self.take)(&scene),
                     None if warned_missing != name => {
                         warned_missing = name.clone();
-                        self.status.lock().unwrap().push(LogLevel::Warning, format!("Auto switching: there's no scene called \"{name}\""));
+                        self.status.lock_ok().push(LogLevel::Warning, format!("Auto switching: there's no scene called \"{name}\""));
                     }
                     None => {}
                 }
@@ -212,7 +213,7 @@ impl AutoSwitcher {
             let st = AutoStatus { enabled, talking: director.talking(now, Duration::from_millis(a.hold_ms as u64)), paused_for: if enabled { pause_left } else { 0.0 } };
             let changed = st.enabled != last_status.enabled || st.talking != last_status.talking || (st.paused_for > 0.0) != (last_status.paused_for > 0.0);
             if changed || st.paused_for > 0.0 {
-                self.status.lock().unwrap().auto_switch = st.clone();
+                self.status.lock_ok().auto_switch = st.clone();
                 if changed {
                     (self.waker)();
                 }

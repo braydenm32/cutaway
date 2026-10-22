@@ -3,6 +3,7 @@
 //! router changes. Cutaway runs Cloudflare's `cloudflared` program,
 //! downloading it the first time if it isn't installed.
 
+use crate::util::LockExt;
 use anyhow::{anyhow, bail, Context, Result};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -120,7 +121,7 @@ impl Tunnel {
         let (s2, c2, stop2) = (state.clone(), child.clone(), stop.clone());
         let _ = std::thread::Builder::new().name("tunnel".into()).spawn(move || {
             let set = |st: TunnelState| {
-                *s2.lock().unwrap() = st;
+                *s2.lock_ok() = st;
                 waker();
             };
             let mut tries = 0;
@@ -141,7 +142,7 @@ impl Tunnel {
     }
 
     pub fn address(&self) -> Option<String> {
-        match &*self.state.lock().unwrap() {
+        match &*self.state.lock_ok() {
             TunnelState::Up(a) => Some(a.clone()),
             _ => None,
         }
@@ -163,7 +164,7 @@ fn run_once(port: u16, child_slot: &Arc<Mutex<Option<Child>>>, stop: &std::sync:
     }
     let mut child = cmd.spawn().with_context(|| format!("couldn't start {}", exe.display()))?;
     let stderr = child.stderr.take().ok_or_else(|| anyhow!("no output from cloudflared"))?;
-    *child_slot.lock().unwrap() = Some(child);
+    *child_slot.lock_ok() = Some(child);
     if stop.load(std::sync::atomic::Ordering::Relaxed) {
         kill(child_slot);
         return Ok(());
@@ -197,7 +198,7 @@ fn run_once(port: u16, child_slot: &Arc<Mutex<Option<Child>>>, stop: &std::sync:
 }
 
 fn kill(child_slot: &Arc<Mutex<Option<Child>>>) {
-    if let Some(mut c) = child_slot.lock().unwrap().take() {
+    if let Some(mut c) = child_slot.lock_ok().take() {
         let _ = c.kill();
         let _ = c.wait();
     }

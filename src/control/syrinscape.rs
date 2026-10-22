@@ -7,6 +7,7 @@
 //! up the show. Syrinscape doesn't say what's playing, so Cutaway keeps
 //! track of what it started itself.
 
+use crate::util::LockExt;
 use crate::config::{SyrinButton, SyrinKind, SyrinscapeConfig};
 use anyhow::{anyhow, bail, Result};
 use crossbeam_channel::{unbounded, Sender};
@@ -76,10 +77,10 @@ impl Syrinscape {
         let _ = std::thread::Builder::new().name("syrinscape".into()).spawn(move || {
             let agent = crate::util::https_agent(Duration::from_secs(15));
             while let Ok(job) = rx.recv() {
-                s2.lock().unwrap().busy = true;
-                let token = t2.lock().unwrap().clone();
+                s2.lock_ok().busy = true;
+                let token = t2.lock_ok().clone();
                 let r = run(&agent, &token, &job, &s2);
-                let mut st = s2.lock().unwrap();
+                let mut st = s2.lock_ok();
                 st.busy = false;
                 match r {
                     Ok(()) => st.problem = None,
@@ -93,11 +94,11 @@ impl Syrinscape {
     }
 
     pub fn set_token(&self, token: &str) {
-        *self.token.lock().unwrap() = token.trim().to_string();
+        *self.token.lock_ok() = token.trim().to_string();
     }
 
     pub fn has_token(&self) -> bool {
-        !self.token.lock().unwrap().is_empty()
+        !self.token.lock_ok().is_empty()
     }
 
     fn send(&self, job: Job) -> Result<(), String> {
@@ -147,17 +148,17 @@ impl Syrinscape {
     }
 
     pub fn load_soundsets(&self) {
-        self.state.lock().unwrap().soundsets = None;
+        self.state.lock_ok().soundsets = None;
         let _ = self.send(Job::Soundsets);
     }
 
     pub fn load_items(&self, soundset: &str) {
-        self.state.lock().unwrap().items = None;
+        self.state.lock_ok().items = None;
         let _ = self.send(Job::Items(soundset.to_string()));
     }
 
     pub fn is_playing(&self, b: &SyrinButton) -> bool {
-        let st = self.state.lock().unwrap();
+        let st = self.state.lock_ok();
         match b.kind {
             SyrinKind::Mood => st.mood == Some(b.id),
             SyrinKind::Element => st.elements.contains(&b.id),
@@ -212,7 +213,7 @@ fn run(agent: &ureq::Agent, token: &str, job: &Job, state: &Mutex<SyrinState>) -
     match job {
         Job::Play(kind, id) => {
             post(agent, token, &format!("{}/{id}/play/", kind_path(*kind)))?;
-            let mut st = state.lock().unwrap();
+            let mut st = state.lock_ok();
             match kind {
                 SyrinKind::Mood => st.mood = Some(*id),
                 _ => {
@@ -222,7 +223,7 @@ fn run(agent: &ureq::Agent, token: &str, job: &Job, state: &Mutex<SyrinState>) -
         }
         Job::Stop(kind, id) => {
             post(agent, token, &format!("{}/{id}/stop/", kind_path(*kind)))?;
-            let mut st = state.lock().unwrap();
+            let mut st = state.lock_ok();
             match kind {
                 SyrinKind::Mood if st.mood == Some(*id) => st.mood = None,
                 _ => {
@@ -232,21 +233,21 @@ fn run(agent: &ureq::Agent, token: &str, job: &Job, state: &Mutex<SyrinState>) -
         }
         Job::StopAll => {
             post(agent, token, "stop-all/")?;
-            let mut st = state.lock().unwrap();
+            let mut st = state.lock_ok();
             st.mood = None;
             st.elements.clear();
         }
         Job::Volume(v) => {
             post(agent, token, &format!("global-volume/{v:.2}/"))?;
-            state.lock().unwrap().volume = Some(*v);
+            state.lock_ok().volume = Some(*v);
         }
         Job::Check => {
             let v = get(agent, token, "state/")?;
-            state.lock().unwrap().volume = find_number(&v, &["global_volume", "volume", "globalVolume"]);
+            state.lock_ok().volume = find_number(&v, &["global_volume", "volume", "globalVolume"]);
         }
         Job::Soundsets => {
             let r = get(agent, token, "soundsets/").map(|v| parse_soundsets(&v));
-            state.lock().unwrap().soundsets = Some(r.as_ref().map(|s| s.clone()).map_err(|e| format!("{e:#}")));
+            state.lock_ok().soundsets = Some(r.as_ref().map(|s| s.clone()).map_err(|e| format!("{e:#}")));
             r?;
         }
         Job::Items(uuid) => {
@@ -255,7 +256,7 @@ fn run(agent: &ureq::Agent, token: &str, job: &Job, state: &Mutex<SyrinState>) -
                 items.extend(parse_items(&get(agent, token, &format!("elements/?soundset__uuid={uuid}"))?, SyrinKind::Element));
                 Ok(items)
             })();
-            state.lock().unwrap().items = Some((uuid.clone(), r.as_ref().map(|s| s.clone()).map_err(|e| format!("{e:#}"))));
+            state.lock_ok().items = Some((uuid.clone(), r.as_ref().map(|s| s.clone()).map_err(|e| format!("{e:#}"))));
             r?;
         }
     }

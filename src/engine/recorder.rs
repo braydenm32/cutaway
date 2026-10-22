@@ -11,6 +11,7 @@
 //! input raw ───► WAV writer
 //! ```
 
+use crate::util::LockExt;
 use super::encode::{self, AudioEncoder, Purpose, VideoSettings};
 use super::{LogLevel, Status};
 use crate::media::mp4::{Brand, Mp4Writer};
@@ -120,7 +121,7 @@ pub fn spawn_mp4(
             let backup = opts.backup_for(&path);
             let report_backup = |w: &mut Mp4Writer| {
                 if let Some(e) = w.take_backup_error() {
-                    status.lock().unwrap().push(LogLevel::Warning, format!("{label}: {e}. The main recording continues."));
+                    status.lock_ok().push(LogLevel::Warning, format!("{label}: {e}. The main recording continues."));
                 }
             };
             let mut writer: Option<(Mp4Writer, usize, Option<usize>)> = None;
@@ -198,7 +199,7 @@ pub fn spawn_mp4(
                 })();
                 if let Err(e) = r {
                     let msg = format!("{label}: {e:#}");
-                    let mut st = status.lock().unwrap();
+                    let mut st = status.lock_ok();
                     st.push(LogLevel::Error, format!("Recording {msg}"));
                     st.rec_failed = Some(msg);
                     failed = Some(e);
@@ -224,7 +225,7 @@ pub fn spawn_mp4(
                             w.set_duration(id, ns);
                         }
                     }
-                    let chapters = opts.markers.lock().unwrap().iter().map(|m| (m.at, m.name.clone())).collect();
+                    let chapters = opts.markers.lock_ok().iter().map(|m| (m.at, m.name.clone())).collect();
                     w.set_chapters(chapters);
                     report_backup(&mut w);
                     Ok((path, w.finish()?))
@@ -355,7 +356,7 @@ pub fn spawn_video(
                     stats.resized.fetch_add(1, Ordering::Relaxed);
                     if !warned_size {
                         warned_size = true;
-                        status.lock().unwrap().push(
+                        status.lock_ok().push(
                             LogLevel::Warning,
                             format!("{label}: the source changed to {}×{}; its file repeats the last picture until the next take", f.width, f.height),
                         );
@@ -385,7 +386,7 @@ pub fn spawn_video(
                         proxy_enc.as_mut().unwrap().encode(&small, pts, false)
                     })();
                     if let Err(e) = r {
-                        status.lock().unwrap().push(LogLevel::Warning, format!("{label} proxy stopped: {e:#}"));
+                        status.lock_ok().push(LogLevel::Warning, format!("{label} proxy stopped: {e:#}"));
                         proxy = None;
                         proxy_enc = None;
                     }
@@ -418,7 +419,7 @@ pub fn spawn_video(
                         continue;
                     }
                     if let Err(e) = run(&f, pts, &mut enc) {
-                        status.lock().unwrap().push(LogLevel::Error, format!("{label}: {e:#}"));
+                        status.lock_ok().push(LogLevel::Error, format!("{label}: {e:#}"));
                         stats.failed.store(true, Ordering::Relaxed);
                         result = Err(e);
                     }
@@ -594,12 +595,12 @@ pub fn spawn_wav(
                         result = w.write(&b, t1.load(Ordering::Relaxed));
                         for (_, wr) in w.writers.iter_mut() {
                             if let Some(e) = wr.take_backup_error() {
-                                status.lock().unwrap().push(LogLevel::Warning, format!("{label}: {e}. The main recording continues."));
+                                status.lock_ok().push(LogLevel::Warning, format!("{label}: {e}. The main recording continues."));
                             }
                         }
                         if let Err(e) = &result {
                             let msg = format!("{label}: {e:#}");
-                            let mut st = status.lock().unwrap();
+                            let mut st = status.lock_ok();
                             st.push(LogLevel::Error, format!("Recording {msg}"));
                             st.rec_failed = Some(msg);
                         }

@@ -15,6 +15,7 @@
 //!   commands can be sent as text (`scene:2`) or JSON
 //!   (`{"do":"scene:2","id":1}`, answered with `{"type":"reply","id":1,...}`).
 
+use crate::util::LockExt;
 use super::keys::{self, KeyKind, KeySources};
 use super::state::ShowState;
 use super::{ws, Action, Request};
@@ -72,30 +73,30 @@ impl RemoteShared {
 
     /// New state from the app; wakes WebSocket clients if anything changed.
     pub fn publish(&self, s: &ShowState) {
-        let mut show = self.show.lock().unwrap();
+        let mut show = self.show.lock_ok();
         if show.1 == *s {
             return;
         }
         show.1 = s.clone();
         show.0 += 1;
-        *self.state.lock().unwrap() = serde_json::to_string(s).unwrap_or_else(|_| "{}".into());
-        *self.tally.lock().unwrap() = s.sources.iter().map(|x| x.tally.clone()).collect();
+        *self.state.lock_ok() = serde_json::to_string(s).unwrap_or_else(|_| "{}".into());
+        *self.tally.lock_ok() = s.sources.iter().map(|x| x.tally.clone()).collect();
         self.changed.notify_all();
     }
 
     fn snapshot(&self) -> (u64, ShowState) {
-        self.show.lock().unwrap().clone()
+        self.show.lock_ok().clone()
     }
 
     /// Wait (up to `timeout`) for the state to move past `seen`.
     fn wait_change(&self, seen: u64, timeout: Duration) -> u64 {
-        let show = self.show.lock().unwrap();
-        let (show, _) = self.changed.wait_timeout_while(show, timeout, |s| s.0 == seen).unwrap();
+        let show = self.show.lock_ok();
+        let (show, _) = self.changed.wait_timeout_while(show, timeout, |s| s.0 == seen).unwrap_or_else(|e| e.into_inner());
         show.0
     }
 
     fn key_png(&self, kind: KeyKind, size: u32, label: bool) -> Option<Vec<u8>> {
-        let src = self.keys.lock().unwrap().clone();
+        let src = self.keys.lock_ok().clone();
         let state = self.snapshot().1;
         keys::png(&keys::render(&src, &state, kind, size, label)?)
     }
@@ -110,9 +111,9 @@ impl RemoteShared {
     }
 
     fn program_jpeg(&self) -> Option<Arc<Vec<u8>>> {
-        let slot = self.program.lock().unwrap().clone()?;
+        let slot = self.program.lock_ok().clone()?;
         let (generation, frame) = slot.latest()?;
-        if let Some((g, j)) = &*self.jpeg.lock().unwrap() {
+        if let Some((g, j)) = &*self.jpeg.lock_ok() {
             if *g == generation {
                 return Some(j.clone());
             }
@@ -128,7 +129,7 @@ impl RemoteShared {
         let mut out = Vec::new();
         image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 70).encode_image(&rgb).ok()?;
         let j = Arc::new(out);
-        *self.jpeg.lock().unwrap() = Some((generation, j.clone()));
+        *self.jpeg.lock_ok() = Some((generation, j.clone()));
         Some(j)
     }
 }
@@ -261,7 +262,7 @@ fn handle(mut conn: TcpStream, sh: &RemoteShared) -> std::io::Result<()> {
         return respond(&mut conn, "204 No Content", "text/plain", b"", "Access-Control-Allow-Headers: X-Cutaway-Pin\r\n");
     }
     // The page itself is public (it asks for the PIN); everything else isn't.
-    let pin = sh.pin.lock().unwrap().clone();
+    let pin = sh.pin.lock_ok().clone();
     let given = param("pin").or(header_pin).or(cookie_pin).unwrap_or_default();
     let authed = pin.is_empty() || given == pin;
     if path == "/icon.png" || path == "/apple-touch-icon.png" {
@@ -300,11 +301,11 @@ fn handle(mut conn: TcpStream, sh: &RemoteShared) -> std::io::Result<()> {
     }
     match path {
         "/api/state" => {
-            let s = sh.state.lock().unwrap().clone();
+            let s = sh.state.lock_ok().clone();
             respond(&mut conn, "200 OK", "application/json", s.as_bytes(), "")
         }
         "/api/prompter" => {
-            let s = sh.prompter.lock().unwrap().clone();
+            let s = sh.prompter.lock_ok().clone();
             respond(&mut conn, "200 OK", "application/json", s.as_bytes(), "")
         }
         "/api/program.jpg" => match sh.program_jpeg() {
@@ -313,7 +314,7 @@ fn handle(mut conn: TcpStream, sh: &RemoteShared) -> std::io::Result<()> {
         },
         p if p.starts_with("/api/tally/") => {
             let n: usize = p[11..].parse().unwrap_or(0);
-            let t = sh.tally.lock().unwrap().get(n.wrapping_sub(1)).cloned().unwrap_or_else(|| "off".into());
+            let t = sh.tally.lock_ok().get(n.wrapping_sub(1)).cloned().unwrap_or_else(|| "off".into());
             respond(&mut conn, "200 OK", "text/plain", t.as_bytes(), "")
         }
         "/api/action" => {
@@ -341,7 +342,7 @@ fn websocket(conn: TcpStream, key: &str, sh: &RemoteShared) -> std::io::Result<(
     let closed = Arc::new(AtomicBool::new(false));
     let send_state = |writer: &Mutex<TcpStream>, s: &ShowState| -> std::io::Result<()> {
         let msg = serde_json::json!({ "type": "state", "state": s }).to_string();
-        ws::write_text(&mut *writer.lock().unwrap(), &msg)
+        ws::write_text(&mut *writer.lock_ok(), &msg)
     };
     std::thread::scope(|scope| {
         // Reader: commands in, answers out.
@@ -369,20 +370,20 @@ fn websocket(conn: TcpStream, key: &str, sh: &RemoteShared) -> std::io::Result<(
                             "ok": result.is_ok(),
                             "message": match &result { Ok(m) | Err(m) => m },
                         });
-                        if ws::write_text(&mut *w2.lock().unwrap(), &reply.to_string()).is_err() {
+                        if ws::write_text(&mut *w2.lock_ok(), &reply.to_string()).is_err() {
                             break;
                         }
                     }
                     Ok(ws::Message::Ping(p)) => {
-                        let _ = ws::write_frame(&mut *w2.lock().unwrap(), 0xA, &p);
+                        let _ = ws::write_frame(&mut *w2.lock_ok(), 0xA, &p);
                     }
                     Ok(ws::Message::Close) | Err(_) => break,
                     Ok(_) => {}
                 }
             }
             c2.store(true, Ordering::Relaxed);
-            let _ = ws::write_frame(&mut *w2.lock().unwrap(), 0x8, &[]);
-            let _ = w2.lock().unwrap().shutdown(std::net::Shutdown::Both);
+            let _ = ws::write_frame(&mut *w2.lock_ok(), 0x8, &[]);
+            let _ = w2.lock_ok().shutdown(std::net::Shutdown::Both);
         });
         // Writer: the state whenever it changes (at most 10 times a second).
         let mut seen = u64::MAX;
@@ -398,14 +399,14 @@ fn websocket(conn: TcpStream, key: &str, sh: &RemoteShared) -> std::io::Result<(
             }
             if last_ping.elapsed() > Duration::from_secs(15) {
                 last_ping = Instant::now();
-                if ws::write_frame(&mut *writer.lock().unwrap(), 0x9, b"cutaway").is_err() {
+                if ws::write_frame(&mut *writer.lock_ok(), 0x9, b"cutaway").is_err() {
                     break;
                 }
             }
             sh.wait_change(seen, Duration::from_millis(500));
         }
         closed.store(true, Ordering::Relaxed);
-        let _ = writer.lock().unwrap().shutdown(std::net::Shutdown::Both);
+        let _ = writer.lock_ok().shutdown(std::net::Shutdown::Both);
     });
     Ok(())
 }
@@ -428,9 +429,9 @@ mod tests {
     fn serves_page_state_and_actions_with_a_pin() {
         let (tx, rx) = crossbeam_channel::unbounded::<Request>();
         let sh = RemoteShared::new(tx, Arc::new(|| {}));
-        *sh.pin.lock().unwrap() = "4321".into();
-        *sh.state.lock().unwrap() = r#"{"recording":false}"#.into();
-        *sh.tally.lock().unwrap() = vec!["program".into(), "off".into()];
+        *sh.pin.lock_ok() = "4321".into();
+        *sh.state.lock_ok() = r#"{"recording":false}"#.into();
+        *sh.tally.lock_ok() = vec!["program".into(), "off".into()];
         let server = RemoteServer::start(18791, sh.clone()).unwrap();
         // The app's side: answer requests.
         let worker = std::thread::spawn(move || {

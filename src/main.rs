@@ -83,6 +83,7 @@ mod crash_report {
     static INSTALL: extern "C" fn() = install;
 }
 
+use crate::util::LockExt;
 use anyhow::{Context, Result};
 use clap::Parser;
 use config::{AudioConfig, Config, SourceConfig, TransitionMode};
@@ -283,10 +284,10 @@ fn measure_sync(cfg: &Config, seconds: f64) -> Result<()> {
     std::thread::sleep(Duration::from_millis(1500));
     println!("Clap once, sharply, where every camera can see it ({seconds:.0} s)…");
     let job = engine.measure_sync(seconds as f32);
-    while job.result.lock().unwrap().is_none() {
+    while job.result.lock_ok().is_none() {
         std::thread::sleep(Duration::from_millis(100));
     }
-    let r = job.result.lock().unwrap().clone().unwrap();
+    let r = job.result.lock_ok().clone().unwrap();
     if let Some(p) = &r.problem {
         println!("Problem: {p}");
     }
@@ -372,12 +373,12 @@ fn headless(cfg: &Config, seconds: f64, switch_every: Option<f64>, stream: bool,
             restream_at = None;
             println!("[{t:6.2}s] ending the stream and going live again");
             engine.stop_stream();
-            while engine.status.lock().unwrap().stream.stopping {
+            while engine.status.lock_ok().stream.stopping {
                 std::thread::sleep(Duration::from_millis(20));
             }
             engine.start_stream()?;
         }
-        let st = engine.status.lock().unwrap();
+        let st = engine.status.lock_ok();
         if let Some(f) = &st.fatal {
             anyhow::bail!("engine failed: {f}");
         }
@@ -404,13 +405,13 @@ fn headless(cfg: &Config, seconds: f64, switch_every: Option<f64>, stream: bool,
     engine.wait_finalized();
     // Stream shutdown runs in the background too; give it a moment.
     let deadline = Instant::now() + Duration::from_secs(8);
-    while engine.is_streaming() || engine.status.lock().unwrap().stream.stopping {
+    while engine.is_streaming() || engine.status.lock_ok().stream.stopping {
         if Instant::now() > deadline {
             break;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    let st = engine.status.lock().unwrap();
+    let st = engine.status.lock_ok();
     for line in st.log.iter().filter(|l| l.level != engine::LogLevel::Info) {
         println!("  {:?}: {}", line.level, line.text);
     }

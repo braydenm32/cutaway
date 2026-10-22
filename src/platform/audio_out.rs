@@ -5,6 +5,7 @@
 //! (an interface's outputs 3-4 for one presenter, 5-6 for a caller): the
 //! device is opened once and its stream fills every feed's channels.
 
+use crate::util::LockExt;
 use super::audio_in::hosts;
 use crate::devices::DeviceInfo;
 use crate::engine::sources::Running;
@@ -133,7 +134,7 @@ fn open_device(wanted: &str) -> Result<DeviceOut> {
                 config,
                 move |data, _| {
                     data.fill(0.0);
-                    let mut feeds = feeds.lock().unwrap();
+                    let mut feeds = feeds.lock_ok();
                     for f in feeds.iter_mut() {
                         for frame in data.chunks_exact_mut(ch) {
                             if f.ring.len() < 2 {
@@ -191,10 +192,10 @@ impl Drop for OutputRunning {
         if let Some(t) = self.feeder.take() {
             let _ = t.join();
         }
-        let mut reg = registry().lock().unwrap();
+        let mut reg = registry().lock_ok();
         let empty = match reg.get(&self.key) {
             Some(d) => {
-                let mut feeds = d.feeds.lock().unwrap();
+                let mut feeds = d.feeds.lock_ok();
                 feeds.retain(|f| f.id != self.id);
                 feeds.is_empty()
             }
@@ -213,7 +214,7 @@ pub fn open_audio_output(name: &str, channels: (u32, u32), rx: Receiver<AudioBlo
     let key = name.trim().to_lowercase();
     let id = feed_ids().fetch_add(1, Ordering::Relaxed);
     let (rate, dev_channels, feeds) = {
-        let mut reg = registry().lock().unwrap();
+        let mut reg = registry().lock_ok();
         if !reg.contains_key(&key) {
             let d = open_device(name)?;
             reg.insert(key.clone(), d);
@@ -224,13 +225,13 @@ pub fn open_audio_output(name: &str, channels: (u32, u32), rx: Receiver<AudioBlo
     let (left, right) = (channels.0.max(1) as usize - 1, channels.1.max(1) as usize - 1);
     if dev_channels > 1 && (left >= dev_channels || right >= dev_channels) {
         // Don't leave an unused device open.
-        let mut reg = registry().lock().unwrap();
-        if reg.get(&key).is_some_and(|d| d.feeds.lock().unwrap().is_empty()) {
+        let mut reg = registry().lock_ok();
+        if reg.get(&key).is_some_and(|d| d.feeds.lock_ok().is_empty()) {
             reg.remove(&key);
         }
         return Err(anyhow!("{name} has {dev_channels} outputs; channels {}-{} don't exist", left + 1, right + 1));
     }
-    feeds.lock().unwrap().push(Feed { id, left, right, ring: VecDeque::new() });
+    feeds.lock_ok().push(Feed { id, left, right, ring: VecDeque::new() });
 
     // Resample 48 kHz to the device rate and keep the delay short (the
     // device clock drifts against the mix).
@@ -262,7 +263,7 @@ pub fn open_audio_output(name: &str, channels: (u32, u32), rx: Receiver<AudioBlo
             }
             pos -= frames as f64;
             prev = [b.samples[(frames - 1) * 2], b.samples[(frames - 1) * 2 + 1]];
-            let mut feeds = feeds.lock().unwrap();
+            let mut feeds = feeds.lock_ok();
             if let Some(feed) = feeds.iter_mut().find(|f| f.id == id) {
                 feed.ring.extend(out);
                 if feed.ring.len() / 2 > max_frames {

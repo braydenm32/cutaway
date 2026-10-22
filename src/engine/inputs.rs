@@ -2,6 +2,7 @@
 //! and reopened while everything else keeps running, so a camera that's
 //! unplugged (or wasn't plugged in at start) comes back by itself.
 
+use crate::util::LockExt;
 use super::audio::InputShared;
 use super::feed::AudioHub;
 use super::netsrc::NetStatus;
@@ -62,7 +63,7 @@ impl VideoInput {
 
     /// Pan, tilt and zoom controls (a PTZ camera, or a virtual one).
     pub fn ptz(&self) -> Option<Arc<super::ptz::PtzCamera>> {
-        self.links.ptz.lock().unwrap().clone()
+        self.links.ptz.lock_ok().clone()
     }
 
     /// Follow new PTZ settings: adjust the controls, or remake them (and
@@ -73,9 +74,9 @@ impl VideoInput {
             Some(p) if !p.needs_remaking(cfg) => p.configure(&cfg.ptz),
             None if !cfg.has_ptz() => {}
             _ => {
-                *self.links.ptz.lock().unwrap() = super::ptz::PtzCamera::for_source(cfg);
+                *self.links.ptz.lock_ok() = super::ptz::PtzCamera::for_source(cfg);
                 let ndi = |p: &Option<Arc<super::ptz::PtzCamera>>| p.as_ref().is_some_and(|p| p.ndi_rx.is_some());
-                if ndi(&current) || ndi(&self.links.ptz.lock().unwrap()) {
+                if ndi(&current) || ndi(&self.links.ptz.lock_ok()) {
                     let _ = self.open(devices);
                 }
             }
@@ -93,9 +94,9 @@ impl VideoInput {
         let mut extras = sources::Extras::default();
         let (running, desc) =
             crate::util::guard("Opening the device", || sources::start_video(self.index, &self.cfg, devices, self.slot.clone(), &self.hub, &self.net, &self.links, &mut extras))?;
-        *self.running.lock().unwrap() = Some(running);
-        *self.description.lock().unwrap() = desc.clone();
-        *self.player.lock().unwrap() = extras.player;
+        *self.running.lock_ok() = Some(running);
+        *self.description.lock_ok() = desc.clone();
+        *self.player.lock_ok() = extras.player;
         Ok(desc)
     }
 
@@ -107,12 +108,12 @@ impl VideoInput {
     }
 
     pub fn close(&self) {
-        let old = self.running.lock().unwrap().take();
+        let old = self.running.lock_ok().take();
         drop(old);
     }
 
     pub fn is_open(&self) -> bool {
-        self.running.lock().unwrap().is_some()
+        self.running.lock_ok().is_some()
     }
 
     /// Open and delivering pictures.
@@ -121,7 +122,7 @@ impl VideoInput {
     }
 
     pub fn description(&self) -> String {
-        self.description.lock().unwrap().clone()
+        self.description.lock_ok().clone()
     }
 
     pub fn reconnectable(&self) -> bool {
@@ -155,18 +156,18 @@ impl AudioInputDev {
         let note = (started.channels as u32 != self.cfg.channels)
             .then(|| format!("the device gives {} channels ({} set)", started.channels, self.cfg.channels));
         self.channels.store(started.channels as u32, Ordering::Relaxed);
-        *self.running.lock().unwrap() = Some(started.running);
-        *self.description.lock().unwrap() = desc.clone();
+        *self.running.lock_ok() = Some(started.running);
+        *self.description.lock_ok() = desc.clone();
         Ok((desc, note))
     }
 
     pub fn close(&self) {
-        let old = self.running.lock().unwrap().take();
+        let old = self.running.lock_ok().take();
         drop(old);
     }
 
     pub fn is_open(&self) -> bool {
-        self.running.lock().unwrap().is_some()
+        self.running.lock_ok().is_some()
     }
 
     /// Open and delivering audio.
@@ -175,7 +176,7 @@ impl AudioInputDev {
     }
 
     pub fn description(&self) -> String {
-        self.description.lock().unwrap().clone()
+        self.description.lock_ok().clone()
     }
 
     pub fn channels(&self) -> u32 {

@@ -1,6 +1,7 @@
 //! Video decoding with VideoToolbox: H.264, HEVC and ProRes, in hardware,
 //! scaled to the size wanted on the way out.
 
+use crate::util::LockExt;
 use super::pixel_buffer::{PixelBuffer, NV12_VIDEO_RANGE};
 use super::{cmtime_ns, ns_cmtime};
 use crate::engine::decode::{DecoderSetup, VideoDecoder};
@@ -87,7 +88,7 @@ struct Out {
 unsafe extern "C-unwind" fn on_frame(refcon: *mut c_void, _frame: *mut c_void, status: i32, _flags: u32, image: *mut c_void, pts: CMTime, _dur: CMTime) {
     let out = unsafe { &*(refcon as *const Out) };
     if status != 0 {
-        *out.error.lock().unwrap() = Some(format!("VideoToolbox couldn't decode a frame (error {status})"));
+        *out.error.lock_ok() = Some(format!("VideoToolbox couldn't decode a frame (error {status})"));
         return;
     }
     if image.is_null() {
@@ -99,7 +100,7 @@ unsafe extern "C-unwind" fn on_frame(refcon: *mut c_void, _frame: *mut c_void, s
         return;
     }
     let f = VideoFrame { width: pb.width(), height: pb.height(), pts: cmtime_ns(pts).unwrap_or(0), pixels: Arc::new(Pixels::PixelBuffer(pb)), serial: 0 };
-    out.frames.lock().unwrap().push(f);
+    out.frames.lock_ok().push(f);
 }
 
 pub struct VtDecoder {
@@ -161,8 +162,8 @@ impl VtDecoder {
     }
 
     fn take(&self, out: &mut Vec<VideoFrame>) -> Result<()> {
-        out.append(&mut self.out.frames.lock().unwrap());
-        match self.out.error.lock().unwrap().take() {
+        out.append(&mut self.out.frames.lock_ok());
+        match self.out.error.lock_ok().take() {
             Some(e) => bail!(e),
             None => Ok(()),
         }

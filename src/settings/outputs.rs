@@ -1,6 +1,7 @@
 //! Settings → Screens & webcam: a full-screen output for another display,
 //! and the virtual camera for video-call apps.
 
+use crate::util::LockExt;
 use super::*;
 use crate::config::DisplayOutput;
 
@@ -72,7 +73,7 @@ impl SettingsUi {
             });
             return;
         }
-        if let Some(r) = self.vcam_job.lock().unwrap().take() {
+        if let Some(r) = self.vcam_job.lock_ok().take() {
             self.vcam_busy = false;
             self.message = Some(match r {
                 Ok(m) => (m, false),
@@ -137,7 +138,7 @@ impl SettingsUi {
         let out = self.vcam_job.clone();
         std::thread::spawn(move || {
             let r = crate::platform::vcam::install(remove).map_err(|e| format!("{e:#}"));
-            *out.lock().unwrap() = Some(r);
+            *out.lock_ok() = Some(r);
         });
     }
 }

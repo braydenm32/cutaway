@@ -3,6 +3,7 @@
 //! from the recording's program (already encoded, so nothing extra is
 //! kept), decoded a few frames ahead of what's showing.
 
+use crate::util::LockExt;
 use super::decode::{create_video_decoder, DecoderSetup, Reorder, VideoDecoder};
 use crate::media::{Ns, VideoFrame, VideoPacket};
 use anyhow::{anyhow, Result};
@@ -75,7 +76,7 @@ impl ReplayPlayer {
         let span = end - t0 + frame;
         let reorder = packets.iter().any(|p| p.pts != p.dts);
         let speed = speed.clamp(0.1, 1.0);
-        let mut st = self.shared.st.lock().unwrap();
+        let mut st = self.shared.st.lock_ok();
         st.job = Some(Arc::new(Job { packets, setup, reorder, t0 }));
         st.gen += 1;
         st.started = Some(Instant::now());
@@ -90,7 +91,7 @@ impl ReplayPlayer {
 
     /// Stop it now (it fades out quickly).
     pub fn stop(&self) {
-        let mut st = self.shared.st.lock().unwrap();
+        let mut st = self.shared.st.lock_ok();
         if let Some(s) = st.started {
             // Jump to the fade-out.
             let on_air = Duration::from_nanos((st.span as f64 / st.speed as f64) as u64);
@@ -103,18 +104,18 @@ impl ReplayPlayer {
     }
 
     pub fn playing(&self) -> bool {
-        let st = self.shared.st.lock().unwrap();
+        let st = self.shared.st.lock_ok();
         st.started.is_some_and(|s| s.elapsed() < Duration::from_nanos((st.span as f64 / st.speed.max(0.1) as f64) as u64))
     }
 
     /// Why the last replay couldn't play.
     pub fn problem(&self) -> Option<String> {
-        self.shared.st.lock().unwrap().problem.clone()
+        self.shared.st.lock_ok().problem.clone()
     }
 
     /// The picture to show now, if a replay is on.
     pub fn frame(&self) -> Option<ReplayFrame> {
-        let mut st = self.shared.st.lock().unwrap();
+        let mut st = self.shared.st.lock_ok();
         let started = st.started?;
         let elapsed = started.elapsed().as_secs_f32();
         let on_air = st.span as f32 / 1e9 / st.speed;
@@ -139,7 +140,7 @@ impl ReplayPlayer {
 
 impl Drop for ReplayPlayer {
     fn drop(&mut self) {
-        self.shared.st.lock().unwrap().stop = true;
+        self.shared.st.lock_ok().stop = true;
         self.shared.cond.notify_all();
         if let Some(t) = self.thread.take() {
             let _ = t.join();
@@ -153,7 +154,7 @@ fn worker(shared: Arc<Shared>) {
     loop {
         // Wait for a new replay.
         let (job, gen) = {
-            let mut st = shared.st.lock().unwrap();
+            let mut st = shared.st.lock_ok();
             loop {
                 if st.stop {
                     return;
@@ -161,14 +162,14 @@ fn worker(shared: Arc<Shared>) {
                 if let Some(j) = st.job.clone().filter(|_| st.gen != done_gen) {
                     break (j, st.gen);
                 }
-                st = shared.cond.wait_timeout(st, Duration::from_millis(200)).unwrap().0;
+                st = shared.cond.wait_timeout(st, Duration::from_millis(200)).unwrap_or_else(|e| e.into_inner()).0;
             }
         };
         done_gen = gen;
         let mut dec: Box<dyn VideoDecoder> = match create_video_decoder(&job.setup) {
             Ok(d) => d,
             Err(e) => {
-                let mut st = shared.st.lock().unwrap();
+                let mut st = shared.st.lock_ok();
                 st.problem = Some(format!("the replay can't be decoded: {e:#}"));
                 st.started = None;
                 st.job = None;
@@ -181,7 +182,7 @@ fn worker(shared: Arc<Shared>) {
         let mut flushed = false;
         loop {
             {
-                let st = shared.st.lock().unwrap();
+                let st = shared.st.lock_ok();
                 if st.stop || st.gen != gen || st.job.is_none() {
                     break;
                 }
@@ -215,7 +216,7 @@ fn worker(shared: Arc<Shared>) {
                 serial += 1;
                 f.serial = serial;
             }
-            let mut st = shared.st.lock().unwrap();
+            let mut st = shared.st.lock_ok();
             if st.gen == gen {
                 st.ahead.extend(ready);
             }
@@ -235,7 +236,7 @@ mod tests {
         let got: Arc<Mutex<Vec<VideoPacket>>> = Arc::new(Mutex::new(Vec::new()));
         let g2 = got.clone();
         let s = VideoSettings { codec: VideoCodec::H264, width: w, height: h, fps, bitrate_kbps: 2000, purpose: Purpose::Record, backend: "auto".into() };
-        let mut enc = create_video(&s, Arc::new(move |p| g2.lock().unwrap().push(p))).ok()?;
+        let mut enc = create_video(&s, Arc::new(move |p| g2.lock_ok().push(p))).ok()?;
         for i in 0..frames {
             let shade = (40 + (i * 200 / frames)) as u8;
             let t = i as Ns * 1_000_000_000 / fps as Ns;
@@ -243,7 +244,7 @@ mod tests {
             enc.encode(&f, t, i == 0).ok()?;
         }
         enc.finish().ok()?;
-        let v = got.lock().unwrap().clone();
+        let v = got.lock_ok().clone();
         Some(v)
     }
 

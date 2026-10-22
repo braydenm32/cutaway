@@ -6,6 +6,7 @@
 //! source of its own, so it can be switched, recorded and keyed like any
 //! camera.
 
+use crate::util::LockExt;
 use super::sources::{Running, SourceSlot};
 use crate::config::{FramingConfig, FramingFollow, FramingShot, SourceConfig};
 use crate::media::{Ns, VideoFrame, NS_PER_SEC};
@@ -335,11 +336,11 @@ pub fn start(cfg: &SourceConfig, parent_name: &str, parent: Arc<SourceSlot>, slo
     // never holds pictures up.
     let detector: Option<Box<dyn Detector>> = match vision::people_detector() {
         Ok(d) => {
-            *shared.problem.lock().unwrap() = None;
+            *shared.problem.lock_ok() = None;
             Some(d)
         }
         Err(e) => {
-            *shared.problem.lock().unwrap() = Some(format!("{e:#}"));
+            *shared.problem.lock_ok() = Some(format!("{e:#}"));
             None
         }
     };
@@ -354,13 +355,13 @@ pub fn start(cfg: &SourceConfig, parent_name: &str, parent: Arc<SourceSlot>, slo
                     Ok(found) => {
                         if failed {
                             failed = false;
-                            *sh.problem.lock().unwrap() = None;
+                            *sh.problem.lock_ok() = None;
                         }
                         let _ = found_tx.try_send((frame.pts, found));
                     }
                     Err(e) => {
                         failed = true;
-                        *sh.problem.lock().unwrap() = Some(format!("{e:#}"));
+                        *sh.problem.lock_ok() = Some(format!("{e:#}"));
                     }
                 }
             }
@@ -368,8 +369,8 @@ pub fn start(cfg: &SourceConfig, parent_name: &str, parent: Arc<SourceSlot>, slo
     }
 
     let s2 = stop.clone();
-    let initial = shared.cfg.lock().unwrap().clone();
-    let problem = shared.problem.lock().unwrap().clone();
+    let initial = shared.cfg.lock_ok().clone();
+    let problem = shared.problem.lock_ok().clone();
     let thread = std::thread::Builder::new().name(format!("auto-frame {}", slot.index)).spawn(move || {
         let mut framer: Option<Framer> = None;
         let mut applied = initial;
@@ -387,7 +388,7 @@ pub fn start(cfg: &SourceConfig, parent_name: &str, parent: Arc<SourceSlot>, slo
             let fr = framer.get_or_insert_with(|| Framer::new(applied.clone(), (frame.width, frame.height), (w, h)));
             fr.set_source_size((frame.width, frame.height));
             {
-                let now = shared.cfg.lock().unwrap();
+                let now = shared.cfg.lock_ok();
                 if *now != applied {
                     applied = now.clone();
                     fr.set_config(applied.clone());

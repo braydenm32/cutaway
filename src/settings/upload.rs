@@ -1,6 +1,7 @@
 //! Settings → Upload: sending takes to YouTube and Google Drive after the
 //! show, with your own Google sign-in.
 
+use crate::util::LockExt;
 use super::*;
 use crate::config::{DriveFiles, UploadConfig, YoutubePrivacy};
 use crate::net::google::{self, Client, Endpoints};
@@ -11,7 +12,7 @@ impl SettingsUi {
     pub(super) fn upload(&mut self, ui: &mut egui::Ui) {
         title(ui, "Upload after the show", "Send each take to YouTube and Google Drive once it's saved, with your own Google sign-in. Uploads run in the background and resume if the connection drops.");
         // A sign-in that has finished.
-        let finished = self.google.as_ref().and_then(|g| g.result.lock().unwrap().take());
+        let finished = self.google.as_ref().and_then(|g| g.result.lock_ok().take());
         if let Some(r) = finished {
             self.google = None;
             match r {
@@ -185,7 +186,7 @@ impl GoogleSignIn {
                 }
                 Ok((t.refresh, account, granted))
             });
-            *r2.lock().unwrap() = Some(r.map_err(|e| format!("{e:#}")));
+            *r2.lock_ok() = Some(r.map_err(|e| format!("{e:#}")));
             ctx2.request_repaint();
         });
         Ok(GoogleSignIn { cancel, result })

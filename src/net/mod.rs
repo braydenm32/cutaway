@@ -13,6 +13,7 @@ pub mod tunnel;
 
 #[cfg(all(test, not(target_os = "macos")))]
 mod tests {
+    use crate::util::LockExt;
     use crate::engine::encode::{create_aac, create_video, Purpose, VideoSettings};
     use crate::media::testsrc::{TestPattern, TestTone};
     use crate::media::{flv, ts::TsMuxer, VideoCodec, VideoFrame, VideoPacket};
@@ -29,7 +30,7 @@ mod tests {
         let packets = Arc::new(Mutex::new(Vec::new()));
         let p2 = packets.clone();
         let s = VideoSettings { codec: VideoCodec::H264, width: 320, height: 180, fps: 30, bitrate_kbps: 600, purpose: Purpose::Stream, backend: "auto".into() };
-        let mut enc = create_video(&s, Arc::new(move |p| p2.lock().unwrap().push(p))).unwrap();
+        let mut enc = create_video(&s, Arc::new(move |p| p2.lock_ok().push(p))).unwrap();
         let mut tp = TestPattern::new("smpte", 320, 180);
         for i in 0..60i64 {
             let pts = i * 1_000_000_000 / 30;
@@ -42,7 +43,7 @@ mod tests {
         for i in 0..200 {
             frames.extend(aac.push(&tone.render(i * 10_000_000, 480)).unwrap());
         }
-        let v = packets.lock().unwrap().clone();
+        let v = packets.lock_ok().clone();
         (v, frames, aac.config())
     }
 

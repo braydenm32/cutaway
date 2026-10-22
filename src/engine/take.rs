@@ -2,6 +2,7 @@
 //! markers, and the side files (switch log, take notes, chapters, editor
 //! timelines) written when it ends.
 
+use crate::util::LockExt;
 use super::export::{self, ExportFile, TakeExport};
 use super::health::{self, DiskStatus, TakeMonitor};
 use super::recorder::{self, FileOpts, Marker, Markers, VideoStats};
@@ -43,7 +44,7 @@ pub fn space_problem(d: &DiskStatus) -> Option<String> {
 
 impl Engine {
     pub fn is_recording(&self) -> bool {
-        self.take.lock().unwrap().is_some()
+        self.take.lock_ok().is_some()
     }
 
     /// Space on the recording drive at the current settings.
@@ -55,11 +56,11 @@ impl Engine {
     }
 
     pub fn start_recording(&self) -> Result<PathBuf> {
-        let mut guard = self.take.lock().unwrap();
+        let mut guard = self.take.lock_ok();
         if guard.is_some() {
             bail!("already recording");
         }
-        if matches!(self.status.lock().unwrap().rec, RecState::Finalizing { .. }) {
+        if matches!(self.status.lock_ok().rec, RecState::Finalizing { .. }) {
             bail!("still finishing the previous take");
         }
         let cfg = self.config();
@@ -104,20 +105,20 @@ impl Engine {
                 let dir = b.join(&name);
                 let same_drive = std::fs::canonicalize(b).ok().zip(std::fs::canonicalize(&out.folder).ok()).is_some_and(|(a, b)| a == b);
                 if same_drive {
-                    self.status.lock().unwrap().push(LogLevel::Warning, "The backup folder is the recording folder itself, so no backup is written.");
+                    self.status.lock_ok().push(LogLevel::Warning, "The backup folder is the recording folder itself, so no backup is written.");
                     None
                 } else {
                     match std::fs::create_dir_all(&dir) {
                         Ok(()) => {
                             if let Some((free, _)) = health::disk_space(&dir) {
                                 if free < health::MIN_START_BYTES {
-                                    self.status.lock().unwrap().push(LogLevel::Warning, format!("The backup drive has only {} free; the backup will stop when it fills.", human_size(free)));
+                                    self.status.lock_ok().push(LogLevel::Warning, format!("The backup drive has only {} free; the backup will stop when it fills.", human_size(free)));
                                 }
                             }
                             Some(dir)
                         }
                         Err(e) => {
-                            self.status.lock().unwrap().push(LogLevel::Warning, format!("No backup for this take: can't create {} ({e}). Is the backup drive connected?", dir.display()));
+                            self.status.lock_ok().push(LogLevel::Warning, format!("No backup for this take: can't create {} ({e}). Is the backup drive connected?", dir.display()));
                             None
                         }
                     }
@@ -203,7 +204,7 @@ impl Engine {
             self.clips.start(folder.clone(), fps, brand, audio_cfg.clone(), keep);
             let (path, vtx, muxes) = add_video("Program".into(), format!("Program.{ext}"), fps, (cw, ch), true, rate, None, (fps as usize / 2).max(8), track_cfgs.clone(), Some(self.clips.clone()));
             export_files.push(ExportFile { path, name: "Program".into(), width: cw, height: ch, fps, has_audio: audio_cfg.is_some(), source: None, tc_frame: tc_for(fps), length: None });
-            self.video_taps.lock().unwrap().program = Some(ProgramTap { tx: vtx, from: t0 });
+            self.video_taps.lock_ok().program = Some(ProgramTap { tx: vtx, from: t0 });
             program_muxes = muxes;
         }
 
@@ -212,7 +213,7 @@ impl Engine {
             let (vw, vh) = cfg.vertical.size();
             let rate = encode::record_bitrate_kbps(codec, out.program_bitrate_kbps, vw, vh, fps);
             let (_, vtx, _) = add_video("Program (vertical)".into(), format!("Program_Vertical.{ext}"), fps, (vw, vh), true, rate, None, (fps as usize / 2).max(8), Vec::new(), None);
-            self.video_taps.lock().unwrap().tall = Some(ProgramTap { tx: vtx, from: t0 });
+            self.video_taps.lock_ok().tall = Some(ProgramTap { tx: vtx, from: t0 });
         }
 
         // One file per source.
@@ -240,7 +241,7 @@ impl Engine {
         let mut tap = |kind: audio::MixKind| {
             let (atx, arx) = bounded(1000);
             let id = self.tap_ids.fetch_add(1, Ordering::Relaxed);
-            self.mix_taps.lock().unwrap().push((id, kind, atx));
+            self.mix_taps.lock_ok().push((id, kind, atx));
             mix_tap_ids.push(id);
             arx
         };
@@ -294,9 +295,9 @@ impl Engine {
             iso_slots,
             raw_inputs,
         };
-        *self.take_monitor.lock().unwrap() = Some(TakeMonitor::new(folder.clone(), backup_folder.clone(), stats));
+        *self.take_monitor.lock_ok() = Some(TakeMonitor::new(folder.clone(), backup_folder.clone(), stats));
         {
-            let mut st = self.status.lock().unwrap();
+            let mut st = self.status.lock_ok();
             st.rec = RecState::Recording { since: take.started, folder: folder.clone() };
             st.rec_failed = None;
             st.markers = 0;
@@ -313,18 +314,18 @@ impl Engine {
 
     /// Drop a marker at what the program shows now. Returns its name.
     pub fn add_marker(&self, name: Option<String>) -> Result<String> {
-        let guard = self.take.lock().unwrap();
+        let guard = self.take.lock_ok();
         let Some(take) = guard.as_ref() else { bail!("markers go into a recording; start recording first") };
         // The program monitor shows frames VIDEO_LATENCY behind real time.
         let at = (clock::now() - VIDEO_LATENCY - take.t0).max(0);
-        let mut markers = take.markers.lock().unwrap();
+        let mut markers = take.markers.lock_ok();
         let name = name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| format!("Marker {}", markers.len() + 1));
         markers.push(Marker { at, name: name.clone(), scene: self.switcher.live().name });
         markers.sort_by_key(|m| m.at);
         let count = markers.len();
         drop(markers);
         drop(guard);
-        let mut st = self.status.lock().unwrap();
+        let mut st = self.status.lock_ok();
         st.markers = count;
         st.push(LogLevel::Info, format!("{name} at {}", fmt_duration(Duration::from_nanos(at as u64))));
         drop(st);
@@ -350,7 +351,7 @@ impl Engine {
                 }
                 Err(e) => (LogLevel::Warning, format!("{name} couldn't be saved: {e:#}")),
             };
-            status.lock().unwrap().push(msg.0, msg.1);
+            status.lock_ok().push(msg.0, msg.1);
             waker();
         })?;
         Ok(format!("Clip {number}"))
@@ -359,13 +360,13 @@ impl Engine {
     /// Stop recording. Files are finalized in the background; watch
     /// `status.rec` (or call `wait_finalized`).
     pub fn stop_recording(&self) {
-        let Some(take) = self.take.lock().unwrap().take() else { return };
+        let Some(take) = self.take.lock_ok().take() else { return };
         self.clips.stop();
         let fps = self.info.fps;
         let t1 = next_boundary(fps);
         take.t1.store(t1, Ordering::Relaxed);
         let folder = take.folder.clone();
-        self.status.lock().unwrap().rec = RecState::Finalizing { folder: folder.clone() };
+        self.status.lock_ok().rec = RecState::Finalizing { folder: folder.clone() };
         (self.waker)();
 
         let taps = self.video_taps.clone();
@@ -385,7 +386,7 @@ impl Engine {
         let handle = std::thread::spawn(move || {
             clock::sleep_until(t1 + settle);
             {
-                let mut t = taps.lock().unwrap();
+                let mut t = taps.lock_ok();
                 t.program = None;
                 t.tall = None;
             }
@@ -396,7 +397,7 @@ impl Engine {
                     problems.push(format!("{name}: {dropped} frames were dropped because the encoder couldn't keep up (they were repeated in the file)"));
                 }
             }
-            mix_taps.lock().unwrap().retain(|(i, ..)| !take.mix_tap_ids.contains(i));
+            mix_taps.lock_ok().retain(|(i, ..)| !take.mix_tap_ids.contains(i));
             for i in &inputs {
                 i.stop_raw_tap();
             }
@@ -406,12 +407,12 @@ impl Engine {
                 backup: take.opts.backup_folder.clone(),
                 first_scene: take.first_scene.clone(),
                 first_angle: take.first_angle,
-                markers: take.markers.lock().unwrap().clone(),
+                markers: take.markers.lock_ok().clone(),
                 export_files: take.export_files.clone(),
                 tc_seconds: take.tc_seconds,
             };
             let mut report = take.collect();
-            *monitor.lock().unwrap() = None;
+            *monitor.lock_ok() = None;
             // The last words of the take, once recognised.
             let cues = captions.map(|c| {
                 c.settle(t1, Duration::from_secs(8));
@@ -422,7 +423,7 @@ impl Engine {
             report.markers = side.markers.iter().map(|m| (m.at as f64 / NS_PER_SEC as f64, m.name.clone())).collect();
             let events = switcher.events_between(t0 + VIDEO_LATENCY, t1 + VIDEO_LATENCY);
             let written = side.write(&cfg, &report, &summary, &events, t0, t1, fps, (cw, ch), stream_since, cues.as_deref());
-            let mut st = status.lock().unwrap();
+            let mut st = status.lock_ok();
             let total: u64 = report.files.iter().map(|f| f.1).sum();
             st.push(
                 LogLevel::Info,
@@ -442,7 +443,7 @@ impl Engine {
                 make_podcast(&cfg, &folder, side.backup.as_deref(), &side.markers, &status, &waker);
             }
         });
-        self.finalizers.lock().unwrap().push(handle);
+        self.finalizers.lock_ok().push(handle);
     }
 }
 
@@ -467,17 +468,17 @@ fn make_podcast(cfg: &crate::config::Config, folder: &std::path::Path, backup: O
     let episode = podcast::Episode { title, show, author: p.author.clone(), date: now.format("%Y-%m-%d").to_string() };
     let chapters: Vec<(Ns, String)> = markers.iter().map(|m| (m.at, m.name.clone())).collect();
     let backup_file = backup.map(|b| b.join(&file));
-    status.lock().unwrap().background = Some(("Making the podcast".into(), 0.0));
+    status.lock_ok().background = Some(("Making the podcast".into(), 0.0));
     waker();
     let mut last = Instant::now();
     let result = podcast::make(&wav, &folder.join(&file), backup_file.as_deref(), p, &episode, &chapters, &mut |f| {
         if last.elapsed() > Duration::from_millis(250) {
             last = Instant::now();
-            status.lock().unwrap().background = Some(("Making the podcast".into(), f));
+            status.lock_ok().background = Some(("Making the podcast".into(), f));
             waker();
         }
     });
-    let mut st = status.lock().unwrap();
+    let mut st = status.lock_ok();
     st.background = None;
     match result {
         Ok(r) => st.push(

@@ -1,6 +1,7 @@
 //! Disk space and recording health: how much recording time is left, and
 //! whether every source, file and input is keeping up.
 
+use crate::util::LockExt;
 use super::inputs::{AudioInputDev, VideoInput};
 use super::recorder::VideoStats;
 use super::{LogLevel, Status};
@@ -234,9 +235,9 @@ pub struct HealthMonitor {
 
 impl HealthMonitor {
     pub fn tick(&mut self) {
-        let cfg = self.cfg.lock().unwrap().clone();
+        let cfg = self.cfg.lock_ok().clone();
         let (generation, sources, audio): (u64, Vec<Arc<VideoInput>>, Vec<Arc<AudioInputDev>>) = {
-            let l = self.lineup.lock().unwrap();
+            let l = self.lineup.lock_ok();
             (l.generation, l.video.clone(), l.audio.clone())
         };
         let channels: Vec<(u32, bool)> = audio.iter().map(|a| (a.channels(), a.cfg.record)).collect();
@@ -261,7 +262,7 @@ impl HealthMonitor {
         }
 
         // The take: files and disk.
-        let mut take = self.take.lock().unwrap();
+        let mut take = self.take.lock_ok();
         let mut stop_reason = None;
         let mut warnings = Vec::new();
         let (main_rate, measured) = match take.as_mut() {
@@ -310,7 +311,7 @@ impl HealthMonitor {
             }
         }
         drop(take);
-        let mut st = self.status.lock().unwrap();
+        let mut st = self.status.lock_ok();
         st.health = health;
         st.disk = disk;
         st.backup_disk = backup;

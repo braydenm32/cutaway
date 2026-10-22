@@ -138,6 +138,9 @@ and [Install on Windows](#install-on-windows).
 - **Every input on its own track:** optionally, the Program file carries
   each audio input as its own (disabled) track after the mix, so an editor
   can re-balance the show without the WAVs.
+- **No accidental quits:** closing the window (or Cmd+Q, Alt+F4) while
+  recording or live asks first. Quitting anyway finishes and saves the take
+  and ends the broadcast.
 - **Instant clips:** press **✂ Clip** (or `K`, a Stream Deck key, the
   remote) to save the last 30 seconds (your choice) of the program as its
   own file in the take's `Clips` folder, while the recording carries on —
@@ -510,6 +513,9 @@ Video Extensions** on some PCs.
   input's re-syncs and the drives. It turns amber when something needs a look.
 - **A device that misbehaves** doesn't stop the app. It's marked offline, the
   reason is in the Log panel, and it's reopened when it comes back.
+- **A crash in one part of Cutaway** doesn't spread to the rest: the other
+  parts keep using the shared settings and state it left behind, and the
+  crash's details are in the log.
 - **Run from Terminal** to watch messages live:
   ```sh
   /Applications/Cutaway.app/Contents/MacOS/Cutaway

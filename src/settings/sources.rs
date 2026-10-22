@@ -2,6 +2,7 @@
 //! pictures, media players and network inputs, plus each source's crop,
 //! colour and keying.
 
+use crate::util::LockExt;
 use super::*;
 use crate::config::{FramingConfig, FramingFollow, FramingShot, MediaConfig, SourceLook};
 use crate::engine::netsrc::{self, NetSpec};
@@ -169,7 +170,7 @@ impl SettingsUi {
     fn source_detail(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
         let applied: Vec<String> = self.original.sources.iter().map(|s| s.device.trim().to_string()).collect();
         let mut guests_on = false;
-        let ndi = self.ndi_found.lock().unwrap().clone();
+        let ndi = self.ndi_found.lock_ok().clone();
         // Sources a close-up can be cut from: (name, fps).
         let wides: Vec<(String, u32)> = self
             .draft
@@ -491,10 +492,10 @@ impl SettingsUi {
         }
         if scan_ndi {
             let out = self.ndi_found.clone();
-            *out.lock().unwrap() = None;
+            *out.lock_ok() = None;
             std::thread::spawn(move || {
                 let r = crate::engine::ndi::find_sources(2500).map_err(|e| format!("{e:#}"));
-                *out.lock().unwrap() = Some(r);
+                *out.lock_ok() = Some(r);
             });
         }
         // Renamed: close-ups cut from this source follow the new name.

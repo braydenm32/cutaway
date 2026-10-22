@@ -5,6 +5,7 @@
 //!   Microsoft's software H.264; Windows' AAC encoder).
 //! * Linux (development builds): OpenH264 and FDK-AAC, in software.
 
+use crate::util::LockExt;
 use crate::media::{AudioConfig, Ns, VideoCodec, VideoFrame, VideoPacket};
 use anyhow::Result;
 use std::sync::Arc;
@@ -332,7 +333,7 @@ mod tests {
         let sizes = Arc::new(Mutex::new(Vec::<usize>::new()));
         let s2 = sizes.clone();
         let s = VideoSettings { codec: VideoCodec::H264, width: 320, height: 180, fps: 30, bitrate_kbps: 3000, purpose: Purpose::Stream, backend: "auto".into() };
-        let mut enc = create_video(&s, Arc::new(move |p| s2.lock().unwrap().push(p.data.len()))).unwrap();
+        let mut enc = create_video(&s, Arc::new(move |p| s2.lock_ok().push(p.data.len()))).unwrap();
         // A noisy picture, so the bitrate is what limits it.
         let mut seed = 1u32;
         let mut noise = |n: usize| -> Vec<u8> {
@@ -352,10 +353,10 @@ mod tests {
             }
         };
         run(&mut enc, 0);
-        let before: usize = sizes.lock().unwrap().drain(..).skip(30).sum();
+        let before: usize = sizes.lock_ok().drain(..).skip(30).sum();
         assert!(enc.set_bitrate(500), "this encoder takes a new bitrate");
         run(&mut enc, 60);
-        let after: usize = sizes.lock().unwrap().drain(..).skip(30).sum();
+        let after: usize = sizes.lock_ok().drain(..).skip(30).sum();
         assert!(after * 3 < before, "much less after lowering it: {before} → {after} bytes");
     }
 
@@ -364,7 +365,7 @@ mod tests {
         let packets = Arc::new(Mutex::new(Vec::new()));
         let p2 = packets.clone();
         let s = VideoSettings { codec: VideoCodec::H264, width: 320, height: 180, fps: 30, bitrate_kbps: 800, purpose: Purpose::Record, backend: "auto".into() };
-        let mut enc = create_video(&s, Arc::new(move |p| p2.lock().unwrap().push(p))).unwrap();
+        let mut enc = create_video(&s, Arc::new(move |p| p2.lock_ok().push(p))).unwrap();
         let mut tp = TestPattern::new("ball", 320, 180);
         for i in 0..60i64 {
             let pts = i * 1_000_000_000 / 30;
@@ -384,7 +385,7 @@ mod tests {
 
         let path = std::env::temp_dir().join(format!("cutaway-enc-{}.mp4", std::process::id()));
         let mut w = Mp4Writer::create(&path, Brand::Mp4).unwrap();
-        let packets = packets.lock().unwrap();
+        let packets = packets.lock_ok();
         assert_eq!(packets.len(), 60);
         assert!(packets[0].keyframe);
         let v = w.add_video(&packets[0].config, 30);

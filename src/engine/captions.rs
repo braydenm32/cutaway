@@ -6,6 +6,7 @@
 //! request's final result gives each word's time, which becomes cues on the
 //! program clock (the same clock as every file).
 
+use crate::util::LockExt;
 use super::graphics::{GraphicLayer, FULL_UV};
 use super::text::{ascent, draw_text, system_fonts, text_width, wrap};
 use super::{LogLevel, Status, Waker};
@@ -192,13 +193,13 @@ impl Captions {
                     Ok(r) => r,
                     Err(e) => {
                         let msg = format!("{e:#}");
-                        *s2.status.lock().unwrap() = format!("not running: {msg}");
-                        status.lock().unwrap().push(LogLevel::Warning, format!("Live captions: {msg}"));
+                        *s2.status.lock_ok() = format!("not running: {msg}");
+                        status.lock_ok().push(LogLevel::Warning, format!("Live captions: {msg}"));
                         waker();
                         return;
                     }
                 };
-                *s2.status.lock().unwrap() = "listening".into();
+                *s2.status.lock_ok() = "listening".into();
                 waker();
                 Runner::new(s2, rec, waker).run(audio, &stop2);
             })
@@ -216,18 +217,18 @@ impl Captions {
 
     /// Size, lines and placement changed.
     pub fn set_style(&self, cfg: &CaptionsConfig) {
-        *self.shared.style.lock().unwrap() = cfg.clone();
+        *self.shared.style.lock_ok() = cfg.clone();
         self.shared.restyle.store(true, Ordering::Relaxed);
     }
 
     /// "listening", or why not.
     pub fn status(&self) -> String {
-        self.shared.status.lock().unwrap().clone()
+        self.shared.status.lock_ok().clone()
     }
 
     /// What's on screen now.
     pub fn text(&self) -> String {
-        self.shared.text.lock().unwrap().clone()
+        self.shared.text.lock_ok().clone()
     }
 
     /// The caption box for the compositor, when shown.
@@ -235,21 +236,21 @@ impl Captions {
         if !self.showing() {
             return None;
         }
-        let on_recording = self.shared.style.lock().unwrap().on_recording;
-        let image = self.shared.image.lock().unwrap();
+        let on_recording = self.shared.style.lock_ok().on_recording;
+        let image = self.shared.image.lock_ok();
         let (version, img, rect) = image.as_ref()?;
         Some(GraphicLayer { key: (CAPTION_KEY, *version), image: img.clone(), rect: *rect, alpha: 1.0, stream_only: !on_recording, uv: FULL_UV })
     }
 
     /// Final cues overlapping [from, to].
     pub fn cues_between(&self, from: Ns, to: Ns) -> Vec<Cue> {
-        self.shared.cues.lock().unwrap().iter().filter(|c| c.end > from && c.start < to).cloned().collect()
+        self.shared.cues.lock_ok().iter().filter(|c| c.end > from && c.start < to).cloned().collect()
     }
 
     /// Finish recognising everything up to `until` (ends the current
     /// request), waiting up to `timeout`.
     pub fn settle(&self, until: Ns, timeout: Duration) {
-        if self.shared.status.lock().unwrap().starts_with("not running") {
+        if self.shared.status.lock_ok().starts_with("not running") {
             return;
         }
         self.shared.restart_at.store(until, Ordering::Relaxed);
@@ -382,7 +383,7 @@ impl Runner {
             Event::Final { request, text, words } => {
                 if let Some(&base) = self.bases.get(&request) {
                     let cues = cues_from_words(base, &words);
-                    let mut all = self.shared.cues.lock().unwrap();
+                    let mut all = self.shared.cues.lock_ok();
                     all.extend(cues);
                     // Keep about a day of captions.
                     while all.len() > 50_000 {
@@ -406,7 +407,7 @@ impl Runner {
                 self.bases.retain(|r, _| *r == current || pending.contains(r));
             }
             Event::Error { request, message } => {
-                *self.shared.status.lock().unwrap() = format!("problem: {message}");
+                *self.shared.status.lock_ok() = format!("problem: {message}");
                 self.pending.retain(|r| *r != request);
                 if request == self.request {
                     self.request = self.rec.restart();
@@ -427,7 +428,7 @@ impl Runner {
 
     /// Redraw the box if the visible lines changed.
     fn redraw(&mut self) {
-        let style = self.shared.style.lock().unwrap().clone();
+        let style = self.shared.style.lock_ok().clone();
         let canvas = self.shared.canvas;
         let full = format!("{} {}", self.committed, self.partial).trim().to_string();
         // Don't let the remembered text grow without end.
@@ -447,8 +448,8 @@ impl Runner {
             return;
         }
         self.shown = shown.clone();
-        *self.shared.text.lock().unwrap() = shown;
-        let mut image = self.shared.image.lock().unwrap();
+        *self.shared.text.lock_ok() = shown;
+        let mut image = self.shared.image.lock_ok();
         if lines.is_empty() {
             *image = None;
         } else {

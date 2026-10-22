@@ -55,6 +55,7 @@ pub mod text;
 pub mod timers;
 pub mod watchdog;
 
+use crate::util::LockExt;
 use crate::config::{parse_color, Config, TransitionMode};
 use crate::media::{clock, AudioBlock, Ns, VideoFrame, NS_PER_SEC};
 use anyhow::{bail, Context, Result};
@@ -98,23 +99,23 @@ impl FrameSlot {
         Arc::new(FrameSlot { frame: Mutex::new(None), generation: AtomicU64::new(0), last: Mutex::new(None) })
     }
     pub(crate) fn put(&self, f: Frame) {
-        *self.frame.lock().unwrap() = Some(Arc::new(f));
-        *self.last.lock().unwrap() = Some(Instant::now());
+        *self.frame.lock_ok() = Some(Arc::new(f));
+        *self.last.lock_ok() = Some(Instant::now());
         self.generation.fetch_add(1, Ordering::Release);
     }
     /// (generation, frame); generation changes whenever a new frame arrives.
     pub fn latest(&self) -> Option<(u64, Arc<Frame>)> {
-        let f = self.frame.lock().unwrap().clone()?;
+        let f = self.frame.lock_ok().clone()?;
         Some((self.generation.load(Ordering::Acquire), f))
     }
     /// Forget the picture.
     pub fn clear(&self) {
-        *self.frame.lock().unwrap() = None;
+        *self.frame.lock_ok() = None;
         self.generation.fetch_add(1, Ordering::Release);
     }
     /// True when frames have stopped arriving.
     pub fn stale(&self, after: Duration) -> bool {
-        self.last.lock().unwrap().map(|t| t.elapsed() > after).unwrap_or(true)
+        self.last.lock_ok().map(|t| t.elapsed() > after).unwrap_or(true)
     }
 }
 
@@ -472,7 +473,7 @@ impl Engine {
             Some(p) if !p.as_os_str().is_empty() => match image::open(p) {
                 Ok(img) => Some(img.to_rgba8()),
                 Err(e) => {
-                    status.lock().unwrap().push(LogLevel::Warning, format!("Background image {}: {e}", p.display()));
+                    status.lock_ok().push(LogLevel::Warning, format!("Background image {}: {e}", p.display()));
                     None
                 }
             },
@@ -493,7 +494,7 @@ impl Engine {
         // (see watchdog), so plugging it in later just works.
         let hub = feed::AudioHub::new();
         let pads = pads::PadBank::new(&cfg.pads);
-        *hub.pads.lock().unwrap() = Some(pads.clone());
+        *hub.pads.lock_ok() = Some(pads.clone());
         let mut sources = Vec::new();
         let mut aspects = Vec::new();
         // Every source's frames first: an auto-framed source is cut from
@@ -516,13 +517,13 @@ impl Engine {
             let slot = slots[i].clone();
             match opened {
                 Err(e) => {
-                    let mut st = status.lock().unwrap();
+                    let mut st = status.lock_ok();
                     st.push(LogLevel::Error, format!("{}: {e:#}. It will connect automatically when available.", sc.name));
                     st.offline.insert(sc.name.clone());
                 }
                 Ok(_) => {
-                    if let Some(p) = input.framing().and_then(|f| f.problem.lock().unwrap().clone()) {
-                        status.lock().unwrap().push(LogLevel::Warning, format!("{}: showing the whole picture ({p})", sc.name));
+                    if let Some(p) = input.framing().and_then(|f| f.problem.lock_ok().clone()) {
+                        status.lock_ok().push(LogLevel::Warning, format!("{}: showing the whole picture ({p})", sc.name));
                     }
                 }
             }
@@ -549,10 +550,10 @@ impl Engine {
             let input = inputs::AudioInputDev::new(i, ac.clone(), tx, shared.clone(), hub.clone());
             let devs = device_cache.audio(&ac.device).to_vec();
             match input.open(&devs) {
-                Ok((_, Some(note))) => status.lock().unwrap().push(LogLevel::Warning, format!("{}: {note}", ac.name)),
+                Ok((_, Some(note))) => status.lock_ok().push(LogLevel::Warning, format!("{}: {note}", ac.name)),
                 Ok(_) => {}
                 Err(e) => {
-                    let mut st = status.lock().unwrap();
+                    let mut st = status.lock_ok();
                     st.push(LogLevel::Error, format!("{}: {e:#}. It will connect automatically when available.", ac.name));
                     st.offline.insert(ac.name.clone());
                 }
@@ -680,12 +681,12 @@ impl Engine {
         {
             let (sw, c2, inputs2) = (switcher.clone(), shared_cfg.clone(), auto_inputs.clone());
             let take = Box::new(move |scene: &crate::scene::Scene| {
-                let t = c2.lock().unwrap().transition.clone();
+                let t = c2.lock_ok().transition.clone();
                 let mut s = scene.clone();
                 s.retain_sources(sw.source_count());
                 // A stinger every time someone speaks would be a lot: mix.
                 let mode = if t.mode == TransitionMode::Stinger { TransitionMode::Mix } else { t.mode };
-                apply_scene_audio(&inputs2.lock().unwrap(), &s, scene_audio_timing(mode, t.duration_ms));
+                apply_scene_audio(&inputs2.lock_ok(), &s, scene_audio_timing(mode, t.duration_ms));
                 sw.take(s, mode, t.duration_ms);
             });
             let a = autoswitch::AutoSwitcher {
@@ -704,7 +705,7 @@ impl Engine {
         let codec = cfg.output.codec.video_codec();
         let encoder = describe_encoder(codec, &cfg.output.encoder);
         {
-            let mut st = status.lock().unwrap();
+            let mut st = status.lock_ok();
             st.push(LogLevel::Info, format!("Program {cw}×{ch} @ {fps} fps on {compositor_name}"));
             st.push(LogLevel::Info, format!("Recording with {encoder}"));
         }
@@ -771,7 +772,7 @@ impl Engine {
 
     /// Start or stop background removal to match each source's settings.
     fn apply_cutouts(&self, sources: &[crate::config::SourceConfig]) {
-        let mut states = self.cutouts.lock().unwrap();
+        let mut states = self.cutouts.lock_ok();
         for (i, sc) in sources.iter().enumerate() {
             let (Some(state), Some(handle)) = (states.get_mut(i), self.sources.get(i)) else { continue };
             let want = sc.look.remove_background.then(|| sc.look.cutout_quality.level());
@@ -786,13 +787,13 @@ impl Engine {
             let Some(q) = want else { continue };
             let (status, waker, name) = (self.status.clone(), self.waker.clone(), sc.name.clone());
             let failed = move |e: String| {
-                status.lock().unwrap().push(LogLevel::Warning, format!("{name}: background removal stopped working ({e})"));
+                status.lock_ok().push(LogLevel::Warning, format!("{name}: background removal stopped working ({e})"));
                 waker();
             };
             *state = match cutout::start(&sc.name, handle.slot.clone(), self.masks[i].clone(), q, failed) {
                 Ok(c) => CutoutState::On(q, c),
                 Err(e) => {
-                    self.status.lock().unwrap().push(LogLevel::Warning, format!("{}: background removal isn't available ({e:#})", sc.name));
+                    self.status.lock_ok().push(LogLevel::Warning, format!("{}: background removal isn't available ({e:#})", sc.name));
                     CutoutState::Failed(q)
                 }
             };
@@ -809,10 +810,10 @@ impl Engine {
 
     /// Start, stop or restyle live captions to match the settings.
     pub fn apply_captions(&self, cfg: &crate::config::CaptionsConfig) {
-        let mut current = self.captions_cfg.lock().unwrap();
+        let mut current = self.captions_cfg.lock_ok();
         let same_listening = current.as_ref().is_some_and(|c| c.enabled == cfg.enabled && c.source == cfg.source && c.language == cfg.language && c.model == cfg.model);
         if same_listening {
-            if let Some((_, c)) = &*self.captions.lock().unwrap() {
+            if let Some((_, c)) = &*self.captions.lock_ok() {
                 c.set_style(cfg);
             }
             *current = Some(cfg.clone());
@@ -821,15 +822,15 @@ impl Engine {
         *current = Some(cfg.clone());
         drop(current);
         // Stop what's running.
-        if let Some((id, c)) = self.captions.lock().unwrap().take() {
-            self.mix_taps.lock().unwrap().retain(|t| t.0 != id);
+        if let Some((id, c)) = self.captions.lock_ok().take() {
+            self.mix_taps.lock_ok().retain(|t| t.0 != id);
             drop(c);
         }
         if !cfg.enabled {
             return;
         }
         if let Some(p) = crate::platform::speech::problem(&cfg.language, cfg.model) {
-            self.status.lock().unwrap().push(LogLevel::Warning, format!("Live captions: {p}"));
+            self.status.lock_ok().push(LogLevel::Warning, format!("Live captions: {p}"));
             return;
         }
         let kind = match cfg.source.trim() {
@@ -838,21 +839,21 @@ impl Engine {
             name => match self.audio.iter().position(|a| a.name.eq_ignore_ascii_case(name)) {
                 Some(i) => audio::MixKind::Track { input: i, post_fader: false },
                 None => {
-                    self.status.lock().unwrap().push(LogLevel::Warning, format!("Live captions: there's no audio input called \"{name}\"; listening to the recording mix"));
+                    self.status.lock_ok().push(LogLevel::Warning, format!("Live captions: there's no audio input called \"{name}\"; listening to the recording mix"));
                     audio::MixKind::Recording
                 }
             },
         };
         let (tx, rx) = bounded(500);
         let id = self.tap_ids.fetch_add(1, Ordering::Relaxed);
-        self.mix_taps.lock().unwrap().push((id, kind, tx));
+        self.mix_taps.lock_ok().push((id, kind, tx));
         let (language, model) = (cfg.language.clone(), cfg.model);
         let c = captions::Captions::start(cfg, self.info.canvas, rx, Box::new(move || crate::platform::speech::start(&language, model)), self.status.clone(), self.waker.clone());
-        *self.captions.lock().unwrap() = Some((id, Arc::new(c)));
+        *self.captions.lock_ok() = Some((id, Arc::new(c)));
     }
 
     pub fn captions(&self) -> Option<Arc<captions::Captions>> {
-        self.captions.lock().unwrap().as_ref().map(|c| c.1.clone())
+        self.captions.lock_ok().as_ref().map(|c| c.1.clone())
     }
 
     // ---- NDI output -----------------------------------------------------------------------
@@ -865,11 +866,11 @@ impl Engine {
             if s.input.cfg.device.trim().to_lowercase().starts_with("ndi:") && !s.input.is_open() {
                 match s.input.open(&[]) {
                     Ok(_) => started.push(s.name.clone()),
-                    Err(e) => self.status.lock().unwrap().push(LogLevel::Warning, format!("{}: {e:#}", s.name)),
+                    Err(e) => self.status.lock_ok().push(LogLevel::Warning, format!("{}: {e:#}", s.name)),
                 }
             }
         }
-        let mut st = self.status.lock().unwrap();
+        let mut st = self.status.lock_ok();
         st.push(LogLevel::Info, if started.is_empty() { "NDI is installed".to_string() } else { format!("NDI is installed: connecting {}", started.join(", ")) });
         drop(st);
         let cfg = self.config();
@@ -878,7 +879,7 @@ impl Engine {
 
     /// Start, change or stop the NDI outputs to match the settings.
     pub fn apply_ndi_out(&self, cfg: &crate::config::NdiOutConfig) {
-        let mut cur = self.ndi_out.lock().unwrap();
+        let mut cur = self.ndi_out.lock_ok();
         if cur.as_ref().map(|c| &c.0) == Some(cfg) {
             return;
         }
@@ -889,7 +890,7 @@ impl Engine {
             return;
         }
         if let Err(e) = ndi::api_ready() {
-            self.status.lock().unwrap().push(LogLevel::Warning, format!("NDI output: {e:#}"));
+            self.status.lock_ok().push(LogLevel::Warning, format!("NDI output: {e:#}"));
             return;
         }
         let mut outs = NdiOutputs { stop: Arc::new(AtomicBool::new(false)), threads: Vec::new(), video_tap: None, mix_tap: None, watchers: Vec::new(), connections: Arc::new(AtomicU32::new(0)) };
@@ -903,8 +904,8 @@ impl Engine {
                     let (atx, arx) = bounded::<AudioBlock>(200);
                     let vid = self.tap_ids.fetch_add(1, Ordering::Relaxed);
                     let aid = self.tap_ids.fetch_add(1, Ordering::Relaxed);
-                    self.video_taps.lock().unwrap().listeners.push((vid, vtx));
-                    self.mix_taps.lock().unwrap().push((aid, audio::MixKind::Recording, atx));
+                    self.video_taps.lock_ok().listeners.push((vid, vtx));
+                    self.mix_taps.lock_ok().push((aid, audio::MixKind::Recording, atx));
                     outs.video_tap = Some(vid);
                     outs.mix_tap = Some(aid);
                     let (stop, conns) = (outs.stop.clone(), outs.connections.clone());
@@ -924,9 +925,9 @@ impl Engine {
                     }) {
                         outs.threads.push(t);
                     }
-                    self.status.lock().unwrap().push(LogLevel::Info, format!("NDI output: the program is on the network as \"{full}\""));
+                    self.status.lock_ok().push(LogLevel::Info, format!("NDI output: the program is on the network as \"{full}\""));
                 }
-                Err(e) => self.status.lock().unwrap().push(LogLevel::Warning, format!("NDI output: {e:#}")),
+                Err(e) => self.status.lock_ok().push(LogLevel::Warning, format!("NDI output: {e:#}")),
             }
         }
         if cfg.sources {
@@ -957,10 +958,10 @@ impl Engine {
     fn stop_ndi_outputs(&self, mut outs: NdiOutputs) {
         outs.stop.store(true, Ordering::Relaxed);
         if let Some(id) = outs.video_tap {
-            self.video_taps.lock().unwrap().listeners.retain(|l| l.0 != id);
+            self.video_taps.lock_ok().listeners.retain(|l| l.0 != id);
         }
         if let Some(id) = outs.mix_tap {
-            self.mix_taps.lock().unwrap().retain(|(i, ..)| *i != id);
+            self.mix_taps.lock_ok().retain(|(i, ..)| *i != id);
         }
         for (slot, id) in &outs.watchers {
             slot.remove_watcher(*id);
@@ -972,7 +973,7 @@ impl Engine {
 
     /// NDI receivers watching the program (None when it isn't being sent).
     pub fn ndi_watchers(&self) -> Option<u32> {
-        let cur = self.ndi_out.lock().unwrap();
+        let cur = self.ndi_out.lock_ok();
         let (cfg, outs) = cur.as_ref()?;
         cfg.program.then(|| outs.connections.load(Ordering::Relaxed))
     }
@@ -980,23 +981,23 @@ impl Engine {
     // ---- virtual camera ----------------------------------------------------------------
 
     pub fn virtual_camera_on(&self) -> bool {
-        self.vcam.lock().unwrap().is_some()
+        self.vcam.lock_ok().is_some()
     }
 
     /// Send the program to the "Cutaway" camera in video apps.
     pub fn set_virtual_camera(&self, on: bool) -> Result<()> {
-        let mut v = self.vcam.lock().unwrap();
+        let mut v = self.vcam.lock_ok();
         if let Some((id, running)) = v.take() {
-            self.video_taps.lock().unwrap().listeners.retain(|l| l.0 != id);
+            self.video_taps.lock_ok().listeners.retain(|l| l.0 != id);
             drop(running);
         }
         if on {
             let (tx, rx) = bounded(3);
             let running = crate::platform::vcam::start(rx)?;
             let id = self.tap_ids.fetch_add(1, Ordering::Relaxed);
-            self.video_taps.lock().unwrap().listeners.push((id, tx));
+            self.video_taps.lock_ok().listeners.push((id, tx));
             *v = Some((id, running));
-            self.status.lock().unwrap().push(LogLevel::Info, "Virtual camera on: choose \"Cutaway\" as the camera in your video app");
+            self.status.lock_ok().push(LogLevel::Info, "Virtual camera on: choose \"Cutaway\" as the camera in your video app");
         }
         (self.waker)();
         Ok(())
@@ -1007,14 +1008,14 @@ impl Engine {
     /// Start, change or stop the monitor output to match the settings.
     pub fn apply_monitor(&self, mix: &crate::config::MixConfig) {
         self.monitor_volume.store((10f32.powf(mix.monitor_volume_db.clamp(-60.0, 12.0) / 20.0)).to_bits(), Ordering::Relaxed);
-        let mut m = self.monitor.lock().unwrap();
+        let mut m = self.monitor.lock_ok();
         let device = mix.monitor_device.trim().to_string();
         let source = mix.monitor_source.trim().to_string();
         if m.as_ref().is_some_and(|(d, s, ..)| *d == device && *s == source) {
             return;
         }
         if let Some((_, _, id, running)) = m.take() {
-            self.mix_taps.lock().unwrap().retain(|(i, ..)| *i != id);
+            self.mix_taps.lock_ok().retain(|(i, ..)| *i != id);
             drop(running);
         }
         if device.is_empty() {
@@ -1031,10 +1032,10 @@ impl Engine {
         match crate::platform::open_audio_output(&device, (1, 2), rx, self.monitor_volume.clone()) {
             Ok(running) => {
                 let id = self.tap_ids.fetch_add(1, Ordering::Relaxed);
-                self.mix_taps.lock().unwrap().push((id, kind, tx));
+                self.mix_taps.lock_ok().push((id, kind, tx));
                 *m = Some((device, source, id, running));
             }
-            Err(e) => self.status.lock().unwrap().push(LogLevel::Warning, format!("Headphones: {e:#}")),
+            Err(e) => self.status.lock_ok().push(LogLevel::Warning, format!("Headphones: {e:#}")),
         }
     }
 
@@ -1054,7 +1055,7 @@ impl Engine {
 
     /// Start, change or stop the extra outputs to match the settings.
     pub fn apply_outputs(&self, mix: &crate::config::MixConfig) {
-        let mut outs = self.outputs.lock().unwrap();
+        let mut outs = self.outputs.lock_ok();
         // Volume changes apply in place; anything else reopens that output.
         let mut keep: Vec<RunningOutput> = Vec::new();
         for o in outs.drain(..) {
@@ -1064,7 +1065,7 @@ impl Engine {
                     keep.push(RunningOutput { cfg: c.clone(), ..o });
                 }
                 _ => {
-                    self.mix_taps.lock().unwrap().retain(|t| t.0 != o.tap);
+                    self.mix_taps.lock_ok().retain(|t| t.0 != o.tap);
                     drop(o.running);
                 }
             }
@@ -1078,10 +1079,10 @@ impl Engine {
             match crate::platform::open_audio_output(&c.device, (c.left, c.right), rx, volume.clone()) {
                 Ok(running) => {
                     let tap = self.tap_ids.fetch_add(1, Ordering::Relaxed);
-                    self.mix_taps.lock().unwrap().push((tap, self.output_kind(c), tx));
+                    self.mix_taps.lock_ok().push((tap, self.output_kind(c), tx));
                     keep.push(RunningOutput { cfg: c.clone(), tap, volume, running });
                 }
-                Err(e) => self.status.lock().unwrap().push(LogLevel::Warning, format!("Output \"{}\": {e:#}", c.name)),
+                Err(e) => self.status.lock_ok().push(LogLevel::Warning, format!("Output \"{}\": {e:#}", c.name)),
             }
         }
         *outs = keep;
@@ -1100,7 +1101,7 @@ impl Engine {
 
     /// Current settings (as last applied).
     pub fn config(&self) -> Config {
-        self.cfg.lock().unwrap().clone()
+        self.cfg.lock_ok().clone()
     }
 
     /// Whether `update_config` would take these settings now.
@@ -1120,7 +1121,7 @@ impl Engine {
 
     /// The scenes as saved (automatic switching finds them by name).
     pub fn set_scenes(&self, scenes: &[crate::scene::Scene]) {
-        self.cfg.lock().unwrap().scenes = scenes.to_vec();
+        self.cfg.lock_ok().scenes = scenes.to_vec();
     }
 
     /// Apply settings that don't need the engine rebuilt (recording format,
@@ -1157,7 +1158,7 @@ impl Engine {
         }
         self.replay_label.store(new.replay.label, Ordering::Relaxed);
         if old.vertical != new.vertical {
-            let mut t = self.tall.lock().unwrap();
+            let mut t = self.tall.lock_ok();
             t.cfg = new.vertical.clone();
             t.generation += 1;
         }
@@ -1170,7 +1171,7 @@ impl Engine {
         if new_looks != old_looks || old.style != new.style {
             let aspects = new.sources.iter().map(|s| s.look.cropped_aspect(s.width as f32 / s.height as f32)).collect();
             self.switcher.set_aspects(aspects);
-            let mut l = self.looks.lock().unwrap();
+            let mut l = self.looks.lock_ok();
             l.generation += 1;
             l.looks = new_looks;
             l.style = new.style.clone();
@@ -1186,7 +1187,7 @@ impl Engine {
             if let (Some(h), Some(o)) = (self.sources.get(i), old.sources.get(i)) {
                 if o.framing != s.framing && o.device == s.device {
                     if let Some(f) = h.input.framing() {
-                        *f.cfg.lock().unwrap() = s.framing.clone();
+                        *f.cfg.lock_ok() = s.framing.clone();
                     }
                 }
             }
@@ -1207,7 +1208,7 @@ impl Engine {
                 }
             }
         }
-        *self.cfg.lock().unwrap() = new.clone();
+        *self.cfg.lock_ok() = new.clone();
         Ok(())
     }
 
@@ -1264,7 +1265,7 @@ impl Engine {
         let peers: Arc<Vec<(String, Arc<SourceSlot>)>> = Arc::new(new.sources.iter().zip(&slots).map(|(sc, s)| (sc.name.clone(), s.clone())).collect());
         let mut old_handles: Vec<Option<SourceHandle>> = std::mem::take(&mut self.sources).into_iter().map(Some).collect();
         let mut old_masks: Vec<Option<Arc<cutout::MaskSlot>>> = std::mem::take(&mut self.masks).into_iter().map(Some).collect();
-        let mut old_cutouts: Vec<Option<CutoutState>> = std::mem::take(&mut *self.cutouts.lock().unwrap()).into_iter().map(Some).collect();
+        let mut old_cutouts: Vec<Option<CutoutState>> = std::mem::take(&mut *self.cutouts.lock_ok()).into_iter().map(Some).collect();
         let mut sources = Vec::new();
         let mut masks = Vec::new();
         let mut cutouts = Vec::new();
@@ -1295,7 +1296,7 @@ impl Engine {
                 // Its file ends now rather than holding its last picture to
                 // the end of the take.
                 h.slot.stop_iso_tap();
-                if let Some(take) = self.take.lock().unwrap().as_mut() {
+                if let Some(take) = self.take.lock_ok().as_mut() {
                     let length = clock::now() - take.t0;
                     for f in take.export_files.iter_mut().filter(|f| f.source == Some(h.uid as usize)) {
                         f.length = Some(length);
@@ -1309,7 +1310,7 @@ impl Engine {
                     format!("{}: removed; its own file in this take ends here", h.name)
                 });
             }
-            self.status.lock().unwrap().offline.remove(&h.name);
+            self.status.lock_ok().offline.remove(&h.name);
         }
         if recording {
             for (i, sc) in new.sources.iter().enumerate() {
@@ -1320,12 +1321,12 @@ impl Engine {
         }
         self.sources = sources;
         self.masks = masks;
-        *self.cutouts.lock().unwrap() = cutouts;
+        *self.cutouts.lock_ok() = cutouts;
 
         // The compositor and switcher follow between two frames.
         let generation = self.comp_lineups.fetch_add(1, Ordering::Relaxed) + 1;
         let aspects: Vec<f32> = new.sources.iter().map(|s| s.look.cropped_aspect(s.width as f32 / s.height as f32)).collect();
-        *self.comp_lineup.lock().unwrap() = Some(CompLineup {
+        *self.comp_lineup.lock_ok() = Some(CompLineup {
             generation,
             from: keep.clone(),
             sizes: new.sources.iter().map(|s| (s.width, s.height)).collect(),
@@ -1343,13 +1344,13 @@ impl Engine {
         }
         {
             // Looks by the new numbers (the compositor already has them).
-            let mut l = self.looks.lock().unwrap();
+            let mut l = self.looks.lock_ok();
             l.looks = new.sources.iter().map(|s| s.look.clone()).collect();
             l.style = new.style.clone();
             l.generation += 1;
         }
         {
-            let mut t = self.tall.lock().unwrap();
+            let mut t = self.tall.lock_ok();
             t.names = new.sources.iter().map(|s| s.name.clone()).collect();
             t.generation += 1;
         }
@@ -1406,7 +1407,7 @@ impl Engine {
                     format!("{}: removed; its WAV in this take ends here", h.name)
                 });
             }
-            self.status.lock().unwrap().offline.remove(&h.name);
+            self.status.lock_ok().offline.remove(&h.name);
         }
         if recording {
             for (i, ac) in new.audio.iter().enumerate() {
@@ -1418,14 +1419,14 @@ impl Engine {
         self.audio = audio;
         self.mix.set_lineup(mix_slots, new.audio.iter().map(|a| a.name.clone()).collect());
         self.mix.set_talkback_input(talkback_index(&new));
-        *self.auto_inputs.lock().unwrap() = self.audio.iter().map(|a| (a.name.clone(), a.shared.clone())).collect();
+        *self.auto_inputs.lock_ok() = self.audio.iter().map(|a| (a.name.clone(), a.shared.clone())).collect();
         guests::hub().set_engine_inputs(new.audio.iter().enumerate().map(|(i, a)| (a.device.clone(), i)).collect());
         // Outputs that leave out an input by name (one that's new, too).
         {
-            let outs = self.outputs.lock().unwrap();
+            let outs = self.outputs.lock_ok();
             let kinds: Vec<(u64, audio::MixKind)> = outs.iter().map(|o| (o.tap, self.output_kind_in(&o.cfg, &new.audio))).collect();
             drop(outs);
-            for t in self.mix_taps.lock().unwrap().iter_mut() {
+            for t in self.mix_taps.lock_ok().iter_mut() {
                 if let Some((_, k)) = kinds.iter().find(|(id, _)| *id == t.0) {
                     t.1 = *k;
                 }
@@ -1434,7 +1435,7 @@ impl Engine {
 
         // ---- the rest follows ---------------------------------------------------
         {
-            let mut l = self.lineup.lock().unwrap();
+            let mut l = self.lineup.lock_ok();
             l.generation += 1;
             l.video = self.sources.iter().map(|s| s.input.clone()).collect();
             l.audio = self.audio.iter().map(|a| a.input.clone()).collect();
@@ -1445,9 +1446,9 @@ impl Engine {
             let _ = std::thread::Builder::new().name("opening".into()).spawn(move || {
                 let devs = inputs::DeviceCache::default().video(&input.cfg.device).to_vec();
                 match input.open(&devs) {
-                    Ok(desc) => status.lock().unwrap().push(LogLevel::Info, format!("{}: {desc}", input.cfg.name)),
+                    Ok(desc) => status.lock_ok().push(LogLevel::Info, format!("{}: {desc}", input.cfg.name)),
                     Err(e) => {
-                        let mut st = status.lock().unwrap();
+                        let mut st = status.lock_ok();
                         st.push(LogLevel::Error, format!("{}: {e:#}. It will connect automatically when available.", input.cfg.name));
                         st.offline.insert(input.cfg.name.clone());
                     }
@@ -1460,10 +1461,10 @@ impl Engine {
             let _ = std::thread::Builder::new().name("opening".into()).spawn(move || {
                 let devs = inputs::DeviceCache::default().audio(&input.cfg.device).to_vec();
                 match input.open(&devs) {
-                    Ok((_, Some(note))) => status.lock().unwrap().push(LogLevel::Warning, format!("{}: {note}", input.cfg.name)),
+                    Ok((_, Some(note))) => status.lock_ok().push(LogLevel::Warning, format!("{}: {note}", input.cfg.name)),
                     Ok(_) => {}
                     Err(e) => {
-                        let mut st = status.lock().unwrap();
+                        let mut st = status.lock_ok();
                         st.push(LogLevel::Error, format!("{}: {e:#}. It will connect automatically when available.", input.cfg.name));
                         st.offline.insert(input.cfg.name.clone());
                     }
@@ -1486,7 +1487,7 @@ impl Engine {
             // The engine's own copy in the new order, each kept one as it was
             // (so `update_config` then applies what changed live: looks,
             // framing, levels, processing...), the new ones as they are.
-            let mut c = self.cfg.lock().unwrap();
+            let mut c = self.cfg.lock_ok();
             c.sources = new.sources.iter().enumerate().map(|(i, sc)| keep[i].and_then(|j| old.sources.get(j).cloned()).unwrap_or_else(|| sc.clone())).collect();
             c.audio = new.audio.iter().enumerate().map(|(i, ac)| akeep[i].and_then(|j| old.audio.get(j).cloned()).unwrap_or_else(|| ac.clone())).collect();
             c.scenes = new.scenes.clone();
@@ -1495,22 +1496,22 @@ impl Engine {
         // headphones and captions where they named an input.
         self.apply_cutouts(&new.sources);
         if new.ndi_out.sources {
-            if let Some((_, outs)) = self.ndi_out.lock().unwrap().take() {
+            if let Some((_, outs)) = self.ndi_out.lock_ok().take() {
                 self.stop_ndi_outputs(outs);
             }
             self.apply_ndi_out(&new.ndi_out);
         }
         let solo = new.mix.monitor_source.trim();
         if !solo.is_empty() && !solo.eq_ignore_ascii_case("stream") {
-            if let Some((_, _, id, running)) = self.monitor.lock().unwrap().take() {
-                self.mix_taps.lock().unwrap().retain(|(i, ..)| *i != id);
+            if let Some((_, _, id, running)) = self.monitor.lock_ok().take() {
+                self.mix_taps.lock_ok().retain(|(i, ..)| *i != id);
                 drop(running);
             }
             self.apply_monitor(&new.mix);
         }
         let heard = new.captions.source.trim().to_lowercase();
         if new.captions.enabled && !heard.is_empty() && heard != "recording" && heard != "stream" {
-            *self.captions_cfg.lock().unwrap() = None;
+            *self.captions_cfg.lock_ok() = None;
             self.apply_captions(&new.captions);
         }
         (self.waker)();
@@ -1518,14 +1519,14 @@ impl Engine {
     }
 
     pub fn encoder_description(&self) -> String {
-        let cfg = self.cfg.lock().unwrap();
+        let cfg = self.cfg.lock_ok();
         describe_encoder(cfg.output.codec.video_codec(), &cfg.output.encoder)
     }
 
     // ---- streaming ------------------------------------------------------------------
 
     pub fn is_streaming(&self) -> bool {
-        self.stream.lock().unwrap().is_some()
+        self.stream.lock_ok().is_some()
     }
 
     /// Go live to every enabled destination.
@@ -1533,7 +1534,7 @@ impl Engine {
         if self.is_streaming() {
             bail!("already live");
         }
-        if self.status.lock().unwrap().stream.stopping {
+        if self.status.lock_ok().stream.stopping {
             bail!("the previous stream is still ending");
         }
         let cfg = self.config();
@@ -1546,7 +1547,7 @@ impl Engine {
                 tap_id: id,
                 program_fps: self.info.fps,
                 vertical: {
-                    let v = &self.tall.lock().unwrap().cfg;
+                    let v = &self.tall.lock_ok().cfg;
                     v.enabled.then(|| v.size())
                 },
                 status: self.status.clone(),
@@ -1554,13 +1555,13 @@ impl Engine {
             },
         )?;
         self.mix.reset_stream_loudness();
-        *self.stream_started.lock().unwrap() = Some(clock::now());
+        *self.stream_started.lock_ok() = Some(clock::now());
         let names: Vec<String> = cfg.streaming.destinations.iter().filter(|d| d.enabled).map(|d| d.name.clone()).collect();
-        self.status.lock().unwrap().push(LogLevel::Info, format!("Going live to {} ({})", names.join(", "), session.encoder));
-        *self.stream.lock().unwrap() = Some(session);
+        self.status.lock_ok().push(LogLevel::Info, format!("Going live to {} ({})", names.join(", "), session.encoder));
+        *self.stream.lock_ok() = Some(session);
         if cfg.streaming.record_when_live && !self.is_recording() {
             if let Err(e) = self.start_recording() {
-                self.status.lock().unwrap().push(LogLevel::Error, format!("Couldn't start recording: {e:#}"));
+                self.status.lock_ok().push(LogLevel::Error, format!("Couldn't start recording: {e:#}"));
             }
         }
         (self.waker)();
@@ -1569,21 +1570,21 @@ impl Engine {
 
     /// End the stream cleanly (in the background; takes a moment).
     pub fn stop_stream(&self) {
-        let Some(session) = self.stream.lock().unwrap().take() else { return };
-        self.status.lock().unwrap().stream.stopping = true;
+        let Some(session) = self.stream.lock_ok().take() else { return };
+        self.status.lock_ok().stream.stopping = true;
         (self.waker)();
         let (status, waker) = (self.status.clone(), self.waker.clone());
         let handle = std::thread::spawn(move || {
-            let since = status.lock().unwrap().stream.since;
+            let since = status.lock_ok().stream.since;
             session.stop();
-            let mut st = status.lock().unwrap();
+            let mut st = status.lock_ok();
             let length = since.map(|s| fmt_duration(s.elapsed())).unwrap_or_default();
             st.stream = StreamStatus::default();
             st.push(LogLevel::Info, format!("Stream ended ({length})"));
             drop(st);
             waker();
         });
-        self.finalizers.lock().unwrap().push(handle);
+        self.finalizers.lock_ok().push(handle);
     }
 
     // ---- live controls -------------------------------------------------------------
@@ -1611,7 +1612,7 @@ impl Engine {
                 None => {
                     let info = self.stinger.info();
                     let why = info.problem.unwrap_or_else(|| if info.loading { "the stinger is still loading".into() } else { "no stinger video is set (Settings → Switching)".into() });
-                    self.status.lock().unwrap().push(LogLevel::Warning, format!("Mixed instead of the stinger: {why}"));
+                    self.status.lock_ok().push(LogLevel::Warning, format!("Mixed instead of the stinger: {why}"));
                     mode = TransitionMode::Mix;
                 }
             }
@@ -1675,13 +1676,13 @@ impl Engine {
 
     /// Controls of a media player source.
     pub fn player(&self, source: usize) -> Option<Arc<player::PlayerControl>> {
-        self.sources.get(source)?.input.player.lock().unwrap().clone()
+        self.sources.get(source)?.input.player.lock_ok().clone()
     }
 
     pub fn set_auto_switch(&self, on: bool) {
         self.auto.enabled.store(on, Ordering::Relaxed);
         if on && self.config().auto_switch.rules.is_empty() {
-            self.status.lock().unwrap().push(LogLevel::Warning, "Auto switching has no rules yet: add them in Settings → Switching.");
+            self.status.lock_ok().push(LogLevel::Warning, "Auto switching has no rules yet: add them in Settings → Switching.");
         }
         (self.waker)();
     }
@@ -1698,7 +1699,7 @@ impl Engine {
     /// Host time the current stream started.
     pub fn stream_started_at(&self) -> Option<Ns> {
         if self.is_streaming() {
-            *self.stream_started.lock().unwrap()
+            *self.stream_started.lock_ok()
         } else {
             None
         }
@@ -1719,7 +1720,7 @@ impl Engine {
     // ---- recording (see take.rs) ---------------------------------------------------
 
     pub fn wait_finalized(&self) {
-        let jobs: Vec<JoinHandle<()>> = std::mem::take(&mut *self.finalizers.lock().unwrap());
+        let jobs: Vec<JoinHandle<()>> = std::mem::take(&mut *self.finalizers.lock_ok());
         for h in jobs {
             let _ = h.join();
         }
@@ -1765,12 +1766,12 @@ impl Engine {
         }
         self.wait_finalized();
         guests::hub().detach_engine();
-        if let Some((_, outs)) = self.ndi_out.lock().unwrap().take() {
+        if let Some((_, outs)) = self.ndi_out.lock_ok().take() {
             self.stop_ndi_outputs(outs);
         }
-        self.monitor.lock().unwrap().take();
-        self.outputs.lock().unwrap().clear();
-        if let Some((_, r)) = self.vcam.lock().unwrap().take() {
+        self.monitor.lock_ok().take();
+        self.outputs.lock_ok().clear();
+        if let Some((_, r)) = self.vcam.lock_ok().take() {
             drop(r);
         }
         self.stop.store(true, Ordering::Relaxed);
@@ -1876,11 +1877,11 @@ impl CompositorLoop {
             clock::sleep_until(t + VIDEO_LATENCY);
             // Sources added, removed or moved: everything follows at once,
             // between frames.
-            let lineup = self.lineup.lock().unwrap().take();
+            let lineup = self.lineup.lock_ok().take();
             if let Some(l) = lineup {
                 self.comp.set_lineup(&l.from, &l.sizes);
                 for (i, why) in self.comp.set_looks(&l.looks, &l.style) {
-                    self.status.lock().unwrap().push(LogLevel::Warning, format!("Source {}: the LUT wasn't used: {why}", i + 1));
+                    self.status.lock_ok().push(LogLevel::Warning, format!("Source {}: the LUT wasn't used: {why}", i + 1));
                 }
                 self.switcher.remap_sources(&l.from, l.aspects, l.uids);
                 self.slots = l.slots;
@@ -1889,11 +1890,11 @@ impl CompositorLoop {
                 self.lineup_done.store(l.generation, Ordering::Release);
             }
             {
-                let l = self.looks.lock().unwrap();
+                let l = self.looks.lock_ok();
                 if l.generation != self.looks_generation {
                     self.looks_generation = l.generation;
                     for (i, why) in self.comp.set_looks(&l.looks, &l.style) {
-                        self.status.lock().unwrap().push(LogLevel::Warning, format!("Source {}: the LUT wasn't used: {why}", i + 1));
+                        self.status.lock_ok().push(LogLevel::Warning, format!("Source {}: the LUT wasn't used: {why}", i + 1));
                     }
                 }
             }
@@ -1902,7 +1903,7 @@ impl CompositorLoop {
                 self.comp.set_preview_width(pw);
             }
             {
-                let t = self.tall.lock().unwrap();
+                let t = self.tall.lock_ok();
                 if t.generation != self.tall_generation {
                     self.tall_generation = t.generation;
                     self.tall_on = t.cfg.enabled.then(|| (t.cfg.clone(), vertical::framing(&t.cfg, &t.names)));
@@ -1914,7 +1915,7 @@ impl CompositorLoop {
             }
             // Who wants this frame?
             let (program_tx, stream, listeners, tall_tx, tall_stream) = {
-                let taps = self.taps.lock().unwrap();
+                let taps = self.taps.lock_ok();
                 (
                     taps.program.as_ref().filter(|p| t >= p.from).map(|p| p.tx.clone()),
                     taps.stream.as_ref().map(|s| (s.tx.clone(), s.from, s.size, s.fps.min(fps).max(1))),
@@ -1979,7 +1980,7 @@ impl CompositorLoop {
                 if let Some((cfg, framing)) = &self.tall_on {
                     let (w, h) = cfg.size();
                     let aspect = w as f32 / h as f32;
-                    let names = self.tall.lock().unwrap().names.clone();
+                    let names = self.tall.lock_ok().names.clone();
                     let frames_of = |scene: &crate::scene::Scene| {
                         let l = cfg.layout_of(&scene.name);
                         let one = names.iter().position(|n| n.eq_ignore_ascii_case(&l.source));
@@ -2023,7 +2024,7 @@ impl CompositorLoop {
                     None => self.comp.set_replay(None, 0.0, false),
                 }
                 let mut graphics = self.graphics.layers(t);
-                if let Some((_, c)) = &*self.captions.lock().unwrap() {
+                if let Some((_, c)) = &*self.captions.lock_ok() {
                     graphics.extend(c.layer());
                 }
                 serial += 1;
@@ -2040,7 +2041,7 @@ impl CompositorLoop {
                             if let Some(tx) = program_tx {
                                 if tx.try_send(p).is_err() && !warned_program {
                                     warned_program = true;
-                                    self.status.lock().unwrap().push(
+                                    self.status.lock_ok().push(
                                         LogLevel::Warning,
                                         "Program: the encoder can't keep up, frames are being repeated. Lower the resolution or bitrate.",
                                     );
@@ -2050,7 +2051,7 @@ impl CompositorLoop {
                         if let (Some(f), Some((tx, _))) = (stream_frame, stream_now) {
                             if tx.try_send(f).is_err() && !warned_stream {
                                 warned_stream = true;
-                                self.status.lock().unwrap().push(LogLevel::Warning, "Stream: the encoder can't keep up, frames are being dropped.");
+                                self.status.lock_ok().push(LogLevel::Warning, "Stream: the encoder can't keep up, frames are being dropped.");
                             }
                         }
                         let fresh = r.preview.is_some() || !r.thumbs.is_empty();
@@ -2073,7 +2074,7 @@ impl CompositorLoop {
                             if let Some(tx) = &tall_tx {
                                 if tx.try_send(f).is_err() && !warned_tall {
                                     warned_tall = true;
-                                    self.status.lock().unwrap().push(LogLevel::Warning, "Vertical version: the encoder can't keep up, frames are being repeated.");
+                                    self.status.lock_ok().push(LogLevel::Warning, "Vertical version: the encoder can't keep up, frames are being repeated.");
                                 }
                             }
                         }
@@ -2082,7 +2083,7 @@ impl CompositorLoop {
                         }
                     }
                     Err(e) => {
-                        let mut st = self.status.lock().unwrap();
+                        let mut st = self.status.lock_ok();
                         st.push(LogLevel::Error, format!("Compositor: {e:#}"));
                         st.fatal = Some(format!("the GPU compositor stopped: {e:#}"));
                         drop(st);
@@ -2099,7 +2100,7 @@ impl CompositorLoop {
                 k = jump;
                 if last_behind.is_none_or(|l| l.elapsed() > Duration::from_secs(30)) {
                     last_behind = Some(Instant::now());
-                    self.status.lock().unwrap().push(LogLevel::Warning, "The compositor fell behind and skipped frames (is the computer overloaded?)");
+                    self.status.lock_ok().push(LogLevel::Warning, "The compositor fell behind and skipped frames (is the computer overloaded?)");
                 }
             }
         }
@@ -2174,7 +2175,7 @@ mod tests {
         };
         // The bars on air, watched as the program comes out.
         let (tx, rx) = bounded::<VideoFrame>(64);
-        e.video_taps.lock().unwrap().listeners.push((999, tx));
+        e.video_taps.lock_ok().listeners.push((999, tx));
         let bars = cfg.effective_scenes()[1].clone();
         e.take_scene(&bars, TransitionMode::Cut, 0);
         std::thread::sleep(Duration::from_millis(800));
@@ -2212,12 +2213,12 @@ mod tests {
         // The new source and input come up.
         std::thread::sleep(Duration::from_millis(1200));
         assert!(e.sources[2].input.alive(), "Flat is running");
-        assert!(e.status.lock().unwrap().meters.contains_key("a1"), "Tone 2 is in the mix");
+        assert!(e.status.lock_ok().meters.contains_key("a1"), "Tone 2 is in the mix");
 
         // The take: every file there was at the start, finished cleanly.
         e.stop_recording();
         e.wait_finalized();
-        let report = e.status.lock().unwrap().last_take.clone().expect("a take");
+        let report = e.status.lock_ok().last_take.clone().expect("a take");
         let names: Vec<String> = report.files.iter().map(|f| f.0.file_name().unwrap().to_string_lossy().to_string()).collect();
         for want in ["ISO_01_Dark", "ISO_02_Bars", "ISO_03_Snow", "Program", "Audio_01_Tone"] {
             assert!(names.iter().any(|n| n.starts_with(want)), "{want} in {names:?}");

@@ -1,6 +1,7 @@
 //! The graphics layer: logos, watermarks, name titles and clocks drawn
 //! above every scene, each with its own on/off button and a fade.
 
+use crate::util::LockExt;
 use super::timers::{clock_text, Timers};
 use super::VIDEO_LATENCY;
 use crate::config::{parse_color, Graphic, GraphicKind};
@@ -124,7 +125,7 @@ impl Graphics {
     pub fn new(cfgs: &[Graphic], canvas: (u32, u32), timers: Arc<Timers>) -> Arc<Self> {
         let g = Arc::new(Graphics { canvas, items: Mutex::new(Vec::new()), versions: Default::default(), timers, comment: Mutex::new(CommentItem::default()) });
         g.update(cfgs);
-        for it in g.items.lock().unwrap().iter_mut() {
+        for it in g.items.lock_ok().iter_mut() {
             it.visible = it.cfg.visible;
             it.from_alpha = it.target();
         }
@@ -138,7 +139,7 @@ impl Graphics {
     /// Settings changed: redraw graphics whose look changed; on/off states
     /// carry over by name.
     pub fn update(&self, cfgs: &[Graphic]) {
-        let mut items = self.items.lock().unwrap();
+        let mut items = self.items.lock_ok();
         let mut old: Vec<Item> = std::mem::take(&mut *items);
         for cfg in cfgs {
             let prev = old.iter().position(|o| o.cfg.name == cfg.name).map(|i| old.remove(i));
@@ -188,7 +189,7 @@ impl Graphics {
 
     /// Show a viewer comment (None: hide it).
     pub fn set_comment(&self, comment: Option<&Comment>, style: &crate::config::CommentsConfig) {
-        let mut c = self.comment.lock().unwrap();
+        let mut c = self.comment.lock_ok();
         let t = clock::now() - VIDEO_LATENCY;
         c.from_alpha = c.alpha_at(t);
         c.changed_at = t;
@@ -205,12 +206,12 @@ impl Graphics {
 
     #[cfg(test)]
     pub fn comment_showing(&self) -> bool {
-        self.comment.lock().unwrap().visible
+        self.comment.lock_ok().visible
     }
 
     /// Change a ticker's text live.
     pub fn set_ticker_text(&self, index: usize, text: &str) {
-        let mut items = self.items.lock().unwrap();
+        let mut items = self.items.lock_ok();
         let Some(it) = items.get_mut(index).filter(|i| i.cfg.kind == GraphicKind::Ticker) else { return };
         if it.cfg.title == text {
             return;
@@ -222,24 +223,24 @@ impl Graphics {
 
     /// What a clock graphic shows now.
     pub fn clock_text(&self, index: usize) -> Option<(String, bool)> {
-        let items = self.items.lock().unwrap();
+        let items = self.items.lock_ok();
         let it = items.get(index).filter(|i| i.cfg.kind == GraphicKind::Clock)?;
         Some(clock_text(&it.cfg, &self.timers, chrono::Local::now()))
     }
 
     /// (name, on, problem) for each graphic.
     pub fn list(&self) -> Vec<(String, bool, Option<String>)> {
-        self.items.lock().unwrap().iter().map(|i| (i.cfg.name.clone(), i.visible, i.error.clone())).collect()
+        self.items.lock_ok().iter().map(|i| (i.cfg.name.clone(), i.visible, i.error.clone())).collect()
     }
 
     pub fn is_visible(&self, index: usize) -> bool {
-        self.items.lock().unwrap().get(index).is_some_and(|i| i.visible)
+        self.items.lock_ok().get(index).is_some_and(|i| i.visible)
     }
 
     /// Show or hide a graphic (fading as set). Timed like a scene change,
     /// so it lands on the program frame the operator saw.
     pub fn set_visible(&self, index: usize, on: bool) {
-        let mut items = self.items.lock().unwrap();
+        let mut items = self.items.lock_ok();
         let Some(it) = items.get_mut(index) else { return };
         if it.visible == on {
             return;
@@ -257,7 +258,7 @@ impl Graphics {
 
     /// Change a title's text live.
     pub fn set_text(&self, index: usize, title: &str, subtitle: &str) {
-        let mut items = self.items.lock().unwrap();
+        let mut items = self.items.lock_ok();
         let Some(it) = items.get_mut(index) else { return };
         if it.cfg.title == title && it.cfg.subtitle == subtitle {
             return;
@@ -273,7 +274,7 @@ impl Graphics {
     /// What to draw for the program frame at time `t`.
     pub fn layers(&self, t: Ns) -> Vec<GraphicLayer> {
         let (cw, ch) = (self.canvas.0 as f32, self.canvas.1 as f32);
-        let mut items = self.items.lock().unwrap();
+        let mut items = self.items.lock_ok();
         let mut out = Vec::new();
         let wall = chrono::Local::now() + chrono::Duration::nanoseconds(t - clock::now());
         for (i, it) in items.iter_mut().enumerate() {
@@ -309,7 +310,7 @@ impl Graphics {
             }
         }
         drop(items);
-        let c = self.comment.lock().unwrap();
+        let c = self.comment.lock_ok();
         let alpha = c.alpha_at(t);
         if let (Some(img), true) = (&c.image, alpha > 0.001) {
             let w = c.style.width.clamp(0.05, 1.0);

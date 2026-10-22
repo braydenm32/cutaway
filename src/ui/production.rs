@@ -1,6 +1,7 @@
 //! The production extras in the main window: macros, PTZ cameras, instant
 //! replay, the teleprompter and viewer comments.
 
+use crate::util::LockExt;
 use super::theme::*;
 use super::App;
 use crate::control::{Action, CommentCmd, PrompterCmd, PtzCmd, ReplayCmd, Target};
@@ -507,7 +508,7 @@ impl App {
             self.prompter.script = std::sync::Arc::new(script);
             self.prompter.starts = starts;
             self.prompter.version += 1;
-            *self.remote_shared.prompter.lock().unwrap() = serde_json::json!({ "version": self.prompter.version, "text": *self.prompter.script, "segments": self.prompter.starts }).to_string();
+            *self.remote_shared.prompter.lock_ok() = serde_json::json!({ "version": self.prompter.version, "text": *self.prompter.script, "segments": self.prompter.starts }).to_string();
         }
         let now = Instant::now();
         let dt = now.duration_since(self.prompter.last).as_secs_f64().min(0.5);

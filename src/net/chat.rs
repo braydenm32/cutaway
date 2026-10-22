@@ -6,6 +6,7 @@
 //! - YouTube: the YouTube Data API's live chat messages, with a free API
 //!   key, polled at the rate YouTube asks for.
 
+use crate::util::LockExt;
 use anyhow::{anyhow, bail, Context, Result};
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
@@ -87,7 +88,7 @@ impl Chat {
         let channel = cfg.twitch_channel.trim().trim_start_matches('#').to_lowercase();
         if !channel.is_empty() {
             let (st, s2, ids, w) = (state.clone(), stop.clone(), next_id.clone(), waker.clone());
-            state.lock().unwrap().twitch = "connecting…".into();
+            state.lock_ok().twitch = "connecting…".into();
             if let Ok(t) = std::thread::Builder::new().name("twitch chat".into()).spawn(move || twitch(&channel, st, s2, ids, w)) {
                 threads.push(t);
             }
@@ -96,24 +97,24 @@ impl Chat {
         let key = cfg.youtube_api_key.trim().to_string();
         if let Some(video) = video.filter(|_| !key.is_empty()) {
             let (st, s2, ids, w) = (state.clone(), stop.clone(), next_id.clone(), waker);
-            state.lock().unwrap().youtube = "connecting…".into();
+            state.lock_ok().youtube = "connecting…".into();
             if let Ok(t) = std::thread::Builder::new().name("youtube chat".into()).spawn(move || youtube(&video, &key, st, s2, ids, w)) {
                 threads.push(t);
             }
         } else if !cfg.youtube.trim().is_empty() {
-            state.lock().unwrap().youtube = if key.is_empty() { "needs a YouTube API key".into() } else { "that isn't a YouTube video address".into() };
+            state.lock_ok().youtube = if key.is_empty() { "needs a YouTube API key".into() } else { "that isn't a YouTube video address".into() };
         }
         Chat { state, stop, threads, next_id, made_for: (cfg.twitch_channel.clone(), cfg.youtube.clone(), cfg.youtube_api_key.clone()) }
     }
 
     /// Newest last.
     pub fn messages(&self) -> Vec<ChatMessage> {
-        self.state.lock().unwrap().messages.iter().cloned().collect()
+        self.state.lock_ok().messages.iter().cloned().collect()
     }
 
     /// (Twitch, YouTube) connection states ("" when not used).
     pub fn status(&self) -> (String, String) {
-        let st = self.state.lock().unwrap();
+        let st = self.state.lock_ok();
         (st.twitch.clone(), st.youtube.clone())
     }
 
@@ -126,7 +127,7 @@ impl Chat {
 }
 
 fn add(state: &Arc<Mutex<State>>, m: ChatMessage) {
-    let mut st = state.lock().unwrap();
+    let mut st = state.lock_ok();
     st.messages.push_back(m);
     while st.messages.len() > KEEP {
         st.messages.pop_front();
@@ -167,7 +168,7 @@ pub fn parse_twitch(line: &str) -> Option<(String, Option<String>, String)> {
 
 fn twitch(channel: &str, state: Arc<Mutex<State>>, stop: Arc<AtomicBool>, ids: Arc<AtomicU64>, waker: Arc<dyn Fn() + Send + Sync>) {
     let set = |s: String| {
-        state.lock().unwrap().twitch = s;
+        state.lock_ok().twitch = s;
         waker();
     };
     let mut wait = 2;
@@ -247,7 +248,7 @@ pub fn youtube_video_id(s: &str) -> Option<String> {
 
 fn youtube(video: &str, key: &str, state: Arc<Mutex<State>>, stop: Arc<AtomicBool>, ids: Arc<AtomicU64>, waker: Arc<dyn Fn() + Send + Sync>) {
     let set = |s: String| {
-        state.lock().unwrap().youtube = s;
+        state.lock_ok().youtube = s;
         waker();
     };
     let agent = crate::util::https_agent(Duration::from_secs(20));
