@@ -58,7 +58,7 @@ pictures) with a small built-in WebSocket client.
 ## For developers
 
 ```sh
-python3 make_icons.py                       # redraw the icons
+python3 make_icons.py                       # redraw the icons (the plugin icon is Cutaway's logo, from ../assets/logo)
 npx @elgato/cli validate app.cutaway.streamdeck.sdPlugin
 npx @elgato/cli pack app.cutaway.streamdeck.sdPlugin   # → .streamDeckPlugin
 node test/mock-streamdeck.js 127.0.0.1:8790 1234       # end-to-end test against a running Cutaway

@@ -23,6 +23,7 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp target/aarch64-apple-darwin/release/cutaway "$app/Contents/MacOS/Cutaway"
 sed "s/__VERSION__/$version/g" macos/Info.plist > "$app/Contents/Info.plist"
+cp macos/Cutaway.icns "$app/Contents/Resources/"
 # The Stream Deck plugin (Settings → Remote & MIDI → Install…).
 if [[ -f streamdeck/Cutaway.streamDeckPlugin ]]; then
     cp streamdeck/Cutaway.streamDeckPlugin "$app/Contents/Resources/"

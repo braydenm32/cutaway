@@ -9,10 +9,13 @@ the Stream Deck app shows in its action list and before Cutaway connects.
 
 import math
 import os
+import sys
 
 from PIL import Image, ImageDraw, ImageFont
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "assets", "logo"))
+import make_logo  # noqa: E402  Cutaway's logo, for the plugin and category icons
 OUT = os.path.join(HERE, "app.cutaway.streamdeck.sdPlugin", "imgs")
 S = 8  # supersampling
 
@@ -140,10 +143,6 @@ def glyph(d, kind, box, color, accent=None):
         d.polygon([p(5, 13), p(10, 13), p(5, 17.5)], fill=color)
         for x in (6.5, 10, 13.5):
             d.ellipse([p(x - 1, 7.3), p(x + 1, 9.3)], fill=BG)
-    elif kind == "logo":
-        # A frame with a diagonal cut through it.
-        d.rounded_rectangle([p(2, 4), p(18, 16)], radius=2 * u, outline=color, width=lw)
-        d.line([p(6, 16.5), p(14, 3.5)], fill=accent, width=lw * 2)
 
 
 def save(img, path, size):
@@ -173,13 +172,15 @@ def key(kind, path, name):
 
 
 def plugin_icon(path):
+    """The app icon, for the Stream Deck store and the plugin list."""
     for size, suffix in ((256, ""), (512, "@2x")):
-        n = size * S
-        img = Image.new("RGBA", (n, n), (0, 0, 0, 0))
-        d = ImageDraw.Draw(img)
-        d.rounded_rectangle([0, 0, n - 1, n - 1], radius=n * 0.22, fill=BG)
-        glyph(d, "logo", (n * 0.16, n * 0.16, n * 0.84, n * 0.84), WHITE, RED)
-        save(img, path + suffix + ".png", size)
+        make_logo.render("square", size).save(path + suffix + ".png")
+
+
+def category_icon(path):
+    """The letters alone in white, beside the plugin's group of actions."""
+    for size, suffix in ((28, ""), (56, "@2x")):
+        make_logo.render_mark(size, WHITE, WHITE).save(path + suffix + ".png")
 
 
 ACTIONS = {
@@ -215,6 +216,6 @@ if __name__ == "__main__":
     for kind, name in ACTIONS.items():
         icon(kind, os.path.join(OUT, "actions", kind, "icon"), 20, WHITE, WHITE)
         key(kind, os.path.join(OUT, "actions", kind, "key"), name)
-    icon("logo", os.path.join(OUT, "plugin", "category"), 28, WHITE, WHITE)
+    category_icon(os.path.join(OUT, "plugin", "category"))
     plugin_icon(os.path.join(OUT, "plugin", "marketplace"))
     print("icons written to", OUT)

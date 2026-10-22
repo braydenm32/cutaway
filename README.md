@@ -1,3 +1,5 @@
+<img src="assets/logo/cutaway-mac.svg" width="112" alt="Cutaway's icon: a leaning C and A, the A's left leg a red cut, inside a camera's corner brackets with a red recording light">
+
 # Cutaway
 
 A software take on hardware production consoles like the RØDECaster Video. It
@@ -1025,6 +1027,7 @@ source that drops can't stall the cameras, the program or the other outputs.
 | `src/platform/win/` | Media Foundation capture, encoders and decoders, Windows Graphics Capture, the virtual camera |
 | `src/platform/audio_*.rs` | Audio devices on both (CoreAudio; WASAPI and ASIO) |
 | `src/platform/whisper.rs`, `onnx.rs` | Captions with Whisper; finding people with ONNX Runtime (Windows) |
+| `assets/logo/` | The logo, and `make_logo.py`, which draws it and every app icon made from it (Mac, Windows, the window, the phone remote, the Stream Deck plugin) |
 | `windows/` | The Windows build script, icon, and the virtual camera source (`windows/vcam`, a Media Foundation media source DLL) |
 | `models/` | The two small models for finding people on Windows, with their licenses |
 | `macos/virtualcam/` | The camera extension (Swift) and its signing script |

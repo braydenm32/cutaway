@@ -42,9 +42,19 @@ pub mod theme {
 }
 use theme::*;
 
+/// Cutaway's icon for its windows and, while it runs, the Dock or taskbar
+/// (drawn by assets/logo/make_logo.py). Without it they'd show egui's.
+fn app_icon() -> Arc<egui::IconData> {
+    #[cfg(target_os = "macos")]
+    let png: &[u8] = include_bytes!("../assets/logo/window-mac.png");
+    #[cfg(not(target_os = "macos"))]
+    let png: &[u8] = include_bytes!("../assets/logo/window-square.png");
+    Arc::new(eframe::icon_data::from_png_bytes(png).unwrap_or_default())
+}
+
 pub fn run(cfg: Config, save_path: Option<PathBuf>, self_test: bool) -> anyhow::Result<()> {
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_title("Cutaway").with_inner_size([1480.0, 920.0]).with_min_inner_size([1000.0, 640.0]),
+        viewport: egui::ViewportBuilder::default().with_title("Cutaway").with_icon(app_icon()).with_inner_size([1480.0, 920.0]).with_min_inner_size([1000.0, 640.0]),
         ..Default::default()
     };
     eframe::run_native(
@@ -3168,7 +3178,7 @@ impl App {
         let mut actual_full = None;
         let multiview = self.cfg.display.output == DisplayOutput::Multiview;
         let prompter = (self.cfg.display.output == DisplayOutput::Prompter).then(|| (self.cfg.prompter.clone(), self.prompter.script.clone(), self.prompter.pos));
-        let mut builder = egui::ViewportBuilder::default().with_title("Cutaway — Output").with_inner_size([960.0, 540.0]).with_fullscreen(self.cfg.display.fullscreen);
+        let mut builder = egui::ViewportBuilder::default().with_title("Cutaway — Output").with_icon(app_icon()).with_inner_size([960.0, 540.0]).with_fullscreen(self.cfg.display.fullscreen);
         // (The setting only says how it opens: after that, full screen goes on
         // and off by command, following the window's real state.)
         if self.self_test.is_some() {
@@ -3772,4 +3782,13 @@ fn style(ctx: &egui::Context) {
     ctx.set_style_of(egui::Theme::Dark, style.clone());
     ctx.set_style_of(egui::Theme::Light, style);
     ctx.set_theme(egui::ThemePreference::Dark);
+}
+
+#[cfg(test)]
+mod icon_tests {
+    #[test]
+    fn app_icon_loads() {
+        let icon = super::app_icon();
+        assert!(icon.width >= 256 && icon.width == icon.height, "{}x{}", icon.width, icon.height);
+    }
 }
