@@ -507,7 +507,9 @@ pub struct SourceConfig {
     ///   - the device name as listed by `cutaway --list-devices` (a partial,
     ///     case-insensitive match is fine), e.g. "Cam Link 4K"
     ///   - "#2" for the second detected video device
-    ///   - "screen" to capture the main display
+    ///   - "screen" to capture the main display; "screen:display:<name>",
+    ///     "screen:window:<app>|<title>" or "screen:app:<app>" for another
+    ///     display, a window or an app (see `platform::capture`)
     ///   - "test" or "test:<pattern>" for a generated test picture
     ///     (patterns: smpte, ball, pinwheel, spokes, gradient, snow, colors)
     ///   - "frame:<source name>" for an auto-framed close-up cut from

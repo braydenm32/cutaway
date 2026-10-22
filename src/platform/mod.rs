@@ -3,6 +3,7 @@
 use crate::media::{AudioBlock, VideoFrame};
 use std::sync::Arc;
 
+pub mod capture;
 pub mod displays;
 #[cfg(target_os = "macos")]
 pub mod macos;
@@ -27,9 +28,9 @@ pub use audio_in::{list_audio_devices, open_audio_input};
 pub use audio_out::{list_output_devices, open_audio_output};
 
 #[cfg(target_os = "macos")]
-pub use macos::{list_video_devices, open_camera, open_screen, permissions_changed, request_permissions};
+pub use macos::{capture_targets, list_video_devices, open_camera, open_screen, permissions_changed, request_permissions};
 #[cfg(windows)]
-pub use win::{list_video_devices, open_camera, open_screen, permissions_changed, request_permissions};
+pub use win::{capture_targets, list_video_devices, open_camera, open_screen, permissions_changed, request_permissions};
 
 #[cfg(not(any(target_os = "macos", windows)))]
 mod none {
@@ -47,8 +48,27 @@ mod none {
     pub fn open_camera(_dev: &DeviceInfo, _w: u32, _h: u32, _fps: u32, _sink: FrameSink) -> Result<Box<dyn Running>> {
         bail!("camera capture isn't available in this build (macOS only for now)")
     }
-    pub fn open_screen(_w: u32, _h: u32, _fps: u32, _sink: FrameSink) -> Result<Box<dyn Running>> {
+    pub fn open_screen(_target: &super::capture::ScreenTarget, _w: u32, _h: u32, _fps: u32, _sink: FrameSink) -> Result<Box<dyn Running>> {
         bail!("screen capture isn't available in this build (macOS only for now)")
+    }
+    pub fn capture_targets() -> Result<Vec<super::capture::CaptureTarget>> {
+        use super::capture::{CaptureTarget, ScreenTarget, TargetKind, Thumb};
+        if std::env::var_os("CUTAWAY_UI_TEST_FAKE_SCREENS").is_none() {
+            bail!("screen capture isn't available in this build")
+        }
+        // Made-up screens and windows, for screenshots of Settings.
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        let pic = |w: usize, h: usize, c: [u8; 3]| Thumb { size: [w, h], rgba: (0..w * h).flat_map(|i| if (i % w) < w / 5 || (i / w) < h / 8 { [40, 44, 52, 255] } else { [c[0], c[1], c[2], 255] }).collect() };
+        let mut v = Vec::new();
+        for d in super::displays::list() {
+            v.push(CaptureTarget { kind: TargetKind::Display, device: if d.main { "screen".into() } else { ScreenTarget::Display(d.name.clone()).device() }, name: d.name.clone(), detail: String::new(), thumb: Some(pic(160, 90, if d.main { [30, 90, 160] } else { [140, 60, 120] })) });
+        }
+        for (app, title, c) in [("com.apple.Keynote", "Show opener.key", [200, 120, 40]), ("com.google.Chrome", "Run of show — Google Docs", [60, 160, 90]), ("com.apple.Safari", "Guest bios", [90, 110, 200]), ("com.spotify.client", "Spotify", [20, 180, 80])] {
+            let t = ScreenTarget::Window { app: app.into(), title: title.into() };
+            v.push(CaptureTarget { kind: TargetKind::Window, device: t.device(), name: title.into(), detail: super::capture::short_app(app), thumb: Some(pic(160, 100, c)) });
+            v.push(CaptureTarget { kind: TargetKind::App, device: ScreenTarget::App(app.into()).device(), name: super::capture::short_app(app), detail: "every window of the app".into(), thumb: Some(pic(160, 100, c)) });
+        }
+        Ok(v)
     }
     pub fn open_audio_input(_dev: Option<&DeviceInfo>, _channels: u32, _sink: AudioSink) -> Result<AudioStarted> {
         bail!("audio input isn't available in this build (macOS only for now)")

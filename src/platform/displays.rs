@@ -154,12 +154,16 @@ mod imp {
             .collect()
     }
 
-    /// The names macOS shows in Displays settings, by display id (AppKit
-    /// only answers on the main thread; elsewhere the names are generic).
+    /// The names macOS shows in Displays settings, by display id. AppKit
+    /// only answers on the main thread, so other threads (opening a screen
+    /// capture) get the names it last gave; Cutaway asks on the main thread
+    /// as it starts.
     fn screen_names() -> Vec<(u32, String)> {
-        let Some(mtm) = MainThreadMarker::new() else { return Vec::new() };
+        use crate::util::LockExt;
+        static LAST: std::sync::Mutex<Vec<(u32, String)>> = std::sync::Mutex::new(Vec::new());
+        let Some(mtm) = MainThreadMarker::new() else { return LAST.lock_ok().clone() };
         let key = NSString::from_str("NSScreenNumber");
-        NSScreen::screens(mtm)
+        let names: Vec<(u32, String)> = NSScreen::screens(mtm)
             .iter()
             .filter_map(|s| {
                 let desc = s.deviceDescription();
@@ -167,7 +171,9 @@ mod imp {
                 let n = n.downcast::<NSNumber>().ok()?;
                 Some((n.unsignedIntValue(), s.localizedName().to_string()))
             })
-            .collect()
+            .collect();
+        *LAST.lock_ok() = names.clone();
+        names
     }
 }
 
@@ -270,8 +276,15 @@ mod imp {
 
 #[cfg(not(any(target_os = "macos", windows)))]
 mod imp {
-    pub fn list() -> Vec<super::Display> {
-        Vec::new()
+    use super::Display;
+
+    pub fn list() -> Vec<Display> {
+        if std::env::var_os("CUTAWAY_UI_TEST_FAKE_SCREENS").is_none() {
+            return Vec::new();
+        }
+        // Made-up displays, for screenshots of Settings.
+        let d = |name: &str, x: f32, y: f32, w: f32, h: f32, main: bool| Display { name: name.into(), x, y, w, h, pixels: (w as u32 * 2, h as u32 * 2), main, id: x as u64 };
+        vec![d("Built-in Retina Display", 0.0, 0.0, 1512.0, 982.0, true), d("DELL U2720Q", 1512.0, -300.0, 1920.0, 1080.0, false), d("Projector", -1280.0, 200.0, 1280.0, 720.0, false)]
     }
 }
 

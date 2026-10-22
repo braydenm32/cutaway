@@ -3,6 +3,7 @@
 //! video engine rebuilt are flagged, everything else applies live.
 
 mod captions;
+mod capture_picker;
 mod comments;
 mod control;
 mod graphics;
@@ -248,6 +249,7 @@ pub struct SettingsUi {
     profile_name: String,
     rename_to: String,
     ndi_found: Arc<Mutex<Option<Result<Vec<String>, String>>>>,
+    capture: capture_picker::CapturePicker,
     vcam_job: Arc<Mutex<Option<Result<String, String>>>>,
     vcam_busy: bool,
     learning: Option<usize>,
@@ -311,6 +313,7 @@ impl SettingsUi {
             profile_name: String::new(),
             rename_to: String::new(),
             ndi_found: Arc::new(Mutex::new(None)),
+            capture: capture_picker::CapturePicker::new(),
             vcam_job: Arc::new(Mutex::new(None)),
             vcam_busy: false,
             learning: None,
@@ -1608,7 +1611,7 @@ pub(super) fn short_device(device: &str) -> String {
     match device {
         "test" => "Test pattern".into(),
         d if d.starts_with("test:") => format!("Test pattern ({})", &d[5..]),
-        "screen" => "Screen capture".into(),
+        d if crate::platform::capture::is_screen(d) => crate::platform::capture::ScreenTarget::parse(d).map(|t| t.describe()).unwrap_or_default(),
         "default" => "System default".into(),
         "media" => "Media player".into(),
         "pads" => "Sound pads".into(),
@@ -1860,6 +1863,11 @@ fn shortcuts(ui: &mut egui::Ui) {
 /// settings), each with its number, name and size; click one to choose it.
 /// `ours` is the one Cutaway's window is on. Returns the one clicked.
 pub(crate) fn display_map(ui: &mut egui::Ui, displays: &[crate::platform::displays::Display], selected: Option<usize>, ours: Option<usize>, height: f32) -> Option<usize> {
+    display_map_with(ui, displays, selected, ours, height, &[])
+}
+
+/// [`display_map`] with a picture of what's on each display (by index).
+pub(crate) fn display_map_with(ui: &mut egui::Ui, displays: &[crate::platform::displays::Display], selected: Option<usize>, ours: Option<usize>, height: f32, pictures: &[Option<egui::TextureId>]) -> Option<usize> {
     use eframe::egui::{pos2, Align2, FontId, Rect, Sense, Stroke, StrokeKind};
     if displays.is_empty() {
         return None;
@@ -1878,6 +1886,12 @@ pub(crate) fn display_map(ui: &mut egui::Ui, displays: &[crate::platform::displa
         let chosen = selected == Some(i);
         let fill = if chosen { ACCENT.gamma_multiply(0.35) } else if resp.hovered() { RAISED.gamma_multiply(1.4) } else { RAISED };
         painter.rect_filled(r, 6.0, fill);
+        if let Some(Some(tex)) = pictures.get(i) {
+            let pic = r.shrink(4.0);
+            painter.image(*tex, pic, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            // Darker, so the number and name read over it.
+            painter.rect_filled(pic, 3.0, Color32::from_black_alpha(if chosen { 70 } else { 120 }));
+        }
         painter.rect_stroke(r, 6.0, Stroke::new(if chosen { 2.5 } else { 1.0 }, if chosen { ACCENT } else { LINE }), StrokeKind::Inside);
         if d.main {
             // The menu bar / taskbar side.

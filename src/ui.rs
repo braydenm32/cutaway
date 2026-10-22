@@ -226,6 +226,9 @@ impl App {
     fn new(cc: &eframe::CreationContext<'_>, mut cfg: Config, save_path: Option<PathBuf>) -> Self {
         // Every source and input gets its identity for this session.
         cfg.assign_uids();
+        // The displays' names (macOS only gives them on this thread; screen
+        // captures opened later find their display by name).
+        crate::platform::displays::list();
         style(&cc.egui_ctx);
         cc.egui_ctx.set_zoom_factor(cfg.ui.scale.clamp(0.5, 3.0));
         let ctx = cc.egui_ctx.clone();

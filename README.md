@@ -68,6 +68,12 @@ and [Install on Windows](#install-on-windows).
 - **Any source, many at once.** Webcams, USB/Thunderbolt capture cards and
   cameras over HDMI capture (if QuickTime Player can see it, Cutaway can), the
   screen, or test patterns. There is no fixed limit; 4K sources are supported.
+- **Screen capture: a screen, a window or an app.** Pick it like sharing your
+  screen in a video call: your displays drawn as they're arranged, or cards
+  with a picture of each open window and app. A window keeps its shape (black
+  around it), is found again by its title after a restart, and comes back by
+  itself if it's closed and reopened. (An app on Windows is its biggest
+  window; on a Mac, every window it has on that screen.)
 - **Change the line-up mid-show.** Add, remove or change sources and audio
   inputs while recording or live: only what changed opens or closes, and the
   rest never blinks. Removing one while recording or streaming asks first; its
