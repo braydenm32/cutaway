@@ -1839,6 +1839,8 @@ fn shortcuts(ui: &mut egui::Ui) {
         ("N".into(), "Next rundown segment (Shift+N goes back)"),
         ("Alt + 1 – 9".into(), "Show / hide graphic 1–9"),
         ("E".into(), "Edit the live layout"),
+        (format!("{cmd}Z"), "Undo a change to a scene, a title's text or Settings"),
+        (if cfg!(target_os = "macos") { format!("{cmd}Shift+Z") } else { format!("{cmd}Shift+Z / {cmd}Y") }, "Redo"),
         (format!("{cmd}R"), "Start / stop recording"),
         (format!("{cmd},"), "Open Settings"),
         ("Esc".into(), "Close Settings"),
