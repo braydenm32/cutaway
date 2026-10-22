@@ -25,6 +25,7 @@ mod production;
 mod starting;
 mod undo;
 mod uploads;
+mod waiting;
 
 pub mod theme {
     use eframe::egui::Color32;
@@ -224,6 +225,8 @@ pub struct App {
     sync: Option<SyncWizard>,
     /// The transition T toggles back to from Cut.
     last_transition: TransitionMode,
+    /// Takes left unfinished by a crash, being rescued.
+    rescue: Option<waiting::Rescue>,
     /// Scripted actions for automated screenshots (hidden --ui-test flag).
     self_test: Option<(Instant, u8)>,
 }
@@ -242,7 +245,10 @@ impl App {
         let (requests_tx, requests_rx) = unbounded();
         let remote_shared = remote::RemoteShared::new(requests_tx.clone(), waker.clone());
         let syrinscape = control::syrinscape::Syrinscape::new(&cfg.syrinscape, waker.clone());
+        // A crash mid-take: put the files back together while the window opens.
+        let rescue = crate::recovery::start_rescue(&crate::recovery::folders(&cfg), waker.clone()).map(waiting::Rescue::new);
         let mut app = App {
+            rescue,
             syrinscape,
             rundown: Default::default(),
             queued: Vec::new(),
@@ -1689,10 +1695,15 @@ impl App {
                 }
                 ui.ctx().request_repaint_after(Duration::from_millis(250));
             }
-            RecState::Finalizing { folder } => {
-                ui.add_enabled(false, pill(RichText::new("Saving files…").size(15.0).color(Color32::WHITE), RAISED));
-                status_line = Some((folder.display().to_string(), TEXT_DIM));
-                ui.ctx().request_repaint_after(Duration::from_millis(250));
+            RecState::Finalizing { folder, step, done } => {
+                let t = ui.input(|i| i.time) as f32;
+                let r = ui.add_enabled(false, pill(RichText::new(format!("Saving files  {:.0}%", done * 100.0)).size(15.0).color(Color32::WHITE), RAISED));
+                // A bar along the bottom of the button fills as it goes.
+                let bar = Rect::from_min_size(r.rect.left_bottom() - vec2(0.0, 3.0), vec2(r.rect.width(), 3.0));
+                ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * done.clamp(0.02, 1.0), bar.height())), 1.5, ACCENT);
+                status_line = Some((format!("{step}{}", waiting::ellipsis(t)), ACCENT));
+                r.on_disabled_hover_text(format!("Finishing the take in {}", folder.display()));
+                ui.ctx().request_repaint_after(Duration::from_millis(100));
             }
             RecState::Idle => {
                 let btn = pill(RichText::new("●  RECORD").size(15.0).strong().color(RED), RAISED).stroke(Stroke::new(1.5, RED_DIM));
@@ -1721,12 +1732,26 @@ impl App {
             let live = stream.destinations.iter().filter(|d| d.state == DestState::Live).count();
             let total = stream.destinations.iter().filter(|d| d.state != DestState::Off).count();
             let healthy = live == total && total > 0;
-            let fill = if healthy { LIVE } else { Color32::from_rgb(170, 90, 20) };
-            let btn = pill(RichText::new(format!("◉  LIVE  {}", fmt_clock(t))).size(15.0).strong().color(Color32::WHITE), fill);
-            if ui.add(btn).on_hover_text("End the stream").clicked() {
-                self.toggle_stream();
+            // Nothing's live yet, but it's trying: say so, not "LIVE".
+            let connecting: Vec<&str> = stream.destinations.iter().filter(|d| matches!(d.state, DestState::Connecting | DestState::Retrying { .. })).map(|d| d.name.as_str()).collect();
+            let going = live == 0 && !connecting.is_empty();
+            if going {
+                let pulse = ((ui.input(|i| i.time) as f32 * 3.0).sin() + 1.0) * 0.5;
+                let fill = Color32::from_rgb(60, 24, 44).lerp_to_gamma(Color32::from_rgb(150, 30, 90), pulse);
+                let btn = pill(RichText::new(format!("◉  GOING LIVE{}", waiting::ellipsis(ui.input(|i| i.time) as f32))).size(15.0).strong().color(Color32::WHITE), fill).min_size(vec2(150.0, 0.0));
+                if ui.add(btn).on_hover_text("Connecting. Click to stop.").clicked() {
+                    self.toggle_stream();
+                }
+                status_line = Some((format!("Connecting to {}", connecting.join(", ")), Color32::from_rgb(230, 120, 170)));
+                ui.ctx().request_repaint_after(Duration::from_millis(50));
+            } else {
+                let fill = if healthy { LIVE } else { Color32::from_rgb(170, 90, 20) };
+                let btn = pill(RichText::new(format!("◉  LIVE  {}", fmt_clock(t))).size(15.0).strong().color(Color32::WHITE), fill);
+                if ui.add(btn).on_hover_text("End the stream").clicked() {
+                    self.toggle_stream();
+                }
             }
-            if !healthy {
+            if !healthy && !going {
                 status_line = Some((format!("{live} of {total} destinations live — see Stream panel"), AMBER));
             }
             ui.ctx().request_repaint_after(Duration::from_millis(250));
@@ -2426,11 +2451,11 @@ impl App {
             if let Some(tex) = self.texture(&ctx, &format!("src{i}"), slot) {
                 painter.image(tex, pic, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
             }
-            if *offline || slot.stale(Duration::from_secs(2)) {
-                painter.rect_filled(pic, 3.0, Color32::from_black_alpha(170));
-                painter.text(pic.center() - vec2(0.0, 8.0), Align2::CENTER_CENTER, "NO SIGNAL", FontId::proportional(16.0), AMBER);
-                if let Some(d) = detail {
-                    painter.text(pic.center() + vec2(0.0, 12.0), Align2::CENTER_CENTER, d, FontId::proportional(11.0), TEXT_DIM);
+            let wait = waiting::TileWait::of(slot, *offline, detail.is_some());
+            if wait != waiting::TileWait::Fine {
+                waiting::draw_tile_wait(&painter, pic, wait, detail.as_deref(), ctx.input(|i| i.time) as f32);
+                if wait != waiting::TileWait::NoSignal {
+                    ctx.request_repaint_after(Duration::from_millis(50));
                 }
             }
             let on_air = live_sources.contains(&i);
@@ -3992,6 +4017,7 @@ impl eframe::App for App {
         self.title_dialog(&ctx);
         self.precheck_dialog(&ctx);
         self.sync_dialog(&ctx);
+        self.rescue_card(&ctx);
         if let Some((text, at, error)) = self.toast.clone() {
             if at.elapsed() < Duration::from_secs(6) {
                 egui::Area::new(egui::Id::unique("toast")).anchor(Align2::CENTER_BOTTOM, vec2(0.0, -120.0)).show(&ctx, |ui| {

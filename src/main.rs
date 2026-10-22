@@ -242,14 +242,6 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
-    let mut folders = vec![cfg.output.folder.clone()];
-    folders.extend(cfg.output.backup_folder.clone().filter(|p| !p.as_os_str().is_empty()));
-    for folder in folders {
-        for take in recovery::recover_unfinished(&folder) {
-            eprintln!("Recovered an unfinished take: {}", take.display());
-        }
-    }
-
     for (i, url) in args.stream_to.iter().enumerate() {
         let srt = url.to_lowercase().starts_with("srt://");
         cfg.streaming.destinations.push(config::StreamDestination {
@@ -265,6 +257,15 @@ fn run() -> Result<()> {
     // Camera/microphone prompts (first launch only); answered in the background.
     platform::request_permissions();
 
+    // Takes a crash left unfinished are repaired first: here for the
+    // command line, in the background (with a progress card) in the window.
+    if args.measure_sync || args.headless {
+        for folder in recovery::folders(&cfg) {
+            for take in recovery::recover_unfinished(&folder) {
+                eprintln!("Recovered an unfinished take: {}", take.display());
+            }
+        }
+    }
     if args.measure_sync {
         return measure_sync(&cfg, args.seconds);
     }

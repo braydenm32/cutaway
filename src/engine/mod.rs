@@ -92,11 +92,12 @@ pub struct FrameSlot {
     frame: Mutex<Option<Arc<Frame>>>,
     generation: AtomicU64,
     last: Mutex<Option<Instant>>,
+    born: Instant,
 }
 
 impl FrameSlot {
     pub fn new() -> Arc<Self> {
-        Arc::new(FrameSlot { frame: Mutex::new(None), generation: AtomicU64::new(0), last: Mutex::new(None) })
+        Arc::new(FrameSlot { frame: Mutex::new(None), generation: AtomicU64::new(0), last: Mutex::new(None), born: Instant::now() })
     }
     pub(crate) fn put(&self, f: Frame) {
         *self.frame.lock_ok() = Some(Arc::new(f));
@@ -112,6 +113,14 @@ impl FrameSlot {
     pub fn clear(&self) {
         *self.frame.lock_ok() = None;
         self.generation.fetch_add(1, Ordering::Release);
+    }
+    /// How long since the last frame (None if there's never been one).
+    pub fn since_last(&self) -> Option<Duration> {
+        self.last.lock_ok().map(|t| t.elapsed())
+    }
+    /// How long it's been waiting for pictures.
+    pub fn age(&self) -> Duration {
+        self.born.elapsed()
     }
     /// True when frames have stopped arriving.
     pub fn stale(&self, after: Duration) -> bool {
@@ -149,6 +158,9 @@ pub enum RecState {
     },
     Finalizing {
         folder: PathBuf,
+        /// What it's doing now, and how far along it is (0 to 1).
+        step: String,
+        done: f32,
     },
 }
 

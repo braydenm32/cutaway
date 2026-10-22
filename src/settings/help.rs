@@ -244,7 +244,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Recording, "WAV files") => "The bit depth of the WAV files. 24-bit suits most; 32-bit float can't clip, even if a level was too hot.",
         (Recording, "Backup copy") => "Records a second copy of every file into another folder as you go. Pick one on a different drive, so a full or failing drive can't lose the show.",
         (Recording, "Instant clips") => "The Clip button (or K) saves the last few seconds of the program into the take's Clips folder, to share straight away.",
-        (Recording, "Crash protection") => "Files are written so that after a crash or a power cut they keep everything up to the last second.",
+        (Recording, "Crash protection") => "Files are written so that after a crash or a power cut they keep everything up to the last second. Next time Cutaway opens, it mends them and tells you when the take is safe.",
         (Recording, "Timecode") => "Stamps every file with the time of day as timecode, so editors can line the files up by it.",
         (Recording, "Editor timelines") => "Saves the live edit as a multicam timeline for Final Cut Pro, DaVinci Resolve and Premiere Pro, with every angle and your cuts.",
         (Recording, "Audio sessions") => "Saves a REAPER session and a DAWproject (Fender Studio Pro, Bitwig, Cubase) with every WAV on its own track, lined up.",
