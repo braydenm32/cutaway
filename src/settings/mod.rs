@@ -1856,6 +1856,62 @@ fn shortcuts(ui: &mut egui::Ui) {
 /// Wherever NDI is chosen: when it isn't installed, offer to install NDI's
 /// own free runtime (downloaded from NDI, its installer opened), and credit
 /// NDI as its licence asks.
+/// The displays drawn as they're arranged (like the system's Displays
+/// settings), each with its number, name and size; click one to choose it.
+/// `ours` is the one Cutaway's window is on. Returns the one clicked.
+pub(crate) fn display_map(ui: &mut egui::Ui, displays: &[crate::platform::displays::Display], selected: Option<usize>, ours: Option<usize>, height: f32) -> Option<usize> {
+    use eframe::egui::{pos2, Align2, FontId, Rect, Sense, Stroke, StrokeKind};
+    if displays.is_empty() {
+        return None;
+    }
+    let (min_x, min_y) = displays.iter().fold((f32::MAX, f32::MAX), |(x, y), d| (x.min(d.x), y.min(d.y)));
+    let (max_x, max_y) = displays.iter().fold((f32::MIN, f32::MIN), |(x, y), d| (x.max(d.x + d.w), y.max(d.y + d.h)));
+    let width = ui.available_width().min(560.0);
+    let scale = (width / (max_x - min_x)).min(height / (max_y - min_y));
+    let size = vec2((max_x - min_x) * scale, (max_y - min_y) * scale);
+    let (area, _) = ui.allocate_exact_size(size, Sense::hover());
+    let painter = ui.painter_at(area.expand(2.0));
+    let mut clicked = None;
+    for (i, d) in displays.iter().enumerate() {
+        let r = Rect::from_min_size(pos2(area.left() + (d.x - min_x) * scale, area.top() + (d.y - min_y) * scale), vec2(d.w * scale, d.h * scale)).shrink(3.0);
+        let resp = ui.interact(r, ui.scope_id().with(("display", i)), Sense::click());
+        let chosen = selected == Some(i);
+        let fill = if chosen { ACCENT.gamma_multiply(0.35) } else if resp.hovered() { RAISED.gamma_multiply(1.4) } else { RAISED };
+        painter.rect_filled(r, 6.0, fill);
+        painter.rect_stroke(r, 6.0, Stroke::new(if chosen { 2.5 } else { 1.0 }, if chosen { ACCENT } else { LINE }), StrokeKind::Inside);
+        if d.main {
+            // The menu bar / taskbar side.
+            let bar = if cfg!(windows) { Rect::from_min_max(pos2(r.left() + 6.0, r.bottom() - 9.0), pos2(r.right() - 6.0, r.bottom() - 5.0)) } else { Rect::from_min_max(pos2(r.left() + 6.0, r.top() + 5.0), pos2(r.right() - 6.0, r.top() + 9.0)) };
+            painter.rect_filled(bar, 2.0, Color32::from_white_alpha(60));
+        }
+        let small = r.height() < 70.0 || r.width() < 110.0;
+        painter.text(r.center() - vec2(0.0, if small { 0.0 } else { 14.0 }), Align2::CENTER_CENTER, format!("{}", i + 1), FontId::proportional(if small { 16.0 } else { 22.0 }), Color32::WHITE);
+        if !small {
+            let mut name = d.name.clone();
+            let max_chars = ((r.width() - 12.0) / 6.5).max(4.0) as usize;
+            if name.chars().count() > max_chars {
+                name = name.chars().take(max_chars.saturating_sub(1)).collect::<String>() + "…";
+            }
+            painter.text(r.center() + vec2(0.0, 8.0), Align2::CENTER_CENTER, name, FontId::proportional(11.5), Color32::from_gray(225));
+            let note = if ours == Some(i) { format!("{}×{} · Cutaway is here", d.pixels.0, d.pixels.1) } else { format!("{}×{}", d.pixels.0, d.pixels.1) };
+            painter.text(r.center() + vec2(0.0, 23.0), Align2::CENTER_CENTER, note, FontId::proportional(10.5), TEXT_DIM);
+        }
+        let resp = resp.on_hover_text(format!("{} {}: {}×{}{}", i + 1, d.name, d.pixels.0, d.pixels.1, if d.main { " (main display)" } else { "" }));
+        if resp.clicked() {
+            clicked = Some(i);
+        }
+    }
+    clicked
+}
+
+/// The display Cutaway's main window is on, if known.
+pub(crate) fn our_display(ctx: &egui::Context, displays: &[crate::platform::displays::Display]) -> Option<usize> {
+    use crate::platform::displays;
+    let (outer, native) = ctx.input_for(egui::ViewportId::ROOT, |i| (i.viewport().outer_rect, i.viewport().native_pixels_per_point.unwrap_or(1.0)));
+    let zoom = ctx.zoom_factor();
+    outer.and_then(|r| displays::containing(displays, displays::window_units([r.center().x * zoom, r.center().y * zoom], native)))
+}
+
 pub fn ndi_offer(ui: &mut egui::Ui) {
     use crate::net::ndi_install::{self, Stage};
     if crate::engine::ndi::available() {

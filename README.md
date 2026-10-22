@@ -306,7 +306,10 @@ Take_2026-10-16_19-30-02/
 - **NDI output:** the program (with its sound), and optionally every source,
   as NDI on your network for other computers, OBS, vMix or recorders.
 - **Second screen:** the program, the multiview or the teleprompter, full
-  screen on a projector, TV or confidence monitor.
+  screen on a projector, TV or confidence monitor. Pick the screen from a
+  picture of your displays (or leave it on Automatic: any screen but
+  Cutaway's). It never fills the screen Cutaway is on by itself, and Esc
+  always gets you out: once to leave full screen, twice to close it.
 - **Live captions:** speech recognised on the Mac (nothing leaves it),
   shown on the stream (and optionally burned into the recording), from the
   mix or any one input.
@@ -548,7 +551,7 @@ Video Extensions** on some PCs.
 | Go live / end stream | The **GO LIVE** button. This is mouse-only on purpose, so a stray key can't start or end a broadcast |
 | Edit layout | `E`, or **Edit layout**: drag frames, drag the corner to resize (Shift keeps shape), add/remove sources, scene audio, duplicate, rename, **Save scenes** |
 | Audio strip | Fader = level (double-click resets), **ON** = in the mixes, 🎧 = solo in the headphones |
-| Second screen | **Screen** in the header. On that window: double-click or `F` for full screen, Esc to leave |
+| Second screen | **Screen** in the header. On that window: double-click or `F` for full screen, Esc to leave full screen, Esc again (or ✕, or Cmd/Ctrl+W) to close |
 | Switch show | The show name next to the logo |
 | Settings | ⌘, |
 

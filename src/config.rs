@@ -1672,6 +1672,9 @@ pub enum DisplayOutput {
 pub struct DisplayConfig {
     pub output: DisplayOutput,
     pub fullscreen: bool,
+    /// Which display it goes on, by name (as `platform::displays` names
+    /// them); empty: another display than Cutaway's, if there is one.
+    pub screen: String,
     /// Turn the virtual camera on when Cutaway starts.
     pub virtual_camera: bool,
     /// Show the time and the rundown segment's time left on this screen
@@ -1681,7 +1684,7 @@ pub struct DisplayConfig {
 
 impl Default for DisplayConfig {
     fn default() -> Self {
-        DisplayConfig { output: DisplayOutput::Off, fullscreen: true, virtual_camera: false, clocks: false }
+        DisplayConfig { output: DisplayOutput::Off, fullscreen: true, screen: String::new(), virtual_camera: false, clocks: false }
     }
 }
 
