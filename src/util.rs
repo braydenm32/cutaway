@@ -1,5 +1,35 @@
 //! Small helpers.
 
+/// Standard base64 (as in JSON and data: addresses) back to bytes; None if
+/// it isn't base64.
+pub fn unbase64(s: &str) -> Option<Vec<u8>> {
+    let val = |c: u8| -> Option<u32> {
+        Some(match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' | b'-' => 62,
+            b'/' | b'_' => 63,
+            _ => return None,
+        } as u32)
+    };
+    let bytes: Vec<u8> = s.bytes().filter(|c| !c.is_ascii_whitespace() && *c != b'=').collect();
+    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
+    for chunk in bytes.chunks(4) {
+        let mut n = 0u32;
+        for (i, c) in chunk.iter().enumerate() {
+            n |= val(*c)? << (18 - 6 * i);
+        }
+        match chunk.len() {
+            4 => out.extend_from_slice(&[(n >> 16) as u8, (n >> 8) as u8, n as u8]),
+            3 => out.extend_from_slice(&[(n >> 16) as u8, (n >> 8) as u8]),
+            2 => out.push((n >> 16) as u8),
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
 pub fn human_size(bytes: u64) -> String {
     let b = bytes as f64;
     if b >= 1e9 {

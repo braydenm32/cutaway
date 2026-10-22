@@ -27,6 +27,7 @@ impl SettingsUi {
                         GraphicKind::Title => "title",
                         GraphicKind::Clock => "clock",
                         GraphicKind::Ticker => "ticker",
+                        GraphicKind::Web => "web page",
                     };
                     let b = egui::Button::selectable(self.sel_graphic == i, RichText::new(format!("{}\n{kind}{}", g.name, if i < 9 { format!(" · Alt+{}", i + 1) } else { String::new() })).size(14.0))
                         .min_size(vec2(220.0, 40.0));
@@ -54,7 +55,13 @@ impl SettingsUi {
                         self.sel_graphic = self.draft.graphics.len() - 1;
                     }
                     if ui.button("＋ Scrolling ticker").clicked() {
-                        self.draft.graphics.push(Graphic::ticker(&unique(names, "Ticker"), "Your first headline\nAnd another", ""));
+                        self.draft.graphics.push(Graphic::ticker(&unique(names.clone(), "Ticker"), "Your first headline\nAnd another", ""));
+                        self.sel_graphic = self.draft.graphics.len() - 1;
+                    }
+                    if ui.button("＋ Web page").on_hover_text("A web page or HTML file over the picture, see-through where it's empty: alerts, chat boxes, scoreboards.").clicked() {
+                        let mut g = Graphic::web(&unique(names, "Web page"), "");
+                        g.page_size = [self.draft.program.width, self.draft.program.height];
+                        self.draft.graphics.push(g);
                         self.sel_graphic = self.draft.graphics.len() - 1;
                     }
                     if ui.add_enabled(n > 0, egui::Button::new("Remove")).clicked() {
@@ -97,6 +104,38 @@ impl SettingsUi {
                     ui.add(egui::Slider::new(&mut g.speed, 1.0..=20.0).step_by(0.5).suffix(" widths a minute"));
                     ui.end_row();
                     text_style(ui, g);
+                }
+                GraphicKind::Web => {
+                    label(ui, "Address");
+                    ui.horizontal(|ui| {
+                        ui.add(egui::TextEdit::singleline(&mut g.url).desired_width(300.0).hint_text("https://… or an HTML file"));
+                        if ui.button("Choose file…").clicked() {
+                            if let Some(f) = rfd::FileDialog::new().add_filter("Web pages", &["html", "htm"]).pick_file() {
+                                g.url = f.display().to_string();
+                            }
+                        }
+                    });
+                    ui.end_row();
+                    label(ui, "Page size");
+                    ui.horizontal(|ui| {
+                        ui.add(egui::DragValue::new(&mut g.page_size[0]).range(16..=3840).suffix(" wide"));
+                        ui.label("×");
+                        ui.add(egui::DragValue::new(&mut g.page_size[1]).range(16..=2160).suffix(" high"));
+                        for (txt, w, h) in [("1080p", 1920, 1080), ("720p", 1280, 720)] {
+                            if ui.small_button(txt).clicked() {
+                                g.page_size = [w, h];
+                            }
+                        }
+                    });
+                    ui.end_row();
+                    label(ui, "Drawn by");
+                    match crate::engine::web::find_browser() {
+                        Some(b) => hint(ui, &format!("{} (hidden; nothing opens on screen)", crate::engine::web::browser_name(&b))),
+                        None => {
+                            ui.label(RichText::new("⚠ Web pages need Google Chrome or Microsoft Edge installed").color(AMBER));
+                        }
+                    }
+                    ui.end_row();
                 }
                 GraphicKind::Image => {
                     label(ui, "Image");
@@ -222,6 +261,8 @@ impl SettingsUi {
                     let (text, over) = crate::engine::timers::clock_text(g, &crate::engine::timers::Timers::default(), chrono::Local::now());
                     Some(crate::engine::graphics::render_clock(g, &text, over, canvas))
                 }
+                // (Drawn live by the browser; it shows in the main window.)
+                GraphicKind::Web => None,
                 GraphicKind::Ticker => {
                     // The band with the text where it starts.
                     let mut band = crate::engine::graphics::render_ticker_band(g, canvas);
@@ -256,8 +297,15 @@ impl SettingsUi {
             ui.painter().with_clip_rect(rect).image(tex.id(), r, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::from_white_alpha((g.opacity * 255.0) as u8));
         } else if g.kind == GraphicKind::Image {
             ui.label(RichText::new("⚠ Choose a PNG or JPEG image.").color(AMBER));
+        } else if g.kind == GraphicKind::Web {
+            let w = g.width * rect.width();
+            let r = egui::Rect::from_min_size(rect.min + vec2(g.x * rect.width(), g.y * rect.height()), vec2(w, w * g.page_size[1] as f32 / g.page_size[0].max(1) as f32));
+            ui.painter().with_clip_rect(rect).rect_stroke(r, 2.0, egui::Stroke::new(1.5, ACCENT), egui::StrokeKind::Inside);
+            ui.painter().with_clip_rect(rect).text(r.center(), egui::Align2::CENTER_CENTER, "web page", egui::FontId::proportional(13.0), ACCENT);
         }
-        if g.kind == GraphicKind::Ticker {
+        if g.kind == GraphicKind::Web {
+            hint(ui, "The page runs all the time, so it's ready the moment it goes on; ⟳ beside its button loads it again. It's see-through wherever the page has no background. Its sound isn't heard.");
+        } else if g.kind == GraphicKind::Ticker {
             hint(ui, "Change the text live from its button in the main window (✎).");
         } else if g.kind == GraphicKind::Clock && g.clock.is_timer() {
             hint(ui, &format!("Start, pause and reset it from its button in the main window (right-click), a Stream Deck Timer key, or the commands timer:{0}:start, timer:{0}:pause and timer:{0}:reset.", g.name));

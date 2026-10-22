@@ -1,5 +1,6 @@
-//! The graphics layer: logos, watermarks, name titles and clocks drawn
-//! above every scene, each with its own on/off button and a fade.
+//! The graphics layer: logos, watermarks, name titles, clocks, tickers and
+//! web pages drawn above every scene, each with its own on/off button and
+//! a way of coming on.
 
 use crate::util::LockExt;
 use super::timers::{clock_text, Timers};
@@ -84,6 +85,9 @@ struct Item {
     text: (String, bool),
     /// Tickers: the moving text.
     strip: Option<TickerStrip>,
+    /// Web pages: the page, and which of its pictures is showing.
+    web: Option<super::web::WebPage>,
+    web_seen: u64,
 }
 
 impl Item {
@@ -148,15 +152,19 @@ impl Graphics {
                     p.cfg = cfg.clone();
                     p
                 }
-                Some(p) => {
+                Some(mut p) => {
                     let (image, error, text) = self.render(cfg);
                     let strip = self.render_strip(cfg);
-                    Item { cfg: cfg.clone(), image, error, version: self.next_version(), visible: p.visible, changed_at: p.changed_at, from_alpha: p.from_alpha, text, strip }
+                    // A page carries on unless what it shows changed.
+                    let same_page = p.cfg.kind == GraphicKind::Web && p.cfg.url == cfg.url && p.cfg.page_size == cfg.page_size;
+                    let (web, web_seen) = if same_page { (p.web.take(), p.web_seen) } else { (open_page(cfg), 0) };
+                    let image = if same_page { p.image.take() } else { image };
+                    Item { cfg: cfg.clone(), image, error, version: self.next_version(), visible: p.visible, changed_at: p.changed_at, from_alpha: p.from_alpha, text, strip, web, web_seen }
                 }
                 None => {
                     let (image, error, text) = self.render(cfg);
                     let strip = self.render_strip(cfg);
-                    Item { cfg: cfg.clone(), image, error, version: self.next_version(), visible: false, changed_at: 0, from_alpha: 0.0, text, strip }
+                    Item { cfg: cfg.clone(), image, error, version: self.next_version(), visible: false, changed_at: 0, from_alpha: 0.0, text, strip, web: open_page(cfg), web_seen: 0 }
                 }
             };
             items.push(item);
@@ -173,6 +181,8 @@ impl Graphics {
                 Ok(render_clock(cfg, &text.0, text.1, self.canvas))
             }
             GraphicKind::Ticker => Ok(render_ticker_band(cfg, self.canvas)),
+            // (Drawn by the browser as it goes.)
+            GraphicKind::Web => return (None, None, text),
         };
         match r {
             Ok(img) => (Some(Arc::new(img)), None, text),
@@ -230,7 +240,14 @@ impl Graphics {
 
     /// (name, on, problem) for each graphic.
     pub fn list(&self) -> Vec<(String, bool, Option<String>)> {
-        self.items.lock_ok().iter().map(|i| (i.cfg.name.clone(), i.visible, i.error.clone())).collect()
+        self.items.lock_ok().iter().map(|i| (i.cfg.name.clone(), i.visible, i.error.clone().or_else(|| i.web.as_ref().and_then(|w| w.problem())))).collect()
+    }
+
+    /// Load a web page again (to restart its animation or pick up changes).
+    pub fn reload(&self, index: usize) {
+        if let Some(w) = self.items.lock_ok().get(index).and_then(|i| i.web.as_ref()) {
+            w.reload();
+        }
     }
 
     pub fn is_visible(&self, index: usize) -> bool {
@@ -279,6 +296,12 @@ impl Graphics {
         let wall = chrono::Local::now() + chrono::Duration::nanoseconds(t - clock::now());
         for (i, it) in items.iter_mut().enumerate() {
             let alpha = it.alpha_at(t);
+            // A web page's newest picture.
+            if let Some((v, img)) = it.web.as_ref().and_then(|w| w.picture()).filter(|(v, _)| *v != it.web_seen) {
+                it.web_seen = v;
+                it.image = Some(img);
+                it.version = self.versions.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            }
             // Clocks redraw when their text changes.
             if it.cfg.kind == GraphicKind::Clock && alpha > 0.001 {
                 let text = clock_text(&it.cfg, &self.timers, wall);
@@ -319,6 +342,11 @@ impl Graphics {
         }
         out
     }
+}
+
+/// A web graphic's page, opened in the background.
+fn open_page(cfg: &Graphic) -> Option<super::web::WebPage> {
+    (cfg.kind == GraphicKind::Web).then(|| super::web::WebPage::open(&cfg.url, (cfg.page_size[0], cfg.page_size[1]), Arc::new(|| {})))
 }
 
 fn load_image(path: &Path) -> Result<RgbaImage, String> {
