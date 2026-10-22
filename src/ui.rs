@@ -177,6 +177,8 @@ pub struct App {
     ptz_zoom: Option<f32>,
     /// The last replay problem shown.
     replay_problem: Option<String>,
+    /// Slow motion ticked in the Replay button's menu.
+    replay_slow: bool,
     /// A phone camera's QR code on show: its link id.
     qr_for: Option<String>,
     /// A newer Cutaway, once GitHub has said so; and its window.
@@ -256,6 +258,7 @@ impl App {
             ptz_drive: None,
             ptz_zoom: None,
             replay_problem: None,
+            replay_slow: false,
             qr_for: None,
             update: Arc::new(std::sync::Mutex::new(None)),
             update_open: false,
@@ -1643,8 +1646,8 @@ impl App {
         let mut status_line: Option<(String, Color32)> = None;
         let mut marker_clicked = false;
         let mut clip_clicked = false;
-        // Some(Some(slow)): replay; Some(None): stop it.
-        let mut replay_clicked: Option<Option<bool>> = None;
+        // Some(Some((slow, angle))): replay; Some(None): stop it.
+        let mut replay_clicked: Option<Option<(bool, Option<control::ReplayAngle>)>> = None;
 
         // ---- record
         match &rec {
@@ -1671,24 +1674,40 @@ impl App {
                 let rb = egui::Button::new(RichText::new(if replaying { "⟲ Replaying" } else { "⟲ Replay" }).color(if replaying { Color32::WHITE } else { ui.visuals().text_color() }))
                     .fill(if replaying { RED_DIM } else { ui.visuals().widgets.inactive.weak_bg_fill })
                     .min_size(vec2(0.0, 30.0));
-                let r = ui.add(rb).on_hover_text(format!("Play the last {:.0} seconds again, on air. Right-click for slow motion.", self.cfg.replay.seconds));
+                let r = ui.add(rb).on_hover_text(format!("Play the last {:.0} seconds again, on air. Right-click for slow motion or another camera.", self.cfg.replay.seconds));
                 if r.clicked() {
-                    replay_clicked = Some(if replaying { None } else { Some(false) });
+                    replay_clicked = Some(if replaying { None } else { Some((false, None)) });
                 }
+                let angles: Vec<String> = self.engine.as_ref().map(|e| e.sources.iter().filter(|s| s.record).map(|s| s.name.clone()).collect()).unwrap_or_default();
+                let mut slow = self.replay_slow;
                 r.context_menu(|ui| {
-                    if ui.button("Replay in slow motion").clicked() {
-                        replay_clicked = Some(Some(true));
-                        ui.close();
+                    ui.checkbox(&mut slow, "Slow motion");
+                    ui.separator();
+                    let mut pick = |ui: &mut egui::Ui, text: &str, angle: control::ReplayAngle| {
+                        if ui.button(text).clicked() {
+                            replay_clicked = Some(Some((slow, Some(angle))));
+                            ui.close();
+                        }
+                    };
+                    pick(ui, "Replay the program", control::ReplayAngle::Program);
+                    if !angles.is_empty() {
+                        ui.label(RichText::new("From one camera").size(11.0).color(TEXT_DIM));
+                        for a in &angles {
+                            pick(ui, &format!("   {a}"), control::ReplayAngle::Source(control::Target::Name(a.clone())));
+                        }
                     }
-                    if ui.button("Replay at normal speed").clicked() {
-                        replay_clicked = Some(Some(false));
-                        ui.close();
+                    if angles.len() >= 2 {
+                        pick(ui, &format!("Every angle at once ({})", angles.len().min(4)), control::ReplayAngle::Quad);
                     }
-                    if replaying && ui.button("Stop the replay").clicked() {
-                        replay_clicked = Some(None);
-                        ui.close();
+                    if replaying {
+                        ui.separator();
+                        if ui.button("Stop the replay").clicked() {
+                            replay_clicked = Some(None);
+                            ui.close();
+                        }
                     }
                 });
+                self.replay_slow = slow;
                 if let Some(d) = &disk {
                     let left = d.seconds_left().map(crate::engine::health::fmt_left).unwrap_or_default();
                     status_line = Some((format!("{} free · {left} left", crate::util::human_size(d.free)), if d.seconds_left().is_some_and(|s| s < 1800.0) { AMBER } else { TEXT_DIM }));
@@ -1781,7 +1800,7 @@ impl App {
         }
         if let Some(r) = replay_clicked {
             let cmd = match r {
-                Some(slow) => control::ReplayCmd::Play { seconds: None, slow },
+                Some((slow, angle)) => control::ReplayCmd::Play { seconds: None, slow, angle },
                 None => control::ReplayCmd::Stop,
             };
             if let Err(e) = self.run_action(Action::Replay(cmd)) {

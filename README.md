@@ -262,7 +262,8 @@ Take_2026-10-16_19-30-02/
   in) over a time you choose; the recording and stream carry on.
 - **Instant replay:** **⟲ Replay** plays the last few seconds of the program
   again over it, in slow motion if you like, with a "REPLAY" label, then
-  fades back to live (while recording).
+  fades back to live (while recording). It can show the moment from any
+  camera instead, or up to four cameras at once.
 - **Macros:** a button that runs several commands in order, with waits
   between (e.g. take a scene, start a pad, show a title, wait 5 seconds,
   hide it).
@@ -566,7 +567,7 @@ Video Extensions** on some PCs.
 | Who an auto-framed source follows | Right-click its tile: follow and shot size |
 | Marker | `M`, or **◆ Marker** while recording |
 | Save a clip | `K`, or **✂ Clip** while recording (the last 30 seconds, or as set) |
-| Instant replay | **⟲ Replay** while recording (right-click it for slow motion) |
+| Instant replay | **⟲ Replay** while recording (right-click it for slow motion or another camera) |
 | Fade to black | **FTB** under the transitions; again to come back |
 | Macros, PTZ, teleprompter, comments | Their panels on the right, the Stream Deck, the remote, MIDI or OSC |
 | Sound pads 1–12 | F1–F12, or the pad buttons in the sound panel (hold for "while held" pads) |
@@ -730,6 +731,7 @@ for button feedback.
 | `rundown:next`, `rundown:previous`, `rundown:3`, `rundown:Interview`, `rundown:stop` | The rundown |
 | `ftb`, `ftb:on`, `ftb:off` | Fade to black and back |
 | `replay`, `replay:slow`, `replay:10`, `replay:stop` | Instant replay (the last seconds as set, or 10) |
+| `replay:Cam 2`, `replay:quad:slow`, `replay:program` | Replay from one camera, every angle at once, or the program |
 | `macro:2`, `macro:Open the show` | Run a macro |
 | `wait:2.5` | In macros and cues: wait 2.5 seconds before the next command |
 | `ptz:Cam 2:preset:1`, `ptz:2:home`, `ptz:2:left:0.5`, `ptz:2:in`, `ptz:2:stop`, `ptz:2:store:3` | PTZ cameras: presets, home, moves (`left`, `right`, `up`, `down`, `in`, `out`, with a speed) until `stop` |
@@ -826,6 +828,12 @@ source.
   seconds (Settings → Switching → Instant replay sets how many, and the slow
   motion speed) over the program, labelled "REPLAY", and fades back to live.
   It comes from the recording itself, so it costs nothing extra.
+  - **From any camera:** right-click **⟲ Replay** and pick a camera to see
+    the moment from its angle, even one the program wasn't showing, or
+    **Every angle at once** for up to four cameras in a grid. **Shows** in
+    the replay settings sets what a plain click plays. It uses each camera's
+    own file, so the camera needs **Record to its own file** on (and files
+    that aren't ProRes, which are too big to keep in memory).
 - **Macros:** **Settings → Macros:** a name, a colour and a list of commands
   (any from the table above, with `wait:` between). They're buttons in the
   main window, Stream Deck keys and remote buttons, and can be cues.

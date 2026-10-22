@@ -391,6 +391,9 @@ pub struct Engine {
     pub pads: Arc<pads::PadBank>,
     /// The last stretch of the recording, for instant clips.
     clips: Arc<clips::ClipBuffer>,
+    /// The last stretch of each source's own file, for replays from any
+    /// camera: (source name, its buffer). Empty when not recording.
+    angles: Mutex<Vec<(String, Arc<clips::ClipBuffer>)>>,
     /// The stinger transition's video.
     pub stinger: Arc<stinger::StingerPlayer>,
     /// Instant replays.
@@ -753,6 +756,7 @@ impl Engine {
             outputs: Mutex::new(Vec::new()),
             pads,
             clips: clips::ClipBuffer::new(),
+            angles: Mutex::new(Vec::new()),
             stinger,
             replay,
             replay_label,
@@ -1656,13 +1660,39 @@ impl Engine {
 
     /// Play the last `seconds` (None: as set) of the program again, on air.
     /// Returns how long it'll be on.
-    pub fn start_replay(&self, seconds: Option<f32>, slow: bool) -> Result<Duration> {
+    pub fn start_replay(&self, seconds: Option<f32>, slow: bool, angle: &crate::control::ReplayAngle) -> Result<Duration> {
+        use crate::control::ReplayAngle;
         let cfg = self.config();
         let secs = seconds.unwrap_or(cfg.replay.seconds).clamp(1.0, 60.0);
         // The newest pictures are still on their way to the recording.
-        let packets = self.clips.recent(secs)?;
+        let lanes = match angle {
+            ReplayAngle::Program => vec![self.clips.recent(secs)?],
+            ReplayAngle::Source(t) => {
+                let angles = self.angles.lock_ok();
+                let names: Vec<String> = angles.iter().map(|a| a.0.clone()).collect();
+                // (By number: the source's place in the show, not among those recorded.)
+                let i = match t {
+                    crate::control::Target::Index(i) => self.sources.get(*i).and_then(|s| names.iter().position(|n| *n == s.name)),
+                    t => t.find(&names),
+                };
+                let Some(i) = i else {
+                    self.clips.recent(secs)?; // (says "start recording first" when it isn't)
+                    bail!("{t} isn't being recorded on its own, so it can't be replayed (its \"Record to its own file\" is off, or the files are ProRes)");
+                };
+                vec![angles[i].1.recent(secs)?]
+            }
+            ReplayAngle::Quad => {
+                self.clips.recent(secs)?;
+                let angles = self.angles.lock_ok();
+                let lanes: Vec<_> = angles.iter().take(4).filter_map(|a| a.1.recent(secs).ok()).collect();
+                if lanes.len() < 2 {
+                    bail!("a replay from every angle needs at least two sources recording their own files");
+                }
+                lanes
+            }
+        };
         let speed = if slow { cfg.replay.slow_speed.clamp(0.1, 1.0) } else { 1.0 };
-        let d = self.replay.start(packets, speed)?;
+        let d = self.replay.start_lanes(lanes, speed)?;
         (self.waker)();
         Ok(d)
     }
@@ -2245,6 +2275,74 @@ mod tests {
         };
         let (dark, bars) = (seconds("ISO_01_Dark"), seconds("ISO_02_Bars"));
         assert!(dark > 0.6 && dark < bars - 1.5, "Dark {dark:.2} s, Bars {bars:.2} s");
+        e.shutdown();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A replay from one camera shows that camera (not the program), and
+    /// every angle at once shows them side by side.
+    #[test]
+    fn replays_from_any_camera() {
+        use crate::config::SourceConfig;
+        use crate::control::{ReplayAngle, Target};
+        let _turn = guests::test_turn();
+        let _gpu = compositor::test_gpu_turn();
+        let dir = std::env::temp_dir().join(format!("cutaway-angles-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut cfg = Config::default();
+        (cfg.program.width, cfg.program.height, cfg.program.fps) = (320, 180, 15);
+        cfg.output.folder = dir.clone();
+        let src = |name: &str, device: &str| SourceConfig { name: name.into(), device: device.into(), width: 320, height: 180, fps: 15, ..Default::default() };
+        cfg.sources = vec![src("Dark", "test:ball"), src("Bars", "test:smpte")];
+        cfg.assign_uids();
+        let mut e = match Engine::start(&cfg, Arc::new(|| {})) {
+            Ok(e) => e,
+            Err(err) => {
+                eprintln!("skipping: the engine can't start here ({err:#})");
+                return;
+            }
+        };
+        let dark = cfg.effective_scenes()[0].clone();
+        e.take_scene(&dark, TransitionMode::Cut, 0);
+        assert!(e.start_replay(None, false, &ReplayAngle::Program).is_err(), "nothing recorded yet");
+        if let Err(err) = e.start_recording() {
+            eprintln!("skipping: {err:#}");
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(3500));
+        let mean = |f: &VideoFrame| f.pixels.with_planes(|p| (0..p.y.len()).step_by(37).map(|i| p.y[i] as f64).sum::<f64>() / (p.y.len() / 37) as f64);
+        let watch = |e: &Engine| {
+            let mut seen = Vec::new();
+            for _ in 0..60 {
+                std::thread::sleep(Duration::from_millis(20));
+                if let Some(f) = e.replay.frame() {
+                    seen.push(f.frame);
+                }
+            }
+            seen.last().cloned().expect("replay pictures")
+        };
+        // The program (the dark one) and the bars, from the bars' own file.
+        e.start_replay(Some(2.0), false, &ReplayAngle::Program).unwrap();
+        let program = mean(&watch(&e));
+        e.replay.stop();
+        std::thread::sleep(Duration::from_millis(500));
+        e.start_replay(Some(2.0), false, &ReplayAngle::Source(Target::Name("bars".into()))).unwrap();
+        let bars = watch(&e);
+        assert!(mean(&bars) > program + 20.0, "the bars, not the program: {} vs {program}", mean(&bars));
+        e.replay.stop();
+        std::thread::sleep(Duration::from_millis(500));
+        // By number too, and every angle at once.
+        assert!(e.start_replay(Some(2.0), false, &ReplayAngle::Source(Target::Index(1))).is_ok());
+        e.replay.stop();
+        std::thread::sleep(Duration::from_millis(500));
+        e.start_replay(Some(2.0), false, &ReplayAngle::Quad).unwrap();
+        let quad = watch(&e);
+        assert_eq!((quad.width, quad.height), (320, 180));
+        let at = |x: usize, y: usize| quad.pixels.with_planes(|p| p.y[p.y_stride * y + x]);
+        assert!(at(80, 135) <= 17, "two angles: the bottom row is empty");
+        assert!(e.start_replay(None, false, &ReplayAngle::Source(Target::Name("Nobody".into()))).is_err());
+        e.stop_recording();
+        e.wait_finalized();
         e.shutdown();
         let _ = std::fs::remove_dir_all(&dir);
     }

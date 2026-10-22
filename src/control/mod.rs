@@ -133,9 +133,33 @@ pub enum PtzCmd {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ReplayCmd {
-    /// Play the last `seconds` (None: as set), in slow motion or not.
-    Play { seconds: Option<f32>, slow: bool },
+    /// Play the last `seconds` (None: as set), in slow motion or not, from
+    /// the program or a camera (None: as set).
+    Play { seconds: Option<f32>, slow: bool, angle: Option<ReplayAngle> },
     Stop,
+}
+
+/// What a replay shows.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub enum ReplayAngle {
+    /// The program, as it went out.
+    #[default]
+    Program,
+    /// One source, from its own recording.
+    Source(Target),
+    /// Up to four sources at once, in a grid.
+    Quad,
+}
+
+impl ReplayAngle {
+    /// From settings or a command word: "" or "program", "quad", or a source.
+    pub fn parse(s: &str) -> ReplayAngle {
+        match s.trim().to_lowercase().as_str() {
+            "" | "program" | "pgm" => ReplayAngle::Program,
+            "quad" | "all" | "angles" | "every angle" | "grid" => ReplayAngle::Quad,
+            _ => ReplayAngle::Source(Target::Name(s.trim().to_string())),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -363,15 +387,21 @@ impl Action {
             "replay" => {
                 let mut seconds = None;
                 let mut slow = false;
-                for p in rest.unwrap_or("").split(':').map(|p| p.trim().to_lowercase()).filter(|p| !p.is_empty()) {
+                let mut angle = None;
+                for part in rest.unwrap_or("").split(':').map(str::trim).filter(|p| !p.is_empty()) {
+                    let p = part.to_lowercase();
                     match p.as_str() {
                         "stop" | "off" | "end" => return Ok(Action::Replay(ReplayCmd::Stop)),
                         "slow" | "slowmo" | "slow-mo" => slow = true,
                         "play" | "normal" => {}
-                        n => seconds = Some(n.trim_end_matches('s').parse::<f32>().map_err(|_| format!("\"{n}\" isn't a number of seconds"))?.clamp(1.0, 60.0)),
+                        n => match n.trim_end_matches('s').parse::<f32>() {
+                            Ok(v) => seconds = Some(v.clamp(1.0, 60.0)),
+                            // Anything else is the angle: a source's name, or "quad".
+                            Err(_) => angle = Some(ReplayAngle::parse(part)),
+                        },
                     }
                 }
-                Action::Replay(ReplayCmd::Play { seconds, slow })
+                Action::Replay(ReplayCmd::Play { seconds, slow, angle })
             }
             "macro" => Action::Macro(Target::parse(need(rest, &verb)?)),
             "wait" | "pause" | "delay" => {
@@ -471,9 +501,15 @@ impl Action {
             },
             Action::Replay(r) => match r {
                 ReplayCmd::Stop => "Stop the replay".into(),
-                ReplayCmd::Play { seconds, slow } => {
+                ReplayCmd::Play { seconds, slow, angle } => {
                     let secs = seconds.map(|s| format!(" the last {s:.0} s")).unwrap_or_default();
-                    format!("Replay{secs}{}", if *slow { " in slow motion" } else { "" })
+                    let from = match angle {
+                        None => String::new(),
+                        Some(ReplayAngle::Program) => " of the program".into(),
+                        Some(ReplayAngle::Source(t)) => format!(" from {t}"),
+                        Some(ReplayAngle::Quad) => " from every angle".into(),
+                    };
+                    format!("Replay{secs}{from}{}", if *slow { " in slow motion" } else { "" })
                 }
             },
             Action::Macro(m) => format!("Macro {m}"),
@@ -619,8 +655,11 @@ mod tests {
         assert_eq!(Action::parse("ptz:Cam:store:Wide"), Ok(Action::Ptz(Target::Name("Cam".into()), PtzCmd::Store(Target::Name("Wide".into())))));
         assert_eq!(Action::parse("ptz:Cam:out"), Ok(Action::Ptz(Target::Name("Cam".into()), PtzCmd::Zoom(-1.0))));
         assert!(Action::parse("ptz:preset:1").is_err());
-        assert_eq!(Action::parse("replay"), Ok(Action::Replay(ReplayCmd::Play { seconds: None, slow: false })));
-        assert_eq!(Action::parse("replay:8:slow"), Ok(Action::Replay(ReplayCmd::Play { seconds: Some(8.0), slow: true })));
+        assert_eq!(Action::parse("replay"), Ok(Action::Replay(ReplayCmd::Play { seconds: None, slow: false, angle: None })));
+        assert_eq!(Action::parse("replay:8:slow"), Ok(Action::Replay(ReplayCmd::Play { seconds: Some(8.0), slow: true, angle: None })));
+        assert_eq!(Action::parse("replay:Cam 2:slow"), Ok(Action::Replay(ReplayCmd::Play { seconds: None, slow: true, angle: Some(ReplayAngle::Source(Target::Name("Cam 2".into()))) })));
+        assert_eq!(Action::parse("replay:quad:5"), Ok(Action::Replay(ReplayCmd::Play { seconds: Some(5.0), slow: false, angle: Some(ReplayAngle::Quad) })));
+        assert_eq!(Action::parse("replay:program"), Ok(Action::Replay(ReplayCmd::Play { seconds: None, slow: false, angle: Some(ReplayAngle::Program) })));
         assert_eq!(Action::parse("replay:stop"), Ok(Action::Replay(ReplayCmd::Stop)));
         assert_eq!(Action::parse("macro:Intro"), Ok(Action::Macro(Target::Name("Intro".into()))));
         assert_eq!(Action::parse("wait:1.5"), Ok(Action::Wait(1.5)));
