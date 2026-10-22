@@ -10,6 +10,8 @@
     <string>app.cutaway.Cutaway</string>
     <key>CFBundleExecutable</key>
     <string>Cutaway</string>
+    <key>CFBundleIconFile</key>
+    <string>Cutaway</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

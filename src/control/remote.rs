@@ -30,6 +30,8 @@ use std::time::{Duration, Instant};
 
 const PAGE: &str = include_str!("remote.html");
 const PROMPTER_PAGE: &str = include_str!("prompter.html");
+/// The page's icon, and the one a phone puts on its home screen.
+const ICON_PNG: &[u8] = include_bytes!("../../assets/logo/remote.png");
 
 /// What the server shares with the app.
 pub struct RemoteShared {
@@ -262,6 +264,9 @@ fn handle(mut conn: TcpStream, sh: &RemoteShared) -> std::io::Result<()> {
     let pin = sh.pin.lock().unwrap().clone();
     let given = param("pin").or(header_pin).or(cookie_pin).unwrap_or_default();
     let authed = pin.is_empty() || given == pin;
+    if path == "/icon.png" || path == "/apple-touch-icon.png" {
+        return respond(&mut conn, "200 OK", "image/png", ICON_PNG, "Cache-Control: max-age=86400\r\n");
+    }
     if path == "/prompter" {
         return respond(&mut conn, "200 OK", "text/html; charset=utf-8", PROMPTER_PAGE.as_bytes(), "");
     }
@@ -437,6 +442,8 @@ mod tests {
         let (status, body) = get(18791, "/");
         assert!(status.contains("200") && body.contains("Cutaway Remote"));
         assert!(get(18791, "/api/state").0.contains("401"));
+        // The icon is public too, so a home-screen shortcut gets it.
+        assert!(get(18791, "/apple-touch-icon.png").0.contains("200"));
         let (status, body) = get(18791, "/api/state?pin=4321");
         assert!(status.contains("200") && body.contains("recording"), "{status} {body}");
         assert_eq!(get(18791, "/api/tally/1?pin=4321").1, "program");
