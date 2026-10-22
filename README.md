@@ -222,8 +222,11 @@ Take_2026-10-16_19-30-02/
 - **Frame styling:** rounded corners, borders and drop shadows on framed
   sources (they disappear smoothly as a frame grows to full screen).
 - **Graphics:** logos/watermarks (PNG with transparency) and name titles
-  (lower thirds) above every scene, each with its own button and fade. Title
-  text can be changed live between guests.
+  (lower thirds) above every scene, each with its own button. Each comes on
+  its own way: a fade, a slide in from the nearer side, a wipe from left to
+  right, a gentle rise, or a pop (**Comes on** in its settings, with how long
+  it takes), and leaves the same way back. Title text can be changed live
+  between guests.
 - **Clocks and countdowns:** clock graphics show the time of day, a
   countdown to a time ("Starting in 4:59"), a countdown or stopwatch you
   start from a button, key or cue, or the time left in the rundown segment
