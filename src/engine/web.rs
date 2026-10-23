@@ -534,7 +534,27 @@ fn run_page(
     if let Some(e) = nav.get("errorText").and_then(Value::as_str) {
         bail!("{url} couldn't be opened ({e})");
     }
-    b.call("Page.startScreencast", json!({ "format": "png", "maxWidth": size.0, "maxHeight": size.1, "everyNthFrame": 1 }), s)?;
+    // The page settles first: a navigation can move the tab to another
+    // renderer, and a screencast asked for mid-move fails ("Not attached
+    // to an active page"). A page that never finishes loading still shows.
+    let loaded_by = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < loaded_by && !stop.load(Ordering::Relaxed) {
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(ev) if ev.get("method").and_then(Value::as_str) == Some("Page.loadEventFired") => break,
+            Ok(ev) if ev.get("method").and_then(Value::as_str) == Some("Inspector.targetCrashed") => bail!("the page crashed"),
+            Ok(_) | Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+            Err(_) => bail!("the browser closed"),
+        }
+    }
+    let cast = json!({ "format": "png", "maxWidth": size.0, "maxHeight": size.1, "everyNthFrame": 1 });
+    let mut tries = 0;
+    while let Err(e) = b.call("Page.startScreencast", cast.clone(), s) {
+        tries += 1;
+        if tries >= 5 || stop.load(Ordering::Relaxed) {
+            return Err(e);
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    }
     *problem.lock_ok() = None;
     while !stop.load(Ordering::Relaxed) {
         if reload.swap(false, Ordering::Relaxed) {
