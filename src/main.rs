@@ -206,6 +206,12 @@ fn run() -> Result<()> {
         eprintln!("Created settings file {}", cfg_path.display());
         cfg
     };
+    // The remote always has a PIN: one is made (and kept) for settings
+    // from before that.
+    if cfg.remote.ensure_pin() && args.demo.is_none() {
+        cfg.save(&cfg_path)?;
+        eprintln!("Made a PIN for the remote: {}", cfg.remote.pin);
+    }
     if args.demo.is_some() {
         // Keep demo output next to the real recordings but don't overwrite settings.
         if let Ok(real) = Config::load(&cfg_path) {

@@ -8,7 +8,7 @@ impl SettingsUi {
     pub(super) fn control(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
         title(ui, "Remote & MIDI", "Run the show from a phone or tablet, a Stream Deck, Companion, show-control software or a MIDI controller.");
         let r = &mut self.draft.remote;
-        let state = if r.enabled { format!("on, port {}{}", r.port, if r.pin.trim().is_empty() { ", no PIN" } else { "" }) } else { "off".to_string() };
+        let state = if r.enabled { format!("on, port {}, PIN {}", r.port, r.pin.trim()) } else { "off".to_string() };
         part(ui, "remote", "Phone and tablet remote", &state, true, |ui| {
             egui::Grid::new("remote").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
                 label(ui, "Remote control");
@@ -19,13 +19,14 @@ impl SettingsUi {
                 ui.end_row();
                 label(ui, "PIN");
                 ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut r.pin).desired_width(90.0).hint_text("none"));
+                    ui.add(egui::TextEdit::singleline(&mut r.pin).desired_width(90.0).hint_text("made for you"));
                     if ui.small_button("New PIN").clicked() {
-                        let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(4321);
-                        r.pin = format!("{:04}", n % 10_000);
+                        r.pin = crate::config::new_pin();
                     }
-                    if r.pin.trim().is_empty() {
-                        ui.label(RichText::new("anyone on the network could control the show").color(AMBER).size(12.5));
+                    if r.enabled && r.pin.trim().is_empty() {
+                        ui.label(RichText::new("a PIN is made when you apply").color(TEXT_DIM).size(12.5));
+                    } else if r.pin.trim().chars().count() < 4 {
+                        ui.label(RichText::new("short PINs are easy to guess: use 4 or more").color(AMBER).size(12.5));
                     }
                 });
                 ui.end_row();
@@ -48,7 +49,7 @@ impl SettingsUi {
                 ui.add_space(6.0);
                 ui.label(RichText::new("Stream Deck, Bitfocus Companion and scripts").strong());
                 hint(ui, "Any button that can open a web address can run a command:");
-                let pin = if r.pin.trim().is_empty() { String::new() } else { format!("&pin={}", r.pin.trim()) };
+                let pin = format!("&pin={}", if r.pin.trim().is_empty() { "PIN" } else { r.pin.trim() });
                 for (cmd, what) in [("scene:1", "take scene 1"), ("preview:2", "preview scene 2"), ("take", "take preview to program"), ("record", "record on/off"), ("marker", "add a marker"), ("graphic:1", "graphic 1 on/off")] {
                     ui.label(RichText::new(format!("{url}/api/action?do={cmd}{pin}    ({what})")).monospace().size(12.5).color(TEXT_DIM));
                 }

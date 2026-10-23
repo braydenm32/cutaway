@@ -1914,8 +1914,30 @@ impl Default for DisplayConfig {
 pub struct RemoteConfig {
     pub enabled: bool,
     pub port: u16,
-    /// Asked for once by each phone/tablet; empty = no PIN (not recommended).
+    /// Asked for once by each phone/tablet. Always set while the remote is
+    /// on (one is made if it's empty).
     pub pin: String,
+}
+
+impl RemoteConfig {
+    /// Make a PIN if the remote is on without one. True if it made one.
+    pub fn ensure_pin(&mut self) -> bool {
+        if !self.enabled || !self.pin.trim().is_empty() {
+            return false;
+        }
+        self.pin = new_pin();
+        true
+    }
+}
+
+/// A random four-digit PIN.
+pub fn new_pin() -> String {
+    let mut b = [0u8; 4];
+    if getrandom::fill(&mut b).is_err() {
+        // (No system randomness: the clock is the next best thing.)
+        b = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(4321).to_le_bytes();
+    }
+    format!("{:04}", u32::from_le_bytes(b) % 10_000)
 }
 
 impl Default for RemoteConfig {
@@ -2155,6 +2177,17 @@ pub fn parse_color(s: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_remote_always_has_a_pin() {
+        let mut r = RemoteConfig { enabled: true, ..Default::default() };
+        assert!(r.ensure_pin());
+        assert_eq!(r.pin.len(), 4);
+        assert!(r.pin.chars().all(|c| c.is_ascii_digit()));
+        assert!(!r.ensure_pin(), "kept once made");
+        let mut off = RemoteConfig::default();
+        assert!(!off.ensure_pin() && off.pin.is_empty(), "not while it's off");
+    }
 
     #[test]
     fn roundtrip_toml() {

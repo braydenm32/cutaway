@@ -4160,6 +4160,9 @@ impl App {
     /// now (an edit in Settings), so they're not moved with the sources.
     fn apply_settings_as(&mut self, mut new: Config, ctx: &egui::Context, own_scenes: bool) -> Result<(), String> {
         new.validate().map_err(|e| e.to_string())?;
+        if new.remote.ensure_pin() {
+            self.toast(format!("The remote's PIN is {}", new.remote.pin), false);
+        }
         new.assign_uids();
         // Only the program's size and rate rebuild everything; sources and
         // inputs change live, one by one.

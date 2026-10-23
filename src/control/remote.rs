@@ -14,6 +14,10 @@
 //! * `/api/ws` — WebSocket: the state is pushed whenever it changes, and
 //!   commands can be sent as text (`scene:2`) or JSON
 //!   (`{"do":"scene:2","id":1}`, answered with `{"type":"reply","id":1,...}`).
+//!
+//! Everything but the pages needs the PIN (`?pin=`, an `X-Cutaway-Pin`
+//! header or the cookie the page sets). Five wrong PINs in a row from one
+//! address make it wait a minute.
 
 use crate::util::LockExt;
 use super::keys::{self, KeyKind, KeySources};
@@ -23,7 +27,8 @@ use crate::engine::{FrameSlot, Waker};
 use anyhow::{Context, Result};
 use crossbeam_channel::{bounded, Sender};
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::collections::HashMap;
+use std::net::{IpAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
@@ -52,6 +57,33 @@ pub struct RemoteShared {
     pub keys: Mutex<KeySources>,
     /// The teleprompter's script as JSON ({version, text, segments}).
     pub prompter: Mutex<String>,
+    /// Wrong PINs by address: how many in a row, and when the last was.
+    wrong: Mutex<HashMap<IpAddr, (u32, Instant)>>,
+}
+
+/// Wrong PINs from one address before it has to wait.
+const TRIES: u32 = 5;
+/// How long it waits.
+const LOCKED_FOR: Duration = Duration::from_secs(60);
+
+impl RemoteShared {
+    /// Whether `ip` is waiting after too many wrong PINs.
+    fn locked_out(&self, ip: IpAddr) -> bool {
+        let mut w = self.wrong.lock_ok();
+        w.retain(|_, (_, at)| at.elapsed() < LOCKED_FOR);
+        w.get(&ip).is_some_and(|(n, _)| *n >= TRIES)
+    }
+
+    fn note_pin(&self, ip: IpAddr, right: bool) {
+        let mut w = self.wrong.lock_ok();
+        if right {
+            w.remove(&ip);
+        } else {
+            let e = w.entry(ip).or_insert((0, Instant::now()));
+            e.0 += 1;
+            e.1 = Instant::now();
+        }
+    }
 }
 
 impl RemoteShared {
@@ -68,6 +100,7 @@ impl RemoteShared {
             changed: Condvar::new(),
             keys: Mutex::new(KeySources::default()),
             prompter: Mutex::new("{}".into()),
+            wrong: Mutex::new(HashMap::new()),
         })
     }
 
@@ -185,6 +218,12 @@ fn query(q: &str) -> Vec<(String, String)> {
     }).collect()
 }
 
+/// Compared without stopping at the first difference (so timing doesn't
+/// give the PIN away a digit at a time).
+fn same(a: &str, b: &str) -> bool {
+    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |d, (x, y)| d | (x ^ y)) == 0
+}
+
 fn respond(conn: &mut TcpStream, status: &str, ctype: &str, body: &[u8], extra: &str) -> std::io::Result<()> {
     let head = format!(
         "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n{extra}\r\n",
@@ -240,10 +279,17 @@ fn handle(mut conn: TcpStream, sh: &RemoteShared) -> std::io::Result<()> {
     if method == "OPTIONS" {
         return respond(&mut conn, "204 No Content", "text/plain", b"", "Access-Control-Allow-Headers: X-Cutaway-Pin\r\n");
     }
-    // The page itself is public (it asks for the PIN); everything else isn't.
+    // The page itself is public (it asks for the PIN); everything else
+    // needs it. There's always a PIN (with none set, nothing is let in), and
+    // an address that keeps getting it wrong has to wait a minute.
     let pin = sh.pin.lock_ok().clone();
     let given = param("pin").or(header_pin).or(cookie_pin).unwrap_or_default();
-    let authed = pin.is_empty() || given == pin;
+    let ip = conn.peer_addr().map(|a| a.ip()).unwrap_or(IpAddr::from([0, 0, 0, 0]));
+    let locked = sh.locked_out(ip);
+    let authed = !locked && !pin.is_empty() && same(&given, &pin);
+    if !locked && !given.is_empty() {
+        sh.note_pin(ip, authed);
+    }
     if path == "/icon.png" || path == "/apple-touch-icon.png" {
         return respond(&mut conn, "200 OK", "image/png", ICON_PNG, "Cache-Control: max-age=86400\r\n");
     }
@@ -253,6 +299,9 @@ fn handle(mut conn: TcpStream, sh: &RemoteShared) -> std::io::Result<()> {
     if path == "/" || path == "/index.html" {
         let cookie = if authed && !pin.is_empty() { format!("Set-Cookie: cutaway_pin={pin}; Path=/; Max-Age=31536000\r\n") } else { String::new() };
         return respond(&mut conn, "200 OK", "text/html; charset=utf-8", PAGE.as_bytes(), &cookie);
+    }
+    if locked {
+        return respond(&mut conn, "429 Too Many Requests", "text/plain", b"Too many wrong PINs: wait a minute", "Retry-After: 60\r\n");
     }
     if !authed {
         return respond(&mut conn, "401 Unauthorized", "text/plain", b"PIN needed", "");
@@ -431,6 +480,22 @@ mod tests {
         assert!(status.contains("200") && body == "Scene 2", "{status} {body}");
         assert!(get(18791, "/api/action?do=explode&pin=4321").0.contains("400"));
         worker.join().unwrap();
+        // Guessing: five wrong PINs and even the right one waits.
+        for _ in 0..5 {
+            assert!(get(18791, "/api/state?pin=0000").0.contains("401"));
+        }
+        assert!(get(18791, "/api/state?pin=4321").0.contains("429"));
+        drop(server);
+    }
+
+    #[test]
+    fn no_pin_lets_nothing_in() {
+        let (tx, _rx) = crossbeam_channel::unbounded::<Request>();
+        let sh = RemoteShared::new(tx, Arc::new(|| {}));
+        let server = RemoteServer::start(18793, sh).unwrap();
+        assert!(get(18793, "/").0.contains("200"));
+        assert!(get(18793, "/api/state").0.contains("401"));
+        assert!(get(18793, "/api/state?pin=").0.contains("401"));
         drop(server);
     }
 
@@ -442,6 +507,7 @@ mod tests {
         let mut s = ShowState { program: "Wide".into(), ..Default::default() };
         s.scenes.push(SceneState { name: "Wide".into(), program: true, preview: false });
         sh.publish(&s);
+        *sh.pin.lock_ok() = "2468".into();
         let server = RemoteServer::start(18792, sh.clone()).unwrap();
         let worker = std::thread::spawn(move || {
             let r = rx.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -450,7 +516,7 @@ mod tests {
         });
         let mut c = TcpStream::connect(("127.0.0.1", 18792)).unwrap();
         c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-        write!(c, "GET /api/ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n").unwrap();
+        write!(c, "GET /api/ws?pin=2468 HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n").unwrap();
         let mut head = Vec::new();
         let mut b = [0u8; 1];
         while !head.ends_with(b"\r\n\r\n") {
@@ -483,9 +549,9 @@ mod tests {
             }
         }
         // Key pictures.
-        let (status, _) = get(18792, "/api/key/scene/1.png?size=72");
+        let (status, _) = get(18792, "/api/key/scene/1.png?size=72&pin=2468");
         assert!(status.contains("200"), "{status}");
-        assert!(get(18792, "/api/key/scene/9.png").0.contains("404"));
+        assert!(get(18792, "/api/key/scene/9.png?pin=2468").0.contains("404"));
         c.write_all(&ws::client_frame(0x8, b"")).unwrap();
         worker.join().unwrap();
         drop(server);

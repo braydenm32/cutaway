@@ -332,7 +332,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
 
         (Control, "Remote control") => "Lets phones, tablets, the Stream Deck plugin, Companion and scripts on this network run the show, through a web page and web addresses.",
         (Control, "Port") => "The port the remote runs on.",
-        (Control, "PIN") => "A code needed to use the remote. Without one, anyone on the network could control the show.",
+        (Control, "PIN") => "The code every phone, Stream Deck and script needs to use the remote. There's always one: Cutaway makes a four-digit PIN if this is empty. A device that gets it wrong five times in a row has to wait a minute before trying again.",
         (Control, "OSC") => "Accepts OSC commands over the network: QLab, Companion, TouchOSC, lighting desks.",
         (Control, "Listen on UDP port") => "The port OSC commands arrive on.",
         (Control, "Send state to") => "Where Cutaway sends its state as OSC whenever it changes (scenes, tally, recording, levels), so a controller can show it. Optional.",
