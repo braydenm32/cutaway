@@ -244,11 +244,12 @@ pub struct SettingsUi {
     schedule_job: Option<scheduled::ScheduleJob>,
     show_keys: HashSet<usize>,
     encoders: Arc<Mutex<Option<EncoderLists>>>,
-    scanning: bool,
     confirm_discard: bool,
     confirm_reset: bool,
     confirm_remove: Option<RemoveCheck>,
     message: Option<(String, bool)>,
+    /// The settings an Apply failed for: its error shows until they change.
+    failed: Option<Box<Config>>,
     outputs: Vec<DeviceInfo>,
     sel_graphic: usize,
     profile_name: String,
@@ -311,11 +312,11 @@ impl SettingsUi {
                 let list = |c: Codec| crate::engine::encode::video_backends(c.video_codec()).into_iter().map(String::from).collect::<Vec<_>>();
                 (list(Codec::H264), list(Codec::H265))
             }))),
-            scanning: false,
             confirm_discard: false,
             confirm_reset: false,
             confirm_remove: None,
             message: None,
+            failed: None,
             outputs: crate::platform::list_output_devices(),
             sel_graphic: 0,
             profile_name: String::new(),
@@ -377,8 +378,12 @@ impl SettingsUi {
                 }
                 self.original = self.draft.clone();
                 self.message = Some(("Saved".into(), false));
+                self.failed = None;
             }
-            Err(e) => self.message = Some((e, true)),
+            Err(e) => {
+                self.message = Some((e, true));
+                self.failed = Some(Box::new(self.draft.clone()));
+            }
         }
     }
 
@@ -399,12 +404,6 @@ impl SettingsUi {
     fn show_window(&mut self, ctx: &egui::Context, info: &SettingsContext) -> SettingsAction {
         let mut action = SettingsAction::None;
         let mut open = true;
-        if self.scanning && self.encoders.lock_ok().is_some() {
-            self.scanning = false;
-        }
-        if self.scanning {
-            ctx.request_repaint_after(std::time::Duration::from_millis(200));
-        }
         // (Esc while recording a shortcut's key only stops that.)
         let esc = self.key_capture.is_none() && ctx.input(|i| i.key_pressed(egui::Key::Escape));
 
@@ -502,11 +501,18 @@ impl SettingsUi {
                 let live = info.recording || info.streaming;
                 let blocked = restart && live;
                 let lineup = !restart && self.original.lineup_changed(&self.draft);
+                let failed = match (&self.message, &self.failed) {
+                    (Some((m, true)), Some(f)) if **f == self.draft => Some(m.clone()),
+                    _ => None,
+                };
                 ui.horizontal(|ui| {
                     if let Err(e) = &valid {
                         ui.label(RichText::new(format!("⚠ {e}")).color(AMBER));
                     } else if blocked {
                         ui.label(RichText::new("Stop recording and streaming to change the program's size or frame rate.").color(AMBER));
+                    } else if let Some(m) = &failed {
+                        // Why the last Apply didn't work, until something's changed.
+                        ui.label(RichText::new(m).color(RED));
                     } else if restart {
                         ui.label(RichText::new("Applying restarts the video engine (previews blink for a moment).").color(TEXT_DIM));
                     } else if lineup && live {
@@ -684,14 +690,15 @@ impl SettingsUi {
             Section::Guests => a.guests != b.guests,
             Section::Program => a.program != b.program || a.style != b.style,
             Section::Switching => a.transition != b.transition || a.auto_switch != b.auto_switch || a.replay != b.replay,
-            Section::Graphics => a.graphics != b.graphics,
+            Section::Graphics => a.graphics != b.graphics || a.rotations != b.rotations,
             Section::Captions => a.captions != b.captions,
             Section::Recording => a.output != b.output || a.podcast != b.podcast,
-            Section::Streaming => a.streaming != b.streaming,
+            Section::Streaming => a.streaming != b.streaming || a.schedule != b.schedule,
             Section::Vertical => a.vertical != b.vertical,
             Section::Upload => a.upload != b.upload,
             Section::Outputs => a.display != b.display || a.ndi_out != b.ndi_out,
             Section::Control => a.remote != b.remote || a.midi != b.midi || a.osc != b.osc,
+            Section::Shortcuts => a.keys != b.keys,
             _ => false,
         }
     }
@@ -997,7 +1004,6 @@ impl SettingsUi {
 
     fn recording(&mut self, ui: &mut egui::Ui) {
         title(ui, "Recording", "Where takes go, how they're encoded, and what's saved with them for editing.");
-        self.poll_encoder_scan();
         let scan = self.encoders.lock_ok().clone();
         let o = &mut self.draft.output;
         let (pw, ph, pfps) = (self.draft.program.width, self.draft.program.height, self.draft.program.fps);
@@ -1257,7 +1263,6 @@ impl SettingsUi {
 
     fn streaming(&mut self, ui: &mut egui::Ui) {
         title(ui, "Streaming", "Go live to any number of places at once: the program is encoded once and sent to each.");
-        self.poll_encoder_scan();
         let scan = self.encoders.lock_ok().clone();
         let n = self.draft.streaming.destinations.len();
         if self.sel_dest >= n {
@@ -1510,14 +1515,6 @@ impl SettingsUi {
                 ui.label(RichText::new(format!("{}  {}", l.time, l.text)).monospace().size(12.0).color(color));
             }
         });
-    }
-
-    // ---- encoder detection ------------------------------------------------------------
-
-    fn poll_encoder_scan(&mut self) {
-        if self.scanning && self.encoders.lock_ok().is_some() {
-            self.scanning = false;
-        }
     }
 }
 

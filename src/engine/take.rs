@@ -370,7 +370,13 @@ impl Engine {
     /// Stop recording. Files are finalized in the background; watch
     /// `status.rec` (or call `wait_finalized`).
     pub fn stop_recording(&self) {
-        let Some(take) = self.take.lock_ok().take() else { return };
+        // (Finalizing is set before the take is let go of, so a new one
+        // can't start in between and lose its program to this one's ending.)
+        let mut guard = self.take.lock_ok();
+        let Some(take) = guard.take() else { return };
+        let folder = take.folder.clone();
+        self.status.lock_ok().rec = RecState::Finalizing { folder: folder.clone(), step: "Catching the last frames".into(), done: 0.0 };
+        drop(guard);
         self.clips.stop();
         for (_, a) in self.angles.lock_ok().drain(..) {
             a.stop();
@@ -378,8 +384,6 @@ impl Engine {
         let fps = self.info.fps;
         let t1 = next_boundary(fps);
         take.t1.store(t1, Ordering::Relaxed);
-        let folder = take.folder.clone();
-        self.status.lock_ok().rec = RecState::Finalizing { folder: folder.clone(), step: "Catching the last frames".into(), done: 0.0 };
         (self.waker)();
 
         let taps = self.video_taps.clone();

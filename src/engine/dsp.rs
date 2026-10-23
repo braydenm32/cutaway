@@ -1,7 +1,8 @@
 //! Audio processing for the mixes: a voice channel strip (high-pass, gate,
 //! EQ, compressor, de-esser), a limiter, a loudness meter (EBU R128 /
 //! ITU-R BS.1770) and stream levelling. Everything works on interleaved
-//! stereo at 48 kHz, one 10 ms block at a time, with no added latency.
+//! stereo at 48 kHz, one 10 ms block at a time. Only noise reduction adds
+//! latency (10 ms); everything else adds none.
 
 use crate::config::VoiceProcessing;
 use std::collections::VecDeque;
@@ -257,6 +258,11 @@ pub struct Denoiser {
     /// The untouched input, delayed to line up with the cleaned one.
     dry: VecDeque<f32>,
     primed: bool,
+    /// The last frame had the same signal on both sides.
+    was_mono: bool,
+    /// Scratch space so a frame doesn't allocate.
+    inp: [Vec<f32>; 2],
+    out: [Vec<f32>; 2],
 }
 
 const NR_FRAME: usize = nnnoiseless::DenoiseState::FRAME_SIZE;
@@ -270,25 +276,39 @@ impl Denoiser {
             ready: VecDeque::with_capacity(NR_FRAME * 4),
             dry: VecDeque::with_capacity(NR_FRAME * 6),
             primed: false,
+            was_mono: false,
+            inp: [vec![0.0; NR_FRAME], vec![0.0; NR_FRAME]],
+            out: [vec![0.0; NR_FRAME], vec![0.0; NR_FRAME]],
         }
     }
 
-    /// One 10 ms frame of each side through RNNoise.
-    fn frame(&mut self, l: &[f32], r: &[f32]) -> (Vec<f32>, Vec<f32>) {
-        let scale = |v: &[f32]| -> Vec<f32> { v.iter().map(|x| x * 32767.0).collect() };
-        let mut out_l = vec![0f32; NR_FRAME];
-        self.states[0].process_frame(&mut out_l, &scale(l));
-        let out_r = if l == r {
-            // Keep the second state in step for when the sides differ.
-            let mut o = vec![0f32; NR_FRAME];
-            self.states[1].process_frame(&mut o, &scale(r));
-            out_l.clone()
+    /// The next whole frame from `pending` through RNNoise, onto `ready`.
+    /// A mono source (both sides the same) runs through once.
+    fn frame(&mut self) {
+        let frame = &self.pending[..NR_FRAME * 2];
+        for k in 0..NR_FRAME {
+            self.inp[0][k] = frame[2 * k] * 32767.0;
+            self.inp[1][k] = frame[2 * k + 1] * 32767.0;
+        }
+        let mono = self.inp[0] == self.inp[1];
+        let [out_l, out_r] = &mut self.out;
+        self.states[0].process_frame(out_l, &self.inp[0]);
+        if mono {
+            out_r.copy_from_slice(out_l);
         } else {
-            let mut o = vec![0f32; NR_FRAME];
-            self.states[1].process_frame(&mut o, &scale(r));
-            o
-        };
-        (out_l.iter().map(|v| v / 32767.0).collect(), out_r.iter().map(|v| v / 32767.0).collect())
+            if self.was_mono {
+                // The right side was skipped while mono: pick up where the
+                // left one is rather than from stale state.
+                self.states[1] = self.states[0].clone();
+            }
+            self.states[1].process_frame(out_r, &self.inp[1]);
+        }
+        self.was_mono = mono;
+        self.pending.drain(..NR_FRAME * 2);
+        for k in 0..NR_FRAME {
+            self.ready.push_back(self.out[0][k] / 32767.0);
+            self.ready.push_back(self.out[1][k] / 32767.0);
+        }
     }
 
     /// Clean an interleaved stereo buffer in place.
@@ -305,14 +325,7 @@ impl Denoiser {
         self.pending.extend_from_slice(buf);
         self.dry.extend(buf.iter().copied());
         while self.pending.len() >= NR_FRAME * 2 {
-            let l: Vec<f32> = self.pending[..NR_FRAME * 2].iter().step_by(2).copied().collect();
-            let r: Vec<f32> = self.pending[1..NR_FRAME * 2].iter().step_by(2).copied().collect();
-            self.pending.drain(..NR_FRAME * 2);
-            let (cl, cr) = self.frame(&l, &r);
-            for k in 0..NR_FRAME {
-                self.ready.push_back(cl[k]);
-                self.ready.push_back(cr[k]);
-            }
+            self.frame();
         }
         let wet = self.amount;
         for v in buf.iter_mut() {
@@ -409,12 +422,13 @@ impl Limiter {
         let mut min_g: f64 = 1.0;
         for f in buf.chunks_exact_mut(2) {
             let peak = (f[0].abs().max(f[1].abs())) as f64;
-            let need = if peak * self.gain > self.ceiling { self.ceiling / peak } else { 1.0 };
+            // The most gain this sample can take without going over.
+            let need = if peak > self.ceiling { self.ceiling / peak } else { 1.0 };
             if need < self.gain {
                 self.gain = need;
             } else {
-                self.gain = 1.0 + rel * (self.gain - 1.0);
-                self.gain = self.gain.min(need.max(self.gain));
+                // Back up slowly, but never past what this sample allows.
+                self.gain = (1.0 + rel * (self.gain - 1.0)).min(need);
             }
             min_g = min_g.min(self.gain);
             f[0] = (f[0] as f64 * self.gain).clamp(-self.ceiling, self.ceiling) as f32;

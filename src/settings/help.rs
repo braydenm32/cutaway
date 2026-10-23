@@ -336,7 +336,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Control, "OSC") => "Accepts OSC commands over the network: QLab, Companion, TouchOSC, lighting desks.",
         (Control, "Listen on UDP port") => "The port OSC commands arrive on.",
         (Control, "Send state to") => "Where Cutaway sends its state as OSC whenever it changes (scenes, tally, recording, levels), so a controller can show it. Optional.",
-        (Control, "MIDI control") => "Lets MIDI controllers' pads, keys and faders run commands. Map them below with Learn.",
+        (Control, "MIDI control") => "Lets MIDI controllers' pads, keys and faders run commands. Map them below with Learn. A \"while held\" sound pad or talkback:on stops when you let go of the pad.",
         (Control, "Controller") => "Which MIDI device to listen to, or every one connected.",
         (Control, "Light up pads") => "Lights pads on controllers that support it, to show what's on air.",
 

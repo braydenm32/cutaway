@@ -105,7 +105,7 @@ pub fn read_message_max(r: &mut impl Read, max: usize) -> io::Result<Message> {
             r.read_exact(&mut b)?;
             len = u64::from_be_bytes(b);
         }
-        if len as usize + data.len() > max {
+        if len > max.saturating_sub(data.len()) as u64 {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "message too big"));
         }
         let mut mask = [0u8; 4];

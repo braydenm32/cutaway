@@ -10,10 +10,9 @@
 use crate::util::LockExt;
 use super::speech::{Event, Recognizer, Word};
 use crate::config::SpeechModel;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender};
 use std::collections::HashMap;
-use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -111,39 +110,15 @@ pub fn download(language: &str, model: SpeechModel) {
 
 fn fetch(file: &'static str) -> Result<()> {
     let url = format!("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{file}");
-    let dir = models_dir();
-    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    let part = dir.join(format!("{file}.part"));
-    let tls = ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).root_certs(ureq::tls::RootCerts::PlatformVerifier).build();
-    let agent: ureq::Agent = ureq::Agent::config_builder().tls_config(tls).timeout_connect(Some(Duration::from_secs(20))).build().into();
-    let resp = agent.get(&url).call().map_err(|e| anyhow!("couldn't reach the model server ({e})"))?;
-    let total = resp.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
-    let mut reader = resp.into_body().into_reader();
-    let mut out = std::fs::File::create(&part)?;
-    let mut buf = vec![0u8; 1 << 16];
-    let mut got = 0u64;
-    loop {
-        let n = reader.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        out.write_all(&buf[..n])?;
-        got += n as u64;
+    // A whisper.cpp model starts with "lmgg". The shared downloader checks
+    // that, the answer and the length, and gives up on a stalled connection.
+    let never = std::sync::atomic::AtomicBool::new(false);
+    crate::net::fetch::fetch(&url, &models_dir().join(file), b"lmgg", "the model server", "a speech model", &never, &mut |got, total| {
         if let Some(s) = downloads().lock_ok().get_mut(file) {
             s.got = got;
-            s.total = total;
+            s.total = total.unwrap_or(0);
         }
-    }
-    out.flush()?;
-    drop(out);
-    // A whisper.cpp model starts with "lmgg".
-    let mut head = [0u8; 4];
-    std::fs::File::open(&part)?.read_exact(&mut head)?;
-    if &head != b"lmgg" || (total > 0 && got != total) {
-        let _ = std::fs::remove_file(&part);
-        return Err(anyhow!("the download wasn't a complete speech model; try again"));
-    }
-    std::fs::rename(&part, dir.join(file))?;
+    })?;
     Ok(())
 }
 

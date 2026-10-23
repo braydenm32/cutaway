@@ -117,6 +117,7 @@ pub struct CaptureTarget {
 /// remembered title: the same title, else the one sharing the most words
 /// with it (a document's name stays while "— Edited" comes and goes), else
 /// the first (usually the frontmost).
+#[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
 pub fn best_window<T: Copy>(windows: &[(T, String)], title: &str) -> Option<T> {
     if let Some((id, _)) = windows.iter().find(|(_, t)| t == title) {
         return Some(*id);
@@ -150,7 +151,7 @@ pub fn place_nv12(y_src: &[u8], uv_src: &[u8], w: usize, h: usize, fw: usize, fh
         let n = w.min(fw.saturating_sub(x));
         yp[(y + row) * fw + x..][..n].copy_from_slice(&y_src[row * w..][..n]);
     }
-    for row in 0..(h / 2).min((fh - y) / 2) {
+    for row in 0..(h / 2).min(fh.saturating_sub(y) / 2) {
         let n = w.min(fw.saturating_sub(x));
         uvp[(y / 2 + row) * fw + x..][..n].copy_from_slice(&uv_src[row * w..][..n]);
     }

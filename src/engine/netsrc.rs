@@ -42,7 +42,7 @@ pub fn parse_spec(device: &str) -> Option<NetSpec> {
         }
         return Some(NetSpec::SrtCall { url: d.to_string() });
     }
-    if let Some(rest) = d.strip_prefix("rtmp-in:").or_else(|| d.strip_prefix("RTMP-in:")) {
+    if let Some(rest) = crate::util::strip_prefix_ci(d, "rtmp-in:") {
         let (port, key) = rest.split_once('/').unwrap_or((rest, ""));
         return port.trim().parse().ok().map(|port| NetSpec::RtmpListen { port, key: key.trim().to_string() });
     }
@@ -227,7 +227,7 @@ fn rtmp_loop(port: u16, key: String, mut feeder: Feeder, stop: Arc<AtomicBool>, 
                 feeder.reset();
                 let mut st = st2.lock_ok();
                 st.connected = false;
-                st.detail = if why.contains(' ') { why } else { "waiting for the sender".into() };
+                st.detail = why.unwrap_or_else(|| "waiting for the sender".into());
             }
         });
         if let Err(e) = r {

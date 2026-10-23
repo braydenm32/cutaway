@@ -129,13 +129,18 @@ impl VtDecoder {
                 }
             }
             VideoCodec::ProRes(p) => {
-                let fourcc = match p {
-                    ProRes::Proxy => b"apco",
-                    ProRes::Lt => b"apcs",
-                    ProRes::Standard => b"apcn",
-                    ProRes::Hq => b"apch",
+                // The file's own code when it has one (ProRes 4444 plays
+                // as HQ elsewhere but needs its own code here).
+                let fourcc: [u8; 4] = match s.parameter_sets.first().and_then(|c| c.as_slice().try_into().ok()) {
+                    Some(c) => c,
+                    None => match p {
+                        ProRes::Proxy => *b"apco",
+                        ProRes::Lt => *b"apcs",
+                        ProRes::Standard => *b"apcn",
+                        ProRes::Hq => *b"apch",
+                    },
                 };
-                unsafe { CMVideoFormatDescriptionCreate(std::ptr::null(), u32::from_be_bytes(*fourcc), s.width as i32, s.height as i32, std::ptr::null(), &mut format) }
+                unsafe { CMVideoFormatDescriptionCreate(std::ptr::null(), u32::from_be_bytes(fourcc), s.width as i32, s.height as i32, std::ptr::null(), &mut format) }
             }
         };
         if status != 0 || format.is_null() {

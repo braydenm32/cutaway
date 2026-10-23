@@ -78,14 +78,21 @@ pub struct Mp4Reader {
     pub tracks: Vec<Track>,
 }
 
+// Reads past the end of a (damaged) box give 0 rather than a crash.
 fn be16(b: &[u8], at: usize) -> u16 {
-    u16::from_be_bytes([b[at], b[at + 1]])
+    b.get(at..at + 2).map_or(0, |v| u16::from_be_bytes(v.try_into().unwrap()))
 }
 fn be32(b: &[u8], at: usize) -> u32 {
-    u32::from_be_bytes(b[at..at + 4].try_into().unwrap())
+    b.get(at..at + 4).map_or(0, |v| u32::from_be_bytes(v.try_into().unwrap()))
 }
 fn be64(b: &[u8], at: usize) -> u64 {
-    u64::from_be_bytes(b[at..at + 8].try_into().unwrap())
+    b.get(at..at + 8).map_or(0, |v| u64::from_be_bytes(v.try_into().unwrap()))
+}
+
+/// A table's entry count (at `at`), capped to the entries that fit in the
+/// box after `first` bytes, so a damaged count can't run away.
+fn entries(b: &[u8], at: usize, first: usize, size: usize) -> usize {
+    (be32(b, at) as usize).min(b.len().saturating_sub(first) / size)
 }
 
 /// Boxes in `data`: (type, payload).
@@ -201,8 +208,15 @@ pub fn parse_asc(asc: &[u8]) -> Option<(u32, u16)> {
     }
     let idx = take(4);
     let rate = if idx == 15 { take(24) } else { *RATES.get(idx as usize)? };
-    let ch = take(4) as u16;
-    Some((rate, if ch == 0 { 2 } else { ch.min(8) }))
+    // Channel configurations: 1-6 as numbered, 7 is 7.1, 11 is 6.1 and
+    // 12/14 are 7.1 layouts; anything else (or 0, set in the stream) as stereo.
+    let ch = match take(4) {
+        c @ 1..=6 => c as u16,
+        11 => 7,
+        7 | 12 | 14 => 8,
+        _ => 2,
+    };
+    Some((rate, ch))
 }
 
 fn parse_stsd(stsd: &[u8], handler: &[u8; 4]) -> TrackKind {
@@ -230,14 +244,11 @@ fn parse_stsd(stsd: &[u8], handler: &[u8; 4]) -> TrackKind {
                     Some(r) => (r.to_vec(), h264::parse_hvcc(r)),
                     None => return TrackKind::Other,
                 },
-                VideoCodec::ProRes(_) => (Vec::new(), Vec::new()),
+                // The exact four-character code goes to the decoder (4444
+                // is read as HQ but decodes with its own code).
+                VideoCodec::ProRes(_) => (fourcc.to_vec(), vec![fourcc.to_vec()]),
             };
-            let mut cfg = VideoConfig { codec, width: w, height: h, record, parameter_sets };
-            if let VideoCodec::ProRes(_) = codec {
-                // Keep the exact four-character code for the decoder.
-                cfg.record = fourcc.to_vec();
-            }
-            TrackKind::Video(cfg)
+            TrackKind::Video(VideoConfig { codec, width: w, height: h, record, parameter_sets })
         }
         b"soun" if &fourcc == b"mp4a" && body.len() >= 28 => {
             let channels = be16(body, 16);
@@ -260,37 +271,47 @@ fn parse_stbl(stbl: &[u8]) -> Result<Vec<SampleInfo>> {
     let stsz = child(stbl, b"stsz").context("stsz")?;
     let fixed = be32(stsz, 4);
     let count = be32(stsz, 8) as usize;
+    let count = if fixed != 0 { count } else { entries(stsz, 8, 12, 4) };
+    if count > 1 << 26 {
+        bail!("damaged sample table");
+    }
     let sizes: Vec<u32> = if fixed != 0 { vec![fixed; count] } else { (0..count).map(|i| be32(stsz, 12 + i * 4)).collect() };
     let offsets: Vec<u64> = if let Some(stco) = child(stbl, b"stco") {
-        (0..be32(stco, 4) as usize).map(|i| be32(stco, 8 + i * 4) as u64).collect()
+        (0..entries(stco, 4, 8, 4)).map(|i| be32(stco, 8 + i * 4) as u64).collect()
     } else if let Some(co64) = child(stbl, b"co64") {
-        (0..be32(co64, 4) as usize).map(|i| be64(co64, 8 + i * 8)).collect()
+        (0..entries(co64, 4, 8, 8)).map(|i| be64(co64, 8 + i * 8)).collect()
     } else {
         bail!("no chunk offsets")
     };
     let stsc = child(stbl, b"stsc").context("stsc")?;
-    let stsc: Vec<(u32, u32)> = (0..be32(stsc, 4) as usize).map(|i| (be32(stsc, 8 + i * 12), be32(stsc, 12 + i * 12))).collect();
+    let stsc: Vec<(u32, u32)> = (0..entries(stsc, 4, 8, 12)).map(|i| (be32(stsc, 8 + i * 12), be32(stsc, 12 + i * 12))).collect();
     let stts = child(stbl, b"stts").context("stts")?;
+    // Runs only fill as many samples as there are.
     let mut durations = Vec::with_capacity(count);
-    for i in 0..be32(stts, 4) as usize {
+    for i in 0..entries(stts, 4, 8, 8) {
         let (n, d) = (be32(stts, 8 + i * 8), be32(stts, 12 + i * 8));
-        durations.extend(std::iter::repeat_n(d, n as usize));
+        durations.extend(std::iter::repeat_n(d, (n as usize).min(count - durations.len())));
     }
     let mut ctts = Vec::new();
     if let Some(c) = child(stbl, b"ctts") {
-        for i in 0..be32(c, 4) as usize {
+        for i in 0..entries(c, 4, 8, 8) {
             let (n, off) = (be32(c, 8 + i * 8), be32(c, 12 + i * 8) as i32);
-            ctts.extend(std::iter::repeat_n(off, n as usize));
+            ctts.extend(std::iter::repeat_n(off, (n as usize).min(count - ctts.len())));
         }
     }
-    let sync: Option<std::collections::HashSet<u32>> = child(stbl, b"stss").map(|s| (0..be32(s, 4) as usize).map(|i| be32(s, 8 + i * 4)).collect());
+    let sync: Option<std::collections::HashSet<u32>> = child(stbl, b"stss").map(|s| (0..entries(s, 4, 8, 4)).map(|i| be32(s, 8 + i * 4)).collect());
 
     let mut out = Vec::with_capacity(count);
     let mut sample = 0usize;
     let mut dts = 0i64;
+    // The sample-to-chunk run in force (runs are in chunk order).
+    let mut run = 0usize;
     for (ci, &chunk_off) in offsets.iter().enumerate() {
         let chunk_no = ci as u32 + 1;
-        let per = stsc.iter().rev().find(|e| e.0 <= chunk_no).map(|e| e.1).unwrap_or(1);
+        while run + 1 < stsc.len() && stsc[run + 1].0 <= chunk_no {
+            run += 1;
+        }
+        let per = stsc.get(run).filter(|e| e.0 <= chunk_no).map(|e| e.1).unwrap_or(1);
         let mut off = chunk_off;
         for _ in 0..per {
             if sample >= count {
@@ -365,31 +386,39 @@ impl Mp4Reader {
                 }
             }
         }
+        let movie_scale = child(moov, b"mvhd").map_or(0, |m| if m.first() == Some(&1) { be32(m, 20) } else { be32(m, 12) });
         let mut out = Vec::new();
         for (k, trak) in boxes(moov) {
             if &k != b"trak" {
                 continue;
             }
             let Some(tkhd) = child(trak, b"tkhd") else { continue };
-            let id = if tkhd[0] == 1 { be32(tkhd, 20) } else { be32(tkhd, 12) };
+            let id = if tkhd.first() == Some(&1) { be32(tkhd, 20) } else { be32(tkhd, 12) };
             let Some(mdia) = child(trak, b"mdia") else { continue };
             let Some(mdhd) = child(mdia, b"mdhd") else { continue };
-            let timescale = if mdhd[0] == 1 { be32(mdhd, 20) } else { be32(mdhd, 12) };
-            let handler: [u8; 4] = child(mdia, b"hdlr").map(|h| h[8..12].try_into().unwrap()).unwrap_or(*b"none");
+            let timescale = if mdhd.first() == Some(&1) { be32(mdhd, 20) } else { be32(mdhd, 12) };
+            let handler: [u8; 4] = child(mdia, b"hdlr").and_then(|h| h.get(8..12)).map(|h| h.try_into().unwrap()).unwrap_or(*b"none");
             let Some(stbl) = child(mdia, b"minf").and_then(|m| child(m, b"stbl")) else { continue };
             let kind = child(stbl, b"stsd").map(|s| parse_stsd(s, &handler)).unwrap_or(TrackKind::Other);
             let samples = parse_stbl(stbl).unwrap_or_default();
-            // Edit list: the first non-empty edit's media time.
+            // Edit list: the first non-empty edit's media time, less any
+            // empty edits before it (they delay the track).
             let mut start = 0i64;
             let has_edit = child(trak, b"edts").is_some();
             if let Some(elst) = child(trak, b"edts").and_then(|e| child(e, b"elst")) {
-                let v1 = elst[0] == 1;
-                let n = be32(elst, 4) as usize;
-                for i in 0..n {
-                    let mt = if v1 { be64(elst, 8 + i * 20 + 8) as i64 } else { be32(elst, 8 + i * 12 + 4) as i32 as i64 };
+                let v1 = elst.first() == Some(&1);
+                let size = if v1 { 20 } else { 12 };
+                let mut delay = 0i64;
+                for i in 0..entries(elst, 4, 8, size) {
+                    let at = 8 + i * size;
+                    let (dur, mt) = if v1 { (be64(elst, at) as i64, be64(elst, at + 8) as i64) } else { (be32(elst, at) as i64, be32(elst, at + 4) as i32 as i64) };
                     if mt >= 0 {
-                        start = mt;
+                        start = mt - delay;
                         break;
+                    }
+                    // Empty edit: its length is in the movie's timescale.
+                    if movie_scale > 0 {
+                        delay += dur * timescale as i64 / movie_scale as i64;
                     }
                 }
             }

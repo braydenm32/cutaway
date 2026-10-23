@@ -36,8 +36,14 @@ pub fn fetch(url: &str, to: &Path, magic: &[u8], site: &str, what: &str, cancel:
             if n == 0 {
                 break;
             }
-            if got == 0 && !buf[..n].starts_with(magic) {
-                bail!("{site} sent something other than {what}");
+            // The start is checked once there's enough of it (the first
+            // read can be short).
+            if (got as usize) < magic.len() {
+                let had = got as usize;
+                let upto = (magic.len() - had).min(n);
+                if buf[..upto] != magic[had..had + upto] {
+                    bail!("{site} sent something other than {what}");
+                }
             }
             file.write_all(&buf[..n]).context("couldn't save the download")?;
             got += n as u64;

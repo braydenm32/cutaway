@@ -358,7 +358,12 @@ impl SyrinCmd {
                 Some((k, n)) if k.trim().eq_ignore_ascii_case("element") => SyrinCmd::Stop(SyrinKind::Element, id(Some(n.trim()))?),
                 _ => SyrinCmd::StopButton(crate::control::Target::parse(t)),
             },
-            ("volume" | "vol", Some(t)) => SyrinCmd::Volume(t.trim_end_matches('%').trim().parse::<f64>().map(|v| if v > 1.5 { v / 100.0 } else { v }).map_err(|_| format!("\"{t}\" isn't a volume (0 to 1.5)"))?),
+            ("volume" | "vol", Some(t)) => {
+                // "80%" is a percentage; a bare number over 1.5 is one too.
+                let pct = t.trim().ends_with('%');
+                let v = t.trim().trim_end_matches('%').trim().parse::<f64>().map_err(|_| format!("\"{t}\" isn't a volume (0 to 1.5, or 0% to 150%)"))?;
+                SyrinCmd::Volume((if pct || v > 1.5 { v / 100.0 } else { v }).clamp(0.0, 1.5))
+            }
             _ if r.is_empty() => return Err("syrinscape needs a button, e.g. syrinscape:1".into()),
             _ => SyrinCmd::Button(crate::control::Target::parse(r)),
         })
@@ -385,6 +390,8 @@ mod tests {
         assert_eq!(SyrinCmd::parse("stop:Rain"), Ok(SyrinCmd::StopButton(Target::Name("Rain".into()))));
         assert_eq!(SyrinCmd::parse("volume:0.8"), Ok(SyrinCmd::Volume(0.8)));
         assert_eq!(SyrinCmd::parse("volume:80%"), Ok(SyrinCmd::Volume(0.8)));
+        assert_eq!(SyrinCmd::parse("volume:1%"), Ok(SyrinCmd::Volume(0.01)));
+        assert_eq!(SyrinCmd::parse("volume:300%"), Ok(SyrinCmd::Volume(1.5)));
         assert!(SyrinCmd::parse("mood:abc").is_err());
     }
 

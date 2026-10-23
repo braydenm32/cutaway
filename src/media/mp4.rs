@@ -290,7 +290,7 @@ fn hdlr(handler: Handler, brand: Brand, track_name: Option<&str>) -> Vec<u8> {
         Handler::Chapters => (b"text", "SubtitleHandler"),
     };
     let name = track_name.unwrap_or(name);
-    let name = &name[..name.len().min(200)];
+    let name = crate::util::truncate_str(name, 200);
     let mut w = W::new();
     match brand {
         Brand::Mp4 => {
@@ -484,8 +484,7 @@ fn chapter_stsd() -> Vec<u8> {
 
 /// One chapter title sample: length, UTF-8 text, encoding atom.
 fn chapter_sample(title: &str) -> Vec<u8> {
-    let t = title.as_bytes();
-    let t = &t[..t.len().min(1000)];
+    let t = crate::util::truncate_str(title, 1000).as_bytes();
     let mut v = W::new();
     v.u16(t.len() as u16).bytes(t).bytes(&bx(b"encd", &0x0000_0100u32.to_be_bytes()));
     v.0
@@ -988,14 +987,18 @@ pub fn recover(path: &Path) -> Result<Recovery> {
         }
         let mut size = u32::from_be_bytes(head[..4].try_into().unwrap()) as u64;
         let kind: [u8; 4] = head[4..8].try_into().unwrap();
+        let mut hdr = 8;
         if size == 1 {
-            file.read_exact(&mut head[8..16])?;
+            if file.read_exact(&mut head[8..16]).is_err() {
+                break;
+            }
             size = u64::from_be_bytes(head[8..16].try_into().unwrap());
+            hdr = 16;
         }
-        if size < 8 || pos + size > len {
+        if size < hdr || pos + size > len {
             break; // truncated box: the end of what survived
         }
-        let body_len = size - 8;
+        let body_len = size - hdr;
         match &kind {
             b"ftyp" => {
                 let mut b = vec![0u8; body_len.min(64) as usize];

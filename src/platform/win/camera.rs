@@ -306,7 +306,14 @@ pub fn open_camera(info: &DeviceInfo, w: u32, h: u32, fps: u32, sink: FrameSink)
         // SAFETY: plain call; the reader is done.
         let _ = unsafe { source.Shutdown() };
     })?;
-    let (source, _desc) = rx.recv_timeout(Duration::from_secs(15)).map_err(|_| anyhow!("{} didn't start", info.name))?.context("camera")?;
+    let (source, _desc) = rx
+        .recv_timeout(Duration::from_secs(15))
+        .map_err(|_| {
+            // Don't let it start capturing later with nothing to stop it.
+            stop.store(true, Ordering::Relaxed);
+            anyhow!("{} didn't start", info.name)
+        })?
+        .context("camera")?;
     Ok(Box::new(Camera { stop, source, thread: Some(thread) }))
 }
 

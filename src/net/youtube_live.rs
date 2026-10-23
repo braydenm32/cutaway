@@ -112,9 +112,19 @@ pub fn schedule(auth: &mut Auth, p: &Plan) -> Result<Scheduled> {
             });
             let v = call(auth, "POST", &format!("{api}/liveBroadcasts?part=snippet,status,contentDetails"), Some(&body))?;
             let id = v["id"].as_str().ok_or_else(|| anyhow!("YouTube didn't say which event it made"))?.to_string();
-            let stream = find_or_make_stream(auth, &api, p.stream_key.as_deref())?;
-            call(auth, "POST", &format!("{api}/liveBroadcasts/bind?id={id}&part=id,contentDetails&streamId={}", stream.0), None).context("tying the event to the stream")?;
-            (id, Some(stream.1))
+            let tied = find_or_make_stream(auth, &api, p.stream_key.as_deref()).and_then(|stream| {
+                call(auth, "POST", &format!("{api}/liveBroadcasts/bind?id={id}&part=id,contentDetails&streamId={}", stream.0), None).context("tying the event to the stream")?;
+                Ok(stream)
+            });
+            match tied {
+                Ok(stream) => (id, Some(stream.1)),
+                Err(e) => {
+                    // Don't leave a half-made event on the channel (trying
+                    // again would make another).
+                    let _ = cancel(auth, &id);
+                    return Err(e);
+                }
+            }
         }
     };
     let note = match &p.thumbnail {

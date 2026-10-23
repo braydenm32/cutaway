@@ -116,6 +116,7 @@ struct Precheck {
     rx: Option<Receiver<CheckItem>>,
     waiting: usize,
     then: Option<Then>,
+    started: Instant,
 }
 
 /// The lip-sync measurement dialog.
@@ -151,6 +152,9 @@ pub struct App {
     waker: Waker,
     edit_mode: bool,
     selected_layer: Option<usize>,
+    /// A scene's new name being typed (scene, text): it's renamed when
+    /// the box is left, so a half-typed name never clashes with another.
+    scene_name_edit: Option<(String, String)>,
     /// Undo and redo for scene layouts and settings.
     history: undo::History,
     drag: Option<Drag>,
@@ -312,6 +316,7 @@ impl App {
             waker,
             edit_mode: false,
             selected_layer: None,
+            scene_name_edit: None,
             history: undo::History::default(),
             drag: None,
             settings: None,
@@ -514,11 +519,18 @@ impl App {
         ui.label(RichText::new("Your settings and shows stay as they are when you update.").size(11.5).color(TEXT_DIM));
     }
 
-    /// Start or stop the remote server and MIDI to match the settings.
-    fn apply_control_settings(&mut self) {
+    /// Syrinscape, guests and chat to match the settings (each only
+    /// restarts what changed).
+    fn apply_services(&mut self) {
         self.syrinscape.set_token(&self.cfg.syrinscape.token);
         crate::engine::guests::hub().apply(&self.cfg, self.waker.clone());
         self.apply_chat();
+    }
+
+    /// Start or stop the remote server, MIDI and OSC (and the services
+    /// above) to match the settings.
+    fn apply_control_settings(&mut self) {
+        self.apply_services();
         let r = self.cfg.remote.clone();
         *self.remote_shared.pin.lock_ok() = r.pin.trim().to_string();
         let running_port = self.remote.as_ref().map(|s| s.port);
@@ -643,7 +655,7 @@ impl App {
     fn restore(&mut self, s: &undo::Snapshot, ctx: &egui::Context) -> Result<(), String> {
         match s.kind {
             undo::Kind::Settings if s.settings_differ(&self.cfg) => {
-                self.apply_settings(s.cfg.clone(), ctx)?;
+                self.apply_settings_as(s.cfg.clone(), ctx, true)?;
                 if let Some(win) = self.settings.as_mut() {
                     win.applied(Ok(()), &self.cfg);
                 }
@@ -772,7 +784,7 @@ impl App {
             return;
         }
         if !self.cfg.streaming.destinations.iter().any(|d| d.enabled) {
-            self.settings = Some(SettingsUi::new(self.cfg.clone()).open_at(Section::Streaming));
+            self.settings = Some(self.new_settings().open_at(Section::Streaming));
             self.toast("Add a streaming destination first".into(), false);
             return;
         }
@@ -859,7 +871,11 @@ impl App {
                 let i = find_scene(&t)?;
                 let s = self.scenes[i].clone();
                 if let Some(e) = &self.engine {
-                    e.switcher.set_preview(Some(s.clone()));
+                    // As from a scene button: only sources that exist.
+                    let mut p = s.clone();
+                    p.retain_sources(e.sources.len());
+                    e.switcher.set_preview(Some(p));
+                    (self.waker)();
                 }
                 Ok(format!("{} in preview", s.name))
             }
@@ -1541,12 +1557,16 @@ impl App {
         if !s.go_live || left.num_seconds() > 0 || self.scheduled_done.as_deref() == Some(s.start.as_str()) {
             return;
         }
-        let start = s.start.clone();
-        self.scheduled_done = Some(start);
         if left.num_minutes() < -10 {
+            self.scheduled_done = Some(s.start.clone());
             return;
         }
-        let Some(e) = &self.engine else { return };
+        let Some(e) = &self.engine else {
+            // Still starting up: try again in a moment (for up to 10 minutes).
+            ctx.request_repaint_after(Duration::from_secs(1));
+            return;
+        };
+        self.scheduled_done = Some(s.start.clone());
         if e.is_streaming() {
             return;
         }
@@ -1646,7 +1666,7 @@ impl App {
                 let name = std::env::var("CUTAWAY_UI_TEST_SETTINGS").unwrap_or_default();
                 let section = Section::from_name(&name).unwrap_or(Section::Sources);
                 let source = std::env::var("CUTAWAY_UI_TEST_SOURCE").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
-                self.settings = Some(SettingsUi::new(self.cfg.clone()).open_at(section).select_source(source));
+                self.settings = Some(self.new_settings().open_at(section).select_source(source));
                 4
             }
             s => s,
@@ -1713,7 +1733,7 @@ impl App {
     }
 
     fn header_right(&mut self, ui: &mut egui::Ui) {
-        if ui.button("Settings").on_hover_text("Ctrl/Cmd+,").clicked() {
+        if ui.button("Settings").on_hover_text(format!("Settings{}", self.key_hint(Builtin::Settings))).clicked() {
             self.open_settings();
         }
         let update = self.update.lock_ok().clone().filter(|r| r.version != self.cfg.ui.skip_version);
@@ -1772,7 +1792,7 @@ impl App {
             let on = self.engine.as_ref().is_some_and(|e| e.virtual_camera_on());
             if ui.add(egui::Button::selectable(on, "Webcam")).on_hover_text("Send the program to the \"Cutaway\" camera for Zoom, Teams, Meet…").clicked() {
                 if !on && !crate::platform::vcam::installed() {
-                    self.settings = Some(SettingsUi::new(self.cfg.clone()).open_at(Section::Outputs));
+                    self.settings = Some(self.new_settings().open_at(Section::Outputs));
                 } else {
                     self.set_virtual_camera(!on);
                 }
@@ -1996,7 +2016,7 @@ impl App {
             }
             ui.separator();
             if ui.button("Save as a show…").clicked() {
-                self.settings = Some(SettingsUi::new(self.cfg.clone()).open_at(Section::General));
+                self.settings = Some(self.new_settings().open_at(Section::General));
                 ui.close();
             }
         });
@@ -2015,10 +2035,13 @@ impl App {
             let _ = profiles::save(&dir, &self.cfg.ui.profile, &self.cfg);
         }
         match profiles::load(&dir, name) {
-            Ok(cfg) => {
+            Ok(mut cfg) => {
                 let before = self.snapshot(undo::Kind::Settings, format!("Switch to \"{name}\""));
-                self.scenes = cfg.effective_scenes();
-                match self.apply_settings(cfg, ctx) {
+                // Its own scenes (settings without any would keep this show's).
+                if cfg.scenes.is_empty() {
+                    cfg.scenes = cfg.effective_scenes();
+                }
+                match self.apply_settings_as(cfg, ctx, true) {
                     Ok(()) => {
                         self.history.record(before);
                         self.toast(format!("Switched to \"{name}\""), false)
@@ -2145,7 +2168,7 @@ impl App {
         if rt.on_hover_text(format!("{} to program{}", self.cfg.transition.mode.label(), self.key_hint(Builtin::Take))).clicked() {
             self.take_preview(false);
         }
-        if rc.on_hover_text("Straight to program (Enter)").clicked() {
+        if rc.on_hover_text(format!("Straight to program{}", self.key_hint(Builtin::CutPreview))).clicked() {
             self.take_preview(true);
         }
     }
@@ -2167,7 +2190,7 @@ impl App {
         painter.text(badge.center(), Align2::CENTER_CENTER, "9:16", FontId::proportional(10.0), Color32::WHITE);
         let r = ui.interact(rect, ui.scope_id().with("tall_monitor"), Sense::click());
         if r.on_hover_text("The vertical version (click to set its layouts and framing)").clicked() {
-            self.settings = Some(SettingsUi::new(self.cfg.clone()).open_at(Section::Vertical));
+            self.settings = Some(self.new_settings().open_at(Section::Vertical));
         }
     }
 
@@ -2388,19 +2411,39 @@ impl App {
         let mut delete = false;
         let (mut undo_clicked, mut redo_clicked) = (false, false);
         let old_name = scene.name.clone();
+        let mut rename_clash = None;
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("EDIT LAYOUT").color(AMBER).strong());
             ui.label(RichText::new(if cfg!(target_os = "macos") { "drag frames · corner to resize · Shift keeps shape · scroll to zoom · Option-drag moves the picture" } else { "drag frames · corner to resize · Shift keeps shape · scroll to zoom · Alt-drag moves the picture" }).color(TEXT_DIM).size(11.5));
             ui.separator();
             ui.label("Name");
-            let mut name = scene.name.clone();
-            if ui.add(egui::TextEdit::singleline(&mut name).desired_width(130.0)).changed() {
-                scene.name = name;
-                changed = true;
+            let mut name = match &self.scene_name_edit {
+                Some((of, text)) if *of == old_name => text.clone(),
+                _ => scene.name.clone(),
+            };
+            let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(130.0));
+            if r.changed() {
+                self.scene_name_edit = Some((old_name.clone(), name.clone()));
+            }
+            if r.lost_focus() {
+                if let Some((_, text)) = self.scene_name_edit.take().filter(|(of, _)| *of == old_name) {
+                    let text = text.trim();
+                    if text.is_empty() || text == old_name {
+                        // Nothing to do: the old name stays.
+                    } else if self.scenes.iter().any(|s| s.name != old_name && s.name.eq_ignore_ascii_case(text)) {
+                        rename_clash = Some(text.to_string());
+                    } else {
+                        scene.name = text.to_string();
+                        changed = true;
+                    }
+                }
             }
             egui::ComboBox::from_id_salt("add_layer").selected_text("Add source").show_ui(ui, |ui| {
                 for (i, n) in names.iter().enumerate() {
-                    if ui.selectable_label(false, n).clicked() {
+                    // A source shows once per scene (the program has one
+                    // picture of each).
+                    let there = scene.layers.iter().any(|l| l.source == i);
+                    if ui.add_enabled(!there, egui::Button::selectable(false, n)).on_disabled_hover_text("Already in this scene").clicked() {
                         scene.layers.push(Layer::at(i, 0.3, 0.3, 0.4, 0.4));
                         changed = true;
                     }
@@ -2538,6 +2581,9 @@ impl App {
                 self.edit_mode = false;
             }
         });
+        if let Some(n) = rename_clash {
+            self.toast(format!("There's already a scene called {n}"), true);
+        }
         if changed || new_scene.is_some() || (delete && self.scenes.len() > 1) {
             let label = if delete {
                 format!("Delete scene {old_name}")
@@ -2982,7 +3028,7 @@ impl App {
             ui.label(RichText::new("STREAM").color(TEXT_DIM).size(11.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.small_button("Set up").clicked() {
-                    self.settings = Some(SettingsUi::new(self.cfg.clone()).open_at(Section::Streaming));
+                    self.settings = Some(self.new_settings().open_at(Section::Streaming));
                 }
             });
         });
@@ -3062,14 +3108,17 @@ impl App {
             return;
         }
         ui.add_space(4.0);
+        let mut set_up = false;
         ui.horizontal(|ui| {
             ui.label(RichText::new("GRAPHICS").color(TEXT_DIM).size(11.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("Set up").clicked() {
-                    self.settings = Some(SettingsUi::new(self.cfg.clone()).open_at(Section::Graphics));
-                }
+                set_up = ui.small_button("Set up").clicked();
             });
         });
+        if set_up {
+            self.settings = Some(self.new_settings().open_at(Section::Graphics));
+        }
+        let Some(engine) = &self.engine else { return };
         let mut toggle = None;
         let mut edit = None;
         let mut clock_menus = Vec::new();
@@ -3290,7 +3339,7 @@ impl App {
                                 ui.spacing_mut().item_spacing.x = 3.0;
                                 let soloed = monitoring && self.cfg.mix.monitor_source.eq_ignore_ascii_case(name);
                                 let h = ui.add(egui::Button::selectable(soloed, RichText::new("🎧").size(11.0)).min_size(vec2(24.0, 18.0)));
-                                if h.on_hover_text(if monitoring { "Solo in the headphones" } else { "Choose a headphone output in Settings → Mixing & headphones" }).clicked() {
+                                if h.on_hover_text(if monitoring { "Solo in the headphones" } else { "Choose a headphone output in Settings → Mixing & headphones" }).clicked() && monitoring {
                                     solo = Some(name.clone());
                                 }
                                 let mut tags = String::new();
@@ -3526,15 +3575,30 @@ impl App {
         let check_streams = then != Some(Then::Record) && !dests.is_empty() && !e.is_streaming();
         let waiting = if check_streams { dests.len() } else { 0 };
         let rx = check_streams.then(|| precheck::check_destinations(dests));
-        self.precheck = Some(Precheck { items, rx, waiting, then });
+        self.precheck = Some(Precheck { items, rx, waiting, then, started: Instant::now() });
     }
 
     fn precheck_dialog(&mut self, ctx: &egui::Context) {
         let Some(pc) = self.precheck.as_mut() else { return };
         if let Some(rx) = &pc.rx {
-            while let Ok(item) = rx.try_recv() {
-                pc.items.push(item);
-                pc.waiting = pc.waiting.saturating_sub(1);
+            loop {
+                match rx.try_recv() {
+                    Ok(item) => {
+                        pc.items.push(item);
+                        pc.waiting = pc.waiting.saturating_sub(1);
+                    }
+                    Err(crossbeam_channel::TryRecvError::Empty) => break,
+                    // The checks are over, whether or not each one answered.
+                    Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                        pc.waiting = 0;
+                        break;
+                    }
+                }
+            }
+            if pc.waiting > 0 && pc.started.elapsed() > Duration::from_secs(20) {
+                // Don't wait for ever on a server that never answers.
+                pc.items.push(CheckItem { level: Level::Warn, what: "Streaming".into(), detail: format!("{} destination(s) didn't answer in time", pc.waiting) });
+                pc.waiting = 0;
             }
             if pc.waiting == 0 {
                 pc.rx = None;
@@ -3986,10 +4050,16 @@ impl App {
 
     fn open_settings(&mut self) {
         if self.settings.is_none() {
-            let mut cfg = self.cfg.clone();
-            cfg.scenes = self.scenes.clone();
-            self.settings = Some(SettingsUi::new(cfg));
+            self.settings = Some(self.new_settings());
         }
+    }
+
+    /// A settings window on the settings as they are now, scenes included
+    /// (they can have changes not saved yet).
+    fn new_settings(&self) -> SettingsUi {
+        let mut cfg = self.cfg.clone();
+        cfg.scenes = self.scenes.clone();
+        SettingsUi::new(cfg)
     }
 
     fn settings_context(&self) -> SettingsContext {
@@ -4081,7 +4151,14 @@ impl App {
     }
 
     /// Apply new settings: live where possible, otherwise rebuild the engine.
-    fn apply_settings(&mut self, mut new: Config, ctx: &egui::Context) -> Result<(), String> {
+    fn apply_settings(&mut self, new: Config, ctx: &egui::Context) -> Result<(), String> {
+        self.apply_settings_as(new, ctx, false)
+    }
+
+    /// `own_scenes`: the scenes in `new` already go with its sources (a
+    /// show's saved settings, an undo), rather than with the ones running
+    /// now (an edit in Settings), so they're not moved with the sources.
+    fn apply_settings_as(&mut self, mut new: Config, ctx: &egui::Context, own_scenes: bool) -> Result<(), String> {
         new.validate().map_err(|e| e.to_string())?;
         new.assign_uids();
         // Only the program's size and rate rebuild everything; sources and
@@ -4100,7 +4177,7 @@ impl App {
         }
         let old_uids: Vec<u64> = self.cfg.sources.iter().map(|s| s.uid).collect();
         let new_uids: Vec<u64> = new.sources.iter().map(|s| s.uid).collect();
-        if old_uids != new_uids {
+        if old_uids != new_uids && !own_scenes {
             let new_of = |old: usize| old_uids.get(old).and_then(|u| new_uids.iter().position(|n| n == u));
             for sc in &mut new.scenes {
                 sc.remap_sources(&new_of);
@@ -4138,6 +4215,8 @@ impl App {
         }
         if control_changed {
             self.apply_control_settings();
+        } else {
+            self.apply_services();
         }
         self.save_config();
         if let Some(e) = &self.engine {

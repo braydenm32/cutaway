@@ -183,7 +183,7 @@ impl Graphics {
         let log = self.log.lock_ok();
         let mut out: Vec<OnAir> = Vec::new();
         let mut since: Vec<(String, Ns)> = Vec::new();
-        let mut close = |out: &mut Vec<OnAir>, name: &str, from: Ns, until: Ns| {
+        let close = |out: &mut Vec<OnAir>, name: &str, from: Ns, until: Ns| {
             let (a, b) = (from.max(t0), until.min(t1));
             if b <= a {
                 return;

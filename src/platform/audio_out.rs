@@ -10,7 +10,7 @@ use super::audio_in::hosts;
 use crate::devices::DeviceInfo;
 use crate::engine::sources::Running;
 use crate::media::AudioBlock;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::Receiver;
 use std::collections::{HashMap, VecDeque};
@@ -173,7 +173,14 @@ fn open_device(wanted: &str) -> Result<DeviceOut> {
             }
         }
     })?;
-    let (rate, channels) = ready.recv_timeout(Duration::from_secs(10)).map_err(|_| anyhow!("the audio output didn't start"))??;
+    let (rate, channels) = match ready.recv_timeout(Duration::from_secs(10)) {
+        Ok(r) => r?,
+        Err(_) => {
+            // Don't let it start playing later with nothing to stop it.
+            stop.store(true, Ordering::Relaxed);
+            bail!("the audio output didn't start");
+        }
+    };
     Ok(DeviceOut { feeds, rate, channels, stop, thread: Some(thread) })
 }
 
@@ -213,25 +220,27 @@ impl Drop for OutputRunning {
 pub fn open_audio_output(name: &str, channels: (u32, u32), rx: Receiver<AudioBlock>, volume: Arc<AtomicU32>) -> Result<Box<dyn Running>> {
     let key = name.trim().to_lowercase();
     let id = feed_ids().fetch_add(1, Ordering::Relaxed);
-    let (rate, dev_channels, feeds) = {
+    let (left, right) = (channels.0.max(1) as usize - 1, channels.1.max(1) as usize - 1);
+    // All under the registry lock, so another output closing can't take
+    // the device away before this feed is on it.
+    let (rate, feeds) = {
         let mut reg = registry().lock_ok();
         if !reg.contains_key(&key) {
             let d = open_device(name)?;
             reg.insert(key.clone(), d);
         }
         let d = &reg[&key];
-        (d.rate, d.channels, d.feeds.clone())
-    };
-    let (left, right) = (channels.0.max(1) as usize - 1, channels.1.max(1) as usize - 1);
-    if dev_channels > 1 && (left >= dev_channels || right >= dev_channels) {
-        // Don't leave an unused device open.
-        let mut reg = registry().lock_ok();
-        if reg.get(&key).is_some_and(|d| d.feeds.lock_ok().is_empty()) {
-            reg.remove(&key);
+        let (rate, dev_channels, feeds) = (d.rate, d.channels, d.feeds.clone());
+        if dev_channels > 1 && (left >= dev_channels || right >= dev_channels) {
+            // Don't leave an unused device open.
+            if feeds.lock_ok().is_empty() {
+                reg.remove(&key);
+            }
+            return Err(anyhow!("{name} has {dev_channels} outputs; channels {}-{} don't exist", left + 1, right + 1));
         }
-        return Err(anyhow!("{name} has {dev_channels} outputs; channels {}-{} don't exist", left + 1, right + 1));
-    }
-    feeds.lock_ok().push(Feed { id, left, right, ring: VecDeque::new() });
+        feeds.lock_ok().push(Feed { id, left, right, ring: VecDeque::new() });
+        (rate, feeds)
+    };
 
     // Resample 48 kHz to the device rate and keep the delay short (the
     // device clock drifts against the mix).
@@ -267,7 +276,7 @@ pub fn open_audio_output(name: &str, channels: (u32, u32), rx: Receiver<AudioBlo
             if let Some(feed) = feeds.iter_mut().find(|f| f.id == id) {
                 feed.ring.extend(out);
                 if feed.ring.len() / 2 > max_frames {
-                    let drop = feed.ring.len() - max_frames;
+                    let drop = feed.ring.len() - max_frames * 2;
                     feed.ring.drain(..drop & !1);
                 }
             }

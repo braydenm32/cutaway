@@ -760,7 +760,7 @@ follow the commands (the `/cutaway` prefix is optional):
 |---|---|
 | `/cutaway/scene/2` or `/cutaway/scene "Host"` | Take a scene |
 | `/cutaway/preview/2`, `/cutaway/take`, `/cutaway/cut` | Preview / take / cut |
-| `/cutaway/record 1`, `/cutaway/live 0` | On / off (no argument = toggle) |
+| `/cutaway/record 1`, `/cutaway/live 0`, `/cutaway/talkback 1` | On / off (no argument = toggle); a button sending 1 then 0 holds talkback |
 | `/cutaway/graphic/1`, `/cutaway/audio/Mic 0` | Graphics, inputs |
 | `/cutaway/fader/Mic 0.8` | An input's level from a fader (0…1) |
 | `/cutaway/gain/Mic -6` | An input's level in dB |
@@ -803,12 +803,16 @@ for button feedback.
 | `prompter`, `prompter:faster`, `prompter:slower`, `prompter:back`, `prompter:forward`, `prompter:top` | The teleprompter |
 | `comment:next`, `comment:hide`, `comment` | Viewer comments on screen |
 
+A number picks by position, unless something is named that number (a scene
+called "2"). A macro that runs itself is stopped there, with a message.
+
 Scenes and rundown segments can run commands as **cues** when they start
 (Edit layout → Scene cues; Settings → Rundown), e.g. a break scene that
 starts a Syrinscape mood and a "Back in" countdown.
 
 **MIDI** (macOS and Windows): pick the controller, then **＋ Add a mapping**, press
-**Learn** and hit the pad, key or fader. Pads can run any command above;
+**Learn** and hit the pad, key or fader. Pads can run any command above
+(a "while held" sound pad or `talkback:on` stops when you let go);
 faders (CC) can set an input's level. Pads light up for the scene on air, the
 one in preview, recording, live, auto, graphics and inputs that are on.
 

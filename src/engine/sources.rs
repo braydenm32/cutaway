@@ -244,7 +244,7 @@ pub fn start_video(
     if super::netsrc::is_network(spec) {
         return super::netsrc::start(cfg, slot, hub.clone(), net.clone());
     }
-    if let Some(name) = spec.strip_prefix("ndi:").or_else(|| spec.strip_prefix("NDI:")) {
+    if let Some(name) = crate::util::strip_prefix_ci(spec, "ndi:") {
         let ptz_rx = links.ptz.lock_ok().as_ref().and_then(|p| p.ndi_rx.clone());
         return super::ndi::start(name.trim(), cfg, slot, hub.clone(), net.clone(), ptz_rx);
     }

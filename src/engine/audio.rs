@@ -1027,6 +1027,9 @@ pub fn run_mixer(mut inputs: Vec<MixInput>, mut names: Vec<String>, taps: MixTap
             out
         };
         let (rec_out, stream_out) = (faded(&rec_block), faded(&stream_block));
+        // Each mix-minus feed worked out (and limited) once a block, however
+        // many guests share it.
+        let mut feeds: std::collections::HashMap<(bool, u64), Vec<f32>> = std::collections::HashMap::new();
         for (_, kind, tap) in taps.lock_ok().iter() {
             let block = match kind {
                 MixKind::Recording => rec_out.clone(),
@@ -1043,16 +1046,21 @@ pub fn run_mixer(mut inputs: Vec<MixInput>, mut names: Vec<String>, taps: MixTap
                     let mut out = if *minus == 0 {
                         if *is_stream { stream_block.samples.clone() } else { rec_block.samples.clone() }
                     } else {
-                        let mut o = if *is_stream { stream_raw.clone() } else { rec_raw.clone() };
-                        for (i, to_rec, to_stream, c) in &contrib {
-                            if minus & (1u64 << i) != 0 && (if *is_stream { *to_stream } else { *to_rec }) {
-                                for (a, b) in o.iter_mut().zip(c) {
-                                    *a -= b;
+                        feeds
+                            .entry((*is_stream, *minus))
+                            .or_insert_with(|| {
+                                let mut o = if *is_stream { stream_raw.clone() } else { rec_raw.clone() };
+                                for (i, to_rec, to_stream, c) in &contrib {
+                                    if minus & (1u64 << i) != 0 && (if *is_stream { *to_stream } else { *to_rec }) {
+                                        for (a, b) in o.iter_mut().zip(c) {
+                                            *a -= b;
+                                        }
+                                    }
                                 }
-                            }
-                        }
-                        feed_limiters.entry((*is_stream, *minus)).or_insert_with(|| Limiter::new(-1.0)).process(&mut o);
-                        o
+                                feed_limiters.entry((*is_stream, *minus)).or_insert_with(|| Limiter::new(-1.0)).process(&mut o);
+                                o
+                            })
+                            .clone()
                     };
                     if *talkback {
                         if let Some(tb) = &talkback_sig {
@@ -1065,6 +1073,10 @@ pub fn run_mixer(mut inputs: Vec<MixInput>, mut names: Vec<String>, taps: MixTap
                 }
             };
             let _ = tap.try_send(block);
+        }
+        // (Feeds nobody listens to any more are forgotten.)
+        if !feeds.is_empty() || !feed_limiters.is_empty() {
+            feed_limiters.retain(|k, _| feeds.contains_key(k));
         }
         n += 1;
         if n.is_multiple_of(5) {

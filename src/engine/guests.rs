@@ -234,6 +234,8 @@ struct BackupFile {
     bytes: u64,
     done: bool,
     take: String,
+    /// A piece is being written now.
+    writing: bool,
 }
 
 /// What the engine lends the hub while it runs.
@@ -584,7 +586,7 @@ impl GuestHub {
             let Some(folder) = inner.takes.iter().find(|t| t.0 == take).map(|t| t.1.clone()) else {
                 return Err(("404 Not Found", "that recording has gone".into()));
             };
-            match inner.backups.get(&key) {
+            let r = match inner.backups.get(&key) {
                 Some(b) => (b.path.clone(), b.next, false, source),
                 None => {
                     if seq != 0 {
@@ -599,10 +601,21 @@ impl GuestHub {
                         // (Numbered whatever the kind of file, so parts read in order.)
                         .find(|p| ["webm", "mp4"].iter().all(|e| !p.with_extension(e).exists() && !taken.contains(&p.with_extension(e))))
                         .unwrap();
-                    inner.backups.insert(key.clone(), BackupFile { id: id.to_string(), path: path.clone(), next: 0, bytes: 0, done: false, take: take.to_string() });
+                    inner.backups.insert(key.clone(), BackupFile { id: id.to_string(), path: path.clone(), next: 0, bytes: 0, done: false, take: take.to_string(), writing: false });
                     (path, 0, true, source)
                 }
+            };
+            // This piece is being written: the same piece sent again
+            // meanwhile (a retry) waits its turn instead of going in twice.
+            if seq == r.1 {
+                if let Some(b) = inner.backups.get_mut(&key) {
+                    if b.writing {
+                        return Err(("429 Too Many Requests", format!("still writing piece {seq}")));
+                    }
+                    b.writing = true;
+                }
             }
+            r
         };
         if seq < next {
             return Ok(()); // sent again: already have it
@@ -615,7 +628,11 @@ impl GuestHub {
             f.write_all(data)?;
             f.flush()
         };
-        write().map_err(|e| ("500 Error", format!("can't write {}: {e}", path.display())))?;
+        let written = write();
+        if let Some(b) = self.inner.lock_ok().backups.get_mut(&key) {
+            b.writing = false;
+        }
+        written.map_err(|e| ("500 Error", format!("can't write {}: {e}", path.display())))?;
         if fresh {
             if let Some(at) = at_ms {
                 let note = format!(
@@ -948,13 +965,27 @@ impl GuestHub {
         inner.slots.get(id).map(f)
     }
 
-    /// Tap the engine's mix for a guest: everything but their own voice.
-    fn feed_tap(&self, id: &str) -> Option<(u64, crossbeam_channel::Receiver<AudioBlock>, MixTaps)> {
+    /// The guest source's decoder, to feed without holding up the hub
+    /// (decoding can take a while; other guests and the page shouldn't wait).
+    fn feeder_of(&self, id: &str) -> Option<(Arc<Mutex<Feeder>>, Arc<Mutex<Option<Instant>>>)> {
+        self.with_slot(id, |s| (s.feeder.clone(), s.last_video.clone()))
+    }
+
+    /// Which of the engine's inputs are the guest's own voice (to leave
+    /// out of what they hear).
+    fn feed_minus(&self, id: &str) -> Option<u64> {
         let inner = self.inner.lock_ok();
         let engine = inner.engine.as_ref()?;
         let source = inner.slots.get(id)?.source.to_lowercase();
         let own = engine.inputs.iter().find(|(d, _)| d.trim().to_lowercase().strip_prefix("source:").is_some_and(|n| n.trim() == source)).map(|(_, i)| *i);
-        let minus = own.filter(|i| *i < 64).map(|i| 1u64 << i).unwrap_or(0);
+        Some(own.filter(|i| *i < 64).map(|i| 1u64 << i).unwrap_or(0))
+    }
+
+    /// Tap the engine's mix for a guest: everything but their own voice.
+    fn feed_tap(&self, id: &str) -> Option<(u64, crossbeam_channel::Receiver<AudioBlock>, MixTaps)> {
+        let minus = self.feed_minus(id)?;
+        let inner = self.inner.lock_ok();
+        let engine = inner.engine.as_ref()?;
         let (tx, rx) = bounded(200);
         let tap = self.tap_ids.fetch_add(1, Ordering::Relaxed);
         engine.mix_taps.lock_ok().push((tap, MixKind::Feed { stream: false, minus, talkback: inner.talkback }, tx));
@@ -987,6 +1018,7 @@ fn return_audio(hub: Arc<GuestHub>, id: String, tx: tokio::sync::mpsc::Sender<by
             std::thread::sleep(Duration::from_millis(300));
             continue;
         };
+        let mut checked = Instant::now();
         loop {
             match rx.recv_timeout(Duration::from_millis(300)) {
                 Ok(block) => {
@@ -996,6 +1028,18 @@ fn return_audio(hub: Arc<GuestHub>, id: String, tx: tokio::sync::mpsc::Sender<by
                 }
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => break,
+            }
+            // Their own voice added as an input (or moved) since: still
+            // left out of what they hear.
+            if checked.elapsed() > Duration::from_secs(1) {
+                checked = Instant::now();
+                if let Some(now) = hub.feed_minus(&id) {
+                    for t in taps.lock_ok().iter_mut().filter(|t| t.0 == tap) {
+                        if let MixKind::Feed { minus, .. } = &mut t.1 {
+                            *minus = now;
+                        }
+                    }
+                }
             }
             if stop.load(Ordering::Relaxed) || tx.is_closed() {
                 break;
@@ -1128,15 +1172,27 @@ struct RtpClock {
     first: Option<(u32, Ns)>,
     last: u32,
     turns: i64,
+    /// The earliest any packet came in this stretch, against its time
+    /// (the network's best case), and when the stretch began.
+    best: Option<Ns>,
+    since: Ns,
 }
 
 impl RtpClock {
     fn new(rate: u32) -> Self {
-        RtpClock { rate: rate as i64, first: None, last: 0, turns: 0 }
+        RtpClock { rate: rate as i64, first: None, last: 0, turns: 0, best: None, since: 0 }
     }
 
     fn host(&mut self, ts: u32) -> Ns {
-        let (t0, at) = *self.first.get_or_insert((ts, clock::now()));
+        self.host_at(ts, clock::now())
+    }
+
+    /// `host`, for a packet that came in at `now`.
+    fn host_at(&mut self, ts: u32, now: Ns) -> Ns {
+        let (t0, at) = *self.first.get_or_insert((ts, now));
+        if self.since == 0 {
+            self.since = now;
+        }
         if self.last > 0xC000_0000 && ts < 0x4000_0000 {
             self.turns += 1;
         } else if ts > 0xC000_0000 && self.last < 0x4000_0000 && self.turns > 0 {
@@ -1144,7 +1200,27 @@ impl RtpClock {
             return at + ((((self.turns - 1) << 32) + ts as i64 - t0 as i64) * NS_PER_SEC / self.rate);
         }
         self.last = ts;
-        at + (((self.turns << 32) + ts as i64 - t0 as i64) * NS_PER_SEC / self.rate)
+        let t = at + (((self.turns << 32) + ts as i64 - t0 as i64) * NS_PER_SEC / self.rate);
+        // The guest's clock and ours drift apart a little (a tenth of a
+        // millisecond a second is normal). Follow it gently: a packet
+        // that's "early" moves the timeline at once (it can't be in the
+        // future); and every 10 s it's moved later by half the best case,
+        // so it doesn't creep behind and use up the jitter buffer.
+        let late = now - t;
+        if late < 0 {
+            self.first = Some((t0, at + late));
+            return t + late;
+        }
+        self.best = Some(self.best.map_or(late, |b| b.min(late)));
+        if now - self.since > 10 * NS_PER_SEC {
+            if let (Some(best), Some((t0, at))) = (self.best.take(), self.first) {
+                if best > 2_000_000 {
+                    self.first = Some((t0, at + best / 2));
+                }
+            }
+            self.since = now;
+        }
+        t
     }
 }
 
@@ -1175,15 +1251,15 @@ async fn receive_video(hub: Arc<GuestHub>, id: String, track: Arc<dyn TrackRemot
             let ps: Vec<Vec<u8>> = nals.iter().filter(|n| matches!(h264::h264_nal_type(n), 7 | 8)).map(|n| n.to_vec()).collect();
             let data = h264::to_avcc(nals.iter().copied().filter(|n| h264::h264_nal_type(n) != h264::NAL_AUD));
             got_key |= key;
-            hub.with_slot(&id, |s| {
-                let mut f = s.feeder.lock_ok();
+            if let Some((feeder, last_video)) = hub.feeder_of(&id) {
+                let mut f = feeder.lock_ok();
                 // (A no-op unless they changed or the decoder is new.)
                 if ps.len() >= 2 {
                     f.video_config(VideoCodec::H264, ps.clone());
                 }
                 f.video(VideoCodec::H264, pts, pts, key, &data);
-                *s.last_video.lock_ok() = Some(Instant::now());
-            });
+                *last_video.lock_ok() = Some(Instant::now());
+            }
         }
     }
 }
@@ -1213,7 +1289,9 @@ async fn receive_audio(hub: Arc<GuestHub>, id: String, track: Arc<dyn TrackRemot
         if pcm.is_empty() {
             continue;
         }
-        hub.with_slot(&id, |s| s.feeder.lock_ok().pcm(pts, 48_000, 2, &pcm, &mut mix));
+        if let Some((feeder, _)) = hub.feeder_of(&id) {
+            feeder.lock_ok().pcm(pts, 48_000, 2, &pcm, &mut mix);
+        }
     }
 }
 
@@ -1359,6 +1437,9 @@ fn handle(mut conn: TcpStream, hub: &Arc<GuestHub>) -> std::io::Result<()> {
 
 struct GuestRunning {
     id: String,
+    /// This source's own slot (a newer one for the same guest may have
+    /// taken its place by the time this one closes).
+    mine: Arc<Mutex<Option<Instant>>>,
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -1370,7 +1451,11 @@ impl Drop for GuestRunning {
             let _ = t.join();
         }
         let h = hub();
-        h.inner.lock_ok().slots.remove(&self.id);
+        let mut inner = h.inner.lock_ok();
+        if inner.slots.get(&self.id).is_some_and(|s| Arc::ptr_eq(&s.last_video, &self.mine)) {
+            inner.slots.remove(&self.id);
+        }
+        drop(inner);
         h.wake();
     }
 }
@@ -1403,6 +1488,7 @@ pub fn start_source(cfg: &SourceConfig, slot: Arc<SourceSlot>, audio: Arc<AudioH
     let want_key = Arc::new(AtomicBool::new(true));
     let last_video = Arc::new(Mutex::new(None));
     let h = hub();
+    let mine = last_video.clone();
     h.inner.lock_ok().slots.insert(id.clone(), Slot { source: cfg.name.clone(), camera, screen, feeder: Arc::new(Mutex::new(feeder)), want_key, last_video: last_video.clone() });
     h.wake();
     // The slate, until (and whenever) no pictures come.
@@ -1441,7 +1527,7 @@ pub fn start_source(cfg: &SourceConfig, slot: Arc<SourceSlot>, audio: Arc<AudioH
             std::thread::sleep(Duration::from_millis(400));
         }
     })?;
-    Ok(Box::new(GuestRunning { id, stop, thread: Some(thread) }))
+    Ok(Box::new(GuestRunning { id, mine, stop, thread: Some(thread) }))
 }
 
 /// The hub is the app's one hub: tests that use it (directly, or by
@@ -1492,10 +1578,32 @@ mod tests {
         assert!(a.chars().all(|c| c.is_ascii_alphanumeric()));
         assert_ne!(a, new_id());
         let mut c = RtpClock::new(90_000);
-        let t0 = c.host(0xFFFF_0000);
-        let t1 = c.host(0xFFFF_0000u32.wrapping_add(90_000));
+        let now = 1_000 * NS_PER_SEC;
+        let t0 = c.host_at(0xFFFF_0000, now);
+        let t1 = c.host_at(0xFFFF_0000u32.wrapping_add(90_000), now + NS_PER_SEC + 5_000_000);
         assert_eq!(t1 - t0, NS_PER_SEC, "across the wrap");
-        assert_eq!(c.host(0xFFFF_0000u32.wrapping_add(45_000)) - t0, NS_PER_SEC / 2, "a late packet");
+        assert_eq!(c.host_at(0xFFFF_0000u32.wrapping_add(45_000), now + NS_PER_SEC + 6_000_000) - t0, NS_PER_SEC / 2, "a late packet");
+    }
+
+    /// A guest's clock a little slow or fast against ours: the timeline
+    /// follows, rather than drifting into (or out of) the jitter buffer.
+    #[test]
+    fn follows_a_drifting_clock() {
+        for ppm in [-200i64, 200] {
+            let mut c = RtpClock::new(90_000);
+            let start = 1_000 * NS_PER_SEC;
+            let mut worst: Ns = 0;
+            // An hour of 30 fps, each packet arriving 1 to 6 ms after it was made.
+            for i in 0..(30 * 3600i64) {
+                let real = i * NS_PER_SEC / 30;
+                let ts = (i * 3000) as u32;
+                let now = start + real + real * ppm / 1_000_000 + 1_000_000 + (i * 7919 % 5) * 1_000_000;
+                let t = c.host_at(ts, now);
+                worst = worst.max(now - t);
+                assert!(t <= now, "never in the future");
+            }
+            assert!(worst < 40_000_000, "{ppm} ppm: up to {} ms behind after an hour", worst / 1_000_000);
+        }
     }
 
     /// Join as a browser would (a WebRTC client standing in for one) and

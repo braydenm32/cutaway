@@ -112,6 +112,11 @@ pub fn estimate_rate(cfg: &Config, wav_channels: &[(u32, bool)]) -> f64 {
             kbps += proxy_kbps;
         }
     }
+    if cfg.vertical.enabled && cfg.vertical.record {
+        let v = &cfg.vertical;
+        kbps += encode::record_bitrate_kbps(codec, out.program_bitrate_kbps, v.width, v.height, p.fps) as f64;
+        files_with_audio += 1.0;
+    }
     if !cfg.audio.is_empty() {
         kbps += out.audio_bitrate_kbps as f64 * files_with_audio;
         if out.input_tracks {
@@ -217,8 +222,17 @@ impl TakeMonitor {
     }
 }
 
+/// Everything in a take's folder, its Proxies, Clips and Guests folders
+/// included.
 pub fn folder_size(dir: &Path) -> u64 {
-    std::fs::read_dir(dir).map(|d| d.flatten().filter_map(|e| e.metadata().ok()).filter(|m| m.is_file()).map(|m| m.len()).sum()).unwrap_or(0)
+    fn walk(dir: &Path, depth: u32) -> u64 {
+        let Ok(d) = std::fs::read_dir(dir) else { return 0 };
+        d.flatten()
+            .filter_map(|e| Some((e.path(), e.metadata().ok()?)))
+            .map(|(p, m)| if m.is_dir() { if depth < 3 { walk(&p, depth + 1) } else { 0 } } else { m.len() })
+            .sum()
+    }
+    walk(dir, 0)
 }
 
 /// Runs every second on the watchdog thread.
@@ -285,7 +299,10 @@ impl HealthMonitor {
             }
             None => (estimate, false),
         };
-        let disk = disk_space(&cfg.output.folder).map(|(free, total)| DiskStatus { path: cfg.output.folder.clone(), free, total, rate: main_rate, measured });
+        // The drive the take is filling (the folder setting may have been
+        // changed since it started).
+        let folder = take.as_ref().map(|t| t.folder.clone()).unwrap_or_else(|| cfg.output.folder.clone());
+        let disk = disk_space(&folder).map(|(free, total)| DiskStatus { path: folder.clone(), free, total, rate: main_rate, measured });
         let backup = cfg
             .output
             .backup_folder

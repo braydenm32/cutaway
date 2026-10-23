@@ -150,6 +150,12 @@ pub fn open_audio_input(dev: Option<&DeviceInfo>, channels: u32, sink: AudioSink
             }
         }
     })?;
-    let (name, rate, keep) = rx.recv_timeout(Duration::from_secs(10)).map_err(|_| anyhow!("the audio device didn't start"))??;
+    let (name, rate, keep) = rx
+        .recv_timeout(Duration::from_secs(10))
+        .map_err(|_| {
+            // Don't let it start capturing later with nothing to stop it.
+            stop.store(true, Ordering::Relaxed);
+            anyhow!("the audio device didn't start")
+        })??;
     Ok(AudioStarted { running: Box::new(InputRunning { stop, thread: Some(thread) }), description: name, rate, channels: keep })
 }

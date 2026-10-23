@@ -5,7 +5,6 @@
 //!   Microsoft's software H.264; Windows' AAC encoder).
 //! * Linux (development builds): OpenH264 and FDK-AAC, in software.
 
-use crate::util::LockExt;
 use crate::media::{AudioConfig, Ns, VideoCodec, VideoFrame, VideoPacket};
 use anyhow::Result;
 use std::sync::Arc;
@@ -323,6 +322,7 @@ mod software {
 #[cfg(all(test, not(target_os = "macos")))]
 mod tests {
     use super::*;
+    use crate::util::LockExt;
     use crate::media::mp4::{Brand, Mp4Writer};
     use crate::media::testsrc::{TestPattern, TestTone};
     use std::sync::Mutex;

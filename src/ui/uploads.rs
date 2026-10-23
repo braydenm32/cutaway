@@ -229,10 +229,16 @@ impl Uploads {
             loop {
                 let next = {
                     let mut l = list.lock_ok();
-                    l.iter_mut().find(|j| j.state == JobState::Waiting).map(|j| {
+                    let next = l.iter_mut().find(|j| j.state == JobState::Waiting).map(|j| {
                         j.state = JobState::Uploading;
                         j.clone()
-                    })
+                    });
+                    if next.is_none() {
+                        // Done, said under the list's lock: a job added
+                        // from now on starts a new worker.
+                        running.store(false, Ordering::SeqCst);
+                    }
+                    next
                 };
                 let Some(job) = next else { break };
                 waker();
@@ -263,7 +269,6 @@ impl Uploads {
                 }
                 waker();
             }
-            running.store(false, Ordering::SeqCst);
         });
         if spawned.is_err() {
             self.running.store(false, Ordering::SeqCst);

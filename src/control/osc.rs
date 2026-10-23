@@ -170,13 +170,13 @@ pub fn encode(m: &Message) -> Vec<u8> {
 }
 
 /// Commands that switch something on or off: a 1/0 value means on/off.
-const TOGGLES: &[&str] = &["record", "rec", "live", "stream", "auto", "autoswitch", "captions", "cc", "graphic", "gfx", "overlay", "audio", "input"];
+const TOGGLES: &[&str] = &["record", "rec", "live", "stream", "auto", "autoswitch", "captions", "cc", "graphic", "gfx", "overlay", "audio", "input", "talkback", "tb", "rotation", "rotate", "sponsors"];
 
 /// The command an OSC message stands for (None: nothing to do, e.g. a
 /// button release).
 pub fn command_for(m: &Message) -> Option<Result<Action, String>> {
     let path = m.addr.trim_matches('/');
-    let path = if path.len() >= 7 && path[..7].eq_ignore_ascii_case("cutaway") { path[7..].trim_start_matches('/') } else { path };
+    let path = crate::util::strip_prefix_ci(path, "cutaway").map_or(path, |p| p.trim_start_matches('/'));
     let mut segs: Vec<String> = path.split('/').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect();
     if segs.is_empty() {
         return None;
