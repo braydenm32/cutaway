@@ -908,6 +908,11 @@ impl App {
                 self.toggle_graphic(i, Some(on));
                 Ok(format!("{} {}", names[i], if on { "on" } else { "off" }))
             }
+            Action::Rotation(t, tg) => {
+                let e = self.engine.as_ref().ok_or("the engine isn't running")?;
+                let (name, on) = e.rotations.set(&self.cfg.rotations, &t, tg, &e.graphics)?;
+                Ok(format!("{name} {}", if on { "started" } else { "stopped" }))
+            }
             Action::Audio(t, tg) => {
                 let names: Vec<String> = self.cfg.audio.iter().map(|a| a.name.clone()).collect();
                 let i = t.find(&names).ok_or("there's no such audio input")?;
@@ -1159,6 +1164,7 @@ impl App {
                 .collect(),
             sources: e.sources.iter().enumerate().map(|(i, s)| show::SourceState { name: s.name.clone(), tally: tally(i), offline: offline.contains(&s.name) }).collect(),
             graphics: e.graphics.list().into_iter().map(|(name, on, _)| show::GraphicState { name, on }).collect(),
+            rotations: e.rotations.list().into_iter().map(|r| show::RotationState { name: r.name, running: r.running, showing: r.showing }).collect(),
             inputs: e
                 .audio
                 .iter()
@@ -1325,6 +1331,10 @@ impl App {
                     Action::Live(_) => lit(state.live),
                     Action::Auto(_) => lit(state.auto),
                     Action::Graphic(t, _) => lit(t.find(&gnames).is_some_and(|i| state.graphics[i].on)),
+                    Action::Rotation(t, _) => {
+                        let names: Vec<String> = state.rotations.iter().map(|r| r.name.clone()).collect();
+                        lit(t.find(&names).is_some_and(|i| state.rotations[i].running))
+                    }
                     Action::Audio(t, _) => lit(t.find(&anames).is_some_and(|i| state.inputs[i].on)),
                     Action::Transition(mode) => lit(state.transition == mode.name()),
                     Action::Captions(_) => lit(state.captions),
@@ -2997,6 +3007,14 @@ impl App {
         let mut edit = None;
         let mut clock_menus = Vec::new();
         let mut ticking = false;
+        // Time on screen since going live (or since the recording started).
+        let since = engine.stream_started_at().map(|t| (t, "since you went live")).or_else(|| match &engine.status.lock_ok().rec {
+            crate::engine::RecState::Recording { since, .. } => Some((crate::media::clock::now() - since.elapsed().as_nanos() as i64, "in this take")),
+            _ => None,
+        });
+        let on_air = since.map(|(t, _)| engine.graphics.on_air(t, crate::media::clock::now())).unwrap_or_default();
+        let rotations = engine.rotations.list();
+        let mut rotate = None;
         ui.horizontal_wrapped(|ui| {
             for (i, (name, on, problem)) in list.iter().enumerate() {
                 let clock = self.engine.as_ref().and_then(|e| e.graphics.clock_text(i));
@@ -3012,12 +3030,16 @@ impl App {
                 let b = egui::Button::new(text).fill(if *on { AMBER } else { RAISED }).min_size(vec2(64.0, 28.0));
                 let mut r = ui.add(b);
                 let is_timer = self.cfg.graphics.get(i).is_some_and(|g| g.kind == crate::config::GraphicKind::Clock && g.clock.is_timer());
+                let shown = on_air.iter().find(|o| o.name == *name).zip(since).map(|(o, (_, when))| {
+                    let n = o.showings.len();
+                    format!("\nOn screen {n} time{} ({}) {when}", if n == 1 { "" } else { "s" }, crate::engine::fmt_duration(Duration::from_secs_f64(o.seconds())))
+                });
                 r = r.on_hover_text(match problem {
                     Some(p) => format!("⚠ {p}"),
                     None if is_timer => "Show / hide. Right-click to start, pause or reset it.".into(),
                     None if i < 9 => format!("Show / hide (Alt+{})", i + 1),
                     None => "Show / hide".into(),
-                });
+                } + &shown.unwrap_or_default());
                 if r.clicked() {
                     toggle = Some(i);
                 }
@@ -3035,7 +3057,31 @@ impl App {
                     }
                 }
             }
+            for (i, r) in rotations.iter().enumerate() {
+                let Some(cfg) = self.cfg.rotations.iter().find(|c| c.name == r.name) else { continue };
+                let text = RichText::new(format!("⟳ {}", r.name)).strong().size(12.5).color(if r.running { Color32::BLACK } else { Color32::WHITE });
+                let b = egui::Button::new(text).fill(if r.running { AMBER } else { RAISED }).min_size(vec2(64.0, 28.0));
+                let state = match (&r.showing, r.next_in) {
+                    _ if !r.running => format!("Stopped. {}", match cfg.start {
+                        crate::config::RotationStart::Manual => "Click to start it.".to_string(),
+                        s => format!("Starts by itself {}, or click to start it now.", s.label().replace("I'm", "you're")),
+                    }),
+                    (Some(g), _) => format!("{g} is on now."),
+                    (None, Some(d)) => format!("Next one in {}.", crate::engine::fmt_duration(d).trim_start_matches("00:")),
+                    (None, None) => "Running.".into(),
+                };
+                let tip = format!("Takes turns: {}.\nOne every {} for {} s.\n{state}", cfg.graphics.join(", "), minutes(cfg.every_minutes), cfg.show_seconds);
+                if ui.add(b).on_hover_text(tip).clicked() {
+                    rotate = Some(i);
+                }
+                if r.running {
+                    ticking = true;
+                }
+            }
         });
+        if let Some(i) = rotate {
+            self.act(Action::Rotation(control::Target::Index(i), Toggle::Toggle));
+        }
         for (r, i) in clock_menus {
             self.clock_menu(&r, i);
         }
@@ -4358,5 +4404,18 @@ mod small_tests {
     fn app_icon_loads() {
         let icon = super::app_icon();
         assert!(icon.width >= 256 && icon.width == icon.height, "{}x{}", icon.width, icon.height);
+    }
+}
+
+/// "10 minutes", "1 minute", "90 seconds".
+fn minutes(m: f32) -> String {
+    if m < 1.0 {
+        format!("{:.0} seconds", m * 60.0)
+    } else if (m - 1.0).abs() < 0.01 {
+        "minute".into()
+    } else if m.fract().abs() < 0.01 {
+        format!("{m:.0} minutes")
+    } else {
+        format!("{m:.1} minutes")
     }
 }

@@ -314,6 +314,12 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Outputs, "At start") => "Turns the virtual camera on when Cutaway starts, so video-call apps can pick the \"Cutaway\" camera straight away.",
 
         // ---- Remote & MIDI
+        // ---- Graphics taking turns
+        (Graphics, "Group name") => "What this group is called on its button beside the graphics, and in commands (rotation:Sponsors).",
+        (Graphics, "Graphics") => "The graphics that take turns, in order. When the last one has been on, it starts again from the first.",
+        (Graphics, "How often") => "How often the next graphic comes on, and how long it stays. If it stays on longer than the gap, they follow straight on from each other.",
+        (Graphics, "Runs") => "When it starts and stops by itself. Its button beside the graphics starts or stops it any time, and so do the remote, Stream Deck, MIDI and keys (rotation:Name).",
+
         (Control, "Remote control") => "Lets phones, tablets, the Stream Deck plugin, Companion and scripts on this network run the show, through a web page and web addresses.",
         (Control, "Port") => "The port the remote runs on.",
         (Control, "PIN") => "A code needed to use the remote. Without one, anyone on the network could control the show.",

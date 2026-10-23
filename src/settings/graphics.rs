@@ -80,6 +80,8 @@ impl SettingsUi {
             ui.add_space(14.0);
             ui.vertical(|ui| self.graphic_detail(ui));
         });
+        ui.add_space(10.0);
+        self.rotations(ui);
     }
 
     fn graphic_detail(&mut self, ui: &mut egui::Ui) {

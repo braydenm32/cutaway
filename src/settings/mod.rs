@@ -13,6 +13,7 @@ mod macros;
 mod prompter;
 mod mixing;
 mod outputs;
+mod rotations;
 mod rundown;
 mod shortcuts;
 mod sound;
