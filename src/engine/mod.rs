@@ -1163,6 +1163,7 @@ impl Engine {
                 h.shared.set_routing(a.to_recording, a.to_stream);
                 h.shared.set_processing(&a.processing);
                 h.shared.set_duck(a.duck);
+                h.shared.set_automix(a.automix);
             }
         }
         self.mix.apply(&new.mix);

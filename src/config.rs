@@ -873,6 +873,7 @@ pub fn audio_key(a: &AudioConfig) -> AudioConfig {
         to_stream: true,
         processing: VoiceProcessing::default(),
         duck: false,
+        automix: false,
         record: true,
         split_channels: false,
         ..a.clone()
@@ -935,6 +936,9 @@ pub struct AudioConfig {
     pub processing: VoiceProcessing,
     /// Turned down automatically while others talk (music, pads, ambience).
     pub duck: bool,
+    /// One of the mics the automatic mixer shares out (whoever's talking
+    /// is up, the others go down).
+    pub automix: bool,
     /// Which input this is while Cutaway runs (never saved), as for sources.
     #[serde(skip)]
     pub uid: u64,
@@ -1012,6 +1016,7 @@ impl Default for AudioConfig {
             to_stream: true,
             processing: VoiceProcessing::default(),
             duck: false,
+            automix: false,
             uid: 0,
         }
     }
@@ -1258,6 +1263,9 @@ pub struct MixConfig {
     /// "program", "stream", or an input's name (solo).
     pub monitor_source: String,
     pub monitor_volume_db: f32,
+    /// Automatic mic mixing: the mics marked for it share one level, so
+    /// whoever is talking is up and the others go down.
+    pub automix: bool,
     /// Ducking on: inputs marked to duck go down while others talk.
     pub ducking: bool,
     /// Ducking: inputs marked to duck go down by this much while others talk.
@@ -1367,6 +1375,7 @@ impl Default for MixConfig {
             monitor_device: String::new(),
             monitor_source: "program".into(),
             monitor_volume_db: 0.0,
+            automix: false,
             ducking: false,
             duck_db: -12.0,
             duck_threshold_db: -40.0,

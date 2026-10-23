@@ -812,6 +812,7 @@ impl SettingsUi {
                 .map(|s| s.name.clone())
                 .collect();
             let ducking_on = self.draft.mix.ducking;
+            let automix_on = self.draft.mix.automix;
             ui.vertical(|ui| {
                 let Some(a) = self.draft.audio.get_mut(self.sel_audio) else {
                     hint(ui, "No audio inputs. Add your interface to record your DAW.");
@@ -877,6 +878,14 @@ impl SettingsUi {
                         ui.checkbox(&mut a.duck, "turn down while others talk");
                         if a.duck && !ducking_on {
                             hint(ui, "(ducking is off in Mixing & headphones)");
+                        }
+                    });
+                    ui.end_row();
+                    label(ui, "Auto-mix");
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut a.automix, "a mic: up while talking, down while others talk");
+                        if a.automix && !automix_on {
+                            hint(ui, "(automatic mic mixing is off in Mixing & headphones)");
                         }
                     });
                     ui.end_row();

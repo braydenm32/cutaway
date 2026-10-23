@@ -172,6 +172,31 @@ impl SettingsUi {
             }
         });
 
+        let mixed: Vec<String> = self.draft.audio.iter().filter(|a| a.automix).map(|a| a.name.clone()).collect();
+        let state = if !self.draft.mix.automix { "off".to_string() } else if mixed.len() < 2 { "on, tick at least two mics".to_string() } else { mixed.join(", ") };
+        part(ui, "mix_automix", "Automatic mic mixing", &state, self.draft.mix.automix, |ui| {
+            hint(ui, "For panels and round tables: whoever is talking is up and the other mics go down, so their room noise, echo and breathing don't pile up. Two people talking at once share it. Nothing is cut off: a quiet mic is only ever turned down, never off.");
+            egui::Grid::new("automix").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+                label(ui, "Automatic mixing");
+                ui.checkbox(&mut self.draft.mix.automix, "share the level between the mics below");
+                ui.end_row();
+                label(ui, "Mics");
+                ui.horizontal_wrapped(|ui| {
+                    for a in self.draft.audio.iter_mut().filter(|a| !a.is_pads()) {
+                        ui.checkbox(&mut a.automix, &a.name);
+                    }
+                    if self.draft.audio.is_empty() {
+                        hint(ui, "No audio inputs yet.");
+                    }
+                });
+                ui.end_row();
+            });
+            if self.draft.mix.automix && mixed.len() == 1 {
+                hint(ui, "Tick at least two mics: with one there's nothing to share.");
+            }
+            hint(ui, "Only the mixes change: each mic's own WAV file is recorded as it was, so you can still mix it yourself afterwards.");
+        });
+
         let ducked: Vec<String> = self.draft.audio.iter().filter(|a| a.duck).map(|a| a.name.clone()).collect();
         let state = if !self.draft.mix.ducking { "off".to_string() } else if ducked.is_empty() { "on, nothing ticked".to_string() } else { format!("{} under voices", ducked.join(", ")) };
         part(ui, "mix_duck", "Ducking", &state, false, |ui| {
