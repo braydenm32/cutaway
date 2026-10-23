@@ -623,10 +623,12 @@ mod tests {
         let u = page_url(&f.to_string_lossy()).unwrap();
         assert!(u.starts_with("file:///") && u.ends_with("cutaway%20web%20test.html"), "{u}");
         let _ = std::fs::remove_file(&f);
-        let f = std::env::temp_dir().join("Sale 50% off?#1.html");
+        // (Windows file names can't have a "?".)
+        let (name, want) = if cfg!(windows) { ("Sale 50% off #1.html", "/Sale%2050%25%20off%20%231.html") } else { ("Sale 50% off?#1.html", "/Sale%2050%25%20off%3F%231.html") };
+        let f = std::env::temp_dir().join(name);
         std::fs::write(&f, "<p>hi</p>").unwrap();
         let u = page_url(&f.to_string_lossy()).unwrap();
-        assert!(u.ends_with("/Sale%2050%25%20off%3F%231.html"), "{u}");
+        assert!(u.ends_with(want), "{u}");
         let _ = std::fs::remove_file(&f);
     }
 
