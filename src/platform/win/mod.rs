@@ -42,6 +42,29 @@ pub fn attach_console() {
 
 /// Windows asks for camera and microphone access through its privacy
 /// settings, not a prompt: nothing to do up front.
+/// Close this program (a helper Cutaway started) when Cutaway closes, even
+/// if Cutaway crashes: it goes in a job that ends with Cutaway's handle.
+pub fn kill_with_us(child: &std::process::Child) {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::JobObjects::*;
+    static JOB: OnceLock<Option<isize>> = OnceLock::new();
+    // SAFETY: a job object made once and kept for the life of Cutaway; the
+    // child's handle is valid while it's borrowed.
+    let job = JOB.get_or_init(|| unsafe {
+        let job = CreateJobObjectW(None, None).ok()?;
+        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        SetInformationJobObject(job, JobObjectExtendedLimitInformation, &info as *const _ as *const _, std::mem::size_of_val(&info) as u32).ok()?;
+        Some(job.0 as isize)
+    });
+    if let Some(job) = job {
+        unsafe {
+            let _ = AssignProcessToJobObject(HANDLE(*job as *mut _), HANDLE(child.as_raw_handle()));
+        }
+    }
+}
+
 pub fn request_permissions() {}
 
 pub fn permissions_changed() -> bool {

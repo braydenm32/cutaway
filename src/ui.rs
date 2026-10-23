@@ -2931,6 +2931,12 @@ impl App {
                 if is_title && ui.small_button("✎").on_hover_text("Change the text now").clicked() {
                     edit = Some(i);
                 }
+                let is_web = self.cfg.graphics.get(i).is_some_and(|g| g.kind == crate::config::GraphicKind::Web);
+                if is_web && ui.small_button("⟳").on_hover_text("Load the page again (restarts its animations)").clicked() {
+                    if let Some(e) = &self.engine {
+                        e.graphics.reload(i);
+                    }
+                }
             }
         });
         for (r, i) in clock_menus {

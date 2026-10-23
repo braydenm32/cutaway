@@ -247,6 +247,10 @@ Take_2026-10-16_19-30-02/
   right, a gentle rise, or a pop (**Comes on** in its settings, with how long
   it takes), and leaves the same way back. Title text can be changed live
   between guests.
+- **Web page overlays:** any web page or HTML file over the picture, see-through
+  wherever the page has no background, like a browser source in OBS:
+  StreamElements or Streamlabs alerts and chat boxes, scoreboards, animated
+  graphics made for the web.
 - **Clocks and countdowns:** clock graphics show the time of day, a
   countdown to a time ("Starting in 4:59"), a countdown or stopwatch you
   start from a button, key or cue, or the time left in the rundown segment
@@ -839,6 +843,13 @@ source.
   main window, Stream Deck keys and remote buttons, and can be cues.
 - **Scrolling ticker:** **Settings → Graphics → ＋ Scrolling ticker:** the text, a label
   and the speed. ✎ on its button changes the text live.
+- **Web page overlays:** **Settings → Graphics → ＋ Web page:** an address
+  (or **Choose file…** for an HTML file) and the size the page is laid out
+  at (the program's size by default). Its button shows and hides it like
+  any graphic; **⟳** beside it loads the page again. Pages are drawn by
+  Google Chrome or Microsoft Edge (or Brave, Chromium or Vivaldi), run
+  hidden in the background, so one of them needs to be installed: every
+  Windows PC has Edge. A page's sound isn't heard.
 - **Viewer comments:** **Settings → Viewer comments:** your Twitch channel
   (no sign-in needed) and/or a YouTube live video with a YouTube API key.
   Comments appear in the main window's **Comments** panel; click one to put
