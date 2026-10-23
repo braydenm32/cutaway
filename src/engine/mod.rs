@@ -1940,7 +1940,7 @@ impl CompositorLoop {
             if let Some(l) = lineup {
                 self.comp.set_lineup(&l.from, &l.sizes);
                 for (i, why) in self.comp.set_looks(&l.looks, &l.style) {
-                    self.status.lock_ok().push(LogLevel::Warning, format!("Source {}: the LUT wasn't used: {why}", i + 1));
+                    self.status.lock_ok().push(LogLevel::Warning, format!("Source {}: {why}", i + 1));
                 }
                 self.switcher.remap_sources(&l.from, l.aspects, l.uids);
                 self.slots = l.slots;
@@ -1953,7 +1953,7 @@ impl CompositorLoop {
                 if l.generation != self.looks_generation {
                     self.looks_generation = l.generation;
                     for (i, why) in self.comp.set_looks(&l.looks, &l.style) {
-                        self.status.lock_ok().push(LogLevel::Warning, format!("Source {}: the LUT wasn't used: {why}", i + 1));
+                        self.status.lock_ok().push(LogLevel::Warning, format!("Source {}: {why}", i + 1));
                     }
                 }
             }

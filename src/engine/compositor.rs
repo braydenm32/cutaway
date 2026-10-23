@@ -12,7 +12,7 @@
 use super::graphics::GraphicLayer;
 use super::switcher::Layout;
 use super::vertical::{self, TallFrame};
-use crate::config::{parse_color, FrameStyle, Matte, SourceLook, TransitionMode};
+use crate::config::{BackgroundMode, parse_color, FrameStyle, Matte, SourceLook, TransitionMode};
 use crate::media::{Ns, Pixels, VideoFrame};
 use crate::scene::PadState;
 use anyhow::{anyhow, bail, Context, Result};
@@ -38,6 +38,7 @@ struct Quad {
     trans: [f32; 4],
     dip: [f32; 4],
     lut: [f32; 4],
+    bg: [f32; 4],
 }
 
 impl Quad {
@@ -55,6 +56,9 @@ struct LookGpu {
     key2: [f32; 4],
     keyrgb: [f32; 4],
     lut_strength: f32,
+    /// Behind the people: 0 cut out, 1 blurred, 2 a picture; blur amount.
+    bg_mode: f32,
+    blur: f32,
 }
 
 impl Default for LookGpu {
@@ -83,6 +87,14 @@ impl From<&SourceLook> for LookGpu {
             key2: [l.key_spill.clamp(0.0, 1.0), if l.chroma_key { 1.0 } else { 0.0 }, if l.remove_background { 1.0 } else { 0.0 }, 0.0],
             keyrgb: [k[0], k[1], k[2], 0.0],
             lut_strength: if l.lut.is_some() { l.lut_strength.clamp(0.0, 1.0) } else { 0.0 },
+            bg_mode: match l.background {
+                BackgroundMode::Remove => 0.0,
+                BackgroundMode::Blur => 1.0,
+                BackgroundMode::Replace if l.background_image.is_some() => 2.0,
+                // No picture chosen yet: blurred meanwhile.
+                BackgroundMode::Replace => 1.0,
+            },
+            blur: l.background_blur.clamp(0.0, 1.0),
         }
     }
 }
@@ -109,6 +121,15 @@ struct LutGpu {
     view: wgpu::TextureView,
     points: f32,
     domain: [f32; 2],
+}
+
+/// A source's replacement background, on the GPU.
+struct BgGpu {
+    path: std::path::PathBuf,
+    _tex: wgpu::Texture,
+    view: wgpu::TextureView,
+    /// Width / height.
+    aspect: f32,
 }
 
 /// Which copy of a source's uniforms a draw uses (a source can appear in
@@ -210,6 +231,8 @@ struct SourceGpu {
     mask_pts: Option<Ns>,
     /// Colour LUT, if the source has one.
     lut: Option<Arc<LutGpu>>,
+    /// The picture behind the people, if the background is replaced.
+    bg: Option<Arc<BgGpu>>,
 }
 
 struct GraphicGpu {
@@ -412,6 +435,7 @@ impl Compositor {
                 tex_entry(2),
                 tex_entry(3),
                 tex_entry(4),
+                tex_entry(6),
                 wgpu::BindGroupLayoutEntry {
                     binding: 5,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -520,6 +544,7 @@ impl Compositor {
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&black_view) },
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&white) },
                 wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&no_lut) },
+                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&white) },
             ],
         });
         let mut c = Compositor {
@@ -639,16 +664,18 @@ impl Compositor {
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&view) },
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&view) },
                 wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&Self::tiny_3d(dev, queue)) },
+                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&view) },
             ],
         })
     }
 
     fn bind(&self, quad: Quad, a: &wgpu::TextureView, b: &wgpu::TextureView) -> (wgpu::Buffer, wgpu::BindGroup) {
-        self.bind_mask(quad, a, b, &self.white, &self.no_lut)
+        self.bind_mask(quad, a, b, &self.white, &self.no_lut, &self.white)
     }
 
-    /// Uniforms and textures for one draw, with a mask and a LUT.
-    fn bind_mask(&self, quad: Quad, a: &wgpu::TextureView, b: &wgpu::TextureView, mask: &wgpu::TextureView, lut: &wgpu::TextureView) -> (wgpu::Buffer, wgpu::BindGroup) {
+    /// Uniforms and textures for one draw, with a mask, a LUT and a
+    /// picture for behind the people.
+    fn bind_mask(&self, quad: Quad, a: &wgpu::TextureView, b: &wgpu::TextureView, mask: &wgpu::TextureView, lut: &wgpu::TextureView, bg: &wgpu::TextureView) -> (wgpu::Buffer, wgpu::BindGroup) {
         let buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
             contents: bytemuck::bytes_of(&quad),
@@ -664,19 +691,47 @@ impl Compositor {
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(b) },
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(mask) },
                 wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(lut) },
+                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(bg) },
             ],
         });
         (buf, bind)
     }
 
     /// A source's uniform slots (program A/B, preview, vertical), with its
-    /// mask and LUT (if any).
-    fn source_slots(&self, y: &wgpu::Texture, uv: &wgpu::Texture, mask: Option<&wgpu::Texture>, lut: Option<&LutGpu>) -> Vec<(wgpu::Buffer, wgpu::BindGroup)> {
+    /// mask, LUT and background picture (if any).
+    fn source_slots(&self, y: &wgpu::Texture, uv: &wgpu::Texture, mask: Option<&wgpu::Texture>, lut: Option<&LutGpu>, bg: Option<&BgGpu>) -> Vec<(wgpu::Buffer, wgpu::BindGroup)> {
         let (yv, uvv) = (y.create_view(&Default::default()), uv.create_view(&Default::default()));
         let mv = mask.map(|m| m.create_view(&Default::default()));
         let mask_view = mv.as_ref().unwrap_or(&self.white);
         let lut_view = lut.map(|l| &l.view).unwrap_or(&self.no_lut);
-        (0..4).map(|_| self.bind_mask(Quad::full(0.0, 1.0, [0.0, 0.0]), &yv, &uvv, mask_view, lut_view)).collect()
+        let bg_view = bg.map(|b| &b.view).unwrap_or(&self.white);
+        (0..4).map(|_| self.bind_mask(Quad::full(0.0, 1.0, [0.0, 0.0]), &yv, &uvv, mask_view, lut_view, bg_view)).collect()
+    }
+
+    /// Load a picture for behind a source's people (at most 1920 wide).
+    fn load_bg(&self, path: &std::path::Path) -> Result<BgGpu> {
+        let mut img = image::open(path).with_context(|| format!("can't open {}", path.display()))?.to_rgba8();
+        if img.width() > 1920 {
+            let h = (img.height() as u64 * 1920 / img.width() as u64).max(1) as u32;
+            img = image::imageops::resize(&img, 1920, h, image::imageops::FilterType::Triangle);
+        }
+        let tex = self.device.create_texture_with_data(
+            &self.queue,
+            &wgpu::TextureDescriptor {
+                label: Some("source background"),
+                size: wgpu::Extent3d { width: img.width(), height: img.height(), depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            img.as_raw(),
+        );
+        let view = tex.create_view(&Default::default());
+        Ok(BgGpu { path: path.to_path_buf(), _tex: tex, view, aspect: img.width() as f32 / img.height().max(1) as f32 })
     }
 
     /// Load a .cube LUT onto the GPU.
@@ -775,7 +830,7 @@ impl Compositor {
 
     /// Register a source (index = order of calls).
     pub fn add_source(&mut self, width: u32, height: u32) -> usize {
-        let s = self.make_source(width, height, None);
+        let s = self.make_source(width, height, None, None);
         self.sources.push(s);
         self.sources.len() - 1
     }
@@ -792,7 +847,7 @@ impl Compositor {
                 Some(s) => fresh.push(s),
                 None => {
                     let (w, h) = sizes.get(i).copied().unwrap_or((1920, 1080));
-                    fresh.push(self.make_source(w, h, None));
+                    fresh.push(self.make_source(w, h, None, None));
                 }
             }
         }
@@ -800,7 +855,7 @@ impl Compositor {
         self.looks.truncate(self.sources.len());
     }
 
-    fn make_source(&self, width: u32, height: u32, lut: Option<Arc<LutGpu>>) -> SourceGpu {
+    fn make_source(&self, width: u32, height: u32, lut: Option<Arc<LutGpu>>, bg: Option<Arc<BgGpu>>) -> SourceGpu {
         let (width, height) = (width.max(2) & !1, height.max(2) & !1);
         let mk = |label: &str, w: u32, h: u32, format| {
             self.device.create_texture(&wgpu::TextureDescriptor {
@@ -817,12 +872,12 @@ impl Compositor {
         let y = mk("src y", width, height, wgpu::TextureFormat::R8Unorm);
         let uv = mk("src uv", width / 2, height / 2, wgpu::TextureFormat::Rg8Unorm);
         let (yv, uvv) = (y.create_view(&Default::default()), uv.create_view(&Default::default()));
-        let slots = self.source_slots(&y, &uv, None, lut.as_deref());
+        let slots = self.source_slots(&y, &uv, None, lut.as_deref(), bg.as_deref());
         let tw = self.thumb_width.min(width) & !1;
         let th = ((tw as u64 * height as u64 / width as u64) as u32).max(2) & !1;
         let thumb = Target::new(&self.device, "thumb", tw, th, wgpu::TextureFormat::Rgba8Unorm, 4);
         let (tbuf, tbind) = self.bind(Quad::full(1.0, 1.0, [0.0, 0.0]), &yv, &uvv);
-        SourceGpu { width, height, y, uv, slots, thumb: Some((thumb, tbuf, tbind)), serial: None, mask: None, mask_pts: None, lut }
+        SourceGpu { width, height, y, uv, slots, thumb: Some((thumb, tbuf, tbind)), serial: None, mask: None, mask_pts: None, lut, bg }
     }
 
     /// A person mask for source `index` (from a picture captured at `pts`):
@@ -844,7 +899,7 @@ impl Compositor {
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
-            let slots = self.source_slots(&s.y, &s.uv, Some(&tex), s.lut.as_deref());
+            let slots = self.source_slots(&s.y, &s.uv, Some(&tex), s.lut.as_deref(), s.bg.as_deref());
             let s = &mut self.sources[index];
             s.slots = slots;
             s.mask = Some((tex, size));
@@ -877,24 +932,46 @@ impl Compositor {
         for (i, l) in looks.iter().enumerate() {
             let Some(s) = self.sources.get(i) else { break };
             let want = l.lut.as_ref().filter(|p| !p.as_os_str().is_empty());
-            if s.lut.as_ref().map(|g| &g.path) == want {
+            let want_bg = l.background_image.as_ref().filter(|p| !p.as_os_str().is_empty() && l.remove_background && l.background == BackgroundMode::Replace);
+            let lut_same = s.lut.as_ref().map(|g| &g.path) == want;
+            let bg_same = s.bg.as_ref().map(|g| &g.path) == want_bg;
+            if lut_same && bg_same {
                 continue;
             }
-            let lut = match want {
-                Some(p) => match self.load_lut(p) {
-                    Ok(g) => Some(Arc::new(g)),
-                    Err(e) => {
-                        problems.push((i, format!("{e:#}")));
-                        None
-                    }
-                },
-                None => None,
+            let lut = if lut_same {
+                s.lut.clone()
+            } else {
+                match want {
+                    Some(p) => match self.load_lut(p) {
+                        Ok(g) => Some(Arc::new(g)),
+                        Err(e) => {
+                            problems.push((i, format!("the LUT wasn't used: {e:#}")));
+                            None
+                        }
+                    },
+                    None => None,
+                }
+            };
+            let bg = if bg_same {
+                s.bg.clone()
+            } else {
+                match want_bg {
+                    Some(p) => match self.load_bg(p) {
+                        Ok(g) => Some(Arc::new(g)),
+                        Err(e) => {
+                            problems.push((i, format!("the background picture couldn't be used, so the background is blurred instead: {e:#}")));
+                            None
+                        }
+                    },
+                    None => None,
+                }
             };
             let s = &self.sources[i];
-            let slots = self.source_slots(&s.y, &s.uv, s.mask.as_ref().map(|m| &m.0), lut.as_deref());
+            let slots = self.source_slots(&s.y, &s.uv, s.mask.as_ref().map(|m| &m.0), lut.as_deref(), bg.as_deref());
             let s = &mut self.sources[i];
             s.slots = slots;
             s.lut = lut;
+            s.bg = bg;
         }
         problems
     }
@@ -921,6 +998,25 @@ impl Compositor {
 
     pub fn preview_width(&self) -> u32 {
         self.preview.0.width
+    }
+
+    /// What goes behind source `i`'s people in a frame at `px`: the mode,
+    /// the blur's radius (a fraction of the picture's width), and how much
+    /// of the replacement picture shows (it fills the frame, cropped).
+    fn bg_uniform(&self, i: usize, look: &LookGpu, px: [f32; 4]) -> [f32; 4] {
+        let mut mode = look.bg_mode;
+        let mut scale = [1.0, 1.0];
+        if mode > 1.5 {
+            match &self.sources[i].bg {
+                Some(b) => {
+                    let frame = (px[2] - px[0]).max(1.0) / (px[3] - px[1]).max(1.0);
+                    scale = if frame > b.aspect { [1.0, b.aspect / frame] } else { [frame / b.aspect, 1.0] };
+                }
+                // Not loaded (yet, or it failed): blurred meanwhile.
+                None => mode = 1.0,
+            }
+        }
+        [mode, 0.004 + 0.036 * look.blur, scale[0], scale[1]]
     }
 
     /// Uniforms for source `i` drawn at `st` on a target of `target` pixels
@@ -961,6 +1057,7 @@ impl Compositor {
                 Some(l) if look.lut_strength > 0.0 => [look.lut_strength, l.domain[0], l.domain[1], l.points],
                 _ => [0.0; 4],
             },
+            bg: self.bg_uniform(i, &look, px),
             ..Default::default()
         }
     }
@@ -1007,6 +1104,7 @@ impl Compositor {
                 Some(l) if look.lut_strength > 0.0 => [look.lut_strength, l.domain[0], l.domain[1], l.points],
                 _ => [0.0; 4],
             },
+            bg: self.bg_uniform(i, &look, px),
             ..Default::default()
         }
     }
@@ -1123,8 +1221,8 @@ impl Compositor {
         if frame.width & !1 != s.width || frame.height & !1 != s.height {
             // The device delivers a different size than configured (or
             // switched modes): follow it.
-            let lut = self.sources[index].lut.clone();
-            self.sources[index] = self.make_source(frame.width, frame.height, lut);
+            let (lut, bg) = (self.sources[index].lut.clone(), self.sources[index].bg.clone());
+            self.sources[index] = self.make_source(frame.width, frame.height, lut, bg);
         }
         let s = &mut self.sources[index];
         s.serial = Some(frame.serial);
@@ -1164,7 +1262,7 @@ impl Compositor {
         };
         let fits = self.stinger.as_ref().is_some_and(|s| s.width == frame.width & !1 && s.height == frame.height & !1);
         if !fits {
-            self.stinger = Some(self.make_source(frame.width, frame.height, None));
+            self.stinger = Some(self.make_source(frame.width, frame.height, None, None));
         }
         let s = self.stinger.as_mut().unwrap();
         if s.serial != Some(frame.serial) {
@@ -1199,7 +1297,7 @@ impl Compositor {
         };
         let fits = self.replay.as_ref().is_some_and(|s| s.width == frame.width & !1 && s.height == frame.height & !1);
         if !fits {
-            self.replay = Some(self.make_source(frame.width, frame.height, None));
+            self.replay = Some(self.make_source(frame.width, frame.height, None, None));
         }
         let r = self.replay.as_mut().unwrap();
         if r.serial != Some(frame.serial) {
@@ -2143,6 +2241,26 @@ mod tests {
         c.clear_mask(b);
         let r = c.render(&Layout::One(vec![full, full_top]), None, &[], 0, 52, &wants).unwrap();
         assert!(near(rgb(&r, 40, 90), [0, 255, 0]), "mask cleared: {:?}", rgb(&r, 40, 90));
+        // Blurred instead: its own (green) background, not what's below.
+        c.upload_mask(b, 8, &mask);
+        looks[1] = SourceLook { remove_background: true, background: BackgroundMode::Blur, ..Default::default() };
+        c.set_looks(&looks, &FrameStyle::default());
+        let r = c.render(&Layout::One(vec![full, full_top]), None, &[], 0, 53, &wants).unwrap();
+        assert!(near(rgb(&r, 40, 90), [0, 255, 0]), "background blurred: {:?}", rgb(&r, 40, 90));
+        // Swapped for a picture.
+        let pic = std::env::temp_dir().join(format!("cutaway-bg-test-{}.png", std::process::id()));
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([255, 0, 255, 255])).save(&pic).unwrap();
+        looks[1] = SourceLook { remove_background: true, background: BackgroundMode::Replace, background_image: Some(pic.clone()), ..Default::default() };
+        assert!(c.set_looks(&looks, &FrameStyle::default()).is_empty());
+        let r = c.render(&Layout::One(vec![full, full_top]), None, &[], 0, 54, &wants).unwrap();
+        assert!(near(rgb(&r, 40, 90), [255, 0, 255]), "background replaced: {:?}", rgb(&r, 40, 90));
+        assert!(near(rgb(&r, 280, 90), [0, 255, 0]), "person kept: {:?}", rgb(&r, 280, 90));
+        let _ = std::fs::remove_file(&pic);
+        looks[1].background_image = Some(std::path::PathBuf::from("/nowhere/at/all.png"));
+        assert_eq!(c.set_looks(&looks, &FrameStyle::default()).len(), 1, "a missing picture is reported");
+        let r = c.render(&Layout::One(vec![full, full_top]), None, &[], 0, 55, &wants).unwrap();
+        assert!(near(rgb(&r, 40, 90), [0, 255, 0]), "blurred meanwhile: {:?}", rgb(&r, 40, 90));
+        c.clear_mask(b);
 
         // Wipe halfway, travelling right: the new scene (green) on the left.
         c.set_looks(&[SourceLook::default(), SourceLook::default()], &FrameStyle::default());

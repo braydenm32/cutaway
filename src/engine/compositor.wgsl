@@ -20,6 +20,7 @@ struct U {
     trans: vec4<f32>,  // kind (2 wipe, 3 push, 4 dip), progress 0..1, direction x, y
     dip: vec4<f32>,    // dip colour rgb, unused
     lut: vec4<f32>,    // strength (0 = none), domain min, domain max, points
+    bg: vec4<f32>,     // behind the people: mode (0 cut out, 1 blur, 2 picture), blur radius (of width), picture scale x, y
 };
 
 @group(0) @binding(0) var<uniform> u: U;
@@ -28,6 +29,7 @@ struct U {
 @group(0) @binding(3) var tex_b: texture_2d<f32>;
 @group(0) @binding(4) var tex_mask: texture_2d<f32>;
 @group(0) @binding(5) var tex_lut: texture_3d<f32>;
+@group(0) @binding(6) var tex_bg: texture_2d<f32>;
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
@@ -67,6 +69,44 @@ fn sd_round_box(p: vec2<f32>, half: vec2<f32>, r: f32) -> f32 {
     return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - r;
 }
 
+fn apply_lut(c: vec3<f32>) -> vec3<f32> {
+    if (u.lut.x <= 0.0) {
+        return c;
+    }
+    let n = u.lut.w;
+    let p = clamp((c - vec3<f32>(u.lut.y)) / max(u.lut.z - u.lut.y, 1e-5), vec3<f32>(0.0), vec3<f32>(1.0));
+    let graded = textureSampleLevel(tex_lut, samp, p * ((n - 1.0) / n) + vec3<f32>(0.5 / n), 0.0).rgb;
+    return mix(c, clamp(graded, vec3<f32>(0.0), vec3<f32>(1.0)), u.lut.x);
+}
+
+// The source's own background, blurred like a portrait lens: a spiral of
+// taps over a disc, leaving out the person (so they don't glow around the
+// edges).
+fn blurred_background(uv: vec2<f32>) -> vec3<f32> {
+    let dims = vec2<f32>(textureDimensions(tex_a));
+    let r = vec2<f32>(u.bg.y, u.bg.y * dims.x / max(dims.y, 1.0));
+    var acc = vec3<f32>(0.0);
+    var every = vec3<f32>(0.0);
+    var w = 0.0;
+    let taps = 40;
+    for (var i = 0; i < taps; i = i + 1) {
+        let fi = f32(i) + 0.5;
+        let k = sqrt(fi / f32(taps));
+        let a = fi * 2.39996;
+        let q = uv + vec2<f32>(cos(a), sin(a)) * k * r;
+        let y = textureSampleLevel(tex_a, samp, q, 0.0).r;
+        let c = textureSampleLevel(tex_b, samp, q, 0.0).rg;
+        let rgb = yuv_to_rgb(y, c.r, c.g);
+        let bw = 1.0 - textureSampleLevel(tex_mask, samp, q, 0.0).r;
+        acc = acc + rgb * bw;
+        every = every + rgb;
+        w = w + bw;
+    }
+    // Nearly all person around here: the plain average will do.
+    let b = mix(every / f32(taps), acc / max(w, 1e-4), smoothstep(0.5, 3.0, w));
+    return apply_lut(b);
+}
+
 // A source on the program: crop/mirror (via uv), colour, chroma key or
 // person mask, rounded corners, border and drop shadow.
 @fragment
@@ -87,12 +127,7 @@ fn fs_layer(in: VsOut) -> @location(0) vec4<f32> {
     var rgb = yuv_to_rgb(yy, cc.r, cc.g);
     // Colour LUT (a camera's log to Rec.709, or a look), sampled at the
     // table's points.
-    if (u.lut.x > 0.0) {
-        let n = u.lut.w;
-        let p = clamp((rgb - vec3<f32>(u.lut.y)) / max(u.lut.z - u.lut.y, 1e-5), vec3<f32>(0.0), vec3<f32>(1.0));
-        let graded = textureSampleLevel(tex_lut, samp, p * ((n - 1.0) / n) + vec3<f32>(0.5 / n), 0.0).rgb;
-        rgb = mix(rgb, clamp(graded, vec3<f32>(0.0), vec3<f32>(1.0)), u.lut.x);
-    }
+    rgb = apply_lut(rgb);
     var key_alpha = 1.0;
     if (u.key2.y > 0.5) {
         let dist = distance(cc, u.key.xy);
@@ -107,15 +142,26 @@ fn fs_layer(in: VsOut) -> @location(0) vec4<f32> {
             rgb = rgb - k * s * u.key2.x;
         }
     }
-    // Background removal: the person mask (soft at the edges).
+    // Background removal: the person mask (soft at the edges). Cut out,
+    // blurred, or (after the colour, below) swapped for a picture.
+    let mode = i32(u.bg.x + 0.5);
+    var person = 1.0;
     if (u.key2.z > 0.5) {
-        let m = textureSampleLevel(tex_mask, samp, uv, 0.0).r;
-        key_alpha = key_alpha * smoothstep(0.15, 0.85, m);
+        person = smoothstep(0.15, 0.85, textureSampleLevel(tex_mask, samp, uv, 0.0).r);
+        if (mode == 0) {
+            key_alpha = key_alpha * person;
+        } else if (mode == 1 && person < 0.999) {
+            rgb = mix(blurred_background(uv), rgb, person);
+        }
     }
     // Colour: brightness, contrast, saturation.
     rgb = (rgb - vec3<f32>(0.5)) * u.color.y + vec3<f32>(0.5) + vec3<f32>(u.color.x);
     let luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
     rgb = clamp(mix(vec3<f32>(luma), rgb, u.color.z), vec3<f32>(0.0), vec3<f32>(1.0));
+    if (u.key2.z > 0.5 && mode == 2 && person < 0.999) {
+        let back = textureSampleLevel(tex_bg, samp, (t - vec2<f32>(0.5)) * u.bg.zw + vec2<f32>(0.5), 0.0).rgb;
+        rgb = mix(back, rgb, person);
+    }
 
     let inside = 1.0 - smoothstep(-0.5, 0.5, d);
     let in_pic = 1.0 - smoothstep(-0.5, 0.5, d + bw);

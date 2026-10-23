@@ -850,11 +850,49 @@ pub struct SourceLook {
     /// (what's behind shows the scene's background or the layers below).
     pub remove_background: bool,
     pub cutout_quality: CutoutQuality,
+    /// What happens to the background once the people are found: cut out,
+    /// blurred, or swapped for a picture.
+    #[serde(skip_serializing_if = "BackgroundMode::is_remove")]
+    pub background: BackgroundMode,
+    /// Blurring: how much (0..1).
+    pub background_blur: f32,
+    /// Replacing: the picture.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_image: Option<PathBuf>,
     /// A colour LUT (.cube), e.g. a camera's log-to-Rec.709 conversion.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lut: Option<PathBuf>,
     /// How much of the LUT (0..1).
     pub lut_strength: f32,
+}
+
+/// What happens to the background behind the people (no green screen).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum BackgroundMode {
+    /// Cut out: the scene's background or the layers below show instead.
+    #[default]
+    Remove,
+    /// Blurred, like a portrait lens.
+    Blur,
+    /// Swapped for a picture.
+    Replace,
+}
+
+impl BackgroundMode {
+    pub const ALL: [BackgroundMode; 3] = [BackgroundMode::Blur, BackgroundMode::Replace, BackgroundMode::Remove];
+
+    pub fn is_remove(&self) -> bool {
+        *self == BackgroundMode::Remove
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            BackgroundMode::Remove => "cut out (what's below shows)",
+            BackgroundMode::Blur => "blurred",
+            BackgroundMode::Replace => "a picture instead",
+        }
+    }
 }
 
 /// How carefully people are cut out: finer edges cost more time.
@@ -906,6 +944,9 @@ impl Default for SourceLook {
             key_spill: 0.1,
             remove_background: false,
             cutout_quality: CutoutQuality::Balanced,
+            background: BackgroundMode::Remove,
+            background_blur: 0.5,
+            background_image: None,
             lut: None,
             lut_strength: 1.0,
         }
