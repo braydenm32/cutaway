@@ -200,6 +200,8 @@ pub enum Action {
     Marker(Option<String>),
     Auto(Toggle),
     Graphic(Target, Toggle),
+    /// Start or stop graphics taking turns.
+    Rotation(Target, Toggle),
     Audio(Target, Toggle),
     /// Input level in dB (MIDI faders).
     Gain(Target, f64),
@@ -281,6 +283,14 @@ impl Action {
                     _ => (r, None),
                 };
                 Action::Graphic(Target::parse(target), toggle(t)?)
+            }
+            "rotation" | "rotate" | "sponsors" => {
+                let r = need(rest, &verb)?;
+                let (target, t) = match r.rsplit_once(':') {
+                    Some((a, b)) if toggle(Some(b)).is_ok() => (a, Some(b)),
+                    _ => (r, None),
+                };
+                Action::Rotation(Target::parse(target), toggle(t)?)
             }
             "mute" => Action::Audio(Target::parse(need(rest, &verb)?), Toggle::Off),
             "unmute" => Action::Audio(Target::parse(need(rest, &verb)?), Toggle::On),
@@ -451,6 +461,7 @@ impl Action {
             Action::Marker(n) => n.as_ref().map(|n| format!("Marker \"{n}\"")).unwrap_or_else(|| "Add a marker".into()),
             Action::Auto(x) => t(x, "Automatic switching on", "Automatic switching off", "Automatic switching on/off"),
             Action::Graphic(g, x) => format!("{} {g}", t(x, "Show", "Hide", "Show/hide")),
+            Action::Rotation(r, x) => format!("{} rotation {r}", t(x, "Start", "Stop", "Start/stop")),
             Action::Audio(a, x) => format!("{} {a}", t(x, "Turn on", "Turn off", "Turn on/off")),
             Action::Gain(a, db) => format!("{a} to {db:+.1} dB"),
             Action::Media(s, c) => format!("{s}: {}", format!("{c:?}").to_lowercase()),
@@ -564,6 +575,9 @@ pub fn suggestions(cfg: &Config) -> Vec<(String, String)> {
     for g in &cfg.graphics {
         v.push((format!("graphic:{}", g.name), format!("Graphic on/off: {}", g.name)));
     }
+    for r in &cfg.rotations {
+        v.push((format!("rotation:{}", r.name), format!("Rotation start/stop: {}", r.name)));
+    }
     for g in cfg.graphics.iter().filter(|g| g.kind == crate::config::GraphicKind::Clock && g.clock.is_timer()) {
         v.push((format!("timer:{}:toggle", g.name), format!("Timer start/pause: {}", g.name)));
         v.push((format!("timer:{}:reset", g.name), format!("Timer reset: {}", g.name)));
@@ -617,6 +631,8 @@ mod tests {
         assert_eq!(Action::parse("scene:3"), Ok(Action::Scene(Target::Index(2))));
         assert_eq!(Action::parse("Scene: Host"), Ok(Action::Scene(Target::Name("Host".into()))));
         assert_eq!(Action::parse("take"), Ok(Action::Take));
+        assert_eq!(Action::parse("rotation:Sponsors:off"), Ok(Action::Rotation(Target::Name("Sponsors".into()), Toggle::Off)));
+        assert_eq!(Action::parse("rotation:1"), Ok(Action::Rotation(Target::Index(0), Toggle::Toggle)));
         assert_eq!(Action::parse("cut:2"), Ok(Action::CutTo(Target::Index(1))));
         assert_eq!(Action::parse("record:off"), Ok(Action::Record(Toggle::Off)));
         assert_eq!(Action::parse("live"), Ok(Action::Live(Toggle::Toggle)));

@@ -115,7 +115,27 @@ pub struct Graphics {
     versions: std::sync::atomic::AtomicU64,
     pub timers: Arc<Timers>,
     comment: Mutex<CommentItem>,
+    /// Every time a graphic came on or went off: (when, name, on).
+    log: Mutex<Vec<(Ns, String, bool)>>,
 }
+
+/// How long a graphic was on screen in a stretch of the show.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OnAir {
+    pub name: String,
+    /// Each time it was on: from and until (host time).
+    pub showings: Vec<(Ns, Ns)>,
+}
+
+impl OnAir {
+    pub fn seconds(&self) -> f64 {
+        self.showings.iter().map(|(a, b)| (b - a) as f64 / 1e9).sum()
+    }
+}
+
+/// The most on/off changes kept (a show switching graphics every few
+/// seconds for a day stays well under it).
+const LOG_MAX: usize = 100_000;
 
 /// Layer keys for things that aren't in the graphics list.
 const COMMENT_KEY: usize = 1 << 20;
@@ -123,13 +143,68 @@ const STRIP_KEY: usize = 1 << 21;
 
 impl Graphics {
     pub fn new(cfgs: &[Graphic], canvas: (u32, u32), timers: Arc<Timers>) -> Arc<Self> {
-        let g = Arc::new(Graphics { canvas, items: Mutex::new(Vec::new()), versions: Default::default(), timers, comment: Mutex::new(CommentItem::default()) });
+        let g = Arc::new(Graphics { canvas, items: Mutex::new(Vec::new()), versions: Default::default(), timers, comment: Mutex::new(CommentItem::default()), log: Mutex::new(Vec::new()) });
         g.update(cfgs);
+        let now = clock::now();
         for it in g.items.lock_ok().iter_mut() {
             it.visible = it.cfg.visible;
             it.from_alpha = it.target();
+            if it.visible {
+                g.log_change(now, &it.cfg.name, true);
+            }
         }
         g
+    }
+
+    fn log_change(&self, t: Ns, name: &str, on: bool) {
+        let mut log = self.log.lock_ok();
+        if log.len() >= LOG_MAX {
+            log.drain(..LOG_MAX / 10);
+        }
+        log.push((t, name.to_string(), on));
+    }
+
+    /// Each graphic that was on screen between `t0` and `t1`, and when, in
+    /// the order they first came on.
+    pub fn on_air(&self, t0: Ns, t1: Ns) -> Vec<OnAir> {
+        let log = self.log.lock_ok();
+        let mut out: Vec<OnAir> = Vec::new();
+        let mut since: Vec<(String, Ns)> = Vec::new();
+        let mut close = |out: &mut Vec<OnAir>, name: &str, from: Ns, until: Ns| {
+            let (a, b) = (from.max(t0), until.min(t1));
+            if b <= a {
+                return;
+            }
+            match out.iter_mut().find(|o| o.name == name) {
+                Some(o) => o.showings.push((a, b)),
+                None => out.push(OnAir { name: name.to_string(), showings: vec![(a, b)] }),
+            }
+        };
+        for (t, name, on) in log.iter() {
+            if *t > t1 {
+                break;
+            }
+            let open = since.iter().position(|(n, _)| n == name);
+            match (on, open) {
+                (true, None) => since.push((name.clone(), *t)),
+                (false, Some(i)) => {
+                    let (n, from) = since.remove(i);
+                    close(&mut out, &n, from, *t);
+                }
+                _ => {}
+            }
+        }
+        // Still on at the end.
+        since.sort_by_key(|s| s.1);
+        for (n, from) in since {
+            close(&mut out, &n, from, t1);
+        }
+        out
+    }
+
+    /// Where a graphic is in the list, by name.
+    pub fn index_of(&self, name: &str) -> Option<usize> {
+        self.items.lock_ok().iter().position(|i| i.cfg.name.eq_ignore_ascii_case(name))
     }
 
     fn next_version(&self) -> u64 {
@@ -160,6 +235,11 @@ impl Graphics {
                 }
             };
             items.push(item);
+        }
+        // Gone (or renamed) while on screen: off as far as the log goes.
+        let t = clock::now() - VIDEO_LATENCY;
+        for o in old.iter().filter(|o| o.visible) {
+            self.log_change(t, &o.cfg.name, false);
         }
     }
 
@@ -249,6 +329,9 @@ impl Graphics {
         it.from_alpha = it.alpha_at(t);
         it.changed_at = t;
         it.visible = on;
+        let name = it.cfg.name.clone();
+        drop(items);
+        self.log_change(t, &name, on);
     }
 
     pub fn toggle(&self, index: usize) {

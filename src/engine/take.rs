@@ -389,6 +389,7 @@ impl Engine {
         let mix_taps = self.mix_taps.clone();
         let monitor = self.take_monitor.clone();
         let (status, switcher, waker) = (self.status.clone(), self.switcher.clone(), self.waker.clone());
+        let graphics = self.graphics.clone();
         let summary = self.describe_setup();
         let cfg = self.config();
         let (cw, ch) = self.info.canvas;
@@ -423,6 +424,7 @@ impl Engine {
                 markers: take.markers.lock_ok().clone(),
                 export_files: take.export_files.clone(),
                 tc_seconds: take.tc_seconds,
+                on_air: graphics.on_air(take.t0, t1),
             };
             // What the window shows while it saves.
             let saving = |what: String, done: f32| {
@@ -525,6 +527,8 @@ struct SideFiles {
     markers: Vec<Marker>,
     export_files: Vec<ExportFile>,
     tc_seconds: f64,
+    /// Graphics on screen during the take (the sponsor report).
+    on_air: Vec<super::graphics::OnAir>,
 }
 
 impl SideFiles {
@@ -547,6 +551,10 @@ impl SideFiles {
         let mut extra = Vec::new();
         let mut files: Vec<(String, String)> = Vec::new();
         files.push(("Switches.csv".into(), switch_log(t0, fps, &self.first_scene, events)));
+        if !self.on_air.is_empty() {
+            files.push(("Graphics on air.csv".into(), graphics_log(t0, fps, &self.on_air)));
+            extra.push("Graphics on air.csv".to_string());
+        }
         let take_name = self.folder.file_name().unwrap_or_default().to_string_lossy().to_string();
         if let Some(cues) = cues.filter(|c| !c.is_empty()) {
             let (txt, srt, vtt) = super::captions::transcript_files(cues, t0, &take_name);
@@ -678,6 +686,17 @@ fn switch_log(t0: Ns, fps: u32, first_scene: &str, events: &[switcher::SwitchEve
         let mode = e.mode.name();
         let dur = if e.mode == TransitionMode::Cut { 0 } else { e.duration_ms };
         s += &format!("{},{:.3},\"{}\",{mode},{dur}\n", timecode(ns, fps), ns as f64 / 1e9, e.scene.replace('"', "'"));
+    }
+    s
+}
+
+/// Each graphic shown in the take: how often, for how long, and when
+/// (timed from the start of the files), for sponsors and the edit.
+fn graphics_log(t0: Ns, fps: u32, on_air: &[super::graphics::OnAir]) -> String {
+    let mut s = String::from("graphic,times_shown,seconds_on_screen,on_screen_at\n");
+    for o in on_air {
+        let at: Vec<String> = o.showings.iter().map(|(a, b)| format!("{} - {}", timecode((a - t0).max(0) as u64, fps), timecode((b - t0).max(0) as u64, fps))).collect();
+        s += &format!("\"{}\",{},{:.1},\"{}\"\n", o.name.replace('"', "'"), o.showings.len(), o.seconds(), at.join("; "));
     }
     s
 }

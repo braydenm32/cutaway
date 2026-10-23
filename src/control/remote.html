@@ -159,6 +159,7 @@ function render() {
   const gfx = document.getElementById('graphics'); gfx.innerHTML = '';
   document.getElementById('gfxwrap').style.display = s.graphics.length ? '' : 'none';
   s.graphics.forEach((g, i) => gfx.append(el('button', 'toggle' + (g.on ? ' on' : ''), g.name, () => act('graphic:' + (i + 1)))));
+  (s.rotations || []).forEach((r, i) => gfx.append(el('button', 'toggle' + (r.running ? ' on' : ''), '⟳ ' + r.name, () => act('rotation:' + (i + 1)))));
   // Rundown.
   const rd = s.rundown;
   document.getElementById('rundownwrap').style.display = rd ? '' : 'none';

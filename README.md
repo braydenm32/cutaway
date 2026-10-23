@@ -213,6 +213,7 @@ Take_2026-10-16_19-30-02/
   Take_2026-10-16_19-30-02 (Premiere).xml
   Chapters.txt                       markers as a YouTube chapter list
   Switches.csv                       timecode, scene, transition for every switch
+  Graphics on air.csv                each graphic shown: how often, how long, when
   Take.txt                           devices, encoders, settings, markers, files
 ```
 
@@ -247,6 +248,16 @@ Take_2026-10-16_19-30-02/
   right, a gentle rise, or a pop (**Comes on** in its settings, with how long
   it takes), and leaves the same way back. Title text can be changed live
   between guests.
+- **Graphics taking turns:** a group of graphics (sponsors, your social
+  handles, a "subscribe" reminder) where every few minutes the next one
+  comes on for as long as you set, then goes off. It starts and stops by
+  itself when you go live (or record), or from its **⟳** button, a key, the
+  remote, the Stream Deck or MIDI (`rotation:Sponsors`). Set it up in
+  **Settings → Graphics → Taking turns**.
+- **Time on screen:** hover a graphic's button to see how many times and how
+  long it's been on since you went live, and every take's folder gets
+  **Graphics on air.csv** (each graphic, how often, for how long, and when),
+  handy for sponsor reports.
 - **Clocks and countdowns:** clock graphics show the time of day, a
   countdown to a time ("Starting in 4:59"), a countdown or stopwatch you
   start from a button, key or cue, or the time left in the rundown segment

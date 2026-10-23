@@ -53,6 +53,56 @@ pub struct Config {
     pub vertical: VerticalConfig,
     /// Uploading takes to YouTube and Google Drive.
     pub upload: UploadConfig,
+    /// Graphics that take turns on screen: sponsors, social handles, reminders.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub rotations: Vec<Rotation>,
+}
+
+/// Graphics taking turns: every few minutes the next one comes on for a
+/// while, then goes off.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Rotation {
+    pub name: String,
+    /// The graphics, by name, in the order they take turns.
+    pub graphics: Vec<String>,
+    /// How often one comes on, in minutes.
+    pub every_minutes: f32,
+    /// How long each stays on, in seconds.
+    pub show_seconds: u32,
+    /// When it starts and stops by itself.
+    pub start: RotationStart,
+}
+
+impl Default for Rotation {
+    fn default() -> Self {
+        Rotation { name: "Sponsors".into(), graphics: Vec::new(), every_minutes: 10.0, show_seconds: 15, start: RotationStart::Live }
+    }
+}
+
+/// When a rotation runs by itself (its button starts and stops it any time).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RotationStart {
+    /// Only from its button (or a command).
+    Manual,
+    /// While you're live.
+    #[default]
+    Live,
+    /// While you're live or recording.
+    OnAir,
+}
+
+impl RotationStart {
+    pub const ALL: [RotationStart; 3] = [RotationStart::Live, RotationStart::OnAir, RotationStart::Manual];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            RotationStart::Manual => "only when I start it",
+            RotationStart::Live => "while I'm live",
+            RotationStart::OnAir => "while I'm live or recording",
+        }
+    }
 }
 
 /// Syrinscape Online: moods and sounds started from Cutaway's buttons,
