@@ -56,6 +56,8 @@ pub struct Config {
     /// Graphics that take turns on screen: sponsors, social handles, reminders.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub rotations: Vec<Rotation>,
+    /// Your own keyboard shortcuts.
+    pub keys: KeysConfig,
 }
 
 /// Graphics taking turns: every few minutes the next one comes on for a
@@ -103,8 +105,6 @@ impl RotationStart {
             RotationStart::OnAir => "while I'm live or recording",
         }
     }
-    /// Your own keyboard shortcuts.
-    pub keys: KeysConfig,
 }
 
 /// Your own keyboard shortcuts, on top of (or instead of) the built-in ones.
