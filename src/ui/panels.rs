@@ -193,6 +193,16 @@ impl App {
                     let mb = format!("{:.0} MB", b.bytes as f64 / 1e6);
                     detail.push_str(&if b.done { format!(" · backup ✓ {mb}") } else if b.recording { format!(" · backup {mb}") } else { format!(" · backup coming {mb}") });
                 }
+                if let Some((q, note)) = &g.link {
+                    let (rect, r) = ui.allocate_exact_size(vec2(16.0, 12.0), Sense::hover());
+                    super::waiting::link_bars(ui.painter(), rect, *q);
+                    let word = match q {
+                        crate::engine::guests::LinkQuality::Good => "Connection good".to_string(),
+                        crate::engine::guests::LinkQuality::Weak => format!("Weak connection: {note}"),
+                        crate::engine::guests::LinkQuality::Poor => format!("Poor connection: {note}. Their picture may freeze on air."),
+                    };
+                    r.on_hover_text(word);
+                }
                 let r = ui.add(egui::Label::new(RichText::new(detail).color(TEXT_DIM).size(12.0)).truncate());
                 if let Some(b) = &g.backup {
                     r.on_hover_text(format!("Their backup recording: {}", b.file.display()));
