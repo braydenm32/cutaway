@@ -53,6 +53,27 @@ pub struct Config {
     pub vertical: VerticalConfig,
     /// Uploading takes to YouTube and Google Drive.
     pub upload: UploadConfig,
+    /// Your own keyboard shortcuts.
+    pub keys: KeysConfig,
+}
+
+/// Your own keyboard shortcuts, on top of (or instead of) the built-in ones.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct KeysConfig {
+    /// Built-in shortcuts you've changed, by name ("record" = "Cmd+Shift+R").
+    /// Several keys are separated by commas; an empty one turns it off.
+    pub builtin: std::collections::BTreeMap<String, String>,
+    /// Keys that run any command.
+    pub custom: Vec<CustomKey>,
+}
+
+/// A key that runs a command, like "G" for "Graphic 2 Toggle".
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct CustomKey {
+    pub key: String,
+    pub command: String,
 }
 
 /// Syrinscape Online: moods and sounds started from Cutaway's buttons,

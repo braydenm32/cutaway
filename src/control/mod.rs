@@ -40,6 +40,7 @@ pub mod osc;
 pub mod profiles;
 pub mod remote;
 pub mod rundown;
+pub mod shortcuts;
 pub mod state;
 pub mod syrinscape;
 pub mod ws;

@@ -343,7 +343,12 @@ Take_2026-10-16_19-30-02/
 
 ### Control
 
-- **Keyboard** shortcuts for everything you do during a show.
+- **Keyboard** shortcuts for everything you do during a show. Move any of
+  them to another key or turn one off, and add your own keys for any
+  command (a scene, a graphic, a pad, a macro, a camera move) in
+  **Settings → General → Shortcuts**. A key you pick wins over a built-in
+  one, mistakes like a key given two jobs are flagged as you go, and
+  **Print a cheat sheet** opens a page of every key to keep by the keyboard.
 - **Undo and redo** (Cmd/Ctrl+Z, Cmd/Ctrl+Shift+Z, or the buttons in Edit
   layout) for what you build: moving, resizing, filling and zooming frames,
   adding, renaming, duplicating and deleting scenes, a title's text, and
@@ -577,12 +582,16 @@ Video Extensions** on some PCs.
 | Graphics 1–9 | Alt/Option + number, or the graphic buttons; ✎ edits a title's text live |
 | Media player | ⟲ ⏯ ⏭ on its tile; right-click the tile for the playlist |
 | Record / stop | ⌘R, or the record button |
-| Go live / end stream | The **GO LIVE** button. This is mouse-only on purpose, so a stray key can't start or end a broadcast |
+| Go live / end stream | The **GO LIVE** button. It has no key unless you give it one in Settings → Shortcuts, so a stray key can't start or end a broadcast (a key gets the same checks and "are you sure?" as the button) |
 | Edit layout | `E`, or **Edit layout**: drag frames, drag the corner to resize (Shift keeps shape), **Fit/Fill** and **Zoom** for the selected frame (or double-click a frame to fill it, scroll to zoom, Option/Alt-drag to move the picture), add/remove sources, scene audio, duplicate, rename, **Save scenes** |
 | Audio strip | Fader = level (double-click resets), **ON** = in the mixes, 🎧 = solo in the headphones |
 | Second screen | **Screen** in the header. On that window: double-click or `F` for full screen, Esc to leave full screen, Esc again (or ✕, or Cmd/Ctrl+W) to close |
 | Switch show | The show name next to the logo |
 | Settings | ⌘, |
+
+The keys above are the built-in ones. Any of them (except the numbered
+scene, graphic and pad keys) can be moved or turned off in **Settings →
+General → Shortcuts**, where you can also add your own.
 
 ## Going live
 
