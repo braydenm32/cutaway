@@ -6,6 +6,7 @@
 use crate::util::LockExt;
 use crate::config::{Config, DisplayOutput, TransitionMode};
 use crate::control::state::{self as show, ShowState};
+use crate::control::shortcuts::{self, Binding, Builtin, KeyCombo, Keymap};
 use crate::control::{self, midi, osc, profiles, remote, Action, MediaCmd, Request, Toggle};
 use crate::engine::player::PlayerCmd;
 use crate::engine::precheck::{self, CheckItem, Level};
@@ -227,6 +228,10 @@ pub struct App {
     sync: Option<SyncWizard>,
     /// The transition T toggles back to from Cut.
     last_transition: TransitionMode,
+    /// The keyboard shortcuts, made from the settings they came from.
+    keymap: Option<(crate::config::KeysConfig, Keymap)>,
+    /// Keys held down for something that stops when they're let go.
+    held_keys: Vec<(Key, Action)>,
     /// Takes left unfinished by a crash, being rescued.
     rescue: Option<waiting::Rescue>,
     /// Scripted actions for automated screenshots (hidden --ui-test flag).
@@ -283,6 +288,8 @@ impl App {
             display_screen_applied: String::new(),
             display_generation: 0,
             sync: None,
+            keymap: None,
+            held_keys: Vec::new(),
             last_transition: if cfg.transition.mode == TransitionMode::Cut { TransitionMode::Mix } else { cfg.transition.mode },
             cfg,
             save_path,
@@ -1346,79 +1353,157 @@ impl App {
     // ---- keys ------------------------------------------------------------------------
 
     fn handle_keys(&mut self, ctx: &egui::Context) {
+        // Let go of held shortcuts (talkback, sound pads), even if a window
+        // opened while the key was down.
+        let ups: Vec<Key> = ctx.input(|i| i.events.iter().filter_map(|e| if let egui::Event::Key { key, pressed: false, .. } = e { Some(*key) } else { None }).collect());
+        for k in ups {
+            let (go, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut self.held_keys).into_iter().partition(|(h, _)| *h == k);
+            self.held_keys = keep;
+            for (_, a) in go {
+                self.act(a);
+            }
+        }
         if ctx.egui_wants_keyboard_input() || self.settings.is_some() || self.title_edit.is_some() || self.confirm.is_some() || self.precheck.is_some() || self.sync.is_some() {
             return;
         }
-        let keys = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Num9];
-        if ctx.input(|i| i.modifiers.command && i.key_pressed(Key::Comma)) {
-            self.open_settings();
-            return;
+        if self.keymap.as_ref().is_none_or(|(c, _)| *c != self.cfg.keys) {
+            self.keymap = Some((self.cfg.keys.clone(), Keymap::new(&self.cfg.keys)));
         }
-        // Undo: Cmd/Ctrl+Z. Redo: Cmd/Ctrl+Shift+Z, or Ctrl+Y.
-        let (undo, redo) = ctx.input(|i| {
-            let z = i.modifiers.command && i.key_pressed(Key::Z);
-            (z && !i.modifiers.shift, (z && i.modifiers.shift) || (i.modifiers.command && i.key_pressed(Key::Y)))
+        let downs: Vec<(KeyCombo, bool)> = ctx.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|e| match e {
+                    // (Control on a Mac isn't ⌘, so it's left to the system.)
+                    egui::Event::Key { key, pressed: true, repeat, modifiers, .. } if !(modifiers.ctrl && !modifiers.command) => Some((KeyCombo::new(*key, *modifiers), *repeat)),
+                    _ => None,
+                })
+                .collect()
         });
-        if undo {
-            self.undo(ctx);
-            return;
-        }
-        if redo {
-            self.redo(ctx);
-            return;
-        }
-        let (pressed, shift, alt, cmd_r) = ctx.input(|i| (keys.iter().position(|k| i.key_pressed(*k)), i.modifiers.shift, i.modifiers.alt, i.modifiers.command && i.key_pressed(Key::R)));
-        let (t, e, m, a, space, enter) = ctx.input(|i| {
-            let plain = !i.modifiers.command && !i.modifiers.alt;
-            (
-                plain && i.key_pressed(Key::T),
-                plain && i.key_pressed(Key::E),
-                plain && i.key_pressed(Key::M),
-                plain && i.key_pressed(Key::A),
-                plain && i.key_pressed(Key::Space),
-                plain && i.key_pressed(Key::Enter),
-            )
-        });
-        if ctx.input(|i| !i.modifiers.command && !i.modifiers.alt && i.key_pressed(Key::C)) {
-            if let Some(c) = self.engine.as_ref().and_then(|e| e.captions()) {
-                c.set_showing(!c.showing());
+        for (combo, repeat) in downs {
+            let binding = self.keymap.as_ref().and_then(|(_, m)| m.find(combo).cloned());
+            match binding {
+                // Only undo and redo repeat while the key is held.
+                Some(Binding::Builtin(b)) if !repeat || matches!(b, Builtin::Undo | Builtin::Redo) => self.run_builtin(ctx, b, combo.key),
+                Some(Binding::Command(c)) if !repeat => {
+                    match Action::parse(&c) {
+                        Ok(a) => {
+                            self.run_key_command(a);
+                            if let Some(up) = shortcuts::release_of(&c) {
+                                self.held_keys.push((combo.key, up));
+                            }
+                        }
+                        Err(e) => self.toast(e, true),
+                    }
+                }
+                Some(_) => {}
+                None if !repeat => self.numbered_key(combo),
+                None => {}
             }
         }
-        if let Some(i) = pressed {
-            if alt {
-                self.toggle_graphic(i, None);
-            } else {
-                self.press_scene(i, shift);
+    }
+
+    /// A command on one of your keys. Recording and going live take the same
+    /// path as their buttons, so the checks and "are you sure?" still come up.
+    fn run_key_command(&mut self, a: Action) {
+        let flip = |t: &Toggle, now: bool| match t {
+            Toggle::On => !now,
+            Toggle::Off => now,
+            Toggle::Toggle => true,
+        };
+        match &a {
+            Action::Record(t) => {
+                if flip(t, self.engine.as_ref().is_some_and(|e| e.is_recording())) {
+                    self.toggle_record();
+                }
+            }
+            Action::Live(t) => {
+                if flip(t, self.engine.as_ref().is_some_and(|e| e.is_streaming())) {
+                    self.toggle_stream();
+                }
+            }
+            _ => self.act(a),
+        }
+    }
+
+    /// " (M)": the key for a built-in shortcut, for a button's hover text
+    /// ("" when it has none).
+    fn key_hint(&self, b: Builtin) -> String {
+        let label = match &self.keymap {
+            Some((_, m)) => m.label_of(b),
+            None => Keymap::new(&self.cfg.keys).label_of(b),
+        };
+        if label.is_empty() { label } else { format!(" ({label})") }
+    }
+
+    /// 1–9 take a scene (Shift cuts straight to it), Alt/Option + 1–9 show a
+    /// graphic, F1–F12 play sound pads.
+    fn numbered_key(&mut self, combo: KeyCombo) {
+        if combo.command {
+            return;
+        }
+        if let Some(i) = shortcuts::DIGITS.iter().position(|k| *k == combo.key) {
+            match (combo.shift, combo.alt) {
+                (_, false) => self.press_scene(i, combo.shift),
+                (false, true) => self.toggle_graphic(i, None),
+                (true, true) => {}
+            }
+        } else if let Some(i) = shortcuts::PAD_KEYS.iter().position(|k| *k == combo.key) {
+            if !combo.alt && !combo.shift && i < self.cfg.pads.len() {
+                self.act(Action::Pad(control::Target::Index(i), control::PadCmd::Press));
+                self.held_keys.push((combo.key, Action::Pad(control::Target::Index(i), control::PadCmd::Release)));
             }
         }
-        if t {
-            // Cut <-> the last transition used.
-            self.cfg.transition.mode = match self.mode() {
-                TransitionMode::Cut => self.last_transition,
-                _ => TransitionMode::Cut,
-            };
-            self.cfg_dirty = true;
-        }
-        if e && !cmd_r {
-            self.edit_mode = !self.edit_mode;
-        }
-        if cmd_r {
-            self.toggle_record();
-        }
-        if m {
-            match self.add_marker(None) {
+    }
+
+    fn run_builtin(&mut self, ctx: &egui::Context, b: Builtin, key: Key) {
+        match b {
+            Builtin::Settings => self.open_settings(),
+            Builtin::Undo => self.undo(ctx),
+            Builtin::Redo => self.redo(ctx),
+            Builtin::Record => self.toggle_record(),
+            Builtin::Transition => {
+                // Cut <-> the last transition used.
+                self.cfg.transition.mode = match self.mode() {
+                    TransitionMode::Cut => self.last_transition,
+                    _ => TransitionMode::Cut,
+                };
+                self.cfg_dirty = true;
+            }
+            Builtin::Edit => self.edit_mode = !self.edit_mode,
+            Builtin::Marker => match self.add_marker(None) {
                 Ok(n) => self.toast(format!("{n} added"), false),
                 Err(err) => self.toast(err, true),
+            },
+            Builtin::Auto => {
+                let on = !self.auto_on();
+                self.set_auto(on);
+            }
+            Builtin::Take | Builtin::CutPreview => {
+                if self.preview_mode() {
+                    self.take_preview(b == Builtin::CutPreview);
+                }
+            }
+            Builtin::Captions => {
+                if let Some(c) = self.engine.as_ref().and_then(|e| e.captions()) {
+                    c.set_showing(!c.showing());
+                }
+            }
+            Builtin::NextSegment | Builtin::PreviousSegment => {
+                if !self.cfg.rundown.segments.is_empty() {
+                    self.act(Action::Rundown(if b == Builtin::PreviousSegment { crate::control::rundown::RundownCmd::Previous } else { crate::control::rundown::RundownCmd::Next }));
+                }
+            }
+            Builtin::Clip => match self.run_action(Action::Clip(None)) {
+                Ok(m) => self.toast(m, false),
+                Err(e) => self.toast(e, true),
+            },
+            Builtin::Talkback => {
+                if self.engine.as_ref().is_some_and(|e| e.mix.talkback_input().is_some()) {
+                    self.act(Action::Talkback(Toggle::On));
+                    self.held_keys.push((key, Action::Talkback(Toggle::Off)));
+                }
             }
         }
-        if a {
-            let on = !self.auto_on();
-            self.set_auto(on);
-        }
-        if (space || enter) && self.preview_mode() {
-            self.take_preview(enter);
-        }
-        self.extra_keys(ctx);
     }
 
     fn run_self_test(&mut self, ctx: &egui::Context) {
@@ -1659,12 +1744,12 @@ impl App {
                     self.toggle_record();
                 }
                 let mtext = if markers > 0 { format!("◆ Marker ({markers})") } else { "◆ Marker".into() };
-                if ui.add(egui::Button::new(mtext).min_size(vec2(0.0, 30.0))).on_hover_text("Mark this moment (M): becomes a chapter and a timeline marker").clicked() {
+                if ui.add(egui::Button::new(mtext).min_size(vec2(0.0, 30.0))).on_hover_text(format!("Mark this moment{}: becomes a chapter and a timeline marker", self.key_hint(Builtin::Marker))).clicked() {
                     marker_clicked = true;
                 }
                 if ui
                     .add(egui::Button::new("✂ Clip").min_size(vec2(0.0, 30.0)))
-                    .on_hover_text(format!("Save the last {} seconds as a clip in the take's Clips folder (K)", self.cfg.output.clip_seconds))
+                    .on_hover_text(format!("Save the last {} seconds as a clip in the take's Clips folder{}", self.cfg.output.clip_seconds, self.key_hint(Builtin::Clip)))
                     .clicked()
                 {
                     clip_clicked = true;
@@ -1980,7 +2065,7 @@ impl App {
         painter.text(take.center(), Align2::CENTER_CENTER, "TAKE", FontId::proportional(14.0), Color32::WHITE);
         painter.rect_filled(cut, 6.0, if rc.hovered() { Color32::from_rgb(60, 66, 80) } else { RAISED });
         painter.text(cut.center(), Align2::CENTER_CENTER, "CUT", FontId::proportional(14.0), Color32::WHITE);
-        if rt.on_hover_text(format!("{} to program (Space)", self.cfg.transition.mode.label())).clicked() {
+        if rt.on_hover_text(format!("{} to program{}", self.cfg.transition.mode.label(), self.key_hint(Builtin::Take))).clicked() {
             self.take_preview(false);
         }
         if rc.on_hover_text("Straight to program (Enter)").clicked() {
@@ -2680,7 +2765,7 @@ impl App {
                         self.cfg_dirty = true;
                     }
                     let mut pv = self.cfg.transition.preview_mode;
-                    if ui.add(egui::Button::selectable(pv, "Preview")).on_hover_text("Pick the next scene in preview, then Take (Space) or Cut (Enter)").clicked() {
+                    if ui.add(egui::Button::selectable(pv, "Preview")).on_hover_text(format!("Pick the next scene in preview, then Take{} or Cut{}", self.key_hint(Builtin::Take), self.key_hint(Builtin::CutPreview))).clicked() {
                         pv = !pv;
                         self.cfg.transition.preview_mode = pv;
                         self.cfg_dirty = true;
@@ -2692,7 +2777,7 @@ impl App {
                     }
                     let auto = self.auto_on();
                     let auto_btn = egui::Button::selectable(auto, RichText::new("AUTO").strong().color(if auto { Color32::WHITE } else { TEXT_DIM }));
-                    if ui.add(auto_btn).on_hover_text("Switch automatically to whoever is talking (A). Set up in Settings → Switching.").clicked() {
+                    if ui.add(auto_btn).on_hover_text(format!("Switch automatically to whoever is talking{}. Set up in Settings → Switching.", self.key_hint(Builtin::Auto))).clicked() {
                         self.set_auto(!auto);
                     }
                     if let Some(c) = self.engine.as_ref().and_then(|e| e.captions()) {
@@ -2701,13 +2786,13 @@ impl App {
                         let ok = status == "listening";
                         let color = if !ok { AMBER } else if on { Color32::WHITE } else { TEXT_DIM };
                         let b = egui::Button::selectable(on, RichText::new("CC").strong().color(color));
-                        let tip = if ok { "Live captions on screen (C)".to_string() } else { format!("Live captions: {status}") };
+                        let tip = if ok { format!("Live captions on screen{}", self.key_hint(Builtin::Captions)) } else { format!("Live captions: {status}") };
                         if ui.add(b).on_hover_text(tip).clicked() {
                             c.set_showing(!on);
                         }
                     }
                     let label = if self.edit_mode { "Editing" } else { "Edit layout" };
-                    if ui.add(egui::Button::selectable(self.edit_mode, label)).on_hover_text("Move and resize frames (E)").clicked() {
+                    if ui.add(egui::Button::selectable(self.edit_mode, label)).on_hover_text(format!("Move and resize frames{}", self.key_hint(Builtin::Edit))).clicked() {
                         self.edit_mode = !self.edit_mode;
                     }
                 });

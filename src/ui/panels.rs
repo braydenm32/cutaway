@@ -8,7 +8,7 @@ use crate::config::{parse_color, ClockKind, GraphicKind, SyrinKind};
 use crate::control::rundown::RundownCmd;
 use crate::control::{Action, TimerCmd};
 use crate::settings::{Section, SettingsUi};
-use eframe::egui::{self, pos2, vec2, Align2, Color32, FontId, Key, Rect, RichText, Sense, Stroke, StrokeKind};
+use eframe::egui::{self, pos2, vec2, Align2, Color32, FontId, Rect, RichText, Sense, Stroke, StrokeKind};
 use std::time::Duration;
 
 /// "4:59", or "-0:12" when over.
@@ -27,17 +27,6 @@ fn color_of(s: &str, fallback: u32) -> Color32 {
     let c = parse_color(s).unwrap_or(fallback);
     Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, c as u8)
 }
-
-/// A key going down this frame (not a key-repeat).
-pub fn key_down(ctx: &egui::Context, key: Key) -> bool {
-    ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { key: k, pressed: true, repeat: false, modifiers, .. } if *k == key && !modifiers.command && !modifiers.alt)))
-}
-
-pub fn key_up(ctx: &egui::Context, key: Key) -> bool {
-    ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { key: k, pressed: false, .. } if *k == key)))
-}
-
-pub const PAD_KEYS: [Key; 12] = [Key::F1, Key::F2, Key::F3, Key::F4, Key::F5, Key::F6, Key::F7, Key::F8, Key::F9, Key::F10, Key::F11, Key::F12];
 
 impl App {
     pub(super) fn section_heading(&mut self, ui: &mut egui::Ui, text: &str, section: Section) {
@@ -120,7 +109,7 @@ impl App {
                 }
                 let next_text = if running { "Next ▶" } else { "Start ▶" };
                 let can_next = !running || st.next.is_some();
-                if ui.add_enabled(can_next, egui::Button::new(RichText::new(next_text).strong()).fill(if can_next { ACCENT } else { RAISED }).min_size(vec2(84.0, 0.0))).on_hover_text("Next segment (N)").clicked() {
+                if ui.add_enabled(can_next, egui::Button::new(RichText::new(next_text).strong()).fill(if can_next { ACCENT } else { RAISED }).min_size(vec2(84.0, 0.0))).on_hover_text(format!("Next segment{}", self.key_hint(crate::control::shortcuts::Builtin::NextSegment))).clicked() {
                     cmd = Some(RundownCmd::Next);
                 }
                 if ui.add_enabled(running, egui::Button::new("■")).on_hover_text("Stop the rundown").clicked() {
@@ -396,37 +385,6 @@ impl App {
     }
 
     /// Keys for the extras: F1–F12 pads, B talkback, N rundown, K clip.
-    pub(super) fn extra_keys(&mut self, ctx: &egui::Context) {
-        for (i, k) in PAD_KEYS.iter().enumerate() {
-            if i >= self.cfg.pads.len() {
-                break;
-            }
-            if key_down(ctx, *k) {
-                self.act(Action::Pad(crate::control::Target::Index(i), crate::control::PadCmd::Press));
-            }
-            if key_up(ctx, *k) {
-                self.act(Action::Pad(crate::control::Target::Index(i), crate::control::PadCmd::Release));
-            }
-        }
-        let tb = self.engine.as_ref().is_some_and(|e| e.mix.talkback_input().is_some());
-        if tb && key_down(ctx, Key::B) {
-            self.act(Action::Talkback(crate::control::Toggle::On));
-        }
-        if tb && key_up(ctx, Key::B) {
-            self.act(Action::Talkback(crate::control::Toggle::Off));
-        }
-        if key_down(ctx, Key::N) && !self.cfg.rundown.segments.is_empty() {
-            let back = ctx.input(|i| i.modifiers.shift);
-            self.act(Action::Rundown(if back { RundownCmd::Previous } else { RundownCmd::Next }));
-        }
-        if key_down(ctx, Key::K) {
-            match self.run_action(Action::Clip(None)) {
-                Ok(m) => self.toast(m, false),
-                Err(e) => self.toast(e, true),
-            }
-        }
-    }
-
     /// Right-click menu on a clock graphic's button: its timer.
     pub(super) fn clock_menu(&mut self, resp: &egui::Response, i: usize) {
         let Some(g) = self.cfg.graphics.get(i).cloned() else { return };
