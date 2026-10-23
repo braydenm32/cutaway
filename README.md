@@ -96,8 +96,10 @@ and [Install on Windows](#install-on-windows).
   hear the show without their own voice (mix-minus, plus talkback) and can
   watch the program. A guest can share their screen too (the whole screen,
   one window or a browser tab), arriving as a source of its own while their
-  camera stays on. Cutaway reaches them through a free Cloudflare tunnel,
-  so there's no router setup (see [Remote guests](#remote-guests)).
+  camera stays on. Signal bars warn you when a guest's connection is
+  struggling, before their picture freezes. Cutaway reaches them through a
+  free Cloudflare tunnel, so there's no router setup (see
+  [Remote guests](#remote-guests)).
 - **Media player.** A source that plays a playlist of video files and still
   images, with sound: intros, stings, holding slides, B-roll. Play, pause,
   next and restart from its tile, the remote or MIDI; optionally restart when
@@ -778,6 +780,17 @@ one in preview, recording, live, auto, graphics and inputs that are on.
   side. **Stop sharing** on their page, or **✕** on the screen's row in the
   guests panel, ends it. Sharing needs a computer (Chrome, Edge or Safari);
   phones and tablets don't offer it.
+
+- **Connection warnings:** every couple of seconds each guest's browser (and
+  each phone camera) tells Cutaway how its connection is holding up: how much
+  of the picture is getting lost, how far behind it is, its frame rate and
+  whether the upload is holding it back. Signal bars beside the guest in the
+  guests panel show it (hover for the reason), and a **Weak connection** or
+  **Poor connection** tag appears on their tile, so you can take them off
+  air or ask them to move before their picture freezes. A guest whose
+  picture stops coming shows as poor straight away. Bad news shows at once
+  and good news once it has lasted a few seconds, so it doesn't flicker.
+  The guest sees a line on their own page too, with what might help.
 
 - **Firewalls:** guests connect directly to Cutaway (WebRTC), which works on
   almost every home and mobile network. A few office, school and hotel

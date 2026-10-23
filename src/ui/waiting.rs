@@ -20,6 +20,37 @@ pub(super) fn dots(painter: &egui::Painter, center: egui::Pos2, size: f32, color
     }
 }
 
+/// Signal bars for a guest's connection: three green, two amber, one red.
+pub(super) fn link_bars(painter: &egui::Painter, rect: Rect, q: crate::engine::guests::LinkQuality) {
+    use crate::engine::guests::LinkQuality;
+    let (lit, color) = match q {
+        LinkQuality::Good => (3, GREEN),
+        LinkQuality::Weak => (2, AMBER),
+        LinkQuality::Poor => (1, RED),
+    };
+    let w = rect.width() / 4.0;
+    for k in 0..3 {
+        let h = rect.height() * (0.4 + 0.3 * k as f32);
+        let bar = Rect::from_min_size(pos2(rect.left() + k as f32 * w * 1.4, rect.bottom() - h), vec2(w, h));
+        painter.rect_filled(bar, 1.0, if k < lit { color } else { Color32::from_white_alpha(60) });
+    }
+}
+
+/// A guest's struggling connection, on their tile: bars and a word.
+pub(super) fn draw_link_warning(painter: &egui::Painter, pic: Rect, q: crate::engine::guests::LinkQuality) {
+    let word = if q == crate::engine::guests::LinkQuality::Poor { "Poor connection" } else { "Weak connection" };
+    let font = FontId::proportional(11.0);
+    let galley = painter.layout_no_wrap(word.to_string(), font, Color32::WHITE);
+    let wide = pic.width() > galley.size().x + 60.0;
+    let size = if wide { vec2(galley.size().x + 32.0, 20.0) } else { vec2(24.0, 20.0) };
+    let chip = Rect::from_min_size(pos2(pic.right() - size.x - 5.0, pic.top() + 5.0), size);
+    painter.rect_filled(chip, 4.0, Color32::from_black_alpha(190));
+    link_bars(painter, Rect::from_min_size(chip.min + vec2(6.0, 4.0), vec2(14.0, 12.0)), q);
+    if wide {
+        painter.galley(pos2(chip.left() + 25.0, chip.center().y - galley.size().y / 2.0), galley, Color32::WHITE);
+    }
+}
+
 /// "…" that grows, for a line of text.
 pub(super) fn ellipsis(t: f32) -> &'static str {
     ["", ".", "..", "..."][(t * 2.5) as usize % 4]

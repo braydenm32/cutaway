@@ -2452,6 +2452,12 @@ impl App {
                 (s.name.clone(), s.preview.clone(), s.size.1 as f32 / s.size.0 as f32, offline_set.contains(&s.name), detail)
             })
             .collect();
+        // Guests whose connection is struggling, by source.
+        let links: std::collections::HashMap<String, (crate::engine::guests::LinkQuality, String)> = if self.cfg.guests.enabled {
+            crate::engine::guests::hub().guests().into_iter().filter_map(|g| Some((g.source, g.link.filter(|l| l.0 != crate::engine::guests::LinkQuality::Good)?))).collect()
+        } else {
+            Default::default()
+        };
         let players: Vec<Option<Arc<crate::engine::player::PlayerControl>>> = (0..n).map(|i| engine.player(i)).collect();
         let framers: Vec<Option<Arc<crate::engine::framing::FramingShared>>> = engine.sources.iter().map(|s| s.input.framing().cloned()).collect();
         let mut clicked: Option<(usize, bool)> = None;
@@ -2475,6 +2481,12 @@ impl App {
                 waiting::draw_tile_wait(&painter, pic, wait, detail.as_deref(), ctx.input(|i| i.time) as f32);
                 if wait != waiting::TileWait::NoSignal {
                     ctx.request_repaint_after(Duration::from_millis(50));
+                }
+            }
+            if let (waiting::TileWait::Fine, Some((q, note))) = (wait, links.get(name)) {
+                waiting::draw_link_warning(&painter, pic, *q);
+                if resp.hovered() {
+                    resp.clone().on_hover_text(format!("{name}'s connection: {note}"));
                 }
             }
             let on_air = live_sources.contains(&i);
