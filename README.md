@@ -893,7 +893,7 @@ Cutaway records from audio *inputs*, so route the DAW's output to one:
   tick the ones to apply. (`cutaway --measure-sync` does the same from the
   command line.) You can also set **Delay** on any input or source by hand.
 
-## Auto-framing and background removal
+## Auto-framing and backgrounds (blur, replace, cut out)
 
 ![Background removal and auto-framing](docs/framing.png)
 
@@ -910,11 +910,15 @@ close-up of the person on the left, cut from the same camera.*
     leaves, the frame waits a moment and then widens.
   - The close-up uses the wide camera's frame rate and delay, and is
     recorded to its own file.
-- **Background removal:** in a source's **Picture adjustments**, tick
-  **Remove background**. Put the source above slides, a background image or
-  another camera in a scene. **Fast**, **Balanced** and **Best edges** trade
-  speed for finer hair and edges. Like the other adjustments it changes the
-  program only; the source's own file is untouched.
+- **Blur or replace the background, no green screen:** in a source's
+  **Picture adjustments**, tick **Background** and choose what goes behind
+  the people: **blurred** (the room softly out of focus, like a portrait
+  lens, as strong as you like), **a picture instead** (your own image fills
+  the frame behind them), or **cut out** (put the source above slides, a
+  background image or another camera in a scene and that shows through).
+  **Fast**, **Balanced** and **Best edges** trade speed for finer hair and
+  edges. Like the other adjustments it changes the program only; the
+  source's own file is untouched.
 - On a Mac both use Apple's **Vision** framework on the Neural Engine; on
   Windows, two small open models on the graphics card (see `models/`).
   Nothing leaves the computer.

@@ -705,7 +705,11 @@ fn look_summary(l: &SourceLook) -> String {
         on.push("LUT");
     }
     if l.remove_background {
-        on.push("background removed");
+        on.push(match l.background {
+            crate::config::BackgroundMode::Remove => "background removed",
+            crate::config::BackgroundMode::Blur => "background blurred",
+            crate::config::BackgroundMode::Replace => "background replaced",
+        });
     }
     if l.chroma_key {
         on.push("green screen");
@@ -771,18 +775,53 @@ fn look_editor(ui: &mut egui::Ui, l: &mut SourceLook, lut_check: &mut Option<(st
             }
         });
         ui.end_row();
-        label(ui, "Remove background");
+        label(ui, "Background");
         ui.horizontal(|ui| {
-            ui.checkbox(&mut l.remove_background, "cut the people out (no green screen)");
-            if l.remove_background {
-                egui::ComboBox::from_id_salt("cutout_q").selected_text(l.cutout_quality.label()).width(110.0).show_ui(ui, |ui| {
-                    for q in crate::config::CutoutQuality::ALL {
-                        ui.selectable_value(&mut l.cutout_quality, q, q.label());
-                    }
-                });
-            }
+            ui.checkbox(&mut l.remove_background, "change what's behind the people (no green screen)");
         });
         ui.end_row();
+        if l.remove_background {
+            label(ui, "Behind the people");
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    egui::ComboBox::from_id_salt("bg_mode").selected_text(l.background.label()).width(200.0).show_ui(ui, |ui| {
+                        for m in crate::config::BackgroundMode::ALL {
+                            ui.selectable_value(&mut l.background, m, m.label());
+                        }
+                    });
+                    egui::ComboBox::from_id_salt("cutout_q").selected_text(l.cutout_quality.label()).width(110.0).show_ui(ui, |ui| {
+                        for q in crate::config::CutoutQuality::ALL {
+                            ui.selectable_value(&mut l.cutout_quality, q, q.label());
+                        }
+                    });
+                });
+                match l.background {
+                    crate::config::BackgroundMode::Blur => {
+                        ui.add(egui::Slider::new(&mut l.background_blur, 0.0..=1.0).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)).text("blur"));
+                    }
+                    crate::config::BackgroundMode::Replace => {
+                        ui.horizontal(|ui| {
+                            let shown = l.background_image.as_ref().and_then(|p| p.file_name()).map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| "no picture yet (blurred meanwhile)".into());
+                            ui.label(shown);
+                            if ui.button("Choose…").clicked() {
+                                if let Some(f) = rfd::FileDialog::new().add_filter("Pictures", &["png", "jpg", "jpeg", "webp", "bmp"]).pick_file() {
+                                    l.background_image = Some(f);
+                                }
+                            }
+                        });
+                        if let Some(p) = &l.background_image {
+                            if !p.exists() {
+                                ui.label(RichText::new("⚠ That file isn't there any more; the background is blurred instead.").color(AMBER));
+                            }
+                        }
+                    }
+                    crate::config::BackgroundMode::Remove => {
+                        hint(ui, "Put this source above slides, a picture or another camera in a scene.");
+                    }
+                }
+            });
+            ui.end_row();
+        }
         if l.remove_background {
             ui.label("");
             match crate::platform::vision::problem() {
