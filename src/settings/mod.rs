@@ -14,6 +14,7 @@ mod prompter;
 mod mixing;
 mod outputs;
 mod rundown;
+mod scheduled;
 mod sound;
 mod sources;
 mod switching;
@@ -237,6 +238,8 @@ pub struct SettingsUi {
     sel_dest: usize,
     /// Signing in to Google (Settings → Upload).
     google: Option<upload::GoogleSignIn>,
+    /// Scheduling on YouTube, while it's under way.
+    schedule_job: Option<scheduled::ScheduleJob>,
     show_keys: HashSet<usize>,
     encoders: Arc<Mutex<Option<EncoderLists>>>,
     scanning: bool,
@@ -298,6 +301,7 @@ impl SettingsUi {
             sel_audio: 0,
             sel_dest: 0,
             google: None,
+            schedule_job: None,
             show_keys: HashSet::new(),
             encoders: Arc::new(Mutex::new(Some({
                 let list = |c: Codec| crate::engine::encode::video_backends(c.video_codec()).into_iter().map(String::from).collect::<Vec<_>>();
@@ -1422,6 +1426,7 @@ impl SettingsUi {
                 ui.end_row();
             });
         });
+        self.scheduled(ui);
     }
 
     // ---- Diagnostics ----------------------------------------------------------------

@@ -9,9 +9,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 impl SettingsUi {
-    pub(super) fn upload(&mut self, ui: &mut egui::Ui) {
-        title(ui, "Upload after the show", "Send each take to YouTube and Google Drive once it's saved, with your own Google sign-in. Uploads run in the background and resume if the connection drops.");
-        // A sign-in that has finished.
+    /// A Google sign-in that has finished (from Upload or Streaming).
+    pub(super) fn google_finished(&mut self) {
         let finished = self.google.as_ref().and_then(|g| g.result.lock_ok().take());
         if let Some(r) = finished {
             self.google = None;
@@ -24,6 +23,11 @@ impl SettingsUi {
                 Err(e) => self.message = Some((format!("Not signed in: {e}"), true)),
             }
         }
+    }
+
+    pub(super) fn upload(&mut self, ui: &mut egui::Ui) {
+        title(ui, "Upload after the show", "Send each take to YouTube and Google Drive once it's saved, with your own Google sign-in. Uploads run in the background and resume if the connection drops.");
+        self.google_finished();
         egui::CollapsingHeader::new(RichText::new("Setting up your Google sign-in (once)").strong()).default_open(self.draft.upload.client_id.trim().is_empty()).show(ui, |ui| {
             for (i, step) in [
                 "In the Google Cloud console (console.cloud.google.com), make a project.",
@@ -147,7 +151,7 @@ impl SettingsUi {
             self.google = None;
         }
         if sign_in {
-            match GoogleSignIn::start(ui.ctx(), &self.draft.upload) {
+            match GoogleSignIn::start(ui.ctx(), &self.draft.upload, false) {
                 Ok(g) => self.google = Some(g),
                 Err(e) => self.message = Some((format!("Can't sign in: {e}"), true)),
             }
@@ -167,9 +171,12 @@ pub(super) struct GoogleSignIn {
 
 impl GoogleSignIn {
     /// Start: opens Google's page in the browser.
-    pub fn start(ctx: &egui::Context, u: &UploadConfig) -> Result<GoogleSignIn, String> {
+    /// `live`: also allow scheduling live streams on YouTube.
+    pub fn start(ctx: &egui::Context, u: &UploadConfig, live: bool) -> Result<GoogleSignIn, String> {
         let client = client_of(u);
-        let s = google::SignIn::begin(&client, &google::scopes(u.youtube, u.drive)).map_err(|e| format!("{e:#}"))?;
+        // Keep what was allowed before.
+        let had = |g: &str| u.granted.iter().any(|x| x == g);
+        let s = google::SignIn::begin(&client, &google::scopes(u.youtube, u.drive, live || had("live"))).map_err(|e| format!("{e:#}"))?;
         ctx.open_url(egui::OpenUrl::new_tab(&s.url));
         let cancel = Arc::new(AtomicBool::new(false));
         let result = Arc::new(Mutex::new(None));
@@ -177,14 +184,7 @@ impl GoogleSignIn {
         let _ = std::thread::Builder::new().name("google sign-in".into()).spawn(move || {
             let r = s.finish(&client, Duration::from_secs(300), &c2).and_then(|t| {
                 let account = google::account(&client.ep, &t.access).unwrap_or_else(|_| "your Google account".into());
-                let mut granted = Vec::new();
-                if t.scope.contains(google::SCOPE_YOUTUBE) {
-                    granted.push("youtube".to_string());
-                }
-                if t.scope.contains(google::SCOPE_DRIVE) {
-                    granted.push("drive".to_string());
-                }
-                Ok((t.refresh, account, granted))
+                Ok((t.refresh, account, google::granted(&t.scope)))
             });
             *r2.lock_ok() = Some(r.map_err(|e| format!("{e:#}")));
             ctx2.request_repaint();
@@ -193,6 +193,6 @@ impl GoogleSignIn {
     }
 }
 
-fn client_of(u: &UploadConfig) -> Client {
+pub(super) fn client_of(u: &UploadConfig) -> Client {
     Client { id: u.client_id.trim().to_string(), secret: u.client_secret.trim().to_string(), ep: Endpoints::default() }
 }
