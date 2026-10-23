@@ -319,6 +319,13 @@ Take_2026-10-16_19-30-02/
 - **Talkback:** hold **TALK** (or `B`, or a Stream Deck key) and your mic
   goes to the presenters' headphones and the guests — never the recording or
   stream — with the rest dipped while you talk.
+- **Automatic mic mixing:** for panels and round tables. The mics you tick
+  share one level, the way broadcast automixers do: whoever is talking is
+  up and the others drop away (up to 30 dB), so room noise, echo and
+  breathing don't pile up, and two people talking at once share it. Nothing
+  is ever switched off, so the start of a word is never lost. Each mic's own
+  WAV stays untouched. **Settings → Mixing & headphones → Automatic mic
+  mixing**; the strip shows **↓12** while a mic is turned down.
 - **Auto-ducking:** music, pads and ambience marked to duck dip smoothly
   under the voices and come back up after a pause (off until you turn it on
   in Settings → Mixing & headphones).

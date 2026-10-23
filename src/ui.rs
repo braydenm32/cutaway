@@ -3162,6 +3162,7 @@ impl App {
             (st.meters.clone(), st.offline.clone(), st.loudness.clone())
         };
         let strips: Vec<(String, String, bool, f32)> = engine.audio.iter().map(|a| (a.name.clone(), a.description(), a.shared.is_on(), a.shared.reduction_db())).collect();
+        let automix: Vec<Option<f32>> = engine.audio.iter().map(|a| a.shared.automix_db()).collect();
         let monitoring = !self.cfg.mix.monitor_device.is_empty();
         let ducking = engine.mix.ducking_db();
         if strips.is_empty() {
@@ -3227,8 +3228,14 @@ impl App {
                                 if ac.duck && self.cfg.mix.ducking {
                                     tags.push_str(" D");
                                 }
+                                if ac.automix && self.cfg.mix.automix {
+                                    tags.push_str(" A");
+                                }
                                 if !tags.is_empty() {
-                                    ui.label(RichText::new(tags.trim()).size(10.0).color(ACCENT)).on_hover_text("FX: voice processing on · R: recording only · S: stream only · D: ducks under voices");
+                                    ui.label(RichText::new(tags.trim()).size(10.0).color(ACCENT)).on_hover_text("FX: voice processing on · R: recording only · S: stream only · D: ducks under voices · A: in the automatic mic mix");
+                                }
+                                if let Some(db) = automix.get(i).copied().flatten().filter(|d| *d < -0.5 && self.cfg.mix.automix && *on) {
+                                    ui.label(RichText::new(format!("↓{:.0}", -db)).size(10.0).color(ACCENT)).on_hover_text("The automatic mic mixer has this mic down right now (dB), because someone else is talking");
                                 }
                                 if ac.duck && ducking < -0.5 {
                                     ui.label(RichText::new(format!("↓{:.0}", -ducking)).size(10.0).color(AMBER)).on_hover_text("Turned down under the voices right now (dB)");
