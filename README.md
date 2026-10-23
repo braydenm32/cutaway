@@ -349,6 +349,10 @@ Take_2026-10-16_19-30-02/
   your recordings carry on untouched.
 - **Adaptive bitrate:** when a connection can't keep up, the stream's
   bitrate eases off until it can, and comes back once it's clear.
+- **Scheduled streams:** set the next show up ahead (title, description,
+  picture, start time) as a YouTube event you can share before you go live,
+  and Cutaway can go live by itself at the start time. See
+  [Scheduling a stream](#scheduling-a-stream).
 - **Vertical streams:** send the 9:16 version to YouTube Shorts, TikTok or
   anywhere else, while the other destinations get the program.
 - **NDI output:** the program (with its sound), and optionally every source,
@@ -661,6 +665,34 @@ General → Shortcuts**, where you can also add your own.
   input in Settings → Audio inputs), and stream levelling keeps it at a steady
   loudness (Settings → Mixing & headphones).
 - **Stream keys** are saved in the settings file. Treat that file as private.
+
+### Scheduling a stream
+
+**Settings → Streaming → Scheduled stream** sets up your next show ahead of
+time.
+
+- **Title, description and picture:** what viewers see on the YouTube page.
+  The picture is the thumbnail (JPEG or PNG, 1280×720 is best, up to 2 MB).
+- **Starts:** the date and time on this computer's clock, written like
+  `2026-10-30 19:30`. The settings show the day it falls on and how long
+  until then.
+- **Who can watch:** public, unlisted or private.
+- **Schedule on YouTube** makes the event, so its page (with a countdown and
+  a reminder button) is there to share before you go live. **Copy link**
+  copies it. Change anything and press **Update on YouTube**; **Take it off
+  YouTube** deletes the event. Cutaway also points your YouTube destination's
+  stream key at the event, so going live lands on that page.
+- **Go live by itself:** tick **At the start time** and Cutaway presses
+  GO LIVE for you when it's time, as long as it's open (up to 10 minutes
+  late, if the computer was asleep). The header counts down the last hour.
+  YouTube starts the event when your stream arrives, and ends it when you
+  stop.
+- **The first time**, press **Allow Cutaway to schedule YouTube streams**:
+  it signs in with Google again, asking to manage your live streams. This
+  uses the same Google sign-in as [Upload after the show](#upload-after-the-show),
+  so set that up first.
+- **Other destinations** (Twitch, Facebook and the others) go live at the
+  same moment; set their titles on their own sites.
 
 ## Network sources
 

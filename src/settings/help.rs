@@ -270,6 +270,12 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Recording, "Author") => "Who made it, written into the file.",
 
         // ---- Streaming
+        (Streaming, "Title") => "The scheduled stream's title on its YouTube page.",
+        (Streaming, "Description") => "What the stream is about, under it on YouTube. Links work.",
+        (Streaming, "Starts") => "When the show starts, on this computer's clock: year-month-day and the time, like 2026-10-30 19:30. YouTube shows it on the page (with a reminder button for viewers).",
+        (Streaming, "Picture") => "The thumbnail on the stream's YouTube page: JPEG or PNG, 1280×720 is best, up to 2 MB.",
+        (Streaming, "Who can watch") => "Private: only you. Unlisted: anyone with the link. Public: everyone, in your channel and search.",
+        (Streaming, "At the start time") => "Goes live to every ticked destination by itself at the start time, if Cutaway is open then (up to ten minutes late, never later). The pre-show check and the \"are you sure\" are skipped, so set things up beforehand.",
         (Streaming, "Name") => "What this destination is called in Cutaway.",
         (Streaming, "Service") => "Where it streams to. Picking a service fills in its server; Custom takes any RTMP or RTMPS address; SRT sends to an SRT receiver.",
         (Streaming, "Server") => "The server address from the service (usually filled in already).",

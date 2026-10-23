@@ -178,6 +178,8 @@ pub struct App {
     ptz_zoom: Option<f32>,
     /// The last replay problem shown.
     replay_problem: Option<String>,
+    /// The scheduled start this session already went live for.
+    scheduled_done: Option<String>,
     /// Slow motion ticked in the Replay button's menu.
     replay_slow: bool,
     /// A phone camera's QR code on show: its link id.
@@ -263,6 +265,7 @@ impl App {
             ptz_drive: None,
             ptz_zoom: None,
             replay_problem: None,
+            scheduled_done: None,
             replay_slow: false,
             qr_for: None,
             update: Arc::new(std::sync::Mutex::new(None)),
@@ -1516,6 +1519,57 @@ impl App {
         }
     }
 
+    /// Going live by itself at the scheduled start time (if Cutaway is open
+    /// then; up to ten minutes late, never later, and only once).
+    fn scheduled_go_live(&mut self, ctx: &egui::Context) {
+        let s = &self.cfg.schedule;
+        let Some(at) = s.start_time() else { return };
+        let left = at - chrono::Local::now();
+        // The countdown in the header ticks.
+        if (s.go_live || !s.youtube_id.is_empty()) && left.num_seconds() > 0 && left.num_minutes() < 60 {
+            ctx.request_repaint_after(Duration::from_millis(500));
+        }
+        if !s.go_live || left.num_seconds() > 0 || self.scheduled_done.as_deref() == Some(s.start.as_str()) {
+            return;
+        }
+        let start = s.start.clone();
+        self.scheduled_done = Some(start);
+        if left.num_minutes() < -10 {
+            return;
+        }
+        let Some(e) = &self.engine else { return };
+        if e.is_streaming() {
+            return;
+        }
+        if !self.cfg.streaming.destinations.iter().any(|d| d.enabled) {
+            self.toast("It's the scheduled start time, but there's nowhere to stream to: add a destination in Settings → Streaming".into(), true);
+            return;
+        }
+        self.toast("Going live: it's the scheduled start time".into(), false);
+        self.start_stream_now();
+    }
+
+    /// The header line before a scheduled stream (within a day).
+    fn scheduled_line(&self) -> Option<(String, Color32)> {
+        let s = &self.cfg.schedule;
+        if !s.go_live && s.youtube_id.is_empty() {
+            return None;
+        }
+        let at = s.start_time()?;
+        let left = at - chrono::Local::now();
+        if left.num_seconds() <= 0 || left.num_hours() >= 24 {
+            return None;
+        }
+        let name = if s.title.trim().is_empty() { "Scheduled stream".to_string() } else { s.title.trim().to_string() };
+        let how = if s.go_live { "goes live by itself" } else { "go live yourself" };
+        if left.num_minutes() < 60 {
+            let secs = left.num_seconds();
+            Some((format!("{name}: live in {}:{:02} ({how})", secs / 60, secs % 60), AMBER))
+        } else {
+            Some((format!("{name}: live at {} ({how})", at.format("%H:%M")), TEXT_DIM))
+        }
+    }
+
     fn run_self_test(&mut self, ctx: &egui::Context) {
         let Some((start, step)) = self.self_test else { return };
         if self.engine.is_none() && step == 0 {
@@ -1879,7 +1933,11 @@ impl App {
                 self.toggle_stream();
             }
         }
-        let (text, color) = status_line.unwrap_or_else(|| (self.cfg.output.folder.display().to_string(), TEXT_DIM));
+        // A scheduled stream coming up says so, over the everyday line (disk
+        // space, the last take) but not over warnings or progress.
+        let everyday = status_line.as_ref().is_none_or(|(_, c)| *c == TEXT_DIM);
+        let scheduled = if streaming || !everyday { None } else { self.scheduled_line() };
+        let (text, color) = scheduled.or(status_line).unwrap_or_else(|| (self.cfg.output.folder.display().to_string(), TEXT_DIM));
         ui.add(egui::Label::new(RichText::new(text).color(color).size(12.0)).truncate());
         if marker_clicked {
             match self.add_marker(None) {
@@ -4147,6 +4205,7 @@ impl eframe::App for App {
         self.handle_keys(&ctx);
         self.poll_status();
         self.run_self_test(&ctx);
+        self.scheduled_go_live(&ctx);
         self.publish_state();
         let busy = self.engine.as_ref().is_some_and(|e| e.is_recording() || e.is_streaming());
         if !busy && crate::platform::permissions_changed() {

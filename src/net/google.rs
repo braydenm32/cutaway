@@ -20,6 +20,9 @@ pub struct Endpoints {
     pub token: String,
     pub userinfo: String,
     pub youtube_upload: String,
+    /// YouTube's API (live events).
+    pub youtube_api: String,
+    pub youtube_thumbnails: String,
     pub drive: String,
     pub drive_upload: String,
 }
@@ -31,6 +34,8 @@ impl Default for Endpoints {
             token: "https://oauth2.googleapis.com/token".into(),
             userinfo: "https://openidconnect.googleapis.com/v1/userinfo".into(),
             youtube_upload: "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status".into(),
+            youtube_api: "https://www.googleapis.com/youtube/v3".into(),
+            youtube_thumbnails: "https://www.googleapis.com/upload/youtube/v3/thumbnails/set".into(),
             drive: "https://www.googleapis.com/drive/v3/files".into(),
             drive_upload: "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,webViewLink".into(),
         }
@@ -46,11 +51,14 @@ pub struct Client {
 }
 
 pub const SCOPE_YOUTUBE: &str = "https://www.googleapis.com/auth/youtube.upload";
+/// Managing YouTube: scheduling live streams (and uploading).
+pub const SCOPE_YOUTUBE_LIVE: &str = "https://www.googleapis.com/auth/youtube";
 /// Only files Cutaway itself puts in Drive.
 pub const SCOPE_DRIVE: &str = "https://www.googleapis.com/auth/drive.file";
 
-/// What to ask for: who you are, plus YouTube and/or Drive.
-pub fn scopes(youtube: bool, drive: bool) -> String {
+/// What to ask for: who you are, plus YouTube uploads, Drive and/or
+/// scheduling live streams.
+pub fn scopes(youtube: bool, drive: bool, live: bool) -> String {
     let mut s = vec!["openid", "email"];
     if youtube {
         s.push(SCOPE_YOUTUBE);
@@ -58,7 +66,27 @@ pub fn scopes(youtube: bool, drive: bool) -> String {
     if drive {
         s.push(SCOPE_DRIVE);
     }
+    if live {
+        s.push(SCOPE_YOUTUBE_LIVE);
+    }
     s.join(" ")
+}
+
+/// What a sign-in allowed ("youtube", "drive", "live"), from Google's list.
+pub fn granted(scope: &str) -> Vec<String> {
+    let has = |s: &str| scope.split_whitespace().any(|x| x == s);
+    let mut g = Vec::new();
+    // Managing YouTube covers uploading too.
+    if has(SCOPE_YOUTUBE) || has(SCOPE_YOUTUBE_LIVE) {
+        g.push("youtube".to_string());
+    }
+    if has(SCOPE_DRIVE) {
+        g.push("drive".to_string());
+    }
+    if has(SCOPE_YOUTUBE_LIVE) {
+        g.push("live".to_string());
+    }
+    g
 }
 
 /// For query strings and forms.
@@ -110,7 +138,7 @@ fn random_text(n: usize) -> String {
 }
 
 /// Google's "308 Resume Incomplete" isn't a redirect: don't follow it.
-fn agent(timeout: Duration) -> ureq::Agent {
+pub(crate) fn agent(timeout: Duration) -> ureq::Agent {
     let tls = ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).root_certs(ureq::tls::RootCerts::PlatformVerifier).build();
     ureq::Agent::config_builder()
         .tls_config(tls)
@@ -122,13 +150,13 @@ fn agent(timeout: Duration) -> ureq::Agent {
         .into()
 }
 
-fn read_json(resp: &mut ureq::http::Response<ureq::Body>) -> Result<Value> {
+pub(crate) fn read_json(resp: &mut ureq::http::Response<ureq::Body>) -> Result<Value> {
     let text = resp.body_mut().read_to_string().map_err(|e| anyhow!("Google's answer was cut off ({e})"))?;
     serde_json::from_str(&text).map_err(|_| anyhow!("Google answered with something unexpected: {}", text.chars().take(200).collect::<String>()))
 }
 
 /// Google's reason, from an error answer.
-fn reason(v: &Value) -> String {
+pub(crate) fn reason(v: &Value) -> String {
     v["error_description"]
         .as_str()
         .or_else(|| v["error"]["message"].as_str())
@@ -559,7 +587,9 @@ pub mod tests {
         assert_eq!(encode("a b&c=d/é"), "a%20b%26c%3Dd%2F%C3%A9");
         assert_eq!(decode("4%2F0Ab-x_y+z"), "4/0Ab-x_y z");
         assert_eq!(b64url(&[0xfb, 0xff]), "-_8");
-        assert_eq!(scopes(true, false), format!("openid email {SCOPE_YOUTUBE}"));
+        assert_eq!(scopes(true, false, false), format!("openid email {SCOPE_YOUTUBE}"));
+        assert_eq!(granted(&format!("openid {SCOPE_YOUTUBE} {SCOPE_DRIVE}")), ["youtube", "drive"]);
+        assert_eq!(granted(&format!("email {SCOPE_YOUTUBE_LIVE}")), ["youtube", "live"]);
     }
 
     /// A stand-in for Google: tokens, and resumable uploads that sometimes
@@ -689,6 +719,8 @@ pub mod tests {
                 token: format!("{base}/token"),
                 userinfo: format!("{base}/userinfo"),
                 youtube_upload: format!("{base}/upload?uploadType=resumable"),
+                youtube_api: format!("{base}/yt"),
+                youtube_thumbnails: format!("{base}/thumbs"),
                 drive: format!("{base}/drive"),
                 drive_upload: format!("{base}/upload?uploadType=resumable"),
             },
@@ -699,7 +731,7 @@ pub mod tests {
     fn signs_in_through_the_browser() {
         let g = fake_google(0);
         let c = client(g.port);
-        let s = SignIn::begin(&c, &scopes(true, true)).unwrap();
+        let s = SignIn::begin(&c, &scopes(true, true, false)).unwrap();
         assert!(s.url.contains("code_challenge_method=S256") && s.url.contains("access_type=offline") && s.url.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A"));
         let state = s.url.split("state=").nth(1).unwrap().to_string();
         let redirect = s.redirect.clone();

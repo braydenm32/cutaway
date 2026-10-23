@@ -56,6 +56,10 @@ pub struct Config {
     /// Graphics that take turns on screen: sponsors, social handles, reminders.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub rotations: Vec<Rotation>,
+    /// Your own keyboard shortcuts.
+    pub keys: KeysConfig,
+    /// The next live stream, set up ahead.
+    pub schedule: ScheduleConfig,
 }
 
 /// Graphics taking turns: every few minutes the next one comes on for a
@@ -103,8 +107,6 @@ impl RotationStart {
             RotationStart::OnAir => "while I'm live or recording",
         }
     }
-    /// Your own keyboard shortcuts.
-    pub keys: KeysConfig,
 }
 
 /// Your own keyboard shortcuts, on top of (or instead of) the built-in ones.
@@ -124,6 +126,33 @@ pub struct KeysConfig {
 pub struct CustomKey {
     pub key: String,
     pub command: String,
+}
+
+
+/// The next live stream, set up ahead: its YouTube event (with the page to
+/// share before the show) and going live by itself at the start time.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct ScheduleConfig {
+    pub title: String,
+    pub description: String,
+    /// The event page's picture (JPEG or PNG, up to 2 MB).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thumbnail: Option<PathBuf>,
+    /// When it starts, in this computer's time: "2026-10-30 19:30".
+    pub start: String,
+    pub privacy: YoutubePrivacy,
+    /// Go live by itself at the start time (if Cutaway is open).
+    pub go_live: bool,
+    /// The event made on YouTube ("" = none yet).
+    pub youtube_id: String,
+}
+
+impl ScheduleConfig {
+    /// The start time, if there is a valid one.
+    pub fn start_time(&self) -> Option<chrono::DateTime<chrono::Local>> {
+        crate::net::youtube_live::parse_local(&self.start)
+    }
 }
 
 /// Syrinscape Online: moods and sounds started from Cutaway's buttons,
