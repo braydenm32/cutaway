@@ -86,6 +86,133 @@ pub struct GuestInfo {
     pub screen: bool,
     /// Their backup recording (the latest), if one's coming in.
     pub backup: Option<BackupInfo>,
+    /// How their connection is holding up (while connected), and why.
+    pub link: Option<(LinkQuality, String)>,
+}
+
+/// How well a guest's internet is keeping up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LinkQuality {
+    Good,
+    /// Holding, but struggling: the picture may soften or stutter.
+    Weak,
+    /// Likely to freeze or break up on air.
+    Poor,
+}
+
+impl LinkQuality {
+    pub fn word(self) -> &'static str {
+        match self {
+            LinkQuality::Good => "good",
+            LinkQuality::Weak => "weak",
+            LinkQuality::Poor => "poor",
+        }
+    }
+}
+
+/// What a guest's browser says about its connection, every few seconds.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LinkReport {
+    /// The round trip to the show.
+    pub rtt_ms: Option<f64>,
+    /// Of the picture's packets lately.
+    pub loss_pct: Option<f64>,
+    /// What it's managing to send.
+    pub kbps: Option<f64>,
+    pub fps: Option<f64>,
+    /// The browser itself says the upload is holding the picture back.
+    pub bandwidth_limited: bool,
+    /// (With the camera off, a low frame rate is expected.)
+    pub camera_on: bool,
+}
+
+impl LinkReport {
+    fn from_json(v: &serde_json::Value) -> LinkReport {
+        let num = |k: &str| v[k].as_f64().filter(|x| x.is_finite() && *x >= 0.0);
+        LinkReport {
+            rtt_ms: num("rtt"),
+            loss_pct: num("loss").map(|l| l.min(100.0)),
+            kbps: num("kbps"),
+            fps: num("fps"),
+            bandwidth_limited: v["limited"].as_str() == Some("bandwidth"),
+            camera_on: v["camera"].as_bool().unwrap_or(true),
+        }
+    }
+}
+
+/// How a connection is doing, and the main reason, in plain words.
+pub fn judge(r: &LinkReport) -> (LinkQuality, String) {
+    let mut worst = (LinkQuality::Good, String::new());
+    let mut note = |q: LinkQuality, why: String| {
+        if q > worst.0 {
+            worst = (q, why);
+        }
+    };
+    if let Some(l) = r.loss_pct {
+        if l >= 8.0 {
+            note(LinkQuality::Poor, format!("losing {l:.0}% of the picture"));
+        } else if l >= 2.0 {
+            note(LinkQuality::Weak, format!("losing {l:.0}% of the picture"));
+        }
+    }
+    if let Some(t) = r.rtt_ms {
+        if t >= 700.0 {
+            note(LinkQuality::Poor, format!("{t:.0} ms behind"));
+        } else if t >= 300.0 {
+            note(LinkQuality::Weak, format!("{t:.0} ms behind"));
+        }
+    }
+    if let (true, Some(f)) = (r.camera_on, r.fps) {
+        if f < 8.0 {
+            note(LinkQuality::Poor, format!("only {f:.0} frames a second"));
+        } else if f < 18.0 {
+            note(LinkQuality::Weak, format!("{f:.0} frames a second"));
+        }
+    }
+    if r.bandwidth_limited {
+        let why = match r.kbps {
+            Some(k) => format!("slow upload ({k:.0} kbit/s)"),
+            None => "slow upload".to_string(),
+        };
+        note(if r.kbps.is_some_and(|k| k < 250.0) { LinkQuality::Poor } else { LinkQuality::Weak }, why);
+    }
+    worst
+}
+
+/// A connection's quality as shown: worse news at once, better news once
+/// it has lasted a few seconds (so it doesn't flicker).
+#[derive(Clone, Debug)]
+struct LinkState {
+    shown: LinkQuality,
+    note: String,
+    better_since: Option<Instant>,
+    at: Instant,
+    camera_on: bool,
+}
+
+/// How long better news has to last before it's shown.
+const LINK_SETTLE: Duration = Duration::from_secs(6);
+/// A report older than this no longer counts.
+const LINK_STALE: Duration = Duration::from_secs(8);
+
+impl LinkState {
+    fn update(prev: Option<&LinkState>, (q, note): (LinkQuality, String), camera_on: bool, now: Instant) -> LinkState {
+        match prev {
+            Some(p) if q < p.shown && now.duration_since(p.at) < LINK_STALE => {
+                let since = p.better_since.unwrap_or(now);
+                if now.duration_since(since) >= LINK_SETTLE {
+                    LinkState { shown: q, note, better_since: None, at: now, camera_on }
+                } else {
+                    LinkState { better_since: Some(since), at: now, camera_on, ..p.clone() }
+                }
+            }
+            _ => LinkState { shown: q, note, better_since: None, at: now, camera_on },
+        }
+    }
+
+    fn current(&self, now: Instant) -> Option<(LinkQuality, String)> {
+        (now.duration_since(self.at) < LINK_STALE).then(|| (self.shown, self.note.clone()))
+    }
 }
 
 /// A guest's backup recording as it arrives.
@@ -141,6 +268,7 @@ struct Conn {
     video_out: Option<tokio::sync::mpsc::Sender<bytes::Bytes>>,
     /// Stops the return-audio thread.
     stop: Arc<AtomicBool>,
+    link: Option<LinkState>,
 }
 
 struct Server {
@@ -327,6 +455,7 @@ impl GuestHub {
     /// Every guest source, connected or not.
     pub fn guests(&self) -> Vec<GuestInfo> {
         let inner = self.inner.lock_ok();
+        let now = Instant::now();
         let mut v: Vec<GuestInfo> = inner
             .slots
             .iter()
@@ -342,11 +471,41 @@ impl GuestHub {
                     camera: s.camera,
                     screen: s.screen,
                     backup: Self::backup_of(&inner, id),
+                    link: c.filter(|c| c.connected).and_then(|c| Self::link_of(c, s, now)),
                 }
             })
             .collect();
         v.sort_by(|a, b| a.source.cmp(&b.source));
         v
+    }
+
+    /// A connected guest's quality: from their browser's reports, or poor
+    /// outright when their picture has stopped coming.
+    fn link_of(c: &Conn, s: &Slot, now: Instant) -> Option<(LinkQuality, String)> {
+        let reported = c.link.as_ref().and_then(|l| l.current(now));
+        let since_video = s.last_video.lock_ok().map(|t| now.duration_since(t));
+        let started = c.since.is_some_and(|t| now.duration_since(t) > Duration::from_secs(5));
+        let camera_on = c.link.as_ref().is_none_or(|l| l.camera_on);
+        match since_video {
+            Some(d) if started && camera_on && d > Duration::from_secs(3) => Some((LinkQuality::Poor, format!("no picture for {} s", d.as_secs()))),
+            _ => reported,
+        }
+    }
+
+    /// A guest's browser reporting on its connection; what it should show them.
+    fn link_report(&self, id: &str, report: &LinkReport) -> Option<(LinkQuality, String)> {
+        let mut inner = self.inner.lock_ok();
+        let c = inner.conns.get_mut(id)?;
+        let now = Instant::now();
+        let next = LinkState::update(c.link.as_ref(), judge(report), report.camera_on, now);
+        let changed = c.link.as_ref().map(|l| l.shown) != Some(next.shown);
+        let out = next.current(now);
+        c.link = Some(next);
+        drop(inner);
+        if changed {
+            self.wake();
+        }
+        out
     }
 
     /// The take being recorded now: (token, folder, how long ago it started).
@@ -702,7 +861,7 @@ impl GuestHub {
             vtx
         });
         let name = guest_name.trim().chars().take(40).collect::<String>();
-        self.inner.lock_ok().conns.insert(id, Conn { gen, pc, guest_name: name, connected: false, since: None, video_out, stop });
+        self.inner.lock_ok().conns.insert(id, Conn { gen, pc, guest_name: name, connected: false, since: None, video_out, stop, link: None });
         if return_video {
             self.ensure_program_feed();
         }
@@ -1169,6 +1328,25 @@ fn handle(mut conn: TcpStream, hub: &Arc<GuestHub>) -> std::io::Result<()> {
             hub.kick(&id);
             respond(&mut conn, "204 No Content", "text/plain", b"")
         }
+        ("POST", Some("stats")) => {
+            // About their camera's connection, or (?part=screen) their screen's.
+            let key = if query.get("part") == Some(&"screen") { screen_key(&id) } else { id.clone() };
+            let length = length.min(4096);
+            let mut body = buf[head_end..].to_vec();
+            while body.len() < length {
+                let n = conn.read(&mut chunk)?;
+                if n == 0 {
+                    break;
+                }
+                body.extend_from_slice(&chunk[..n]);
+            }
+            body.truncate(length);
+            let v: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+            match hub.link_report(&key, &LinkReport::from_json(&v)) {
+                Some((q, note)) => respond(&mut conn, "200 OK", "application/json", serde_json::json!({ "quality": q.word(), "note": note }).to_string().as_bytes()),
+                None => respond(&mut conn, "404 Not Found", "application/json", br#"{"quality":"unknown"}"#),
+            }
+        }
         ("POST", Some("screen-stop")) => {
             hub.kick(&screen_key(&id));
             respond(&mut conn, "204 No Content", "text/plain", b"")
@@ -1561,6 +1739,12 @@ mod tests {
         assert!(not_the_slate(&screen_slot, 320, 180) >= 4, "the screen's picture");
         let g = h.guests().into_iter().find(|g| g.id == screen_key(id)).unwrap();
         assert!(g.screen && !g.camera);
+        // Their browser says how the connection is doing; the window shows it.
+        let r = post(port, &format!("/g/{id}/stats?part=screen"), br#"{"loss":12,"rtt":80,"camera":false,"limited":"none"}"#);
+        assert!(r.contains(r#""quality":"poor""#), "{r}");
+        let g = h.guests().into_iter().find(|g| g.id == screen_key(id)).unwrap();
+        assert_eq!(g.link.map(|l| l.0), Some(LinkQuality::Poor));
+        assert!(post(port, &format!("/g/{id}/stats"), br#"{"loss":0}"#).starts_with("HTTP/1.1 404"), "their camera isn't connected");
         assert!(h.guests().into_iter().find(|g| g.id == id).is_some_and(|g| !g.connected), "their camera spot is separate");
         // Stopping the share closes only that connection.
         post(port, &format!("/g/{id}/screen-stop"), b"");
@@ -1569,6 +1753,47 @@ mod tests {
         h.apply(&cfg, Arc::new(|| {}));
         drop(running_screen);
         drop(running_cam);
+    }
+
+    #[test]
+    fn judges_a_connection() {
+        let good = LinkReport { rtt_ms: Some(40.0), loss_pct: Some(0.2), kbps: Some(2400.0), fps: Some(30.0), bandwidth_limited: false, camera_on: true };
+        assert_eq!(judge(&good).0, LinkQuality::Good);
+        let r = LinkReport { loss_pct: Some(3.0), ..good.clone() };
+        assert_eq!(judge(&r), (LinkQuality::Weak, "losing 3% of the picture".into()));
+        let r = LinkReport { rtt_ms: Some(900.0), loss_pct: Some(3.0), ..good.clone() };
+        assert_eq!(judge(&r), (LinkQuality::Poor, "900 ms behind".into()), "the worst reason wins");
+        let r = LinkReport { fps: Some(5.0), ..good.clone() };
+        assert_eq!(judge(&r).0, LinkQuality::Poor);
+        assert_eq!(judge(&LinkReport { camera_on: false, ..r }).0, LinkQuality::Good, "a camera that's off sends few frames, and that's fine");
+        let r = LinkReport { bandwidth_limited: true, kbps: Some(400.0), ..good.clone() };
+        assert_eq!(judge(&r), (LinkQuality::Weak, "slow upload (400 kbit/s)".into()));
+        assert_eq!(judge(&LinkReport::default()).0, LinkQuality::Good, "nothing known yet");
+        let v = serde_json::json!({ "rtt": 120.5, "loss": 250, "fps": -1, "limited": "bandwidth", "camera": false });
+        let r = LinkReport::from_json(&v);
+        assert_eq!((r.rtt_ms, r.loss_pct, r.fps, r.bandwidth_limited, r.camera_on), (Some(120.5), Some(100.0), None, true, false));
+    }
+
+    #[test]
+    fn worse_shows_at_once_better_once_it_lasts() {
+        let t0 = Instant::now();
+        let s = |q: LinkQuality| (q, q.word().to_string());
+        let a = LinkState::update(None, s(LinkQuality::Good), true, t0);
+        let b = LinkState::update(Some(&a), s(LinkQuality::Poor), true, t0 + Duration::from_secs(2));
+        assert_eq!(b.shown, LinkQuality::Poor, "bad news straight away");
+        let c = LinkState::update(Some(&b), s(LinkQuality::Good), true, t0 + Duration::from_secs(4));
+        assert_eq!(c.shown, LinkQuality::Poor, "one good report isn't enough");
+        let d = LinkState::update(Some(&c), s(LinkQuality::Good), true, t0 + Duration::from_secs(8));
+        assert_eq!(d.shown, LinkQuality::Poor);
+        let e = LinkState::update(Some(&d), s(LinkQuality::Good), true, t0 + Duration::from_secs(10));
+        assert_eq!(e.shown, LinkQuality::Good, "good for six seconds");
+        let f = LinkState::update(Some(&e), s(LinkQuality::Weak), true, t0 + Duration::from_secs(11));
+        let g = LinkState::update(Some(&f), s(LinkQuality::Good), true, t0 + Duration::from_secs(13));
+        let h = LinkState::update(Some(&g), s(LinkQuality::Weak), true, t0 + Duration::from_secs(15));
+        let i = LinkState::update(Some(&h), s(LinkQuality::Good), true, t0 + Duration::from_secs(19));
+        assert_eq!(i.shown, LinkQuality::Weak, "a relapse starts the wait again");
+        assert!(i.current(t0 + Duration::from_secs(19)).is_some());
+        assert!(i.current(t0 + Duration::from_secs(40)).is_none(), "old news counts for nothing");
     }
 
     /// Backup recordings: pieces arrive in order into the take's Guests

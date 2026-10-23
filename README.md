@@ -96,8 +96,10 @@ and [Install on Windows](#install-on-windows).
   hear the show without their own voice (mix-minus, plus talkback) and can
   watch the program. A guest can share their screen too (the whole screen,
   one window or a browser tab), arriving as a source of its own while their
-  camera stays on. Cutaway reaches them through a free Cloudflare tunnel,
-  so there's no router setup (see [Remote guests](#remote-guests)).
+  camera stays on. Signal bars warn you when a guest's connection is
+  struggling, before their picture freezes. Cutaway reaches them through a
+  free Cloudflare tunnel, so there's no router setup (see
+  [Remote guests](#remote-guests)).
 - **Media player.** A source that plays a playlist of video files and still
   images, with sound: intros, stings, holding slides, B-roll. Play, pause,
   next and restart from its tile, the remote or MIDI; optionally restart when
@@ -258,6 +260,10 @@ Take_2026-10-16_19-30-02/
   long it's been on since you went live, and every take's folder gets
   **Graphics on air.csv** (each graphic, how often, for how long, and when),
   handy for sponsor reports.
+- **Web page overlays:** any web page or HTML file over the picture, see-through
+  wherever the page has no background, like a browser source in OBS:
+  StreamElements or Streamlabs alerts and chat boxes, scoreboards, animated
+  graphics made for the web.
 - **Clocks and countdowns:** clock graphics show the time of day, a
   countdown to a time ("Starting in 4:59"), a countdown or stopwatch you
   start from a button, key or cue, or the time left in the rundown segment
@@ -354,7 +360,12 @@ Take_2026-10-16_19-30-02/
 
 ### Control
 
-- **Keyboard** shortcuts for everything you do during a show.
+- **Keyboard** shortcuts for everything you do during a show. Move any of
+  them to another key or turn one off, and add your own keys for any
+  command (a scene, a graphic, a pad, a macro, a camera move) in
+  **Settings → General → Shortcuts**. A key you pick wins over a built-in
+  one, mistakes like a key given two jobs are flagged as you go, and
+  **Print a cheat sheet** opens a page of every key to keep by the keyboard.
 - **Undo and redo** (Cmd/Ctrl+Z, Cmd/Ctrl+Shift+Z, or the buttons in Edit
   layout) for what you build: moving, resizing, filling and zooming frames,
   adding, renaming, duplicating and deleting scenes, a title's text, and
@@ -588,12 +599,16 @@ Video Extensions** on some PCs.
 | Graphics 1–9 | Alt/Option + number, or the graphic buttons; ✎ edits a title's text live |
 | Media player | ⟲ ⏯ ⏭ on its tile; right-click the tile for the playlist |
 | Record / stop | ⌘R, or the record button |
-| Go live / end stream | The **GO LIVE** button. This is mouse-only on purpose, so a stray key can't start or end a broadcast |
+| Go live / end stream | The **GO LIVE** button. It has no key unless you give it one in Settings → Shortcuts, so a stray key can't start or end a broadcast (a key gets the same checks and "are you sure?" as the button) |
 | Edit layout | `E`, or **Edit layout**: drag frames, drag the corner to resize (Shift keeps shape), **Fit/Fill** and **Zoom** for the selected frame (or double-click a frame to fill it, scroll to zoom, Option/Alt-drag to move the picture), add/remove sources, scene audio, duplicate, rename, **Save scenes** |
 | Audio strip | Fader = level (double-click resets), **ON** = in the mixes, 🎧 = solo in the headphones |
 | Second screen | **Screen** in the header. On that window: double-click or `F` for full screen, Esc to leave full screen, Esc again (or ✕, or Cmd/Ctrl+W) to close |
 | Switch show | The show name next to the logo |
 | Settings | ⌘, |
+
+The keys above are the built-in ones. Any of them (except the numbered
+scene, graphic and pad keys) can be moved or turned off in **Settings →
+General → Shortcuts**, where you can also add your own.
 
 ## Going live
 
@@ -786,6 +801,17 @@ one in preview, recording, live, auto, graphics and inputs that are on.
   guests panel, ends it. Sharing needs a computer (Chrome, Edge or Safari);
   phones and tablets don't offer it.
 
+- **Connection warnings:** every couple of seconds each guest's browser (and
+  each phone camera) tells Cutaway how its connection is holding up: how much
+  of the picture is getting lost, how far behind it is, its frame rate and
+  whether the upload is holding it back. Signal bars beside the guest in the
+  guests panel show it (hover for the reason), and a **Weak connection** or
+  **Poor connection** tag appears on their tile, so you can take them off
+  air or ask them to move before their picture freezes. A guest whose
+  picture stops coming shows as poor straight away. Bad news shows at once
+  and good news once it has lasted a few seconds, so it doesn't flicker.
+  The guest sees a line on their own page too, with what might help.
+
 - **Firewalls:** guests connect directly to Cutaway (WebRTC), which works on
   almost every home and mobile network. A few office, school and hotel
   networks block that; set a TURN server (Cloudflare Calls, Twilio, your own
@@ -850,6 +876,13 @@ source.
   main window, Stream Deck keys and remote buttons, and can be cues.
 - **Scrolling ticker:** **Settings → Graphics → ＋ Scrolling ticker:** the text, a label
   and the speed. ✎ on its button changes the text live.
+- **Web page overlays:** **Settings → Graphics → ＋ Web page:** an address
+  (or **Choose file…** for an HTML file) and the size the page is laid out
+  at (the program's size by default). Its button shows and hides it like
+  any graphic; **⟳** beside it loads the page again. Pages are drawn by
+  Google Chrome or Microsoft Edge (or Brave, Chromium or Vivaldi), run
+  hidden in the background, so one of them needs to be installed: every
+  Windows PC has Edge. A page's sound isn't heard.
 - **Viewer comments:** **Settings → Viewer comments:** your Twitch channel
   (no sign-in needed) and/or a YouTube live video with a YouTube API key.
   Comments appear in the main window's **Comments** panel; click one to put

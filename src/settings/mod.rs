@@ -15,6 +15,7 @@ mod mixing;
 mod outputs;
 mod rotations;
 mod rundown;
+mod shortcuts;
 mod sound;
 mod sources;
 mod switching;
@@ -254,6 +255,8 @@ pub struct SettingsUi {
     vcam_job: Arc<Mutex<Option<Result<String, String>>>>,
     vcam_busy: bool,
     learning: Option<usize>,
+    /// A shortcut waiting for its key.
+    key_capture: Option<shortcuts::KeyCapture>,
     /// Speech recognition languages (asked for once).
     languages: Option<Vec<(String, String)>>,
     /// What happened when the Stream Deck plugin was opened.
@@ -318,6 +321,7 @@ impl SettingsUi {
             vcam_job: Arc::new(Mutex::new(None)),
             vcam_busy: false,
             learning: None,
+            key_capture: None,
             languages: None,
             plugin_note: None,
             pending: None,
@@ -397,7 +401,8 @@ impl SettingsUi {
         if self.scanning {
             ctx.request_repaint_after(std::time::Duration::from_millis(200));
         }
-        let esc = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        // (Esc while recording a shortcut's key only stops that.)
+        let esc = self.key_capture.is_none() && ctx.input(|i| i.key_pressed(egui::Key::Escape));
 
         let screen = ctx.content_rect();
         let size = vec2((screen.width() - 80.0).clamp(640.0, 1120.0), (screen.height() - 80.0).clamp(420.0, 780.0));
@@ -477,7 +482,7 @@ impl SettingsUi {
                                     Section::Upload => self.upload(ui),
                                     Section::Outputs => self.outputs(ui, info),
                                     Section::Control => self.control(ui, info),
-                                    Section::Shortcuts => shortcuts(ui),
+                                    Section::Shortcuts => self.shortcuts(ui),
                                     Section::Diagnostics => self.diagnostics(ui, info),
                                 }
                                 help::set_page(None);
@@ -1820,44 +1825,6 @@ pub(super) fn recommended_kbps(w: u32, h: u32, fps: u32) -> (u32, u32) {
         p if p <= 2560 * 1440 => if high { (9000, 18000) } else { (6000, 13000) },
         _ => if high { (20000, 51000) } else { (13000, 34000) },
     }
-}
-
-fn shortcuts(ui: &mut egui::Ui) {
-    title(ui, "Shortcuts", "Keyboard control while you direct.");
-    let cmd = if cfg!(target_os = "macos") { "⌘" } else { "Ctrl+" };
-    let rows: Vec<(String, &str)> = vec![
-        ("1 – 9".into(), "Take scene 1–9 (using the current transition)"),
-        ("Shift + 1 – 9".into(), "Cut straight to scene 1–9"),
-        ("Click a source".into(), "Put that source full screen (Shift+click cuts)"),
-        ("T".into(), "Switch between Cut and your transition"),
-        ("Space".into(), "Take the preview scene to program (preview mode)"),
-        ("Enter".into(), "Cut the preview scene to program (preview mode)"),
-        ("A".into(), "Automatic switching on / off"),
-        ("C".into(), "Live captions on screen / off"),
-        ("M".into(), "Add a marker while recording"),
-        ("K".into(), "Save a clip of the last few seconds while recording"),
-        ("F1 – F12".into(), "Sound pads 1–12 (hold for \"while held\" pads)"),
-        ("B (hold)".into(), "Talkback: your mic in the presenters' ears while held"),
-        ("N".into(), "Next rundown segment (Shift+N goes back)"),
-        ("Alt + 1 – 9".into(), "Show / hide graphic 1–9"),
-        ("E".into(), "Edit the live layout"),
-        (format!("{cmd}Z"), "Undo a change to a scene, a title's text or Settings"),
-        (if cfg!(target_os = "macos") { format!("{cmd}Shift+Z") } else { format!("{cmd}Shift+Z / {cmd}Y") }, "Redo"),
-        (format!("{cmd}R"), "Start / stop recording"),
-        (format!("{cmd},"), "Open Settings"),
-        ("Esc".into(), "Close Settings"),
-        ("F / Esc".into(), "On the second-screen window: full screen / leave full screen"),
-        ("Right-click a media tile".into(), "Pick from the media player's playlist"),
-    ];
-    egui::Grid::new("keys").num_columns(2).spacing([24.0, 10.0]).striped(true).show(ui, |ui| {
-        for (k, what) in rows {
-            ui.label(RichText::new(k).monospace().strong());
-            ui.label(what);
-            ui.end_row();
-        }
-    });
-    ui.add_space(8.0);
-    hint(ui, "Going live is mouse-only on purpose, so a stray key can't start or end a broadcast.");
 }
 
 /// Wherever NDI is chosen: when it isn't installed, offer to install NDI's

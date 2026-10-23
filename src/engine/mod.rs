@@ -31,6 +31,7 @@ pub mod feed;
 pub mod framing;
 pub mod ptz;
 pub mod vertical;
+pub mod web;
 pub mod replay;
 pub mod rotation;
 pub mod graphics;

@@ -103,6 +103,27 @@ impl RotationStart {
             RotationStart::OnAir => "while I'm live or recording",
         }
     }
+    /// Your own keyboard shortcuts.
+    pub keys: KeysConfig,
+}
+
+/// Your own keyboard shortcuts, on top of (or instead of) the built-in ones.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct KeysConfig {
+    /// Built-in shortcuts you've changed, by name ("record" = "Cmd+Shift+R").
+    /// Several keys are separated by commas; an empty one turns it off.
+    pub builtin: std::collections::BTreeMap<String, String>,
+    /// Keys that run any command.
+    pub custom: Vec<CustomKey>,
+}
+
+/// A key that runs a command, like "G" for "Graphic 2 Toggle".
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct CustomKey {
+    pub key: String,
+    pub command: String,
 }
 
 /// Syrinscape Online: moods and sounds started from Cutaway's buttons,
@@ -1494,6 +1515,9 @@ pub enum GraphicKind {
     /// A band with scrolling text (`title`: the items, one per line;
     /// `subtitle`: a label at the left, "" for none).
     Ticker,
+    /// A web page (`url`: a web address or an HTML file), drawn with its
+    /// transparency at `page_size`, like a browser source.
+    Web,
 }
 
 /// What a clock graphic shows.
@@ -1603,6 +1627,18 @@ pub struct Graphic {
     pub show_seconds: bool,
     /// Tickers: how fast the text moves, in picture widths per minute.
     pub speed: f32,
+    /// Web pages: the address (or an HTML file).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub url: String,
+    /// Web pages: the size the page is laid out at, in CSS pixels.
+    #[serde(skip_serializing_if = "is_page_size")]
+    pub page_size: [u32; 2],
+}
+
+const PAGE_SIZE: [u32; 2] = [1920, 1080];
+
+fn is_page_size(s: &[u32; 2]) -> bool {
+    *s == PAGE_SIZE
 }
 
 impl Default for Graphic {
@@ -1629,6 +1665,8 @@ impl Default for Graphic {
             seconds: 300,
             clock_24h: false,
             show_seconds: false,
+            url: String::new(),
+            page_size: PAGE_SIZE,
             speed: 6.0,
         }
     }
@@ -1645,6 +1683,11 @@ impl Graphic {
 
     pub fn ticker(name: &str, text: &str, label: &str) -> Graphic {
         Graphic { name: name.into(), kind: GraphicKind::Ticker, title: text.into(), subtitle: label.into(), x: 0.0, y: 0.92, width: 1.0, box_opacity: 0.85, ..Default::default() }
+    }
+
+    /// A web page over the whole picture.
+    pub fn web(name: &str, url: &str) -> Self {
+        Graphic { name: name.into(), kind: GraphicKind::Web, url: url.into(), x: 0.0, y: 0.0, width: 1.0, ..Default::default() }
     }
 }
 
