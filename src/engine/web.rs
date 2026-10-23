@@ -269,12 +269,20 @@ impl Browser {
     /// object closes the browser with Cutaway.
     #[cfg(windows)]
     fn connect(mut cmd: Command, profile: &Path) -> Result<(Child, Writer, Reader)> {
-        use std::io::Write;
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         cmd.arg("--remote-debugging-port=0");
         let mut child = cmd.spawn()?;
         crate::platform::win::kill_with_us(&child);
+        let (write, read) = Self::connect_port(&mut child, profile)?;
+        Ok((child, write, read))
+    }
+
+    /// The DevTools WebSocket of a browser started with
+    /// `--remote-debugging-port=0`. (Windows; also tested on the others.)
+    #[cfg(any(windows, test))]
+    fn connect_port(child: &mut Child, profile: &Path) -> Result<(Writer, Reader)> {
+        use std::io::Write;
         // The browser says which port, and its address, in a file.
         let file = profile.join("DevToolsActivePort");
         let t0 = std::time::Instant::now();
@@ -322,7 +330,7 @@ impl Browser {
                 _ => {}
             }
         });
-        Ok((child, write, read))
+        Ok((write, read))
     }
 
     #[cfg(not(any(unix, windows)))]
@@ -387,7 +395,7 @@ impl Browser {
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn rand_bytes<const N: usize>() -> [u8; N] {
     let mut b = [0u8; N];
     let _ = getrandom::fill(&mut b);
@@ -607,5 +615,40 @@ mod tests {
         let box_px = img.get_pixel(60, 30).0;
         assert!((box_px[3] as i32 - 128).abs() <= 3 && box_px[0] > 240, "the half-see-through white box: {box_px:?}");
         drop(page);
+    }
+
+    /// The way Windows talks to the browser (its DevTools port, over a
+    /// WebSocket), tried here with whichever browser this machine has.
+    #[test]
+    fn talks_over_the_devtools_port() {
+        let Some(exe) = find_browser() else {
+            eprintln!("no Chromium browser here; skipping");
+            return;
+        };
+        let profile = std::env::temp_dir().join(format!("cutaway-web-test-port-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&profile);
+        std::fs::create_dir_all(&profile).unwrap();
+        let mut cmd = Command::new(&exe);
+        cmd.args(["--headless=new", &format!("--user-data-dir={}", profile.display()), "--no-first-run", "--remote-debugging-port=0", "about:blank"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        #[cfg(target_os = "linux")]
+        if unsafe { libc::geteuid() } == 0 {
+            cmd.arg("--no-sandbox");
+        }
+        let mut child = cmd.spawn().unwrap();
+        let r = Browser::connect_port(&mut child, &profile).and_then(|(mut write, mut read)| {
+            write(br#"{"id":1,"method":"Browser.getVersion"}"#)?;
+            loop {
+                let v: Value = serde_json::from_slice(&read()?)?;
+                if v["id"] == 1 {
+                    return Ok(v);
+                }
+            }
+        });
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_dir_all(&profile);
+        let v = r.unwrap();
+        eprintln!("browser said: {}", v["result"]["product"]);
+        assert!(v["result"]["product"].as_str().is_some_and(|p| !p.is_empty()), "{v}");
     }
 }
