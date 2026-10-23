@@ -28,6 +28,8 @@ pub struct ShowState {
     pub scenes: Vec<SceneState>,
     pub sources: Vec<SourceState>,
     pub graphics: Vec<GraphicState>,
+    /// Graphics taking turns.
+    pub rotations: Vec<RotationState>,
     pub inputs: Vec<InputState>,
     pub players: Vec<PlayerState>,
     pub disk: String,
@@ -173,6 +175,14 @@ pub struct SourceState {
     /// "program", "preview" or "off".
     pub tally: String,
     pub offline: bool,
+}
+
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+pub struct RotationState {
+    pub name: String,
+    pub running: bool,
+    /// The graphic on screen because of it.
+    pub showing: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug, Default, PartialEq)]

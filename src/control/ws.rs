@@ -81,6 +81,12 @@ pub enum Message {
 
 /// Read one whole message (joining fragments). Blocks.
 pub fn read_message(r: &mut impl Read) -> io::Result<Message> {
+    read_message_max(r, MAX_MESSAGE)
+}
+
+/// The same, taking messages up to `max` bytes.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn read_message_max(r: &mut impl Read, max: usize) -> io::Result<Message> {
     let mut data = Vec::new();
     let mut kind = None;
     loop {
@@ -99,7 +105,7 @@ pub fn read_message(r: &mut impl Read) -> io::Result<Message> {
             r.read_exact(&mut b)?;
             len = u64::from_be_bytes(b);
         }
-        if len as usize + data.len() > MAX_MESSAGE {
+        if len as usize + data.len() > max {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "message too big"));
         }
         let mut mask = [0u8; 4];
@@ -158,13 +164,22 @@ pub fn write_text(w: &mut impl Write, text: &str) -> io::Result<()> {
 /// A masked frame, as a client sends it (for tests).
 #[cfg(test)]
 pub fn client_frame(opcode: u8, payload: &[u8]) -> Vec<u8> {
-    let mask = [0x12u8, 0x34, 0x56, 0x78];
+    masked_frame(opcode, payload, [0x12u8, 0x34, 0x56, 0x78])
+}
+
+/// A masked frame, as a client sends it (Cutaway talking to a browser).
+#[cfg_attr(not(any(test, windows)), allow(dead_code))]
+pub fn masked_frame(opcode: u8, payload: &[u8], mask: [u8; 4]) -> Vec<u8> {
     let mut out = vec![0x80 | opcode];
     match payload.len() {
         n if n < 126 => out.push(0x80 | n as u8),
-        n => {
+        n if n < 65536 => {
             out.push(0x80 | 126);
             out.extend_from_slice(&(n as u16).to_be_bytes());
+        }
+        n => {
+            out.push(0x80 | 127);
+            out.extend_from_slice(&(n as u64).to_be_bytes());
         }
     }
     out.extend_from_slice(&mask);

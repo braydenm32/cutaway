@@ -31,7 +31,9 @@ pub mod feed;
 pub mod framing;
 pub mod ptz;
 pub mod vertical;
+pub mod web;
 pub mod replay;
+pub mod rotation;
 pub mod graphics;
 pub mod guests;
 pub mod health;
@@ -363,6 +365,8 @@ pub struct Engine {
     /// The preview bus (next scene), when preview/program switching is on.
     pub preview_bus: Arc<FrameSlot>,
     pub graphics: Arc<graphics::Graphics>,
+    /// Graphics taking turns.
+    pub rotations: Arc<rotation::Rotations>,
     looks: Arc<Mutex<LookState>>,
     /// Width of the program monitor picture.
     pub preview_width: Arc<AtomicU32>,
@@ -668,6 +672,7 @@ impl Engine {
 
         // ---- watchdog: reconnects devices, keeps health figures current -----------
         let shared_cfg = Arc::new(Mutex::new(cfg.clone()));
+        let rotations = Arc::new(rotation::Rotations::new());
         let take_monitor = Arc::new(Mutex::new(None));
         let lineup: SharedLineup = Arc::new(Mutex::new(Lineup { generation: 1, video: sources.iter().map(|s| s.input.clone()).collect(), audio: audio.iter().map(|a| a.input.clone()).collect() }));
         {
@@ -685,7 +690,17 @@ impl Engine {
                 status: status.clone(),
                 stop: stop.clone(),
                 waker: waker.clone(),
-                every_second: vec![Box::new(move || monitor.tick())],
+                every_second: vec![Box::new(move || monitor.tick()), {
+                    let (c, g, r, st) = (shared_cfg.clone(), graphics.clone(), rotations.clone(), status.clone());
+                    Box::new(move || {
+                        let rots = c.lock_ok().rotations.clone();
+                        let (live, recording) = {
+                            let s = st.lock_ok();
+                            (s.stream.since.is_some(), matches!(s.rec, RecState::Recording { .. }))
+                        };
+                        r.tick(&rots, &g, live, recording, Instant::now());
+                    })
+                }],
             };
             threads.push(std::thread::Builder::new().name("watchdog".into()).spawn(move || w.run())?);
         }
@@ -734,6 +749,7 @@ impl Engine {
             tall,
             preview_bus,
             graphics,
+            rotations,
             looks,
             preview_width,
             switcher,
@@ -1163,6 +1179,7 @@ impl Engine {
                 h.shared.set_routing(a.to_recording, a.to_stream);
                 h.shared.set_processing(&a.processing);
                 h.shared.set_duck(a.duck);
+                h.shared.set_automix(a.automix);
             }
         }
         self.mix.apply(&new.mix);
@@ -1923,7 +1940,7 @@ impl CompositorLoop {
             if let Some(l) = lineup {
                 self.comp.set_lineup(&l.from, &l.sizes);
                 for (i, why) in self.comp.set_looks(&l.looks, &l.style) {
-                    self.status.lock_ok().push(LogLevel::Warning, format!("Source {}: the LUT wasn't used: {why}", i + 1));
+                    self.status.lock_ok().push(LogLevel::Warning, format!("Source {}: {why}", i + 1));
                 }
                 self.switcher.remap_sources(&l.from, l.aspects, l.uids);
                 self.slots = l.slots;
@@ -1936,7 +1953,7 @@ impl CompositorLoop {
                 if l.generation != self.looks_generation {
                     self.looks_generation = l.generation;
                     for (i, why) in self.comp.set_looks(&l.looks, &l.style) {
-                        self.status.lock_ok().push(LogLevel::Warning, format!("Source {}: the LUT wasn't used: {why}", i + 1));
+                        self.status.lock_ok().push(LogLevel::Warning, format!("Source {}: {why}", i + 1));
                     }
                 }
             }

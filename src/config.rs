@@ -53,9 +53,81 @@ pub struct Config {
     pub vertical: VerticalConfig,
     /// Uploading takes to YouTube and Google Drive.
     pub upload: UploadConfig,
+    /// Graphics that take turns on screen: sponsors, social handles, reminders.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub rotations: Vec<Rotation>,
+    /// Your own keyboard shortcuts.
+    pub keys: KeysConfig,
     /// The next live stream, set up ahead.
     pub schedule: ScheduleConfig,
 }
+
+/// Graphics taking turns: every few minutes the next one comes on for a
+/// while, then goes off.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Rotation {
+    pub name: String,
+    /// The graphics, by name, in the order they take turns.
+    pub graphics: Vec<String>,
+    /// How often one comes on, in minutes.
+    pub every_minutes: f32,
+    /// How long each stays on, in seconds.
+    pub show_seconds: u32,
+    /// When it starts and stops by itself.
+    pub start: RotationStart,
+}
+
+impl Default for Rotation {
+    fn default() -> Self {
+        Rotation { name: "Sponsors".into(), graphics: Vec::new(), every_minutes: 10.0, show_seconds: 15, start: RotationStart::Live }
+    }
+}
+
+/// When a rotation runs by itself (its button starts and stops it any time).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RotationStart {
+    /// Only from its button (or a command).
+    Manual,
+    /// While you're live.
+    #[default]
+    Live,
+    /// While you're live or recording.
+    OnAir,
+}
+
+impl RotationStart {
+    pub const ALL: [RotationStart; 3] = [RotationStart::Live, RotationStart::OnAir, RotationStart::Manual];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            RotationStart::Manual => "only when I start it",
+            RotationStart::Live => "while I'm live",
+            RotationStart::OnAir => "while I'm live or recording",
+        }
+    }
+}
+
+/// Your own keyboard shortcuts, on top of (or instead of) the built-in ones.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct KeysConfig {
+    /// Built-in shortcuts you've changed, by name ("record" = "Cmd+Shift+R").
+    /// Several keys are separated by commas; an empty one turns it off.
+    pub builtin: std::collections::BTreeMap<String, String>,
+    /// Keys that run any command.
+    pub custom: Vec<CustomKey>,
+}
+
+/// A key that runs a command, like "G" for "Graphic 2 Toggle".
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct CustomKey {
+    pub key: String,
+    pub command: String,
+}
+
 
 /// The next live stream, set up ahead: its YouTube event (with the page to
 /// share before the show) and going live by itself at the start time.
@@ -807,11 +879,49 @@ pub struct SourceLook {
     /// (what's behind shows the scene's background or the layers below).
     pub remove_background: bool,
     pub cutout_quality: CutoutQuality,
+    /// What happens to the background once the people are found: cut out,
+    /// blurred, or swapped for a picture.
+    #[serde(skip_serializing_if = "BackgroundMode::is_remove")]
+    pub background: BackgroundMode,
+    /// Blurring: how much (0..1).
+    pub background_blur: f32,
+    /// Replacing: the picture.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_image: Option<PathBuf>,
     /// A colour LUT (.cube), e.g. a camera's log-to-Rec.709 conversion.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lut: Option<PathBuf>,
     /// How much of the LUT (0..1).
     pub lut_strength: f32,
+}
+
+/// What happens to the background behind the people (no green screen).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum BackgroundMode {
+    /// Cut out: the scene's background or the layers below show instead.
+    #[default]
+    Remove,
+    /// Blurred, like a portrait lens.
+    Blur,
+    /// Swapped for a picture.
+    Replace,
+}
+
+impl BackgroundMode {
+    pub const ALL: [BackgroundMode; 3] = [BackgroundMode::Blur, BackgroundMode::Replace, BackgroundMode::Remove];
+
+    pub fn is_remove(&self) -> bool {
+        *self == BackgroundMode::Remove
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            BackgroundMode::Remove => "cut out (what's below shows)",
+            BackgroundMode::Blur => "blurred",
+            BackgroundMode::Replace => "a picture instead",
+        }
+    }
 }
 
 /// How carefully people are cut out: finer edges cost more time.
@@ -863,6 +973,9 @@ impl Default for SourceLook {
             key_spill: 0.1,
             remove_background: false,
             cutout_quality: CutoutQuality::Balanced,
+            background: BackgroundMode::Remove,
+            background_blur: 0.5,
+            background_image: None,
             lut: None,
             lut_strength: 1.0,
         }
@@ -901,6 +1014,7 @@ pub fn audio_key(a: &AudioConfig) -> AudioConfig {
         to_stream: true,
         processing: VoiceProcessing::default(),
         duck: false,
+        automix: false,
         record: true,
         split_channels: false,
         ..a.clone()
@@ -963,6 +1077,9 @@ pub struct AudioConfig {
     pub processing: VoiceProcessing,
     /// Turned down automatically while others talk (music, pads, ambience).
     pub duck: bool,
+    /// One of the mics the automatic mixer shares out (whoever's talking
+    /// is up, the others go down).
+    pub automix: bool,
     /// Which input this is while Cutaway runs (never saved), as for sources.
     #[serde(skip)]
     pub uid: u64,
@@ -1040,6 +1157,7 @@ impl Default for AudioConfig {
             to_stream: true,
             processing: VoiceProcessing::default(),
             duck: false,
+            automix: false,
             uid: 0,
         }
     }
@@ -1286,6 +1404,9 @@ pub struct MixConfig {
     /// "program", "stream", or an input's name (solo).
     pub monitor_source: String,
     pub monitor_volume_db: f32,
+    /// Automatic mic mixing: the mics marked for it share one level, so
+    /// whoever is talking is up and the others go down.
+    pub automix: bool,
     /// Ducking on: inputs marked to duck go down while others talk.
     pub ducking: bool,
     /// Ducking: inputs marked to duck go down by this much while others talk.
@@ -1395,6 +1516,7 @@ impl Default for MixConfig {
             monitor_device: String::new(),
             monitor_source: "program".into(),
             monitor_volume_db: 0.0,
+            automix: false,
             ducking: false,
             duck_db: -12.0,
             duck_threshold_db: -40.0,
@@ -1472,6 +1594,9 @@ pub enum GraphicKind {
     /// A band with scrolling text (`title`: the items, one per line;
     /// `subtitle`: a label at the left, "" for none).
     Ticker,
+    /// A web page (`url`: a web address or an HTML file), drawn with its
+    /// transparency at `page_size`, like a browser source.
+    Web,
 }
 
 /// What a clock graphic shows.
@@ -1581,6 +1706,18 @@ pub struct Graphic {
     pub show_seconds: bool,
     /// Tickers: how fast the text moves, in picture widths per minute.
     pub speed: f32,
+    /// Web pages: the address (or an HTML file).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub url: String,
+    /// Web pages: the size the page is laid out at, in CSS pixels.
+    #[serde(skip_serializing_if = "is_page_size")]
+    pub page_size: [u32; 2],
+}
+
+const PAGE_SIZE: [u32; 2] = [1920, 1080];
+
+fn is_page_size(s: &[u32; 2]) -> bool {
+    *s == PAGE_SIZE
 }
 
 impl Default for Graphic {
@@ -1607,6 +1744,8 @@ impl Default for Graphic {
             seconds: 300,
             clock_24h: false,
             show_seconds: false,
+            url: String::new(),
+            page_size: PAGE_SIZE,
             speed: 6.0,
         }
     }
@@ -1623,6 +1762,11 @@ impl Graphic {
 
     pub fn ticker(name: &str, text: &str, label: &str) -> Graphic {
         Graphic { name: name.into(), kind: GraphicKind::Ticker, title: text.into(), subtitle: label.into(), x: 0.0, y: 0.92, width: 1.0, box_opacity: 0.85, ..Default::default() }
+    }
+
+    /// A web page over the whole picture.
+    pub fn web(name: &str, url: &str) -> Self {
+        Graphic { name: name.into(), kind: GraphicKind::Web, url: url.into(), x: 0.0, y: 0.0, width: 1.0, ..Default::default() }
     }
 }
 

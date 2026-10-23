@@ -64,6 +64,7 @@
       <button id="leave">Leave</button>
       <span id="status2" class="note"></span>
     </div>
+    <div id="linkstat" class="note warn" hidden></div>
     <div id="sharestat" class="note" hidden></div>
     <div id="bkstat" class="note" hidden></div>
     <audio id="ret" autoplay></audio>
@@ -232,6 +233,7 @@ async function join() {
   $('self').classList.toggle('big', !info.returnVideo);
   if (!info.returnVideo) $('program').hidden = true;
   if (info.backup) { pollState(); poller = setInterval(pollState, 1500); }
+  linkTimer = setInterval(() => { sendStats(pc, ''); if (spc) sendStats(spc, 'screen'); }, 2000);
   // Sharing needs a computer: phones and tablets can't.
   $('share').hidden = !info.screen || !(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
 }
@@ -324,6 +326,57 @@ let bk = null, poller = null, sending = false, sent = 0, left = false;
 const queue = [];
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+// ---- how the connection is doing --------------------------------------------------
+// Every couple of seconds the show hears how this connection is holding up
+// (so the producer sees a warning before the picture freezes), and says what
+// it makes of it.
+let linkTimer = null;
+const linkPrev = new Map();
+
+async function sendStats(conn, part) {
+  if (!conn || left || conn.connectionState !== 'connected') return;
+  try {
+    const rep = await conn.getStats();
+    let out = null, remote = null, pair = null;
+    rep.forEach(s => {
+      if (s.type === 'outbound-rtp' && s.kind === 'video') out = s;
+      if (s.type === 'remote-inbound-rtp' && s.kind === 'video') remote = s;
+      if (s.type === 'candidate-pair' && s.nominated && s.state === 'succeeded') pair = s;
+    });
+    const vt = part ? null : stream && stream.getVideoTracks()[0];
+    const st = { limited: out ? (out.qualityLimitationReason || 'none') : 'none', camera: part ? false : !!(vt && vt.enabled) };
+    if (out && out.framesPerSecond != null) st.fps = out.framesPerSecond;
+    if (pair && pair.currentRoundTripTime != null) st.rtt = pair.currentRoundTripTime * 1000;
+    else if (remote && remote.roundTripTime != null) st.rtt = remote.roundTripTime * 1000;
+    const now = performance.now(), prev = linkPrev.get(conn);
+    if (out && prev) {
+      const dt = (now - prev.at) / 1000, sent = out.packetsSent - prev.packets;
+      if (dt > 0) st.kbps = Math.max(0, out.bytesSent - prev.bytes) * 8 / 1000 / dt;
+      if (remote && remote.packetsLost != null && prev.lost != null && sent > 0) {
+        const lost = Math.max(0, remote.packetsLost - prev.lost);
+        st.loss = lost / (sent + lost) * 100;
+      } else if (remote && remote.fractionLost != null) {
+        st.loss = remote.fractionLost * 100;
+      } else if (out.nackCount != null && prev.nacks != null && sent > 0) {
+        st.loss = Math.min(100, Math.max(0, out.nackCount - prev.nacks) / sent * 100);
+      }
+    }
+    if (out) linkPrev.set(conn, { at: now, bytes: out.bytesSent, packets: out.packetsSent, lost: remote ? remote.packetsLost : null, nacks: out.nackCount });
+    const r = await fetch(base + '/stats' + (part ? '?part=' + part : ''), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(st) });
+    if (r.ok && !part) showLink(await r.json());
+  } catch (e) {}
+}
+
+function showLink(q) {
+  const el = $('linkstat');
+  if (q.quality === 'poor') {
+    el.textContent = 'Your connection is struggling (' + q.note + '), so the show may see you freeze. Moving closer to your Wi-Fi, using a cable, or pausing downloads and other video can help.';
+  } else if (q.quality === 'weak') {
+    el.textContent = 'Your connection is a little weak (' + q.note + '). Moving closer to your Wi-Fi or pausing downloads can help.';
+  }
+  el.hidden = !(q.quality === 'poor' || q.quality === 'weak');
+}
+
 function recType() {
   if (!window.MediaRecorder) return '';
   const types = ['video/mp4;codecs=avc1.42E01F,mp4a.40.2', 'video/mp4;codecs=avc1,opus', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
@@ -414,6 +467,7 @@ $('leave').onclick = () => {
   fetch(base + '/leave', { method: 'POST' }).catch(() => {});
   left = true;
   clearInterval(poller);
+  clearInterval(linkTimer);
   finishBackup();
   stopShare();
   if (pc) pc.close(); pc = null;

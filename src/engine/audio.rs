@@ -290,6 +290,10 @@ pub struct InputShared {
     reduction: AtomicU32,
     /// Turned down while others talk.
     duck: AtomicBool,
+    /// Shared out by the automatic mixer.
+    automix: AtomicBool,
+    /// How far the automatic mixer has it down right now (dB, for the UI).
+    automix_db: AtomicU32,
 }
 
 impl InputShared {
@@ -309,6 +313,8 @@ impl InputShared {
             levels: Mutex::new(Vec::new()),
             reduction: AtomicU32::new(0),
             duck: AtomicBool::new(cfg.duck),
+            automix: AtomicBool::new(cfg.automix),
+            automix_db: AtomicU32::new(0f32.to_bits()),
         });
         s.set_gain_db(cfg.gain_db);
         s
@@ -345,6 +351,14 @@ impl InputShared {
     }
     pub fn set_duck(&self, on: bool) {
         self.duck.store(on, Ordering::Relaxed);
+    }
+    pub fn set_automix(&self, on: bool) {
+        self.automix.store(on, Ordering::Relaxed);
+    }
+    /// How far the automatic mixer has this mic down (dB, 0 = not), or
+    /// None when it isn't one of the auto-mixed mics.
+    pub fn automix_db(&self) -> Option<f32> {
+        self.automix.load(Ordering::Relaxed).then(|| f32::from_bits(self.automix_db.load(Ordering::Relaxed)))
     }
     pub fn set_processing(&self, p: &VoiceProcessing) {
         let mut cur = self.processing.lock_ok();
@@ -424,6 +438,7 @@ pub struct MixShared {
     target_lufs: AtomicU32,
     reset_recording: AtomicBool,
     reset_stream: AtomicBool,
+    automix: AtomicBool,
     ducking: AtomicBool,
     duck_db: AtomicU32,
     duck_threshold_db: AtomicU32,
@@ -467,6 +482,7 @@ impl MixShared {
             target_lufs: AtomicU32::new(0),
             reset_recording: AtomicBool::new(false),
             reset_stream: AtomicBool::new(false),
+            automix: AtomicBool::new(false),
             ducking: AtomicBool::new(false),
             duck_db: AtomicU32::new(0),
             duck_threshold_db: AtomicU32::new(0),
@@ -500,6 +516,7 @@ impl MixShared {
         self.levelling.store(cfg.stream_levelling, Ordering::Relaxed);
         self.target_lufs.store(cfg.stream_target_lufs.clamp(-30.0, -8.0).to_bits(), Ordering::Relaxed);
         self.ducking.store(cfg.ducking, Ordering::Relaxed);
+        self.automix.store(cfg.automix, Ordering::Relaxed);
         self.duck_db.store(cfg.duck_db.clamp(-40.0, 0.0).to_bits(), Ordering::Relaxed);
         self.duck_threshold_db.store(cfg.duck_threshold_db.clamp(-70.0, -10.0).to_bits(), Ordering::Relaxed);
         self.duck_release_ms.store(cfg.duck_release_ms.clamp(50, 10_000), Ordering::Relaxed);
@@ -618,6 +635,9 @@ struct Strip {
     meter: MeterAcc,
     history: VecDeque<AudioBlock>,
     fed: Option<u64>,
+    /// Automatic mixing: how loud it's been lately (power), and its gain now (dB).
+    am_env: f32,
+    am_db: f32,
 }
 
 impl Strip {
@@ -636,6 +656,8 @@ impl Strip {
             meter: MeterAcc::default(),
             history: VecDeque::new(),
             fed: None,
+            am_env: 0.0,
+            am_db: 0.0,
         }
     }
 }
@@ -694,6 +716,48 @@ fn take_lineup(l: MixLineup, inputs: &mut Vec<MixInput>, strips: &mut Vec<Strip>
     }
     // Meters are by number: start them again.
     status.lock_ok().meters.retain(|k, _| !(k.len() > 1 && k.starts_with('a') && k[1..].bytes().all(|b| b.is_ascii_digit())));
+}
+
+/// The most the automatic mixer turns a quiet mic down.
+const AUTOMIX_FLOOR_DB: f32 = -30.0;
+
+fn db_to_gain(db: f32) -> f32 {
+    if db == 0.0 {
+        1.0
+    } else {
+        10f32.powf(db / 20.0)
+    }
+}
+
+/// Gain sharing (the way Dan Dugan's automixer works): each mic's share of
+/// how loud all of them are, as a level in dB. One person talking gets
+/// (nearly) all of it; two at once split it; nobody talking leaves every
+/// mic a little down, so the room noise doesn't add up. `mics` is each
+/// mic's power this block; their recent loudness is kept in the strips.
+fn automix_shares(strips: &mut [Strip], mics: &[(usize, f32)]) -> Vec<(usize, f32)> {
+    // Fast to rise, about a quarter of a second to fall (10 ms blocks).
+    const FALL: f32 = 0.96;
+    // A quiet room, so silence still shares evenly.
+    const NOISE: f32 = 1e-7;
+    for &(i, p) in mics {
+        let s = &mut strips[i];
+        s.am_env = if p > s.am_env { p } else { s.am_env * FALL + p * (1.0 - FALL) };
+    }
+    if mics.len() < 2 {
+        return mics.iter().map(|&(i, _)| (i, 0.0)).collect();
+    }
+    let total: f32 = mics.iter().map(|&(i, _)| strips[i].am_env + NOISE).sum();
+    mics.iter().map(|&(i, _)| (i, (10.0 * ((strips[i].am_env + NOISE) / total).log10()).clamp(AUTOMIX_FLOOR_DB, 0.0))).collect()
+}
+
+/// Towards the share: up quickly (so the start of a word isn't lost),
+/// down more gently (so it doesn't pump between words).
+fn automix_step(now: f32, target: f32) -> f32 {
+    if target > now {
+        (now + 3.0).min(target)
+    } else {
+        (now - 0.6).max(target)
+    }
 }
 
 /// The mixer loop: runs until `stop`.
@@ -810,6 +874,28 @@ pub fn run_mixer(mut inputs: Vec<MixInput>, mut names: Vec<String>, taps: MixTap
             processed[i] = Some(buf.clone());
         }
 
+        // Automatic mixing: the auto-mixed mics that are on share one level.
+        let am_from: Vec<f32> = strips.iter().map(|s| s.am_db).collect();
+        {
+            let auto = master.automix.load(Ordering::Relaxed);
+            let mics: Vec<(usize, f32)> = inputs
+                .iter()
+                .enumerate()
+                .filter(|(i, inp)| auto && inp.shared.automix.load(Ordering::Relaxed) && Some(*i) != talkback_input && (strips[*i].level > 0.0 || strips[*i].target > 0.0))
+                .filter_map(|(i, inp)| {
+                    let b = processed[i].as_ref()?;
+                    let g = inp.shared.gain();
+                    Some((i, b.iter().map(|x| x * x).sum::<f32>() / b.len().max(1) as f32 * g * g))
+                })
+                .collect();
+            let shares = automix_shares(&mut strips, &mics);
+            for (i, strip) in strips.iter_mut().enumerate() {
+                let target = shares.iter().find(|(j, _)| *j == i).map(|(_, db)| *db).unwrap_or(0.0);
+                strip.am_db = automix_step(strip.am_db, target);
+                inputs[i].shared.automix_db.store(strip.am_db.to_bits(), Ordering::Relaxed);
+            }
+        }
+
         // Ducking: is anyone (not ducked, on air) talking?
         let threshold = 10f32.powf(f32::from_bits(master.duck_threshold_db.load(Ordering::Relaxed)) / 20.0);
         let talking = inputs.iter().enumerate().any(|(i, inp)| {
@@ -870,6 +956,7 @@ pub fn run_mixer(mut inputs: Vec<MixInput>, mut names: Vec<String>, taps: MixTap
                 continue;
             }
             let ducked = inp.shared.duck.load(Ordering::Relaxed);
+            let (am_a, am_b) = (db_to_gain(am_from[i]), db_to_gain(strip.am_db));
             let keep = minus_any & (1u64 << i.min(63)) != 0 && i < 64;
             let mut mine = if keep { vec![0.0f32; buf.len()] } else { Vec::new() };
             let frames = buf.len() / 2;
@@ -878,7 +965,8 @@ pub fn run_mixer(mut inputs: Vec<MixInput>, mut names: Vec<String>, taps: MixTap
                     strip.level = if strip.target > strip.level { (strip.level + strip.step).min(strip.target) } else { (strip.level - strip.step).max(strip.target) };
                 }
                 let duck = if ducked { duck_from + (duck_to - duck_from) * (k as f32 / frames as f32) } else { 1.0 };
-                let gl = g * strip.level * duck;
+                let am = am_a + (am_b - am_a) * (k as f32 / frames as f32);
+                let gl = g * strip.level * duck * am;
                 let (l, r) = (f[0] * gl, f[1] * gl);
                 if post {
                     post_buf[2 * k] = l;
@@ -1257,6 +1345,26 @@ mod tests {
         // Ducking switched off: the music stays up while the voice talks.
         let out = mix(&[0.1, 0.3], vec![input(true), input(false)], vec![MixKind::Recording], |m| m.apply(&crate::config::MixConfig { limiter: false, ducking: false, ..Default::default() }));
         assert!((out[0][100] - 0.4).abs() < 0.01, "{}", out[0][100]);
+    }
+
+    #[test]
+    fn automix_shares_the_level() {
+        let mic = || crate::config::AudioConfig { automix: true, ..Default::default() };
+        let tracks = vec![MixKind::Track { input: 0, post_fader: true }, MixKind::Track { input: 1, post_fader: true }, MixKind::Track { input: 2, post_fader: true }];
+        let on = |m: &MixShared| m.apply(&crate::config::MixConfig { limiter: false, automix: true, ..Default::default() });
+        // One talking: they stay up, the quiet one goes down (as far as it goes).
+        let out = mix(&[0.3, 0.003, 0.2], vec![mic(), mic(), input(false)], tracks.clone(), on);
+        assert!((out[0][100] - 0.3).abs() < 0.01, "talker: {}", out[0][100]);
+        let floor = 0.003 * 10f32.powf(AUTOMIX_FLOOR_DB / 20.0);
+        assert!((out[1][100] - floor).abs() < 1e-4, "quiet mic: {} (want {floor})", out[1][100]);
+        assert!((out[2][100] - 0.2).abs() < 0.01, "not an auto-mixed input: {}", out[2][100]);
+        // Two talking equally: each 3 dB down, so together they're as loud as one.
+        let out = mix(&[0.1, 0.1], vec![mic(), mic()], tracks.clone(), on);
+        let half = 0.1 * 10f32.powf(-3.0103 / 20.0);
+        assert!((out[0][100] - half).abs() < 0.002 && (out[1][100] - half).abs() < 0.002, "{} {}", out[0][100], out[1][100]);
+        // Switched off: nothing changes.
+        let out = mix(&[0.3, 0.003], vec![mic(), mic()], tracks, |_| {});
+        assert!((out[1][100] - 0.003).abs() < 1e-4, "{}", out[1][100]);
     }
 
     #[test]

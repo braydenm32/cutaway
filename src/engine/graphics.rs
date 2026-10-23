@@ -1,5 +1,6 @@
-//! The graphics layer: logos, watermarks, name titles and clocks drawn
-//! above every scene, each with its own on/off button and a fade.
+//! The graphics layer: logos, watermarks, name titles, clocks, tickers and
+//! web pages drawn above every scene, each with its own on/off button and
+//! a way of coming on.
 
 use crate::util::LockExt;
 use super::timers::{clock_text, Timers};
@@ -84,6 +85,9 @@ struct Item {
     text: (String, bool),
     /// Tickers: the moving text.
     strip: Option<TickerStrip>,
+    /// Web pages: the page, and which of its pictures is showing.
+    web: Option<super::web::WebPage>,
+    web_seen: u64,
 }
 
 impl Item {
@@ -115,7 +119,27 @@ pub struct Graphics {
     versions: std::sync::atomic::AtomicU64,
     pub timers: Arc<Timers>,
     comment: Mutex<CommentItem>,
+    /// Every time a graphic came on or went off: (when, name, on).
+    log: Mutex<Vec<(Ns, String, bool)>>,
 }
+
+/// How long a graphic was on screen in a stretch of the show.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OnAir {
+    pub name: String,
+    /// Each time it was on: from and until (host time).
+    pub showings: Vec<(Ns, Ns)>,
+}
+
+impl OnAir {
+    pub fn seconds(&self) -> f64 {
+        self.showings.iter().map(|(a, b)| (b - a) as f64 / 1e9).sum()
+    }
+}
+
+/// The most on/off changes kept (a show switching graphics every few
+/// seconds for a day stays well under it).
+const LOG_MAX: usize = 100_000;
 
 /// Layer keys for things that aren't in the graphics list.
 const COMMENT_KEY: usize = 1 << 20;
@@ -123,13 +147,68 @@ const STRIP_KEY: usize = 1 << 21;
 
 impl Graphics {
     pub fn new(cfgs: &[Graphic], canvas: (u32, u32), timers: Arc<Timers>) -> Arc<Self> {
-        let g = Arc::new(Graphics { canvas, items: Mutex::new(Vec::new()), versions: Default::default(), timers, comment: Mutex::new(CommentItem::default()) });
+        let g = Arc::new(Graphics { canvas, items: Mutex::new(Vec::new()), versions: Default::default(), timers, comment: Mutex::new(CommentItem::default()), log: Mutex::new(Vec::new()) });
         g.update(cfgs);
+        let now = clock::now();
         for it in g.items.lock_ok().iter_mut() {
             it.visible = it.cfg.visible;
             it.from_alpha = it.target();
+            if it.visible {
+                g.log_change(now, &it.cfg.name, true);
+            }
         }
         g
+    }
+
+    fn log_change(&self, t: Ns, name: &str, on: bool) {
+        let mut log = self.log.lock_ok();
+        if log.len() >= LOG_MAX {
+            log.drain(..LOG_MAX / 10);
+        }
+        log.push((t, name.to_string(), on));
+    }
+
+    /// Each graphic that was on screen between `t0` and `t1`, and when, in
+    /// the order they first came on.
+    pub fn on_air(&self, t0: Ns, t1: Ns) -> Vec<OnAir> {
+        let log = self.log.lock_ok();
+        let mut out: Vec<OnAir> = Vec::new();
+        let mut since: Vec<(String, Ns)> = Vec::new();
+        let mut close = |out: &mut Vec<OnAir>, name: &str, from: Ns, until: Ns| {
+            let (a, b) = (from.max(t0), until.min(t1));
+            if b <= a {
+                return;
+            }
+            match out.iter_mut().find(|o| o.name == name) {
+                Some(o) => o.showings.push((a, b)),
+                None => out.push(OnAir { name: name.to_string(), showings: vec![(a, b)] }),
+            }
+        };
+        for (t, name, on) in log.iter() {
+            if *t > t1 {
+                break;
+            }
+            let open = since.iter().position(|(n, _)| n == name);
+            match (on, open) {
+                (true, None) => since.push((name.clone(), *t)),
+                (false, Some(i)) => {
+                    let (n, from) = since.remove(i);
+                    close(&mut out, &n, from, *t);
+                }
+                _ => {}
+            }
+        }
+        // Still on at the end.
+        since.sort_by_key(|s| s.1);
+        for (n, from) in since {
+            close(&mut out, &n, from, t1);
+        }
+        out
+    }
+
+    /// Where a graphic is in the list, by name.
+    pub fn index_of(&self, name: &str) -> Option<usize> {
+        self.items.lock_ok().iter().position(|i| i.cfg.name.eq_ignore_ascii_case(name))
     }
 
     fn next_version(&self) -> u64 {
@@ -148,18 +227,27 @@ impl Graphics {
                     p.cfg = cfg.clone();
                     p
                 }
-                Some(p) => {
+                Some(mut p) => {
                     let (image, error, text) = self.render(cfg);
                     let strip = self.render_strip(cfg);
-                    Item { cfg: cfg.clone(), image, error, version: self.next_version(), visible: p.visible, changed_at: p.changed_at, from_alpha: p.from_alpha, text, strip }
+                    // A page carries on unless what it shows changed.
+                    let same_page = p.cfg.kind == GraphicKind::Web && p.cfg.url == cfg.url && p.cfg.page_size == cfg.page_size;
+                    let (web, web_seen) = if same_page { (p.web.take(), p.web_seen) } else { (open_page(cfg), 0) };
+                    let image = if same_page { p.image.take() } else { image };
+                    Item { cfg: cfg.clone(), image, error, version: self.next_version(), visible: p.visible, changed_at: p.changed_at, from_alpha: p.from_alpha, text, strip, web, web_seen }
                 }
                 None => {
                     let (image, error, text) = self.render(cfg);
                     let strip = self.render_strip(cfg);
-                    Item { cfg: cfg.clone(), image, error, version: self.next_version(), visible: false, changed_at: 0, from_alpha: 0.0, text, strip }
+                    Item { cfg: cfg.clone(), image, error, version: self.next_version(), visible: false, changed_at: 0, from_alpha: 0.0, text, strip, web: open_page(cfg), web_seen: 0 }
                 }
             };
             items.push(item);
+        }
+        // Gone (or renamed) while on screen: off as far as the log goes.
+        let t = clock::now() - VIDEO_LATENCY;
+        for o in old.iter().filter(|o| o.visible) {
+            self.log_change(t, &o.cfg.name, false);
         }
     }
 
@@ -173,6 +261,8 @@ impl Graphics {
                 Ok(render_clock(cfg, &text.0, text.1, self.canvas))
             }
             GraphicKind::Ticker => Ok(render_ticker_band(cfg, self.canvas)),
+            // (Drawn by the browser as it goes.)
+            GraphicKind::Web => return (None, None, text),
         };
         match r {
             Ok(img) => (Some(Arc::new(img)), None, text),
@@ -230,7 +320,14 @@ impl Graphics {
 
     /// (name, on, problem) for each graphic.
     pub fn list(&self) -> Vec<(String, bool, Option<String>)> {
-        self.items.lock_ok().iter().map(|i| (i.cfg.name.clone(), i.visible, i.error.clone())).collect()
+        self.items.lock_ok().iter().map(|i| (i.cfg.name.clone(), i.visible, i.error.clone().or_else(|| i.web.as_ref().and_then(|w| w.problem())))).collect()
+    }
+
+    /// Load a web page again (to restart its animation or pick up changes).
+    pub fn reload(&self, index: usize) {
+        if let Some(w) = self.items.lock_ok().get(index).and_then(|i| i.web.as_ref()) {
+            w.reload();
+        }
     }
 
     pub fn is_visible(&self, index: usize) -> bool {
@@ -249,6 +346,9 @@ impl Graphics {
         it.from_alpha = it.alpha_at(t);
         it.changed_at = t;
         it.visible = on;
+        let name = it.cfg.name.clone();
+        drop(items);
+        self.log_change(t, &name, on);
     }
 
     pub fn toggle(&self, index: usize) {
@@ -279,6 +379,12 @@ impl Graphics {
         let wall = chrono::Local::now() + chrono::Duration::nanoseconds(t - clock::now());
         for (i, it) in items.iter_mut().enumerate() {
             let alpha = it.alpha_at(t);
+            // A web page's newest picture.
+            if let Some((v, img)) = it.web.as_ref().and_then(|w| w.picture()).filter(|(v, _)| *v != it.web_seen) {
+                it.web_seen = v;
+                it.image = Some(img);
+                it.version = self.versions.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            }
             // Clocks redraw when their text changes.
             if it.cfg.kind == GraphicKind::Clock && alpha > 0.001 {
                 let text = clock_text(&it.cfg, &self.timers, wall);
@@ -336,6 +442,11 @@ impl Graphics {
         }
         out
     }
+}
+
+/// A web graphic's page, opened in the background.
+fn open_page(cfg: &Graphic) -> Option<super::web::WebPage> {
+    (cfg.kind == GraphicKind::Web).then(|| super::web::WebPage::open(&cfg.url, (cfg.page_size[0], cfg.page_size[1]), Arc::new(|| {})))
 }
 
 /// Where a graphic is, how solid, and how much of it shows, `k` of the way

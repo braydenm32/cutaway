@@ -6,6 +6,7 @@
 use crate::util::LockExt;
 use crate::config::{Config, DisplayOutput, TransitionMode};
 use crate::control::state::{self as show, ShowState};
+use crate::control::shortcuts::{self, Binding, Builtin, KeyCombo, Keymap};
 use crate::control::{self, midi, osc, profiles, remote, Action, MediaCmd, Request, Toggle};
 use crate::engine::player::PlayerCmd;
 use crate::engine::precheck::{self, CheckItem, Level};
@@ -229,6 +230,10 @@ pub struct App {
     sync: Option<SyncWizard>,
     /// The transition T toggles back to from Cut.
     last_transition: TransitionMode,
+    /// The keyboard shortcuts, made from the settings they came from.
+    keymap: Option<(crate::config::KeysConfig, Keymap)>,
+    /// Keys held down for something that stops when they're let go.
+    held_keys: Vec<(Key, Action)>,
     /// Takes left unfinished by a crash, being rescued.
     rescue: Option<waiting::Rescue>,
     /// Scripted actions for automated screenshots (hidden --ui-test flag).
@@ -286,6 +291,8 @@ impl App {
             display_screen_applied: String::new(),
             display_generation: 0,
             sync: None,
+            keymap: None,
+            held_keys: Vec::new(),
             last_transition: if cfg.transition.mode == TransitionMode::Cut { TransitionMode::Mix } else { cfg.transition.mode },
             cfg,
             save_path,
@@ -904,6 +911,11 @@ impl App {
                 self.toggle_graphic(i, Some(on));
                 Ok(format!("{} {}", names[i], if on { "on" } else { "off" }))
             }
+            Action::Rotation(t, tg) => {
+                let e = self.engine.as_ref().ok_or("the engine isn't running")?;
+                let (name, on) = e.rotations.set(&self.cfg.rotations, &t, tg, &e.graphics)?;
+                Ok(format!("{name} {}", if on { "started" } else { "stopped" }))
+            }
             Action::Audio(t, tg) => {
                 let names: Vec<String> = self.cfg.audio.iter().map(|a| a.name.clone()).collect();
                 let i = t.find(&names).ok_or("there's no such audio input")?;
@@ -1155,6 +1167,7 @@ impl App {
                 .collect(),
             sources: e.sources.iter().enumerate().map(|(i, s)| show::SourceState { name: s.name.clone(), tally: tally(i), offline: offline.contains(&s.name) }).collect(),
             graphics: e.graphics.list().into_iter().map(|(name, on, _)| show::GraphicState { name, on }).collect(),
+            rotations: e.rotations.list().into_iter().map(|r| show::RotationState { name: r.name, running: r.running, showing: r.showing }).collect(),
             inputs: e
                 .audio
                 .iter()
@@ -1321,6 +1334,10 @@ impl App {
                     Action::Live(_) => lit(state.live),
                     Action::Auto(_) => lit(state.auto),
                     Action::Graphic(t, _) => lit(t.find(&gnames).is_some_and(|i| state.graphics[i].on)),
+                    Action::Rotation(t, _) => {
+                        let names: Vec<String> = state.rotations.iter().map(|r| r.name.clone()).collect();
+                        lit(t.find(&names).is_some_and(|i| state.rotations[i].running))
+                    }
                     Action::Audio(t, _) => lit(t.find(&anames).is_some_and(|i| state.inputs[i].on)),
                     Action::Transition(mode) => lit(state.transition == mode.name()),
                     Action::Captions(_) => lit(state.captions),
@@ -1349,79 +1366,157 @@ impl App {
     // ---- keys ------------------------------------------------------------------------
 
     fn handle_keys(&mut self, ctx: &egui::Context) {
+        // Let go of held shortcuts (talkback, sound pads), even if a window
+        // opened while the key was down.
+        let ups: Vec<Key> = ctx.input(|i| i.events.iter().filter_map(|e| if let egui::Event::Key { key, pressed: false, .. } = e { Some(*key) } else { None }).collect());
+        for k in ups {
+            let (go, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut self.held_keys).into_iter().partition(|(h, _)| *h == k);
+            self.held_keys = keep;
+            for (_, a) in go {
+                self.act(a);
+            }
+        }
         if ctx.egui_wants_keyboard_input() || self.settings.is_some() || self.title_edit.is_some() || self.confirm.is_some() || self.precheck.is_some() || self.sync.is_some() {
             return;
         }
-        let keys = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Num9];
-        if ctx.input(|i| i.modifiers.command && i.key_pressed(Key::Comma)) {
-            self.open_settings();
-            return;
+        if self.keymap.as_ref().is_none_or(|(c, _)| *c != self.cfg.keys) {
+            self.keymap = Some((self.cfg.keys.clone(), Keymap::new(&self.cfg.keys)));
         }
-        // Undo: Cmd/Ctrl+Z. Redo: Cmd/Ctrl+Shift+Z, or Ctrl+Y.
-        let (undo, redo) = ctx.input(|i| {
-            let z = i.modifiers.command && i.key_pressed(Key::Z);
-            (z && !i.modifiers.shift, (z && i.modifiers.shift) || (i.modifiers.command && i.key_pressed(Key::Y)))
+        let downs: Vec<(KeyCombo, bool)> = ctx.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|e| match e {
+                    // (Control on a Mac isn't ⌘, so it's left to the system.)
+                    egui::Event::Key { key, pressed: true, repeat, modifiers, .. } if !(modifiers.ctrl && !modifiers.command) => Some((KeyCombo::new(*key, *modifiers), *repeat)),
+                    _ => None,
+                })
+                .collect()
         });
-        if undo {
-            self.undo(ctx);
-            return;
-        }
-        if redo {
-            self.redo(ctx);
-            return;
-        }
-        let (pressed, shift, alt, cmd_r) = ctx.input(|i| (keys.iter().position(|k| i.key_pressed(*k)), i.modifiers.shift, i.modifiers.alt, i.modifiers.command && i.key_pressed(Key::R)));
-        let (t, e, m, a, space, enter) = ctx.input(|i| {
-            let plain = !i.modifiers.command && !i.modifiers.alt;
-            (
-                plain && i.key_pressed(Key::T),
-                plain && i.key_pressed(Key::E),
-                plain && i.key_pressed(Key::M),
-                plain && i.key_pressed(Key::A),
-                plain && i.key_pressed(Key::Space),
-                plain && i.key_pressed(Key::Enter),
-            )
-        });
-        if ctx.input(|i| !i.modifiers.command && !i.modifiers.alt && i.key_pressed(Key::C)) {
-            if let Some(c) = self.engine.as_ref().and_then(|e| e.captions()) {
-                c.set_showing(!c.showing());
+        for (combo, repeat) in downs {
+            let binding = self.keymap.as_ref().and_then(|(_, m)| m.find(combo).cloned());
+            match binding {
+                // Only undo and redo repeat while the key is held.
+                Some(Binding::Builtin(b)) if !repeat || matches!(b, Builtin::Undo | Builtin::Redo) => self.run_builtin(ctx, b, combo.key),
+                Some(Binding::Command(c)) if !repeat => {
+                    match Action::parse(&c) {
+                        Ok(a) => {
+                            self.run_key_command(a);
+                            if let Some(up) = shortcuts::release_of(&c) {
+                                self.held_keys.push((combo.key, up));
+                            }
+                        }
+                        Err(e) => self.toast(e, true),
+                    }
+                }
+                Some(_) => {}
+                None if !repeat => self.numbered_key(combo),
+                None => {}
             }
         }
-        if let Some(i) = pressed {
-            if alt {
-                self.toggle_graphic(i, None);
-            } else {
-                self.press_scene(i, shift);
+    }
+
+    /// A command on one of your keys. Recording and going live take the same
+    /// path as their buttons, so the checks and "are you sure?" still come up.
+    fn run_key_command(&mut self, a: Action) {
+        let flip = |t: &Toggle, now: bool| match t {
+            Toggle::On => !now,
+            Toggle::Off => now,
+            Toggle::Toggle => true,
+        };
+        match &a {
+            Action::Record(t) => {
+                if flip(t, self.engine.as_ref().is_some_and(|e| e.is_recording())) {
+                    self.toggle_record();
+                }
+            }
+            Action::Live(t) => {
+                if flip(t, self.engine.as_ref().is_some_and(|e| e.is_streaming())) {
+                    self.toggle_stream();
+                }
+            }
+            _ => self.act(a),
+        }
+    }
+
+    /// " (M)": the key for a built-in shortcut, for a button's hover text
+    /// ("" when it has none).
+    fn key_hint(&self, b: Builtin) -> String {
+        let label = match &self.keymap {
+            Some((_, m)) => m.label_of(b),
+            None => Keymap::new(&self.cfg.keys).label_of(b),
+        };
+        if label.is_empty() { label } else { format!(" ({label})") }
+    }
+
+    /// 1–9 take a scene (Shift cuts straight to it), Alt/Option + 1–9 show a
+    /// graphic, F1–F12 play sound pads.
+    fn numbered_key(&mut self, combo: KeyCombo) {
+        if combo.command {
+            return;
+        }
+        if let Some(i) = shortcuts::DIGITS.iter().position(|k| *k == combo.key) {
+            match (combo.shift, combo.alt) {
+                (_, false) => self.press_scene(i, combo.shift),
+                (false, true) => self.toggle_graphic(i, None),
+                (true, true) => {}
+            }
+        } else if let Some(i) = shortcuts::PAD_KEYS.iter().position(|k| *k == combo.key) {
+            if !combo.alt && !combo.shift && i < self.cfg.pads.len() {
+                self.act(Action::Pad(control::Target::Index(i), control::PadCmd::Press));
+                self.held_keys.push((combo.key, Action::Pad(control::Target::Index(i), control::PadCmd::Release)));
             }
         }
-        if t {
-            // Cut <-> the last transition used.
-            self.cfg.transition.mode = match self.mode() {
-                TransitionMode::Cut => self.last_transition,
-                _ => TransitionMode::Cut,
-            };
-            self.cfg_dirty = true;
-        }
-        if e && !cmd_r {
-            self.edit_mode = !self.edit_mode;
-        }
-        if cmd_r {
-            self.toggle_record();
-        }
-        if m {
-            match self.add_marker(None) {
+    }
+
+    fn run_builtin(&mut self, ctx: &egui::Context, b: Builtin, key: Key) {
+        match b {
+            Builtin::Settings => self.open_settings(),
+            Builtin::Undo => self.undo(ctx),
+            Builtin::Redo => self.redo(ctx),
+            Builtin::Record => self.toggle_record(),
+            Builtin::Transition => {
+                // Cut <-> the last transition used.
+                self.cfg.transition.mode = match self.mode() {
+                    TransitionMode::Cut => self.last_transition,
+                    _ => TransitionMode::Cut,
+                };
+                self.cfg_dirty = true;
+            }
+            Builtin::Edit => self.edit_mode = !self.edit_mode,
+            Builtin::Marker => match self.add_marker(None) {
                 Ok(n) => self.toast(format!("{n} added"), false),
                 Err(err) => self.toast(err, true),
+            },
+            Builtin::Auto => {
+                let on = !self.auto_on();
+                self.set_auto(on);
+            }
+            Builtin::Take | Builtin::CutPreview => {
+                if self.preview_mode() {
+                    self.take_preview(b == Builtin::CutPreview);
+                }
+            }
+            Builtin::Captions => {
+                if let Some(c) = self.engine.as_ref().and_then(|e| e.captions()) {
+                    c.set_showing(!c.showing());
+                }
+            }
+            Builtin::NextSegment | Builtin::PreviousSegment => {
+                if !self.cfg.rundown.segments.is_empty() {
+                    self.act(Action::Rundown(if b == Builtin::PreviousSegment { crate::control::rundown::RundownCmd::Previous } else { crate::control::rundown::RundownCmd::Next }));
+                }
+            }
+            Builtin::Clip => match self.run_action(Action::Clip(None)) {
+                Ok(m) => self.toast(m, false),
+                Err(e) => self.toast(e, true),
+            },
+            Builtin::Talkback => {
+                if self.engine.as_ref().is_some_and(|e| e.mix.talkback_input().is_some()) {
+                    self.act(Action::Talkback(Toggle::On));
+                    self.held_keys.push((key, Action::Talkback(Toggle::Off)));
+                }
             }
         }
-        if a {
-            let on = !self.auto_on();
-            self.set_auto(on);
-        }
-        if (space || enter) && self.preview_mode() {
-            self.take_preview(enter);
-        }
-        self.extra_keys(ctx);
     }
 
     /// Going live by itself at the scheduled start time (if Cutaway is open
@@ -1713,12 +1808,12 @@ impl App {
                     self.toggle_record();
                 }
                 let mtext = if markers > 0 { format!("◆ Marker ({markers})") } else { "◆ Marker".into() };
-                if ui.add(egui::Button::new(mtext).min_size(vec2(0.0, 30.0))).on_hover_text("Mark this moment (M): becomes a chapter and a timeline marker").clicked() {
+                if ui.add(egui::Button::new(mtext).min_size(vec2(0.0, 30.0))).on_hover_text(format!("Mark this moment{}: becomes a chapter and a timeline marker", self.key_hint(Builtin::Marker))).clicked() {
                     marker_clicked = true;
                 }
                 if ui
                     .add(egui::Button::new("✂ Clip").min_size(vec2(0.0, 30.0)))
-                    .on_hover_text(format!("Save the last {} seconds as a clip in the take's Clips folder (K)", self.cfg.output.clip_seconds))
+                    .on_hover_text(format!("Save the last {} seconds as a clip in the take's Clips folder{}", self.cfg.output.clip_seconds, self.key_hint(Builtin::Clip)))
                     .clicked()
                 {
                     clip_clicked = true;
@@ -2038,7 +2133,7 @@ impl App {
         painter.text(take.center(), Align2::CENTER_CENTER, "TAKE", FontId::proportional(14.0), Color32::WHITE);
         painter.rect_filled(cut, 6.0, if rc.hovered() { Color32::from_rgb(60, 66, 80) } else { RAISED });
         painter.text(cut.center(), Align2::CENTER_CENTER, "CUT", FontId::proportional(14.0), Color32::WHITE);
-        if rt.on_hover_text(format!("{} to program (Space)", self.cfg.transition.mode.label())).clicked() {
+        if rt.on_hover_text(format!("{} to program{}", self.cfg.transition.mode.label(), self.key_hint(Builtin::Take))).clicked() {
             self.take_preview(false);
         }
         if rc.on_hover_text("Straight to program (Enter)").clicked() {
@@ -2510,6 +2605,12 @@ impl App {
                 (s.name.clone(), s.preview.clone(), s.size.1 as f32 / s.size.0 as f32, offline_set.contains(&s.name), detail)
             })
             .collect();
+        // Guests whose connection is struggling, by source.
+        let links: std::collections::HashMap<String, (crate::engine::guests::LinkQuality, String)> = if self.cfg.guests.enabled {
+            crate::engine::guests::hub().guests().into_iter().filter_map(|g| Some((g.source, g.link.filter(|l| l.0 != crate::engine::guests::LinkQuality::Good)?))).collect()
+        } else {
+            Default::default()
+        };
         let players: Vec<Option<Arc<crate::engine::player::PlayerControl>>> = (0..n).map(|i| engine.player(i)).collect();
         let framers: Vec<Option<Arc<crate::engine::framing::FramingShared>>> = engine.sources.iter().map(|s| s.input.framing().cloned()).collect();
         let mut clicked: Option<(usize, bool)> = None;
@@ -2533,6 +2634,12 @@ impl App {
                 waiting::draw_tile_wait(&painter, pic, wait, detail.as_deref(), ctx.input(|i| i.time) as f32);
                 if wait != waiting::TileWait::NoSignal {
                     ctx.request_repaint_after(Duration::from_millis(50));
+                }
+            }
+            if let (waiting::TileWait::Fine, Some((q, note))) = (wait, links.get(name)) {
+                waiting::draw_link_warning(&painter, pic, *q);
+                if resp.hovered() {
+                    resp.clone().on_hover_text(format!("{name}'s connection: {note}"));
                 }
             }
             let on_air = live_sources.contains(&i);
@@ -2726,7 +2833,7 @@ impl App {
                         self.cfg_dirty = true;
                     }
                     let mut pv = self.cfg.transition.preview_mode;
-                    if ui.add(egui::Button::selectable(pv, "Preview")).on_hover_text("Pick the next scene in preview, then Take (Space) or Cut (Enter)").clicked() {
+                    if ui.add(egui::Button::selectable(pv, "Preview")).on_hover_text(format!("Pick the next scene in preview, then Take{} or Cut{}", self.key_hint(Builtin::Take), self.key_hint(Builtin::CutPreview))).clicked() {
                         pv = !pv;
                         self.cfg.transition.preview_mode = pv;
                         self.cfg_dirty = true;
@@ -2738,7 +2845,7 @@ impl App {
                     }
                     let auto = self.auto_on();
                     let auto_btn = egui::Button::selectable(auto, RichText::new("AUTO").strong().color(if auto { Color32::WHITE } else { TEXT_DIM }));
-                    if ui.add(auto_btn).on_hover_text("Switch automatically to whoever is talking (A). Set up in Settings → Switching.").clicked() {
+                    if ui.add(auto_btn).on_hover_text(format!("Switch automatically to whoever is talking{}. Set up in Settings → Switching.", self.key_hint(Builtin::Auto))).clicked() {
                         self.set_auto(!auto);
                     }
                     if let Some(c) = self.engine.as_ref().and_then(|e| e.captions()) {
@@ -2747,13 +2854,13 @@ impl App {
                         let ok = status == "listening";
                         let color = if !ok { AMBER } else if on { Color32::WHITE } else { TEXT_DIM };
                         let b = egui::Button::selectable(on, RichText::new("CC").strong().color(color));
-                        let tip = if ok { "Live captions on screen (C)".to_string() } else { format!("Live captions: {status}") };
+                        let tip = if ok { format!("Live captions on screen{}", self.key_hint(Builtin::Captions)) } else { format!("Live captions: {status}") };
                         if ui.add(b).on_hover_text(tip).clicked() {
                             c.set_showing(!on);
                         }
                     }
                     let label = if self.edit_mode { "Editing" } else { "Edit layout" };
-                    if ui.add(egui::Button::selectable(self.edit_mode, label)).on_hover_text("Move and resize frames (E)").clicked() {
+                    if ui.add(egui::Button::selectable(self.edit_mode, label)).on_hover_text(format!("Move and resize frames{}", self.key_hint(Builtin::Edit))).clicked() {
                         self.edit_mode = !self.edit_mode;
                     }
                 });
@@ -2958,6 +3065,14 @@ impl App {
         let mut edit = None;
         let mut clock_menus = Vec::new();
         let mut ticking = false;
+        // Time on screen since going live (or since the recording started).
+        let since = engine.stream_started_at().map(|t| (t, "since you went live")).or_else(|| match &engine.status.lock_ok().rec {
+            crate::engine::RecState::Recording { since, .. } => Some((crate::media::clock::now() - since.elapsed().as_nanos() as i64, "in this take")),
+            _ => None,
+        });
+        let on_air = since.map(|(t, _)| engine.graphics.on_air(t, crate::media::clock::now())).unwrap_or_default();
+        let rotations = engine.rotations.list();
+        let mut rotate = None;
         ui.horizontal_wrapped(|ui| {
             for (i, (name, on, problem)) in list.iter().enumerate() {
                 let clock = self.engine.as_ref().and_then(|e| e.graphics.clock_text(i));
@@ -2973,12 +3088,16 @@ impl App {
                 let b = egui::Button::new(text).fill(if *on { AMBER } else { RAISED }).min_size(vec2(64.0, 28.0));
                 let mut r = ui.add(b);
                 let is_timer = self.cfg.graphics.get(i).is_some_and(|g| g.kind == crate::config::GraphicKind::Clock && g.clock.is_timer());
+                let shown = on_air.iter().find(|o| o.name == *name).zip(since).map(|(o, (_, when))| {
+                    let n = o.showings.len();
+                    format!("\nOn screen {n} time{} ({}) {when}", if n == 1 { "" } else { "s" }, crate::engine::fmt_duration(Duration::from_secs_f64(o.seconds())))
+                });
                 r = r.on_hover_text(match problem {
                     Some(p) => format!("⚠ {p}"),
                     None if is_timer => "Show / hide. Right-click to start, pause or reset it.".into(),
                     None if i < 9 => format!("Show / hide (Alt+{})", i + 1),
                     None => "Show / hide".into(),
-                });
+                } + &shown.unwrap_or_default());
                 if r.clicked() {
                     toggle = Some(i);
                 }
@@ -2989,8 +3108,38 @@ impl App {
                 if is_title && ui.small_button("✎").on_hover_text("Change the text now").clicked() {
                     edit = Some(i);
                 }
+                let is_web = self.cfg.graphics.get(i).is_some_and(|g| g.kind == crate::config::GraphicKind::Web);
+                if is_web && ui.small_button("⟳").on_hover_text("Load the page again (restarts its animations)").clicked() {
+                    if let Some(e) = &self.engine {
+                        e.graphics.reload(i);
+                    }
+                }
+            }
+            for (i, r) in rotations.iter().enumerate() {
+                let Some(cfg) = self.cfg.rotations.iter().find(|c| c.name == r.name) else { continue };
+                let text = RichText::new(format!("⟳ {}", r.name)).strong().size(12.5).color(if r.running { Color32::BLACK } else { Color32::WHITE });
+                let b = egui::Button::new(text).fill(if r.running { AMBER } else { RAISED }).min_size(vec2(64.0, 28.0));
+                let state = match (&r.showing, r.next_in) {
+                    _ if !r.running => format!("Stopped. {}", match cfg.start {
+                        crate::config::RotationStart::Manual => "Click to start it.".to_string(),
+                        s => format!("Starts by itself {}, or click to start it now.", s.label().replace("I'm", "you're")),
+                    }),
+                    (Some(g), _) => format!("{g} is on now."),
+                    (None, Some(d)) => format!("Next one in {}.", crate::engine::fmt_duration(d).trim_start_matches("00:")),
+                    (None, None) => "Running.".into(),
+                };
+                let tip = format!("Takes turns: {}.\nOne every {} for {} s.\n{state}", cfg.graphics.join(", "), minutes(cfg.every_minutes), cfg.show_seconds);
+                if ui.add(b).on_hover_text(tip).clicked() {
+                    rotate = Some(i);
+                }
+                if r.running {
+                    ticking = true;
+                }
             }
         });
+        if let Some(i) = rotate {
+            self.act(Action::Rotation(control::Target::Index(i), Toggle::Toggle));
+        }
         for (r, i) in clock_menus {
             self.clock_menu(&r, i);
         }
@@ -3071,6 +3220,7 @@ impl App {
             (st.meters.clone(), st.offline.clone(), st.loudness.clone())
         };
         let strips: Vec<(String, String, bool, f32)> = engine.audio.iter().map(|a| (a.name.clone(), a.description(), a.shared.is_on(), a.shared.reduction_db())).collect();
+        let automix: Vec<Option<f32>> = engine.audio.iter().map(|a| a.shared.automix_db()).collect();
         let monitoring = !self.cfg.mix.monitor_device.is_empty();
         let ducking = engine.mix.ducking_db();
         if strips.is_empty() {
@@ -3136,8 +3286,14 @@ impl App {
                                 if ac.duck && self.cfg.mix.ducking {
                                     tags.push_str(" D");
                                 }
+                                if ac.automix && self.cfg.mix.automix {
+                                    tags.push_str(" A");
+                                }
                                 if !tags.is_empty() {
-                                    ui.label(RichText::new(tags.trim()).size(10.0).color(ACCENT)).on_hover_text("FX: voice processing on · R: recording only · S: stream only · D: ducks under voices");
+                                    ui.label(RichText::new(tags.trim()).size(10.0).color(ACCENT)).on_hover_text("FX: voice processing on · R: recording only · S: stream only · D: ducks under voices · A: in the automatic mic mix");
+                                }
+                                if let Some(db) = automix.get(i).copied().flatten().filter(|d| *d < -0.5 && self.cfg.mix.automix && *on) {
+                                    ui.label(RichText::new(format!("↓{:.0}", -db)).size(10.0).color(ACCENT)).on_hover_text("The automatic mic mixer has this mic down right now (dB), because someone else is talking");
                                 }
                                 if ac.duck && ducking < -0.5 {
                                     ui.label(RichText::new(format!("↓{:.0}", -ducking)).size(10.0).color(AMBER)).on_hover_text("Turned down under the voices right now (dB)");
@@ -4314,5 +4470,18 @@ mod small_tests {
     fn app_icon_loads() {
         let icon = super::app_icon();
         assert!(icon.width >= 256 && icon.width == icon.height, "{}x{}", icon.width, icon.height);
+    }
+}
+
+/// "10 minutes", "1 minute", "90 seconds".
+fn minutes(m: f32) -> String {
+    if m < 1.0 {
+        format!("{:.0} seconds", m * 60.0)
+    } else if (m - 1.0).abs() < 0.01 {
+        "minute".into()
+    } else if m.fract().abs() < 0.01 {
+        format!("{m:.0} minutes")
+    } else {
+        format!("{m:.1} minutes")
     }
 }
