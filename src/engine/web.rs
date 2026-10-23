@@ -603,13 +603,14 @@ mod tests {
         let t0 = std::time::Instant::now();
         // (The first picture can be from before the page has loaded.)
         let drawn = |p: &WebPage| p.picture().is_some_and(|(_, i)| i.get_pixel(60, 30)[3] > 0);
-        while !drawn(&page) && t0.elapsed() < Duration::from_secs(30) {
+        // (Generous: a busy test machine can take a while to start a browser.)
+        while !drawn(&page) && t0.elapsed() < Duration::from_secs(90) {
             let _ = rx.recv_timeout(Duration::from_millis(200));
             if let Some(p) = page.problem() {
                 eprintln!("waiting: {p}");
             }
         }
-        let (_, img) = page.picture().expect("a picture of the page");
+        let (_, img) = page.picture().unwrap_or_else(|| panic!("no picture of the page after {:?} (problem: {:?})", t0.elapsed(), page.problem()));
         assert_eq!(img.dimensions(), (200, 100));
         assert_eq!(img.get_pixel(5, 5)[3], 0, "see-through where the page is empty");
         let box_px = img.get_pixel(60, 30).0;
