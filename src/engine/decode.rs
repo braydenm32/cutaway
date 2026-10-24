@@ -19,7 +19,8 @@ use std::collections::BinaryHeap;
 #[derive(Clone, Debug)]
 pub struct DecoderSetup {
     pub codec: VideoCodec,
-    /// SPS/PPS (and VPS) without start codes; empty for ProRes.
+    /// SPS/PPS (and VPS) without start codes; for ProRes, the file's
+    /// four-character code if known.
     pub parameter_sets: Vec<Vec<u8>>,
     /// Coded size (VideoToolbox needs it for ProRes).
     #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]

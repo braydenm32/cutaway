@@ -572,7 +572,7 @@ pub fn spawn_wav(
         .name("write wav".into())
         .spawn(move || {
             let label = base.file_name().unwrap_or_default().to_string_lossy().to_string();
-            let mut w = WavJob { base, format: SampleFormat::from_bits(bits), split, t0, writers: Vec::new(), scratch: Vec::new(), expected: None, opts };
+            let mut w = WavJob { base, format: SampleFormat::from_bits(bits), split, t0, writers: Vec::new(), scratch: Vec::new(), expected: None, fmt: None, opts };
             // Blocks are written once their time has come (a delayed input
             // runs ahead of the clock), so nothing past the end gets in.
             let mut held: VecDeque<AudioBlock> = VecDeque::new();
@@ -607,12 +607,20 @@ pub fn spawn_wav(
                     }
                 }
             }
+            // Every file gets its proper header, even if one can't.
             let mut out = Vec::new();
+            let mut failed = None;
             for (p, w) in w.writers {
-                let size = w.finish()?;
-                out.push((p, size));
+                match w.finish() {
+                    Ok(size) => out.push((p, size)),
+                    Err(e) => failed = failed.or(Some(e)),
+                }
             }
-            result.map(|_| out)
+            result?;
+            match failed {
+                Some(e) => Err(e),
+                None => Ok(out),
+            }
         })
         .expect("thread")
 }
@@ -626,11 +634,24 @@ struct WavJob {
     scratch: Vec<f32>,
     /// Host time where the next sample belongs.
     expected: Option<Ns>,
+    /// The file's rate and channels (from its first block).
+    fmt: Option<(u32, u16)>,
     opts: FileOpts,
 }
 
 impl WavJob {
     fn write(&mut self, b: &AudioBlock, t1: Ns) -> Result<()> {
+        // A device that comes back in another format (a USB mic plugged
+        // in again at 44.1 kHz mono): made to fit the file as it started.
+        let conformed;
+        let b = match self.fmt {
+            Some((rate, ch)) if (b.rate, b.channels) != (rate, ch) => {
+                conformed = conform(b, rate, ch);
+                &conformed
+            }
+            _ => b,
+        };
+        self.fmt.get_or_insert((b.rate, b.channels));
         let r = trim(b, self.t0, t1);
         if r.is_empty() {
             return Ok(());
@@ -684,6 +705,31 @@ impl WavJob {
     }
 }
 
+/// `b` at another sample rate and channel count (linear in-between
+/// samples: only for the rare device that changes mid-take).
+fn conform(b: &AudioBlock, rate: u32, channels: u16) -> AudioBlock {
+    let (ic, oc) = (b.channels.max(1) as usize, channels.max(1) as usize);
+    let frames = b.frames();
+    let out_frames = if b.rate == rate || b.rate == 0 { frames } else { (frames as u64 * rate as u64 / b.rate as u64) as usize };
+    let mut samples = Vec::with_capacity(out_frames * oc);
+    let at = |f: usize, c: usize| -> f32 {
+        let f = f.min(frames.saturating_sub(1));
+        match (ic, c) {
+            (1, _) => b.samples.get(f).copied().unwrap_or(0.0),
+            (_, c) if c < ic => b.samples.get(f * ic + c).copied().unwrap_or(0.0),
+            _ => 0.0,
+        }
+    };
+    for o in 0..out_frames {
+        let pos = if out_frames == frames { o as f64 } else { o as f64 * b.rate as f64 / rate as f64 };
+        let (i, frac) = (pos.floor() as usize, (pos - pos.floor()) as f32);
+        for c in 0..oc {
+            samples.push(at(i, c) * (1.0 - frac) + at(i + 1, c) * frac);
+        }
+    }
+    AudioBlock { pts: b.pts, rate, channels, samples }
+}
+
 /// Everything running for one take.
 pub struct Take {
     pub folder: PathBuf,
@@ -733,14 +779,18 @@ impl Take {
         }
         if let Some(h) = self.audio_job {
             next("Finishing the sound".into());
-            if let Ok(Err(e)) = h.join() {
-                report.problems.push(format!("audio: {e:#}"));
+            match h.join() {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => report.problems.push(format!("audio: {e:#}")),
+                Err(_) => report.problems.push("audio: the sound encoder crashed".into()),
             }
         }
         for (label, h) in self.track_jobs {
             next(format!("Finishing {label}'s track"));
-            if let Ok(Err(e)) = h.join() {
-                report.problems.push(format!("{label} track: {e:#}"));
+            match h.join() {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => report.problems.push(format!("{label} track: {e:#}")),
+                Err(_) => report.problems.push(format!("{label} track: encoder crashed")),
             }
         }
         for (label, h) in self.writers {
@@ -770,6 +820,16 @@ pub fn video_settings(codec: crate::media::VideoCodec, fps: u32, bitrate_kbps: u
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conforms_a_block_to_the_file() {
+        let b = AudioBlock { pts: 0, rate: 24_000, channels: 1, samples: vec![0.0, 1.0, 0.0, 1.0] };
+        let c = conform(&b, 48_000, 2);
+        assert_eq!((c.rate, c.channels, c.frames()), (48_000, 2, 8));
+        assert_eq!(&c.samples[..6], &[0.0, 0.0, 0.5, 0.5, 1.0, 1.0]);
+        let s = AudioBlock { pts: 0, rate: 48_000, channels: 2, samples: vec![0.1, 0.2, 0.3, 0.4] };
+        assert_eq!(conform(&s, 48_000, 1).samples, vec![0.1, 0.3]);
+    }
 
     fn frame(pts: Ns) -> VideoFrame {
         VideoFrame::new_nv12(2, 2, pts, vec![0; 4], vec![0; 2], 0)

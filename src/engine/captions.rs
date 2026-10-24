@@ -433,7 +433,10 @@ impl Runner {
         let full = format!("{} {}", self.committed, self.partial).trim().to_string();
         // Don't let the remembered text grow without end.
         if self.committed.len() > 600 {
-            let cut = self.committed.len() - 400;
+            let mut cut = self.committed.len() - 400;
+            while !self.committed.is_char_boundary(cut) {
+                cut += 1;
+            }
             let at = self.committed[cut..].find(' ').map(|i| cut + i + 1).unwrap_or(cut);
             self.committed = self.committed[at..].to_string();
         }

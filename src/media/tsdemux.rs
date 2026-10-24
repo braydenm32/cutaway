@@ -118,12 +118,12 @@ impl TsDemuxer {
         let payload = &p[at..];
         if pid == 0 {
             if pusi {
-                let s = &payload[1 + payload[0] as usize..];
+                let Some(s) = payload.get(1 + payload[0] as usize..) else { return };
                 // PAT: first program's PMT pid.
                 if s.len() >= 12 {
                     let len = (((s[1] & 0x0f) as usize) << 8) | s[2] as usize;
                     let mut j = 8;
-                    while j + 4 <= 3 + len - 4 && j + 4 <= s.len() {
+                    while j + 4 <= (3 + len).saturating_sub(4) && j + 4 <= s.len() {
                         let prog = ((s[j] as u16) << 8) | s[j + 1] as u16;
                         let pmt = (((s[j + 2] & 0x1f) as u16) << 8) | s[j + 3] as u16;
                         if prog != 0 {
@@ -138,7 +138,7 @@ impl TsDemuxer {
         }
         if Some(pid) == self.pmt_pid {
             if pusi {
-                let s = &payload[1 + payload[0] as usize..];
+                let Some(s) = payload.get(1 + payload[0] as usize..) else { return };
                 if s.len() >= 12 {
                     let len = (((s[1] & 0x0f) as usize) << 8) | s[2] as usize;
                     let info = (((s[10] & 0x0f) as usize) << 8) | s[11] as usize;
@@ -183,8 +183,9 @@ impl TsDemuxer {
         if hdr > b.len() {
             return;
         }
-        let pts = if flags & 0x80 != 0 { Some(pts_at(&b[9..14])) } else { None };
-        let dts = if flags & 0x40 != 0 { Some(pts_at(&b[14..19])) } else { pts };
+        // The timestamps sit inside the header: one it's too short for is damaged.
+        let pts = if flags & 0x80 != 0 && hdr >= 14 { Some(pts_at(&b[9..14])) } else { None };
+        let dts = if flags & 0x40 != 0 && hdr >= 19 { Some(pts_at(&b[14..19])) } else { pts };
         let Some(pts) = pts else { return };
         let data = &b[hdr..];
         let st = self.streams.iter().find(|s| s.0 == pid).map(|s| s.1).unwrap_or(0);

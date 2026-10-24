@@ -739,7 +739,7 @@ impl SourceConfig {
     /// The source a virtual PTZ camera is cut from.
     pub fn virtual_ptz_of(&self) -> Option<&str> {
         let d = self.device.trim();
-        (d.len() > 5 && d[..5].eq_ignore_ascii_case("vptz:")).then(|| d[5..].trim())
+        crate::util::strip_prefix_ci(d, "vptz:").map(str::trim).filter(|s| !s.is_empty())
     }
 
     /// Moved by PTZ controls (a real PTZ camera or a virtual one).
@@ -752,7 +752,7 @@ impl SourceConfig {
     /// The source an auto-framed source is cut from.
     pub fn framed_from(&self) -> Option<&str> {
         let d = self.device.trim();
-        (d.len() > 6 && d[..6].eq_ignore_ascii_case("frame:")).then(|| d[6..].trim())
+        crate::util::strip_prefix_ci(d, "frame:").map(str::trim).filter(|s| !s.is_empty())
     }
 }
 
@@ -2030,7 +2030,27 @@ impl Config {
             std::fs::create_dir_all(dir)?;
         }
         let text = toml::to_string_pretty(self)?;
-        std::fs::write(path, text).with_context(|| format!("writing {}", path.display()))
+        // Write a copy and swap it in, so a crash or a full disk mid-write
+        // can't leave half a settings file. It holds stream keys and
+        // tokens: on Mac only this user may read it.
+        let tmp = path.with_extension("toml.saving");
+        let write = || -> std::io::Result<()> {
+            let mut f = std::fs::File::create(&tmp)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+            }
+            std::io::Write::write_all(&mut f, text.as_bytes())?;
+            f.sync_all()?;
+            drop(f);
+            std::fs::rename(&tmp, path)
+        };
+        write().map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            e
+        })
+        .with_context(|| format!("writing {}", path.display()))
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -2039,6 +2059,7 @@ impl Config {
         anyhow::ensure!(p.width.is_multiple_of(2) && p.height.is_multiple_of(2), "program width and height must be even");
         anyhow::ensure!((1..=120).contains(&p.fps), "program fps must be between 1 and 120");
         for s in &self.sources {
+            anyhow::ensure!(s.width >= 16 && s.height >= 16, "source '{}': width and height must be at least 16", s.name);
             anyhow::ensure!(s.width % 2 == 0 && s.height % 2 == 0, "source '{}': width and height must be even", s.name);
             anyhow::ensure!((1..=120).contains(&s.fps), "source '{}': fps must be between 1 and 120", s.name);
         }

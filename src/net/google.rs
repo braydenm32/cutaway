@@ -4,7 +4,6 @@
 //! desktop apps) and keeps the refresh token. Files go up with Google's
 //! resumable uploads, so a dropped connection carries on where it stopped.
 
-use crate::util::LockExt;
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -565,6 +564,7 @@ pub fn chapters(markers: &[(f64, String)], duration_s: f64) -> Option<String> {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    use crate::util::LockExt;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 

@@ -7,7 +7,7 @@ use super::App;
 use crate::config::{parse_color, ClockKind, GraphicKind, SyrinKind};
 use crate::control::rundown::RundownCmd;
 use crate::control::{Action, TimerCmd};
-use crate::settings::{Section, SettingsUi};
+use crate::settings::Section;
 use eframe::egui::{self, pos2, vec2, Align2, Color32, FontId, Rect, RichText, Sense, Stroke, StrokeKind};
 use std::time::Duration;
 
@@ -34,7 +34,7 @@ impl App {
             ui.label(RichText::new(text).color(TEXT_DIM).size(11.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.small_button("Set up").clicked() {
-                    self.settings = Some(SettingsUi::new(self.cfg.clone()).open_at(section));
+                    self.settings = Some(self.new_settings().open_at(section));
                 }
             });
         });
@@ -104,7 +104,7 @@ impl App {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 let running = st.index.is_some();
-                if ui.add_enabled(running && st.index != Some(0), egui::Button::new("◀")).on_hover_text("Previous segment (Shift+N)").clicked() {
+                if ui.add_enabled(running && st.index != Some(0), egui::Button::new("◀")).on_hover_text(format!("Previous segment{}", self.key_hint(crate::control::shortcuts::Builtin::PreviousSegment))).clicked() {
                     cmd = Some(RundownCmd::Previous);
                 }
                 let next_text = if running { "Next ▶" } else { "Start ▶" };

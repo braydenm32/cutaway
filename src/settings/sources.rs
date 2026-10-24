@@ -519,6 +519,12 @@ impl SettingsUi {
                     s.device = format!("vptz:{new_name}");
                 }
             }
+            // So does sound taken from it.
+            for a in &mut self.draft.audio {
+                if a.device.trim().strip_prefix("source:").is_some_and(|n| n.trim().eq_ignore_ascii_case(&old_name)) {
+                    a.device = format!("source:{new_name}");
+                }
+            }
         }
     }
 }

@@ -79,10 +79,11 @@ impl Target {
         }
     }
 
-    /// Position in a list of names.
+    /// Position in a list of names. A number is a position, unless
+    /// something is named that number ("scene:2" with a scene called "2").
     pub fn find(&self, names: &[String]) -> Option<usize> {
         match self {
-            Target::Index(i) => (*i < names.len()).then_some(*i),
+            Target::Index(i) => names.iter().position(|x| x.trim() == (i + 1).to_string()).or((*i < names.len()).then_some(*i)),
             Target::Name(n) => names.iter().position(|x| x.eq_ignore_ascii_case(n)),
         }
     }

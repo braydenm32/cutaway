@@ -337,6 +337,19 @@ pub struct Lineup {
 
 pub type SharedLineup = Arc<Mutex<Lineup>>;
 
+/// Media players set to start from the top when they go on air, going on
+/// air with `scene`: back to the start.
+fn restart_players(switcher: &Switcher, cfg: &Config, scene: &crate::scene::Scene, player: impl Fn(usize) -> Option<Arc<player::PlayerControl>>) {
+    let live = switcher.live().sources();
+    for i in scene.sources() {
+        if !live.contains(&i) && cfg.sources.get(i).is_some_and(|s| s.media.restart_on_air) {
+            if let Some(p) = player(i) {
+                p.send(player::PlayerCmd::Restart);
+            }
+        }
+    }
+}
+
 /// A new line-up of sources for the compositor thread, which takes it up
 /// between frames (with the switcher, so what's on air follows).
 struct CompLineup {
@@ -439,7 +452,7 @@ struct RunningOutput {
 fn output_kind_for(o: &crate::config::AudioOutput, inputs: &[String]) -> audio::MixKind {
     let mut minus = 0u64;
     for name in &o.minus {
-        if let Some(i) = inputs.iter().position(|a| a.eq_ignore_ascii_case(name.trim())) {
+        if let Some(i) = inputs.iter().position(|a| a.trim().eq_ignore_ascii_case(name.trim())) {
             if i < 64 {
                 minus |= 1 << i;
             }
@@ -709,11 +722,14 @@ impl Engine {
         let auto = autoswitch::AutoShared::new(cfg.auto_switch.enabled);
         let auto_inputs: Arc<Mutex<Vec<(String, Arc<InputShared>)>>> = Arc::new(Mutex::new(audio.iter().map(|a| (a.name.clone(), a.shared.clone())).collect()));
         {
-            let (sw, c2, inputs2) = (switcher.clone(), shared_cfg.clone(), auto_inputs.clone());
+            let (sw, c2, inputs2, lineup2) = (switcher.clone(), shared_cfg.clone(), auto_inputs.clone(), lineup.clone());
             let take = Box::new(move |scene: &crate::scene::Scene| {
-                let t = c2.lock_ok().transition.clone();
+                let cfg = c2.lock_ok().clone();
+                let t = cfg.transition.clone();
                 let mut s = scene.clone();
                 s.retain_sources(sw.source_count());
+                // (As a take by hand does: players set to restart on air do.)
+                restart_players(&sw, &cfg, &s, |i| lineup2.lock_ok().video.get(i).and_then(|v| v.player.lock_ok().clone()));
                 // A stinger every time someone speaks would be a lot: mix.
                 let mode = if t.mode == TransitionMode::Stinger { TransitionMode::Mix } else { t.mode };
                 apply_scene_audio(&inputs2.lock_ok(), &s, scene_audio_timing(mode, t.duration_ms));
@@ -1160,16 +1176,8 @@ impl Engine {
     /// streaming, naming, ...). Callers check `Config::needs_restart` first.
     /// Takes effect from the next take / next time you go live.
     pub fn update_config(&self, new: &Config) -> Result<()> {
+        self.check_config(new)?;
         let old = self.config();
-        if old.output.codec != new.output.codec || old.output.encoder != new.output.encoder {
-            if self.is_recording() {
-                bail!("stop recording before changing the codec or encoder");
-            }
-            encode::resolve_backend(new.output.codec.video_codec(), &new.output.encoder)?;
-        }
-        if old.streaming.encoder != new.streaming.encoder {
-            encode::resolve_backend(crate::media::VideoCodec::H264, &new.streaming.encoder)?;
-        }
         for (i, a) in new.audio.iter().enumerate() {
             self.set_gain(i, a.gain_db);
             if old.audio.get(i).is_none_or(|o| o.in_program != a.in_program) {
@@ -1722,15 +1730,7 @@ impl Engine {
     /// Media players set to "restart when on air" start from the top when
     /// a scene brings them on.
     fn restart_players_going_on_air(&self, scene: &crate::scene::Scene) {
-        let live = self.switcher.live().sources();
-        let cfg = self.config();
-        for i in scene.sources() {
-            if !live.contains(&i) && cfg.sources.get(i).is_some_and(|s| s.media.restart_on_air) {
-                if let Some(p) = self.player(i) {
-                    p.send(player::PlayerCmd::Restart);
-                }
-            }
-        }
+        restart_players(&self.switcher, &self.config(), scene, |i| self.player(i));
     }
 
     /// Controls of a media player source.
@@ -2014,7 +2014,10 @@ impl CompositorLoop {
                 None => stream_grid = None,
             }
             let canvas = self.comp.canvas_size();
-            let stream_is_program = stream_now.as_ref().is_some_and(|(_, s)| *s == canvas);
+            // (Not when there's something only the stream shows, like
+            // captions kept off the recording: then it gets its own picture.)
+            let stream_extra = self.captions.lock_ok().as_ref().is_some_and(|(_, c)| c.layer().is_some_and(|l| l.stream_only));
+            let stream_is_program = !stream_extra && stream_now.as_ref().is_some_and(|(_, s)| *s == canvas);
             let thumbs: Vec<usize> = if k % thumb_every == 0 {
                 (0..self.slots.len()).filter(|&i| !self.slots[i].stale(1.0)).collect()
             } else {

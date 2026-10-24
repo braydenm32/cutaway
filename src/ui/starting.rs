@@ -112,8 +112,14 @@ impl App {
                 }
             }
             Err(e) => {
+                if self.restart_again {
+                    // The settings changed since: those might work.
+                    self.restart_again = false;
+                    self.vcam_wanted = vcam;
+                    self.start_engine();
+                    return;
+                }
                 self.engine_error = Some(e);
-                self.restart_again = false;
             }
         }
     }

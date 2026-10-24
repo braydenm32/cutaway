@@ -36,9 +36,18 @@ impl App {
     /// Run a list of commands in order; "wait" pauses the rest. `cue`:
     /// they're a scene's or segment's cues (which don't change scenes).
     pub(super) fn run_sequence(&mut self, from: &str, commands: &[String], cue: bool) {
+        self.run_sequence_in(from, commands, cue, Vec::new());
+    }
+
+    /// The same, for the steps of the macros in `inside`.
+    fn run_sequence_in(&mut self, from: &str, commands: &[String], cue: bool, mut inside: Vec<usize>) {
         let mut at = Instant::now();
         let mut flat = Vec::new();
-        self.expand_macros(commands, 0, &mut flat);
+        let mut loops = Vec::new();
+        self.expand_macros(commands, &mut inside, &mut flat, &mut loops);
+        if let Some(name) = loops.first() {
+            self.toast(format!("{from}: the macro {name} runs itself, so that step was skipped"), true);
+        }
         for c in flat {
             match Action::parse(&c) {
                 Ok(Action::Wait(s)) => at += Duration::from_secs_f32(s.max(0.0)),
@@ -57,13 +66,20 @@ impl App {
         }
     }
 
-    /// Macros named in a list, replaced by their commands.
-    fn expand_macros(&self, commands: &[String], depth: usize, out: &mut Vec<String>) {
+    /// Macros named in a list, replaced by their commands. `inside`: the
+    /// macros being expanded; one that would run itself (or nest too deep)
+    /// is left out and named in `loops`, so it can't run without end.
+    fn expand_macros(&self, commands: &[String], inside: &mut Vec<usize>, out: &mut Vec<String>, loops: &mut Vec<String>) {
         let names: Vec<String> = self.cfg.macros.iter().map(|m| m.name.clone()).collect();
         for c in commands {
             match Action::parse(c) {
-                Ok(Action::Macro(t)) if depth < MAX_DEPTH => match t.find(&names) {
-                    Some(i) => self.expand_macros(&self.cfg.macros[i].commands.clone(), depth + 1, out),
+                Ok(Action::Macro(t)) => match t.find(&names) {
+                    Some(i) if inside.contains(&i) || inside.len() >= MAX_DEPTH => loops.push(names[i].clone()),
+                    Some(i) => {
+                        inside.push(i);
+                        self.expand_macros(&self.cfg.macros[i].commands, inside, out, loops);
+                        inside.pop();
+                    }
                     None => out.push(c.clone()),
                 },
                 _ => out.push(c.clone()),
@@ -138,7 +154,7 @@ impl App {
         if mac.commands.is_empty() {
             return Err(format!("{} has no commands yet (Settings → Macros)", mac.name));
         }
-        self.run_sequence(&mac.name, &mac.commands, false);
+        self.run_sequence_in(&mac.name, &mac.commands, false, vec![i]);
         Ok(format!("Running {}", mac.name))
     }
 
@@ -456,11 +472,15 @@ pub(super) struct Prompter {
     pub script: std::sync::Arc<String>,
     pub starts: Vec<usize>,
     pub version: u64,
+    /// The script's length in characters.
+    pub chars: usize,
+    /// The settings the script and speed were last taken from.
+    pub made_from: Option<(crate::config::PrompterConfig, crate::config::RundownConfig)>,
 }
 
 impl Default for Prompter {
     fn default() -> Self {
-        Prompter { playing: false, pos: 0.0, wpm: 140.0, last: Instant::now(), script: Default::default(), starts: Vec::new(), version: 0 }
+        Prompter { playing: false, pos: 0.0, wpm: 140.0, last: Instant::now(), script: Default::default(), starts: Vec::new(), version: 0, chars: 0, made_from: None }
     }
 }
 
@@ -478,8 +498,10 @@ pub(super) fn build_script(cfg: &crate::config::Config) -> (String, Vec<usize>) 
     }
     let mut s = String::new();
     let mut starts = Vec::new();
+    let mut chars = 0;
     for seg in &cfg.rundown.segments {
-        starts.push(s.chars().count());
+        starts.push(chars);
+        let at = s.len();
         s.push_str(&format!("▶ {}\n", seg.name.to_uppercase()));
         let notes = seg.notes.trim();
         if !notes.is_empty() {
@@ -487,6 +509,7 @@ pub(super) fn build_script(cfg: &crate::config::Config) -> (String, Vec<usize>) 
             s.push('\n');
         }
         s.push('\n');
+        chars += s[at..].chars().count();
     }
     if !p.script.trim().is_empty() {
         s.push_str(p.script.trim());
@@ -510,18 +533,28 @@ fn paragraph_starts(text: &str) -> Vec<usize> {
 impl App {
     /// Keep the script up to date and move it along.
     pub(super) fn tick_prompter(&mut self, ctx: &egui::Context) {
-        let (script, starts) = build_script(&self.cfg);
-        if *self.prompter.script != script {
-            self.prompter.script = std::sync::Arc::new(script);
-            self.prompter.starts = starts;
-            self.prompter.version += 1;
-            *self.remote_shared.prompter.lock_ok() = serde_json::json!({ "version": self.prompter.version, "text": *self.prompter.script, "segments": self.prompter.starts }).to_string();
+        // Rebuilt only when its settings change.
+        let fresh = self.prompter.made_from.as_ref().is_none_or(|(p, r)| *p != self.cfg.prompter || *r != self.cfg.rundown);
+        if fresh {
+            if self.prompter.made_from.as_ref().is_some_and(|(p, _)| p.words_per_minute != self.cfg.prompter.words_per_minute) {
+                // A new speed in Settings takes over from the desk's.
+                self.prompter.wpm = self.cfg.prompter.words_per_minute;
+            }
+            self.prompter.made_from = Some((self.cfg.prompter.clone(), self.cfg.rundown.clone()));
+            let (script, starts) = build_script(&self.cfg);
+            if *self.prompter.script != script {
+                self.prompter.chars = script.chars().count();
+                self.prompter.script = std::sync::Arc::new(script);
+                self.prompter.starts = starts;
+                self.prompter.version += 1;
+                *self.remote_shared.prompter.lock_ok() = serde_json::json!({ "version": self.prompter.version, "text": *self.prompter.script, "segments": self.prompter.starts }).to_string();
+            }
         }
         let now = Instant::now();
         let dt = now.duration_since(self.prompter.last).as_secs_f64().min(0.5);
         self.prompter.last = now;
         if self.prompter.playing {
-            let total = self.prompter.script.chars().count() as f64;
+            let total = self.prompter.chars as f64;
             self.prompter.pos = (self.prompter.pos + chars_per_second(self.prompter.wpm) * dt).min(total);
             if self.prompter.pos >= total {
                 self.prompter.playing = false;
@@ -585,7 +618,7 @@ impl App {
         }
         ui.add_space(4.0);
         self.section_heading(ui, "PROMPTER", Section::Prompter);
-        let total = self.prompter.script.chars().count().max(1) as f64;
+        let total = self.prompter.chars.max(1) as f64;
         let mut cmd = None;
         ui.horizontal(|ui| {
             let playing = self.prompter.playing;

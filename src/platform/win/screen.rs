@@ -230,7 +230,11 @@ pub fn open_screen(target: &ScreenTarget, w: u32, h: u32, fps: u32, sink: FrameS
         let _ = session.Close();
         let _ = pool.Close();
     })?;
-    rx.recv_timeout(Duration::from_secs(10)).map_err(|_| anyhow!("screen capture didn't start"))??;
+    rx.recv_timeout(Duration::from_secs(10)).map_err(|_| {
+        // Don't let it start capturing later with nothing to stop it.
+        stop.store(true, Ordering::Relaxed);
+        anyhow!("screen capture didn't start")
+    })??;
     Ok(Box::new(Screen { stop, thread: Some(thread) }))
 }
 

@@ -375,7 +375,8 @@ pub struct VideoConfig {
     pub height: u32,
     /// `avcC` / `hvcC` record (the payload of the MP4 box).
     pub record: Vec<u8>,
-    /// Parameter sets (SPS/PPS, plus VPS for HEVC) without start codes.
+    /// Parameter sets (SPS/PPS, plus VPS for HEVC) without start codes;
+    /// for ProRes read from a file, its four-character code.
     pub parameter_sets: Vec<Vec<u8>>,
 }
 

@@ -197,12 +197,18 @@ fn twitch_session(channel: &str, state: &Arc<Mutex<State>>, stop: &AtomicBool, i
     let mut line = String::new();
     let mut joined = false;
     while !stop.load(Ordering::Relaxed) {
-        line.clear();
+        // A timeout can leave half a line read: keep it for the rest.
+        if line.ends_with('\n') {
+            line.clear();
+        }
         match reader.read_line(&mut line) {
             Ok(0) => bail!("Twitch closed the chat connection"),
             Ok(_) => {}
             Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => continue,
             Err(e) => return Err(e.into()),
+        }
+        if !line.ends_with('\n') {
+            continue;
         }
         let l = line.trim_end();
         if let Some(arg) = l.strip_prefix("PING") {

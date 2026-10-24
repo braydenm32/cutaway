@@ -306,8 +306,17 @@ fn auto_config() -> Config {
     let mut cfg = Config::default();
     let video = devices::list(devices::Kind::Video);
     for (i, d) in video.iter().take(8).enumerate() {
+        // Two of the same camera (or names alike in their first letters)
+        // still get names of their own.
+        let base = short_name(&d.name, i);
+        let mut name = base.clone();
+        let mut n = 2;
+        while cfg.sources.iter().any(|s| s.name.eq_ignore_ascii_case(&name)) {
+            name = format!("{base} {n}");
+            n += 1;
+        }
         cfg.sources.push(SourceConfig {
-            name: short_name(&d.name, i),
+            name,
             device: d.name.clone(),
             ..Default::default()
         });

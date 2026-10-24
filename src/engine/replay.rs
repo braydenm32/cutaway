@@ -135,7 +135,10 @@ impl ReplayPlayer {
             let fade = Duration::from_secs_f32(FADE);
             let elapsed = s.elapsed();
             if elapsed + fade < on_air {
-                st.started = Some(Instant::now() + fade - on_air);
+                // (Checked: an Instant can't go back past when the computer started.)
+                if let Some(t) = Instant::now().checked_sub(on_air - fade) {
+                    st.started = Some(t);
+                }
             }
         }
     }

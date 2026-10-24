@@ -1,7 +1,6 @@
 //! A small RTMP server that accepts one publisher (OBS, a phone app, an
 //! encoder, another Cutaway) and hands over its audio and video.
 
-use crate::util::LockExt;
 use crate::media::flv::Amf;
 use crate::media::{h264, Ns, VideoCodec};
 use anyhow::{anyhow, bail, Context, Result};
@@ -21,7 +20,8 @@ pub enum Incoming {
     AudioConfig { asc: Vec<u8> },
     /// One raw AAC frame.
     Audio { pts: Ns, data: Vec<u8> },
-    Ended(String),
+    /// The publisher stopped, with why if it wasn't a normal stop.
+    Ended(Option<String>),
 }
 
 const MSG_SET_CHUNK: u8 = 1;
@@ -39,6 +39,9 @@ struct InHeader {
     timestamp: u32,
     /// Last timestamp delta (a type-3 chunk starting a message repeats it).
     delta: u32,
+    /// The last header had an extended timestamp, so type-3 chunks
+    /// carry one too.
+    ext: bool,
     length: usize,
     kind: u8,
     stream: u32,
@@ -179,11 +182,17 @@ impl Session {
             }
             i += hlen;
             let mut ts_val = ts_field;
-            if ts_field == Some(0xFF_FFFF) {
+            if fmt <= 2 {
+                h.ext = ts_field == Some(0xFF_FFFF);
+            }
+            if h.ext {
                 if b.len() < i + 4 {
                     return Ok(None);
                 }
-                ts_val = Some(u32::from_be_bytes(b[i..i + 4].try_into().unwrap()));
+                // On a type-3 chunk it only repeats the last one.
+                if fmt <= 2 {
+                    ts_val = Some(u32::from_be_bytes(b[i..i + 4].try_into().unwrap()));
+                }
                 i += 4;
             }
             let remaining = h.length.saturating_sub(h.payload.len());
@@ -339,14 +348,14 @@ pub fn serve(port: u16, key: &str, stop: &AtomicBool, out: &mut dyn FnMut(Incomi
                     _ => {}
                 }
             };
-            if let Some(k) = publishing {
-                out(Incoming::Ended(k));
+            if publishing.is_some() {
+                out(Incoming::Ended(None));
             }
             result
         })();
         if let Err(e) = r {
             if !stop.load(Ordering::Relaxed) {
-                out(Incoming::Ended(format!("{e:#}")));
+                out(Incoming::Ended(Some(format!("{e:#}"))));
             }
         }
     }
@@ -416,6 +425,7 @@ fn handle_audio(t_ms: i64, b: &[u8], out: &mut dyn FnMut(Incoming)) {
 #[cfg(all(test, not(target_os = "macos")))]
 mod tests {
     use super::*;
+    use crate::util::LockExt;
     use std::sync::{Arc, Mutex};
 
     #[test]

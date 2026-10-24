@@ -160,6 +160,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn percent_decoding() {
+        assert_eq!(percent_decode("a%20b+c%41", true), "a b cA");
+        assert_eq!(percent_decode("a+b", false), "a+b");
+        assert_eq!(percent_decode("100%", true), "100%");
+        assert_eq!(percent_decode("%é%4", true), "%é%4");
+        assert_eq!(percent_decode("%C3%A9", true), "é");
+    }
+
+    #[test]
+    fn truncating() {
+        assert_eq!(truncate_str("héllo", 2), "h");
+        assert_eq!(truncate_str("héllo", 3), "hé");
+        assert_eq!(truncate_str("hi", 10), "hi");
+    }
+
+    #[test]
     fn lock_survives_a_crash_while_held() {
         let m = std::sync::Arc::new(std::sync::Mutex::new(1));
         let m2 = m.clone();
@@ -224,4 +240,46 @@ pub fn open_with_system(path: &std::path::Path) -> std::io::Result<()> {
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let mut cmd = std::process::Command::new("xdg-open");
     cmd.arg(path).spawn().map(|_| ())
+}
+
+/// `s` without `prefix`, ignoring ASCII case ("NDI:Cam" and "ndi:Cam" alike).
+pub fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = s.get(..prefix.len())?;
+    head.eq_ignore_ascii_case(prefix).then(|| &s[prefix.len()..])
+}
+
+/// The first `max` bytes of `s` at most, cut on a character boundary.
+pub fn truncate_str(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut cut = max;
+    while !s.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    &s[..cut]
+}
+
+/// Undo URL %-escapes (and `+` for a space in form data). Bad escapes are
+/// kept as they are.
+pub fn percent_decode(s: &str, plus_is_space: bool) -> String {
+    let b = s.as_bytes();
+    let hex = |c: u8| (c as char).to_digit(16);
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'+' if plus_is_space => out.push(b' '),
+            b'%' => match (b.get(i + 1).copied().and_then(hex), b.get(i + 2).copied().and_then(hex)) {
+                (Some(h), Some(l)) => {
+                    out.push((h * 16 + l) as u8);
+                    i += 2;
+                }
+                _ => out.push(b'%'),
+            },
+            c => out.push(c),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }

@@ -4,7 +4,7 @@
 use super::state::ShowState;
 use crate::engine::text::{ascent, draw_text, ellipsize, fill_rect, system_fonts, text_width};
 use crate::engine::{Frame, FrameSlot};
-use crate::scene::{fit, Scene};
+use crate::scene::{place, Scene};
 use image::{Rgba, RgbaImage};
 use std::sync::Arc;
 
@@ -51,6 +51,11 @@ fn sample(f: &Frame, u: f32, v: f32) -> [f32; 4] {
 
 /// Draw `f` scaled into the rectangle (clipped to `clip`).
 fn draw_frame(img: &mut RgbaImage, f: &Frame, rect: [f32; 4], clip: [i32; 4]) {
+    draw_part(img, f, rect, [0.0, 0.0, 1.0, 1.0], clip)
+}
+
+/// The part `part` ([x0, y0, x1, y1] as fractions) of the picture in `rect`.
+fn draw_part(img: &mut RgbaImage, f: &Frame, rect: [f32; 4], part: [f32; 4], clip: [i32; 4]) {
     if f.width == 0 || f.height == 0 || f.rgba.len() < f.width * f.height * 4 {
         return;
     }
@@ -66,7 +71,7 @@ fn draw_frame(img: &mut RgbaImage, f: &Frame, rect: [f32; 4], clip: [i32; 4]) {
             if !(0.0..=1.0).contains(&u) || !(0.0..=1.0).contains(&v) {
                 continue;
             }
-            let s = sample(f, u, v);
+            let s = sample(f, part[0] + u * (part[2] - part[0]), part[1] + v * (part[3] - part[1]));
             let a = s[3] / 255.0;
             let d = img.get_pixel_mut(px as u32, py as u32);
             for k in 0..3 {
@@ -106,9 +111,10 @@ pub fn render(src: &KeySources, state: &ShowState, kind: KeyKind, size: u32, lab
             let scene = src.scenes.get(i);
             for layer in scene.map(|s| s.layers.as_slice()).unwrap_or(&[]) {
                 let Some((_, f)) = src.previews.get(layer.source).and_then(|p| p.latest()) else { continue };
-                let (x, y, w, h) = fit(layer, src.canvas, f.width as f32 / f.height.max(1) as f32);
+                // Placed as on air: filled or fitted, zoomed.
+                let ((x, y, w, h), part) = place(layer, src.canvas, f.width as f32 / f.height.max(1) as f32);
                 let k = pic[2] / src.canvas.0.max(1) as f32;
-                draw_frame(&mut img, &f, [pic[0] + x * k, pic[1] + y * k, w * k, h * k], clip);
+                draw_part(&mut img, &f, [pic[0] + x * k, pic[1] + y * k, w * k, h * k], part, clip);
             }
         }
         KeyKind::Source(i) => {

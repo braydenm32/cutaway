@@ -17,6 +17,11 @@ fn is_media(p: &Path, exts: &[&str]) -> bool {
 pub fn folders(cfg: &crate::config::Config) -> Vec<PathBuf> {
     let mut folders = vec![cfg.output.folder.clone()];
     folders.extend(cfg.output.backup_folder.clone().filter(|p| !p.as_os_str().is_empty()));
+    // The backup set to the same folder: look there once.
+    let same = |a: &Path, b: &Path| a == b || fs::canonicalize(a).ok().is_some_and(|a| fs::canonicalize(b).ok() == Some(a));
+    if folders.len() == 2 && same(&folders[0], &folders[1]) {
+        folders.pop();
+    }
     folders
 }
 
@@ -57,15 +62,16 @@ pub fn repair(take: &Unfinished, mut on_file: impl FnMut(usize, &str)) -> bool {
     for (i, p) in take.files.iter().enumerate() {
         let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
         on_file(i, &name);
+        // A damaged file mustn't stop the rest (or the rescue screen).
         if is_media(p, &["mp4", "mov"]) {
-            match mp4::recover(p) {
+            match crate::util::guard("repairing a recording", || mp4::recover(p)) {
                 Ok(mp4::Recovery::Recovered { seconds }) => lines.push(format!("  {name}: recovered {seconds:.1} s")),
                 Ok(mp4::Recovery::AlreadyComplete) => lines.push(format!("  {name}: complete")),
                 Ok(mp4::Recovery::NotRecoverable) => lines.push(format!("  {name}: nothing could be recovered")),
                 Err(e) => lines.push(format!("  {name}: couldn't repair ({e:#})")),
             }
         } else {
-            match wav::repair(p) {
+            match crate::util::guard("repairing a recording", || wav::repair(p)) {
                 Ok(true) => lines.push(format!("  {name}: header repaired")),
                 Ok(false) => lines.push(format!("  {name}: complete")),
                 Err(e) => lines.push(format!("  {name}: couldn't repair ({e:#})")),

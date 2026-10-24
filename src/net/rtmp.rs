@@ -105,6 +105,9 @@ const OUT_CHUNK: usize = 4096;
 #[derive(Default, Clone)]
 struct InHeader {
     timestamp: u32,
+    /// The last header had an extended timestamp, so type-3 chunks
+    /// carry one too.
+    ext: bool,
     length: usize,
     kind: u8,
     stream: u32,
@@ -395,9 +398,15 @@ impl RtmpPublisher {
                 h.stream = u32::from_le_bytes([b[i + 7], b[i + 8], b[i + 9], b[i + 10]]);
             }
             i += hlen;
-            if ts_field == Some(0xFF_FFFF) {
+            if fmt <= 2 {
+                h.ext = ts_field == Some(0xFF_FFFF);
+            }
+            if h.ext {
                 if b.len() < i + 4 {
                     return Ok(None);
+                }
+                if fmt <= 2 {
+                    ts_field = Some(u32::from_be_bytes(b[i..i + 4].try_into().unwrap()));
                 }
                 i += 4;
             }

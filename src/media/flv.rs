@@ -57,12 +57,21 @@ impl Amf {
 
     /// Decode one value; returns it and the bytes used.
     pub fn decode(b: &[u8]) -> Option<(Amf, usize)> {
+        Self::decode_in(b, 0)
+    }
+
+    /// `depth`: how deep in objects this is (damaged or hostile data can't
+    /// nest without end).
+    fn decode_in(b: &[u8], depth: u32) -> Option<(Amf, usize)> {
         fn string(b: &[u8]) -> Option<(String, usize)> {
             let len = u16::from_be_bytes([*b.first()?, *b.get(1)?]) as usize;
             let s = std::str::from_utf8(b.get(2..2 + len)?).ok()?.to_string();
             Some((s, 2 + len))
         }
-        fn props(b: &[u8]) -> Option<(Vec<(String, Amf)>, usize)> {
+        fn props(b: &[u8], depth: u32) -> Option<(Vec<(String, Amf)>, usize)> {
+            if depth > 32 {
+                return None;
+            }
             let mut i = 0;
             let mut out = Vec::new();
             loop {
@@ -71,7 +80,7 @@ impl Amf {
                 }
                 let (k, n) = string(&b[i..])?;
                 i += n;
-                let (v, n) = Amf::decode(&b[i..])?;
+                let (v, n) = Amf::decode_in(&b[i..], depth + 1)?;
                 i += n;
                 out.push((k, v));
             }
@@ -80,10 +89,11 @@ impl Amf {
             0 => Some((Amf::Number(f64::from_be_bytes(b.get(1..9)?.try_into().ok()?)), 9)),
             1 => Some((Amf::Bool(*b.get(1)? != 0), 2)),
             2 => string(&b[1..]).map(|(s, n)| (Amf::Str(s), n + 1)),
-            3 => props(&b[1..]).map(|(p, n)| (Amf::Object(p), n + 1)),
+            3 => props(&b[1..], depth).map(|(p, n)| (Amf::Object(p), n + 1)),
             5 => Some((Amf::Null, 1)),
             6 => Some((Amf::Undefined, 1)),
-            8 => props(&b[5..]).map(|(p, n)| (Amf::EcmaArray(p), n + 5)),
+            // ECMA array: a 4-byte count, then properties as in an object.
+            8 => props(b.get(5..)?, depth).map(|(p, n)| (Amf::EcmaArray(p), n + 5)),
             _ => None,
         }
     }

@@ -76,7 +76,12 @@ pub fn action_for(m: &MidiMapping, msg: Msg, value: u8) -> Option<Action> {
         Msg::Note { .. } => value > 0,
         Msg::Cc { .. } => value >= 64,
     };
-    pressed.then(|| Action::parse(a).ok()).flatten()
+    if pressed {
+        Action::parse(a).ok()
+    } else {
+        // Letting go: hold pads and talkback stop, as with a held key.
+        super::shortcuts::release_of(a)
+    }
 }
 
 /// Shared with the settings window ("learn").
@@ -213,6 +218,8 @@ mod tests {
         let m = MidiMapping { message: "note 36".into(), action: "scene:2".into() };
         assert_eq!(action_for(&m, Msg::Note { ch: 0, note: 36 }, 90), Some(Action::parse("scene:2").unwrap()));
         assert_eq!(action_for(&m, Msg::Note { ch: 0, note: 36 }, 0), None, "note off does nothing");
+        let t = MidiMapping { message: "note 37".into(), action: "talkback:on".into() };
+        assert_eq!(action_for(&t, Msg::Note { ch: 0, note: 37 }, 0), Action::parse("talkback:off").ok(), "letting go of talkback");
         let f = MidiMapping { message: "cc 7".into(), action: "fader:Mic".into() };
         assert_eq!(action_for(&f, Msg::Cc { ch: 0, cc: 7 }, 100), Some(Action::parse("gain:Mic:0").unwrap()));
         assert_eq!(action_for(&f, Msg::Cc { ch: 0, cc: 7 }, 127), Some(Action::parse("gain:Mic:12").unwrap()));
