@@ -716,9 +716,11 @@ raise it for Wi-Fi or the internet.
 
 ## Remote control, Stream Deck and MIDI
 
-Turn on **Settings → Remote & MIDI → Remote control** and set a PIN. Open
-the address it shows (e.g. `http://192.168.1.20:8790`) on a phone or tablet
-on the same network.
+Turn on **Settings → Remote & MIDI → Remote control**. Open the address it
+shows (e.g. `http://192.168.1.20:8790`) on a phone or tablet on the same
+network and type the PIN. The remote always has one (Cutaway makes a
+four-digit PIN if you don't set your own), and a device that gets it wrong
+five times in a row waits a minute before it can try again.
 
 <img src="docs/remote.png" alt="The phone remote" width="300">
 
