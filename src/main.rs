@@ -208,7 +208,8 @@ fn run() -> Result<()> {
     };
     // The remote always has a PIN: one is made (and kept) for settings
     // from before that.
-    if cfg.remote.ensure_pin() && args.demo.is_none() {
+    let made_pin = cfg.remote.ensure_pin() && args.demo.is_none();
+    if made_pin {
         cfg.save(&cfg_path)?;
         eprintln!("Made a PIN for the remote: {}", cfg.remote.pin);
     }
@@ -282,7 +283,7 @@ fn run() -> Result<()> {
 
     // With --demo, edits from the UI shouldn't overwrite the real settings.
     let save_path = if args.demo.is_some() { None } else { Some(cfg_path) };
-    ui::run(cfg, save_path, args.ui_test)
+    ui::run(cfg, save_path, args.ui_test, made_pin)
 }
 
 /// Listen for a clap and print the delays that would line everything up.
