@@ -69,7 +69,7 @@ fn logo_texture(ctx: &egui::Context) -> egui::TextureHandle {
     ctx.load_texture("cutaway-logo", image, egui::TextureOptions::LINEAR)
 }
 
-pub fn run(cfg: Config, save_path: Option<PathBuf>, self_test: bool) -> anyhow::Result<()> {
+pub fn run(cfg: Config, save_path: Option<PathBuf>, self_test: bool, made_pin: bool) -> anyhow::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_title("Cutaway").with_icon(app_icon()).with_inner_size([1480.0, 920.0]).with_min_inner_size([1000.0, 640.0]),
         ..Default::default()
@@ -79,6 +79,17 @@ pub fn run(cfg: Config, save_path: Option<PathBuf>, self_test: bool) -> anyhow::
         options,
         Box::new(move |cc| {
             let mut app = App::new(cc, cfg, save_path);
+            if made_pin {
+                // Said after any update news, so neither hides the other.
+                let pin = format!("The remote now needs a PIN: {} (Settings → Remote & MIDI)", app.cfg.remote.pin);
+                let (text, error) = match app.toast.take() {
+                    Some((before, _, error)) => (format!("{before}\n{pin}"), error),
+                    None => (pin, false),
+                };
+                // Up for half a minute rather than the usual few seconds:
+                // phones and the Stream Deck stop working until it's typed in.
+                app.toast = Some((text, Instant::now() + Duration::from_secs(24), error));
+            }
             if self_test {
                 app.self_test = Some((Instant::now(), 0));
             }
