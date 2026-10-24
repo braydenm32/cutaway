@@ -23,6 +23,9 @@ pub const NS_PER_SEC: i64 = 1_000_000_000;
 
 /// An NV12 picture (BT.709, video range) from a BGRA one (`pitch` bytes
 /// per row), scaled to `w`×`h` (bilinear). Screen captures on Windows.
+///
+/// Whole-number arithmetic, a row at a time: a 4K screen is converted
+/// every frame, so this is kept quick.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn bgra_to_nv12(src: &[u8], pitch: usize, sw: usize, sh: usize, w: usize, h: usize) -> (Vec<u8>, Vec<u8>) {
     let (w, h) = (w.max(2) & !1, h.max(2) & !1);
@@ -31,50 +34,80 @@ pub fn bgra_to_nv12(src: &[u8], pitch: usize, sw: usize, sh: usize, w: usize, h:
     if sw == 0 || sh == 0 || pitch < sw * 4 || src.len() < pitch * (sh - 1) + sw * 4 {
         return (y, uv);
     }
-    let (fx, fy) = (sw as f32 / w as f32, sh as f32 / h as f32);
+    // For each output column/row: the two source pixels and the weight of
+    // the second (0-256).
+    fn taps(out: usize, size: usize) -> Vec<(usize, usize, u32)> {
+        let f = size as f32 / out as f32;
+        (0..out)
+            .map(|o| {
+                if out == size {
+                    return (o, o, 0);
+                }
+                let x = ((o as f32 + 0.5) * f - 0.5).clamp(0.0, (size - 1) as f32);
+                let x0 = x as usize;
+                (x0, (x0 + 1).min(size - 1), ((x - x0 as f32) * 256.0).round() as u32)
+            })
+            .collect()
+    }
+    let (xs, ys_taps) = (taps(w, sw), taps(h, sh));
     let same = sw == w && sh == h;
-    let px = |x: usize, y: usize| -> [f32; 3] {
-        let i = y * pitch + x * 4;
-        [src[i + 2] as f32, src[i + 1] as f32, src[i] as f32]
-    };
-    let sample = |ox: usize, oy: usize| -> [f32; 3] {
+    // BT.709 video range, scaled by 2^14 (inputs carry 8 more bits).
+    let c = |v: f64| (v * (1 << 14) as f64).round() as i32;
+    let (yr, yg, yb) = (c(0.2126 * 219.0 / 255.0), c(0.7152 * 219.0 / 255.0), c(0.0722 * 219.0 / 255.0));
+    let (ur, ug, ub) = (c(-0.1146 * 224.0 / 255.0), c(-0.3854 * 224.0 / 255.0), c(0.5 * 224.0 / 255.0));
+    let (vr, vg, vb) = (c(0.5 * 224.0 / 255.0), c(-0.4542 * 224.0 / 255.0), c(-0.0458 * 224.0 / 255.0));
+    // One output row, sampled: R, G and B rows, ×256.
+    let sample_row = |oy: usize, out: &mut [Vec<i32>; 3]| {
+        let (y0, y1, fy) = ys_taps[oy];
+        let (a, b) = (&src[y0 * pitch..y0 * pitch + sw * 4], &src[y1 * pitch..y1 * pitch + sw * 4]);
+        let [rs, gs, bs] = out;
+        let outs = rs.iter_mut().zip(gs.iter_mut()).zip(bs.iter_mut());
         if same {
-            return px(ox, oy);
+            for (((r, g), b), px) in outs.zip(a.chunks_exact(4)) {
+                (*r, *g, *b) = ((px[2] as i32) << 8, (px[1] as i32) << 8, (px[0] as i32) << 8);
+            }
+            return;
         }
-        let x = ((ox as f32 + 0.5) * fx - 0.5).clamp(0.0, (sw - 1) as f32);
-        let yy = ((oy as f32 + 0.5) * fy - 0.5).clamp(0.0, (sh - 1) as f32);
-        let (x0, y0) = (x as usize, yy as usize);
-        let (x1, y1) = ((x0 + 1).min(sw - 1), (y0 + 1).min(sh - 1));
-        let (ax, ay) = (x - x0 as f32, yy - y0 as f32);
-        let (a, b, c, d) = (px(x0, y0), px(x1, y0), px(x0, y1), px(x1, y1));
-        let mut o = [0.0; 3];
-        for k in 0..3 {
-            o[k] = (a[k] * (1.0 - ax) + b[k] * ax) * (1.0 - ay) + (c[k] * (1.0 - ax) + d[k] * ax) * ay;
+        let fy = fy as i32;
+        for (((r, g), bl), &(x0, x1, fx)) in outs.zip(xs.iter()) {
+            let (p0, p1, q0, q1) = (&a[x0 * 4..x0 * 4 + 4], &a[x1 * 4..x1 * 4 + 4], &b[x0 * 4..x0 * 4 + 4], &b[x1 * 4..x1 * 4 + 4]);
+            let fx = fx as i32;
+            let mix = |ch: usize| {
+                let top = p0[ch] as i32 * (256 - fx) + p1[ch] as i32 * fx;
+                let bot = q0[ch] as i32 * (256 - fx) + q1[ch] as i32 * fx;
+                (top * (256 - fy) + bot * fy + 128) >> 8
+            };
+            (*r, *g, *bl) = (mix(2), mix(1), mix(0));
         }
-        o
     };
-    let luma = |c: [f32; 3]| (16.0 + (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) * (219.0 / 255.0) + 0.5) as u8;
+    let luma_row = |p: &[Vec<i32>; 3], out: &mut [u8]| {
+        for (((o, r), g), b) in out.iter_mut().zip(&p[0]).zip(&p[1]).zip(&p[2]) {
+            *o = (((16 << 22) + yr * r + yg * g + yb * b + (1 << 21)) >> 22) as u8;
+        }
+    };
     let rows_per = 2 * (h / 2).div_ceil(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, 4)).max(1);
     std::thread::scope(|s| {
         for (part, (ys, cs)) in y.chunks_mut(rows_per * w).zip(uv.chunks_mut(rows_per / 2 * w)).enumerate() {
-            let (sample, luma) = (&sample, &luma);
+            let (sample_row, luma_row) = (&sample_row, &luma_row);
             s.spawn(move || {
                 let first = part * rows_per;
+                let row = || [vec![0i32; w], vec![0i32; w], vec![0i32; w]];
+                let (mut top, mut bot) = (row(), row());
                 for (r2, crow) in cs.chunks_exact_mut(w).enumerate() {
                     let oy = first + r2 * 2;
-                    for cx in 0..w / 2 {
-                        let mut sum = [0.0f32; 3];
-                        for (dy, dx) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
-                            let c = sample(cx * 2 + dx, oy + dy);
-                            ys[(r2 * 2 + dy) * w + cx * 2 + dx] = luma(c);
-                            for k in 0..3 {
-                                sum[k] += c[k] * 0.25;
-                            }
-                        }
-                        let cb = 128.0 + (-0.1146 * sum[0] - 0.3854 * sum[1] + 0.5 * sum[2]) * (224.0 / 255.0);
-                        let cr = 128.0 + (0.5 * sum[0] - 0.4542 * sum[1] - 0.0458 * sum[2]) * (224.0 / 255.0);
-                        crow[cx * 2] = (cb + 0.5).clamp(16.0, 240.0) as u8;
-                        crow[cx * 2 + 1] = (cr + 0.5).clamp(16.0, 240.0) as u8;
+                    sample_row(oy, &mut top);
+                    sample_row(oy + 1, &mut bot);
+                    let (yt, yb2) = ys[r2 * 2 * w..(r2 * 2 + 2) * w].split_at_mut(w);
+                    luma_row(&top, yt);
+                    luma_row(&bot, yb2);
+                    for (cx, out) in crow.chunks_exact_mut(2).enumerate() {
+                        let (i, j) = (cx * 2, cx * 2 + 1);
+                        // The 2×2 block's average, ×256.
+                        let avg = |k: usize| (top[k][i] + top[k][j] + bot[k][i] + bot[k][j] + 2) >> 2;
+                        let (r, g, b) = (avg(0), avg(1), avg(2));
+                        let chroma = |cr: i32, cg: i32, cb: i32| (((128 << 22) + cr * r + cg * g + cb * b + (1 << 21)) >> 22).clamp(16, 240) as u8;
+                        out[0] = chroma(ur, ug, ub);
+                        out[1] = chroma(vr, vg, vb);
                     }
                 }
             });
@@ -405,6 +438,108 @@ pub const AAC_FRAME: u32 = 1024;
 
 #[cfg(test)]
 mod convert_tests {
+    /// The earlier floating-point conversion, to check the quick one against.
+    /// An NV12 picture (BT.709, video range) from a BGRA one (`pitch` bytes
+    /// per row), scaled to `w`×`h` (bilinear). Screen captures on Windows.
+    pub(super) fn reference(src: &[u8], pitch: usize, sw: usize, sh: usize, w: usize, h: usize) -> (Vec<u8>, Vec<u8>) {
+        let (w, h) = (w.max(2) & !1, h.max(2) & !1);
+        let mut y = vec![16u8; w * h];
+        let mut uv = vec![128u8; w * h / 2];
+        if sw == 0 || sh == 0 || pitch < sw * 4 || src.len() < pitch * (sh - 1) + sw * 4 {
+            return (y, uv);
+        }
+        let (fx, fy) = (sw as f32 / w as f32, sh as f32 / h as f32);
+        let same = sw == w && sh == h;
+        let px = |x: usize, y: usize| -> [f32; 3] {
+            let i = y * pitch + x * 4;
+            [src[i + 2] as f32, src[i + 1] as f32, src[i] as f32]
+        };
+        let sample = |ox: usize, oy: usize| -> [f32; 3] {
+            if same {
+                return px(ox, oy);
+            }
+            let x = ((ox as f32 + 0.5) * fx - 0.5).clamp(0.0, (sw - 1) as f32);
+            let yy = ((oy as f32 + 0.5) * fy - 0.5).clamp(0.0, (sh - 1) as f32);
+            let (x0, y0) = (x as usize, yy as usize);
+            let (x1, y1) = ((x0 + 1).min(sw - 1), (y0 + 1).min(sh - 1));
+            let (ax, ay) = (x - x0 as f32, yy - y0 as f32);
+            let (a, b, c, d) = (px(x0, y0), px(x1, y0), px(x0, y1), px(x1, y1));
+            let mut o = [0.0; 3];
+            for k in 0..3 {
+                o[k] = (a[k] * (1.0 - ax) + b[k] * ax) * (1.0 - ay) + (c[k] * (1.0 - ax) + d[k] * ax) * ay;
+            }
+            o
+        };
+        let luma = |c: [f32; 3]| (16.0 + (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) * (219.0 / 255.0) + 0.5) as u8;
+        let rows_per = 2 * (h / 2).div_ceil(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, 4)).max(1);
+        std::thread::scope(|s| {
+            for (part, (ys, cs)) in y.chunks_mut(rows_per * w).zip(uv.chunks_mut(rows_per / 2 * w)).enumerate() {
+                let (sample, luma) = (&sample, &luma);
+                s.spawn(move || {
+                    let first = part * rows_per;
+                    for (r2, crow) in cs.chunks_exact_mut(w).enumerate() {
+                        let oy = first + r2 * 2;
+                        for cx in 0..w / 2 {
+                            let mut sum = [0.0f32; 3];
+                            for (dy, dx) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+                                let c = sample(cx * 2 + dx, oy + dy);
+                                ys[(r2 * 2 + dy) * w + cx * 2 + dx] = luma(c);
+                                for k in 0..3 {
+                                    sum[k] += c[k] * 0.25;
+                                }
+                            }
+                            let cb = 128.0 + (-0.1146 * sum[0] - 0.3854 * sum[1] + 0.5 * sum[2]) * (224.0 / 255.0);
+                            let cr = 128.0 + (0.5 * sum[0] - 0.4542 * sum[1] - 0.0458 * sum[2]) * (224.0 / 255.0);
+                            crow[cx * 2] = (cb + 0.5).clamp(16.0, 240.0) as u8;
+                            crow[cx * 2 + 1] = (cr + 0.5).clamp(16.0, 240.0) as u8;
+                        }
+                    }
+                });
+            }
+        });
+        (y, uv)
+    }
+
+    fn picture(sh: usize, pitch: usize) -> Vec<u8> {
+        let mut seed = 12345u32;
+        (0..pitch * sh)
+            .map(|_| {
+                seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+                (seed >> 16) as u8
+            })
+            .collect()
+    }
+
+    #[test]
+    fn bgra_to_nv12_matches_the_reference() {
+        for &(sw, sh, w, h) in &[(64, 36, 64, 36), (100, 60, 64, 36), (64, 36, 100, 58), (33, 17, 20, 10)] {
+            let pitch = sw * 4 + 12;
+            let src = picture(sh, pitch);
+            let (y, uv) = super::bgra_to_nv12(&src, pitch, sw, sh, w, h);
+            let (ry, ruv) = reference(&src, pitch, sw, sh, w, h);
+            let worst = |a: &[u8], b: &[u8]| a.iter().zip(b).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap_or(0);
+            assert!(worst(&y, &ry) <= 1 && worst(&uv, &ruv) <= 1, "{sw}x{sh} -> {w}x{h}: luma off by {}, chroma by {}", worst(&y, &ry), worst(&uv, &ruv));
+        }
+    }
+
+    /// cargo test --release bgra_speed -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn bgra_speed() {
+        for &(sw, sh, w, h) in &[(1920, 1080, 1920, 1080), (2560, 1600, 1920, 1080), (3840, 2160, 1920, 1080), (3840, 2160, 3840, 2160)] {
+            let src = picture(sh, sw * 4);
+            let time = |f: &dyn Fn()| {
+                let t = std::time::Instant::now();
+                for _ in 0..10 {
+                    f();
+                }
+                t.elapsed().as_secs_f64() * 100.0
+            };
+            let new = time(&|| drop(super::bgra_to_nv12(&src, sw * 4, sw, sh, w, h)));
+            let old = time(&|| drop(reference(&src, sw * 4, sw, sh, w, h)));
+            println!("{sw}x{sh} -> {w}x{h}: {old:.1} ms before, {new:.1} ms now");
+        }
+    }
     #[test]
     fn bgra_to_nv12_colours_and_scaling() {
         // Left half white, right half pure red; 8×4 BGRA, pitch 40.
