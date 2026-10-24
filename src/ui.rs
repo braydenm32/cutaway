@@ -232,6 +232,9 @@ pub struct App {
     last_transition: TransitionMode,
     /// The keyboard shortcuts, made from the settings they came from.
     keymap: Option<(crate::config::KeysConfig, Keymap)>,
+    /// Time on screen for the graphics panel's hover: worked out once a
+    /// second, not every frame. (When, from when, what.)
+    on_air_cache: Option<(Instant, i64, Vec<crate::engine::graphics::OnAir>)>,
     /// Keys held down for something that stops when they're let go.
     held_keys: Vec<(Key, Action)>,
     /// Takes left unfinished by a crash, being rescued.
@@ -292,6 +295,7 @@ impl App {
             display_generation: 0,
             sync: None,
             keymap: None,
+            on_air_cache: None,
             held_keys: Vec::new(),
             last_transition: if cfg.transition.mode == TransitionMode::Cut { TransitionMode::Mix } else { cfg.transition.mode },
             cfg,
@@ -1393,7 +1397,12 @@ impl App {
                 .collect()
         });
         for (combo, repeat) in downs {
-            let binding = self.keymap.as_ref().and_then(|(_, m)| m.find(combo).cloned());
+            // Shift held with a plain key that has nothing of its own on
+            // Shift does what the key does (as it always has: Shift+Space
+            // still takes).
+            let binding = self.keymap.as_ref().and_then(|(_, m)| {
+                m.find(combo).or_else(|| (combo.shift && !combo.command && !combo.alt && !combo.is_numbered()).then(|| m.find(KeyCombo { shift: false, ..combo })).flatten()).cloned()
+            });
             match binding {
                 // Only undo and redo repeat while the key is held.
                 Some(Binding::Builtin(b)) if !repeat || matches!(b, Builtin::Undo | Builtin::Redo) => self.run_builtin(ctx, b, combo.key),
@@ -3070,7 +3079,17 @@ impl App {
             crate::engine::RecState::Recording { since, .. } => Some((crate::media::clock::now() - since.elapsed().as_nanos() as i64, "in this take")),
             _ => None,
         });
-        let on_air = since.map(|(t, _)| engine.graphics.on_air(t, crate::media::clock::now())).unwrap_or_default();
+        let on_air = match since {
+            None => Vec::new(),
+            Some((t, _)) => match &self.on_air_cache {
+                Some((at, from, v)) if (*from - t).abs() < 1_000_000_000 && at.elapsed() < Duration::from_secs(1) => v.clone(),
+                _ => {
+                    let v = engine.graphics.on_air(t, crate::media::clock::now());
+                    self.on_air_cache = Some((Instant::now(), t, v.clone()));
+                    v
+                }
+            },
+        };
         let rotations = engine.rotations.list();
         let mut rotate = None;
         ui.horizontal_wrapped(|ui| {

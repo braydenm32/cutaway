@@ -139,7 +139,7 @@ impl OnAir {
 
 /// The most on/off changes kept (a show switching graphics every few
 /// seconds for a day stays well under it).
-const LOG_MAX: usize = 100_000;
+pub(crate) const LOG_MAX: usize = 100_000;
 
 /// Layer keys for things that aren't in the graphics list.
 const COMMENT_KEY: usize = 1 << 20;
@@ -163,7 +163,16 @@ impl Graphics {
     fn log_change(&self, t: Ns, name: &str, on: bool) {
         let mut log = self.log.lock_ok();
         if log.len() >= LOG_MAX {
-            log.drain(..LOG_MAX / 10);
+            // Forget the oldest changes, but not that a graphic still on
+            // came on (it's still on air).
+            let mut still_on: Vec<(Ns, String)> = Vec::new();
+            for (t, n, on) in log.drain(..LOG_MAX / 10) {
+                still_on.retain(|(_, m)| *m != n);
+                if on {
+                    still_on.push((t, n));
+                }
+            }
+            log.splice(0..0, still_on.into_iter().map(|(t, n)| (t, n, true)));
         }
         log.push((t, name.to_string(), on));
     }

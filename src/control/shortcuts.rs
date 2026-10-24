@@ -262,9 +262,28 @@ pub struct Keymap {
 /// The keys a built-in shortcut is on now: as set, or its defaults.
 pub fn builtin_keys(cfg: &KeysConfig, b: Builtin) -> Vec<KeyCombo> {
     match cfg.builtin.get(b.id()) {
-        Some(set) => set.split(',').filter_map(KeyCombo::parse).collect(),
+        Some(set) => split_keys(set).into_iter().filter_map(KeyCombo::parse).collect(),
         None => b.defaults(),
     }
+}
+
+/// "Cmd+R, F5" → ["Cmd+R", "F5"]. A comma where a key goes is the comma
+/// key: "Cmd+," stays whole.
+pub fn split_keys(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    for (i, c) in s.char_indices() {
+        let part = s[start..i].trim();
+        if c == ',' && !part.is_empty() && !part.ends_with('+') {
+            out.push(part);
+            start = i + 1;
+        }
+    }
+    let last = s[start..].trim();
+    if !last.is_empty() {
+        out.push(last);
+    }
+    out
 }
 
 impl Keymap {
@@ -302,7 +321,7 @@ impl Keymap {
         }
         for b in Builtin::ALL {
             if let Some(set) = cfg.builtin.get(b.id()) {
-                for part in set.split(',').filter(|p| !p.trim().is_empty()) {
+                for part in split_keys(set) {
                     if KeyCombo::parse(part).is_none() {
                         map.problems.push(format!("{}: \"{}\" isn't a key Cutaway knows", b.describe(), part.trim()));
                     }
@@ -397,6 +416,15 @@ mod tests {
         assert_eq!(KeyCombo::parse("Option+1").map(|c| (c.key, c.alt)), Some((Key::Num1, true)));
         assert_eq!(KeyCombo::parse("Cmd++").map(|c| c.key), Some(Key::Plus));
         assert_eq!(KeyCombo::parse("Cmd+,").map(|c| c.key), Some(Key::Comma));
+        assert_eq!(split_keys("Cmd+R, F5"), ["Cmd+R", "F5"]);
+        assert_eq!(split_keys("Cmd+,"), ["Cmd+,"]);
+        assert_eq!(split_keys("Cmd+,, F5"), ["Cmd+,", "F5"]);
+        assert_eq!(split_keys(","), [","]);
+        assert!(split_keys("  ").is_empty());
+        let mut cfg = KeysConfig::default();
+        cfg.builtin.insert(Builtin::Settings.id().into(), "Cmd+,".into());
+        assert!(Keymap::new(&cfg).problems.is_empty());
+        assert_eq!(builtin_keys(&cfg, Builtin::Settings), Builtin::Settings.defaults());
         assert_eq!(KeyCombo::parse("Shift"), None, "a key is needed");
         assert_eq!(KeyCombo::parse("Ctrl+ControlLeft"), None);
         assert_eq!(KeyCombo::parse("G+H"), None, "one key only");

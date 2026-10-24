@@ -58,6 +58,21 @@ fn candidates() -> Vec<PathBuf> {
     v
 }
 
+/// [`find_browser`], looked for at most every few seconds: for Settings,
+/// which asks on every frame.
+pub fn find_browser_cached() -> Option<PathBuf> {
+    static LAST: Mutex<Option<(std::time::Instant, Option<PathBuf>)>> = Mutex::new(None);
+    let mut last = LAST.lock_ok();
+    match &*last {
+        Some((t, b)) if t.elapsed() < Duration::from_secs(5) => b.clone(),
+        _ => {
+            let b = find_browser();
+            *last = Some((std::time::Instant::now(), b.clone()));
+            b
+        }
+    }
+}
+
 /// The browser that draws web pages, if there is one.
 pub fn find_browser() -> Option<PathBuf> {
     candidates().into_iter().find(|p| p.is_file())
@@ -90,7 +105,12 @@ pub fn page_url(s: &str) -> Result<String> {
         let p = std::fs::canonicalize(p).with_context(|| format!("{s} wasn't found"))?;
         let path = p.to_string_lossy().replace('\\', "/");
         let path = path.trim_start_matches("//?/");
-        let encoded: String = path.chars().map(|c| if c == ' ' { "%20".to_string() } else if c == '#' { "%23".to_string() } else { c.to_string() }).collect();
+        // Anything but letters, digits, - . _ ~ / and the drive's : is
+        // written as %XX, so "Sale 50% off?.html" stays one file name.
+        let encoded: String = path
+            .bytes()
+            .map(|c| if c.is_ascii_alphanumeric() || b"-._~/:".contains(&c) { (c as char).to_string() } else { format!("%{c:02X}") })
+            .collect();
         return Ok(if encoded.starts_with('/') { format!("file://{encoded}") } else { format!("file:///{encoded}") });
     }
     // "example.com/overlay": the web.
@@ -185,7 +205,9 @@ impl Browser {
         if unsafe { libc::geteuid() } == 0 {
             cmd.arg("--no-sandbox");
         }
-        let (child, write, read) = Self::connect(cmd, &profile).with_context(|| format!("{} didn't start", browser_name(&exe)))?;
+        // (Removed again if the browser doesn't start.)
+        let profile = Profile(profile);
+        let (child, write, read) = Self::connect(cmd, &profile.0).with_context(|| format!("{} didn't start", browser_name(&exe)))?;
         let b = Arc::new(Browser {
             write: Mutex::new(write),
             next_id: AtomicU64::new(1),
@@ -193,7 +215,7 @@ impl Browser {
             sessions: Mutex::new(HashMap::new()),
             child: Mutex::new(child),
             gone: AtomicBool::new(false),
-            _profile: Profile(profile),
+            _profile: profile,
         });
         let weak = Arc::downgrade(&b);
         std::thread::Builder::new().name("web pages".into()).spawn(move || Self::read_loop(weak, read))?;
@@ -274,8 +296,15 @@ impl Browser {
         cmd.arg("--remote-debugging-port=0");
         let mut child = cmd.spawn()?;
         crate::platform::win::kill_with_us(&child);
-        let (write, read) = Self::connect_port(&mut child, profile)?;
-        Ok((child, write, read))
+        match Self::connect_port(&mut child, profile) {
+            Ok((write, read)) => Ok((child, write, read)),
+            Err(e) => {
+                // Not left running: the page tries again with a new one.
+                let _ = child.kill();
+                let _ = child.wait();
+                Err(e)
+            }
+        }
     }
 
     /// The DevTools WebSocket of a browser started with
@@ -505,7 +534,27 @@ fn run_page(
     if let Some(e) = nav.get("errorText").and_then(Value::as_str) {
         bail!("{url} couldn't be opened ({e})");
     }
-    b.call("Page.startScreencast", json!({ "format": "png", "maxWidth": size.0, "maxHeight": size.1, "everyNthFrame": 1 }), s)?;
+    // The page settles first: a navigation can move the tab to another
+    // renderer, and a screencast asked for mid-move fails ("Not attached
+    // to an active page"). A page that never finishes loading still shows.
+    let loaded_by = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < loaded_by && !stop.load(Ordering::Relaxed) {
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(ev) if ev.get("method").and_then(Value::as_str) == Some("Page.loadEventFired") => break,
+            Ok(ev) if ev.get("method").and_then(Value::as_str) == Some("Inspector.targetCrashed") => bail!("the page crashed"),
+            Ok(_) | Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+            Err(_) => bail!("the browser closed"),
+        }
+    }
+    let cast = json!({ "format": "png", "maxWidth": size.0, "maxHeight": size.1, "everyNthFrame": 1 });
+    let mut tries = 0;
+    while let Err(e) = b.call("Page.startScreencast", cast.clone(), s) {
+        tries += 1;
+        if tries >= 5 || stop.load(Ordering::Relaxed) {
+            return Err(e);
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    }
     *problem.lock_ok() = None;
     while !stop.load(Ordering::Relaxed) {
         if reload.swap(false, Ordering::Relaxed) {
@@ -541,10 +590,11 @@ fn run_page(
     Ok(())
 }
 
-/// Chromium's pictures come with their colours already multiplied by
-/// their transparency; the compositor wants them as they are. (A picture
-/// with any colour brighter than its opacity wasn't multiplied, and is
-/// left alone.)
+/// Chromium's screencast pictures come with their colours already
+/// multiplied by their transparency (checked in the test below: a
+/// rgba(40,80,200,0.5) box arrives as [20,40,100,128]); the compositor
+/// wants them as they are. (A premultiplied colour is never brighter than
+/// its opacity, so a picture with one wasn't multiplied, and is left alone.)
 fn unpremultiply(img: &mut RgbaImage) {
     if img.pixels().any(|p| p[0] > p[3] || p[1] > p[3] || p[2] > p[3]) {
         return;
@@ -573,6 +623,13 @@ mod tests {
         let u = page_url(&f.to_string_lossy()).unwrap();
         assert!(u.starts_with("file:///") && u.ends_with("cutaway%20web%20test.html"), "{u}");
         let _ = std::fs::remove_file(&f);
+        // (Windows file names can't have a "?".)
+        let (name, want) = if cfg!(windows) { ("Sale 50% off #1.html", "/Sale%2050%25%20off%20%231.html") } else { ("Sale 50% off?#1.html", "/Sale%2050%25%20off%3F%231.html") };
+        let f = std::env::temp_dir().join(name);
+        std::fs::write(&f, "<p>hi</p>").unwrap();
+        let u = page_url(&f.to_string_lossy()).unwrap();
+        assert!(u.ends_with(want), "{u}");
+        let _ = std::fs::remove_file(&f);
     }
 
     #[test]
@@ -595,7 +652,7 @@ mod tests {
             eprintln!("no Chromium browser here; skipping");
             return;
         }
-        let html = "data:text/html,<body style='margin:0'><div style='position:absolute;left:20px;top:10px;width:100px;height:50px;background:rgba(255,255,255,0.5)'></div></body>";
+        let html = "data:text/html,<body style='margin:0'><div style='position:absolute;left:20px;top:10px;width:100px;height:50px;background:rgba(40,80,200,0.5)'></div></body>";
         let (tx, rx) = crossbeam_channel::unbounded();
         let page = WebPage::open(html, (200, 100), Arc::new(move || {
             let _ = tx.send(());
@@ -614,7 +671,10 @@ mod tests {
         assert_eq!(img.dimensions(), (200, 100));
         assert_eq!(img.get_pixel(5, 5)[3], 0, "see-through where the page is empty");
         let box_px = img.get_pixel(60, 30).0;
-        assert!((box_px[3] as i32 - 128).abs() <= 3 && box_px[0] > 240, "the half-see-through white box: {box_px:?}");
+        // (Chromium sends it premultiplied, [20, 40, 100, 128]; it comes out
+        // as the page's own colour.)
+        let near = |a: u8, b: i32| (a as i32 - b).abs() <= 4;
+        assert!(near(box_px[3], 128) && near(box_px[0], 40) && near(box_px[1], 80) && near(box_px[2], 200), "the half-see-through blue box: {box_px:?}");
         drop(page);
     }
 

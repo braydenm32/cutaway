@@ -47,21 +47,7 @@ impl Rotations {
     /// take graphics off whose time is up, and put the next one on.
     pub fn tick(&self, rotations: &[Rotation], graphics: &Graphics, live: bool, recording: bool, now: Instant) {
         let mut states = self.states.lock_ok();
-        // Follow the settings by name, keeping each one's place.
-        let mut old = std::mem::take(&mut *states);
-        for r in rotations {
-            let st = match old.iter().position(|s| s.name == r.name) {
-                Some(i) => old.remove(i),
-                None => State { name: r.name.clone(), ..Default::default() },
-            };
-            states.push(st);
-        }
-        // Removed while running: take its graphic off.
-        for st in old {
-            if let Some((g, _)) = st.showing {
-                hide(graphics, &g);
-            }
-        }
+        line_up(&mut states, rotations, graphics);
         for (r, st) in rotations.iter().zip(states.iter_mut()) {
             let on_air = match r.start {
                 RotationStart::Manual => None,
@@ -87,12 +73,9 @@ impl Rotations {
         let names: Vec<String> = rotations.iter().map(|r| r.name.clone()).collect();
         let i = target.find(&names).ok_or("there's no such rotation")?;
         let mut states = self.states.lock_ok();
-        if states.len() != rotations.len() || states.iter().zip(rotations).any(|(s, r)| s.name != r.name) {
-            // Not ticked since the settings changed: line up first.
-            drop(states);
-            self.tick(rotations, graphics, false, false, Instant::now());
-            states = self.states.lock_ok();
-        }
+        // (Not ticked since the settings changed: line up first, leaving
+        // the others running.)
+        line_up(&mut states, rotations, graphics);
         let st = states.get_mut(i).ok_or("there's no such rotation")?;
         let on = match t {
             Toggle::On => true,
@@ -122,6 +105,27 @@ impl Rotations {
                 next_in: s.next_at.filter(|_| s.running).map(|t| t.saturating_duration_since(now)),
             })
             .collect()
+    }
+}
+
+/// Follow the settings by name, keeping each one's place.
+fn line_up(states: &mut Vec<State>, rotations: &[Rotation], graphics: &Graphics) {
+    if states.len() == rotations.len() && states.iter().zip(rotations).all(|(s, r)| s.name == r.name) {
+        return;
+    }
+    let mut old = std::mem::take(states);
+    for r in rotations {
+        let st = match old.iter().position(|s| s.name == r.name) {
+            Some(i) => old.remove(i),
+            None => State { name: r.name.clone(), ..Default::default() },
+        };
+        states.push(st);
+    }
+    // Removed while running: take its graphic off.
+    for st in old {
+        if let Some((g, _)) = st.showing {
+            hide(graphics, &g);
+        }
     }
 }
 
@@ -158,15 +162,26 @@ fn step(r: &Rotation, st: &mut State, graphics: &Graphics, now: Instant) {
     let every = Duration::from_secs_f32((r.every_minutes * 60.0).clamp(1.0, 24.0 * 3600.0));
     let name = present[st.turn % present.len()].clone();
     st.turn += 1;
-    if let Some((g, _)) = st.showing.take() {
-        if g != name {
+    // Still on from its last turn (back to back): it stays ours.
+    let ours = match st.showing.take() {
+        Some((g, _)) if g == name => true,
+        Some((g, _)) => {
             hide(graphics, &g);
+            false
         }
+        None => false,
+    };
+    // A graphic that's already on otherwise (put on by hand, or by another
+    // rotation) has its turn but is left as it is: this one doesn't take it
+    // off afterwards.
+    match graphics.index_of(&name) {
+        Some(_) if ours => st.showing = Some((name, now + show)),
+        Some(i) if !graphics.is_visible(i) => {
+            graphics.set_visible(i, true);
+            st.showing = Some((name, now + show));
+        }
+        _ => {}
     }
-    if let Some(i) = graphics.index_of(&name) {
-        graphics.set_visible(i, true);
-    }
-    st.showing = Some((name, now + show));
     // Back to back when each stays on longer than the gap.
     st.next_at = Some(now + every.max(show));
 }
@@ -231,6 +246,64 @@ mod tests {
         assert_eq!(r.set(&rots, &Target::Index(0), Toggle::Off, &g), Ok(("Sponsors".into(), false)));
         assert!(on(&g).is_empty());
         assert!(r.set(&rots, &Target::Index(3), Toggle::On, &g).is_err());
+    }
+
+    #[test]
+    fn leaves_a_graphic_put_on_by_hand() {
+        let (g, rots) = setup();
+        let r = Rotations::new();
+        let t = Instant::now();
+        g.set_visible(0, true); // Acme, by hand
+        r.tick(&rots, &g, true, false, t);
+        assert_eq!(on(&g), ["Acme"]);
+        r.tick(&rots, &g, true, false, t + Duration::from_secs(11));
+        assert_eq!(on(&g), ["Acme"], "its turn is over, but it was on before: still on");
+        r.tick(&rots, &g, true, false, t + Duration::from_secs(60));
+        assert_eq!(on(&g), ["Acme", "Bolt"]);
+        r.tick(&rots, &g, true, false, t + Duration::from_secs(71));
+        assert_eq!(on(&g), ["Acme"]);
+    }
+
+    #[test]
+    fn one_graphic_back_to_back_still_goes_off() {
+        let (g, mut rots) = setup();
+        rots[0].graphics = vec!["Acme".into()];
+        rots[0].every_minutes = 0.1;
+        rots[0].show_seconds = 30;
+        let r = Rotations::new();
+        let t = Instant::now();
+        r.tick(&rots, &g, true, false, t);
+        r.tick(&rots, &g, true, false, t + Duration::from_secs(30));
+        assert_eq!(on(&g), ["Acme"]);
+        r.tick(&rots, &g, false, false, t + Duration::from_secs(40));
+        assert!(on(&g).is_empty(), "stopped: off, although its turns ran together");
+    }
+
+    #[test]
+    fn starting_one_leaves_the_others_running() {
+        let (g, mut rots) = setup();
+        let r = Rotations::new();
+        let t = Instant::now();
+        r.tick(&rots, &g, true, false, t);
+        assert_eq!(on(&g), ["Acme"]);
+        // A second one added in Settings, and started before the next tick.
+        rots.push(Rotation { name: "Handles".into(), graphics: vec!["Handles".into()], start: RotationStart::Manual, ..Default::default() });
+        r.set(&rots, &Target::Name("Handles".into()), Toggle::On, &g).unwrap();
+        assert_eq!(on(&g), ["Acme", "Handles"], "the sponsor stays on");
+        assert!(r.list()[0].running);
+    }
+
+    #[test]
+    fn a_full_log_keeps_what_is_still_on() {
+        let (g, _) = setup();
+        let t0 = crate::media::clock::now();
+        g.set_visible(2, true); // Handles: on all show
+        for i in 0..super::super::graphics::LOG_MAX {
+            g.set_visible(i % 2, true);
+            g.set_visible(i % 2, false);
+        }
+        let report = g.on_air(t0 - 1_000_000_000, crate::media::clock::now());
+        assert!(report.iter().any(|o| o.name == "Handles"), "Handles is still on air");
     }
 
     #[test]

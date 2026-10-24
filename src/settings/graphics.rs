@@ -131,7 +131,7 @@ impl SettingsUi {
                     });
                     ui.end_row();
                     label(ui, "Drawn by");
-                    match crate::engine::web::find_browser() {
+                    match crate::engine::web::find_browser_cached() {
                         Some(b) => hint(ui, &format!("{} (hidden; nothing opens on screen)", crate::engine::web::browser_name(&b))),
                         None => {
                             ui.label(RichText::new("⚠ Web pages need Google Chrome or Microsoft Edge installed").color(AMBER));
