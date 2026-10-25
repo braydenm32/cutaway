@@ -537,6 +537,7 @@ Settings are in `%APPDATA%\Cutaway\config.toml`, recordings go to
 | Cameras, capture cards | AVFoundation | Media Foundation (webcams, USB/PCIe capture cards) |
 | Screen | ScreenCaptureKit | Windows Graphics Capture |
 | Encoding | VideoToolbox: H.264, HEVC, ProRes | The graphics card's H.264/HEVC encoder (NVIDIA, AMD, Intel), or Microsoft's software H.264. No ProRes |
+| Decoding (players, network sources, replays, MJPEG webcams) | VideoToolbox | Media Foundation on the graphics card, or in software if the card can't (set `CUTAWAY_SOFTWARE_DECODE=1` to always use software) |
 | Audio | CoreAudio | Windows audio (WASAPI) and **ASIO** (interfaces show as "ASIO: …", every channel) |
 | Live captions | Apple's speech recognition | **Whisper**, on the PC: the speech model downloads once from Settings → Captions (57 MB Fast, 181 MB Accurate) |
 | Auto-framing, background removal | Apple's Vision | Open models (YuNet, PP-HumanSeg) on the graphics card through ONNX Runtime and DirectML |

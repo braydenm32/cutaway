@@ -3,8 +3,8 @@
 //!
 //! The device is set to the mode closest to the source's size and rate;
 //! Media Foundation decodes MJPEG and converts to NV12 (and scales, when
-//! the device has no exact mode), and the frames are stamped on the host
-//! clock.
+//! the device has no exact mode; on the graphics card for MJPEG and other
+//! compressed modes), and the frames are stamped on the host clock.
 
 use super::{attributes, explain, mf, pack, planes, string_attr, unpack, Mta};
 use crate::devices::{DeviceInfo, Mode};
@@ -225,12 +225,45 @@ impl Drop for Camera {
     }
 }
 
+/// A source reader giving NV12 at `w`×`h` (or the device's own size, if
+/// Windows can't scale it), and the size it gives. With `card`, decoding
+/// and scaling happen on the graphics card.
+fn open_reader(source: &IMFMediaSource, name: &str, w: u32, h: u32, card: Option<&IMFDXGIDeviceManager>) -> Result<(IMFSourceReader, u32, u32)> {
+    // SAFETY: plain Media Foundation calls on valid objects.
+    unsafe {
+        let attrs = attributes(5)?;
+        attrs.SetUINT32(&MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, 1)?;
+        attrs.SetUINT32(&MF_LOW_LATENCY, 1)?;
+        if let Some(m) = card {
+            attrs.SetUnknown(&MF_SOURCE_READER_D3D_MANAGER, m)?;
+            attrs.SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1)?;
+            // The device stays open if this reader is given up for a
+            // software one (it's shut down by hand at the end).
+            attrs.SetUINT32(&MF_SOURCE_READER_DISCONNECT_MEDIASOURCE_ON_SHUTDOWN, 1)?;
+        }
+        let reader = MFCreateSourceReaderFromMediaSource(source, &attrs).map_err(|e| explain(&e, &format!("Opening {name}")))?;
+        let stream = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
+        let out = MFCreateMediaType()?;
+        out.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+        out.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
+        out.SetUINT64(&MF_MT_FRAME_SIZE, pack(w, h))?;
+        if reader.SetCurrentMediaType(stream, None, &out).is_err() {
+            // Not scaled by Windows: Cutaway scales instead.
+            out.DeleteItem(&MF_MT_FRAME_SIZE)?;
+            reader.SetCurrentMediaType(stream, None, &out).map_err(|e| explain(&e, &format!("{name} can't deliver pictures Cutaway can use")))?;
+        }
+        let current = reader.GetCurrentMediaType(stream)?;
+        let (ow, oh) = unpack(current.GetUINT64(&MF_MT_FRAME_SIZE)?);
+        Ok((reader, ow, oh))
+    }
+}
+
 pub fn open_camera(info: &DeviceInfo, w: u32, h: u32, fps: u32, sink: FrameSink) -> Result<Box<dyn Running>> {
     let stop = Arc::new(AtomicBool::new(false));
     let (tx, rx) = mpsc::channel::<Result<(Mta<IMFMediaSource>, String)>>();
     let (id, name, s2) = (info.id.clone(), info.name.clone(), stop.clone());
     let thread = std::thread::Builder::new().name(format!("camera {name}")).spawn(move || {
-        let opened = (|| -> Result<(IMFMediaSource, IMFSourceReader, u32, u32, String)> {
+        let opened = (|| -> Result<(IMFMediaSource, IMFSourceReader, u32, u32, String, bool)> {
             mf()?;
             let act = activations()?
                 .into_iter()
@@ -248,31 +281,31 @@ pub fn open_camera(info: &DeviceInfo, w: u32, h: u32, fps: u32, sink: FrameSink)
                     }
                 }
                 // …then NV12 at the source's size out of the reader (it
-                // decodes MJPEG, converts and scales as needed).
-                let attrs = attributes(2)?;
-                attrs.SetUINT32(&MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, 1)?;
-                attrs.SetUINT32(&MF_LOW_LATENCY, 1)?;
-                let reader = MFCreateSourceReaderFromMediaSource(&source, &attrs).map_err(|e| explain(&e, &format!("Opening {name}")))?;
-                let stream = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
-                let out = MFCreateMediaType()?;
-                out.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-                out.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
-                out.SetUINT64(&MF_MT_FRAME_SIZE, pack(w, h))?;
-                if reader.SetCurrentMediaType(stream, None, &out).is_err() {
-                    // Not scaled by Windows: Cutaway scales instead.
-                    out.DeleteItem(&MF_MT_FRAME_SIZE)?;
-                    reader.SetCurrentMediaType(stream, None, &out).map_err(|e| explain(&e, &format!("{name} can't deliver pictures Cutaway can use")))?;
-                }
-                let current = reader.GetCurrentMediaType(stream)?;
-                let (ow, oh) = unpack(current.GetUINT64(&MF_MT_FRAME_SIZE)?);
+                // decodes MJPEG, converts and scales as needed). A camera
+                // that sends compressed pictures has them decoded and
+                // scaled on the graphics card when there is one.
+                let packed = handler.GetCurrentMediaType().and_then(|t| t.GetGUID(&MF_MT_SUBTYPE)).is_ok_and(|g| compressed(&g));
+                let card = if packed { super::dxgi_manager() } else { None };
+                let (reader, ow, oh, card) = match card.as_ref().map(|m| open_reader(&source, &name, w, h, Some(m))) {
+                    Some(Ok((r, ow, oh))) => (r, ow, oh, true),
+                    Some(Err(e)) => {
+                        eprintln!("{name}: the graphics card can't decode it ({e:#}); decoding in software");
+                        let (r, ow, oh) = open_reader(&source, &name, w, h, None)?;
+                        (r, ow, oh, false)
+                    }
+                    None => {
+                        let (r, ow, oh) = open_reader(&source, &name, w, h, None)?;
+                        (r, ow, oh, false)
+                    }
+                };
                 let desc = match chosen {
                     Some((_, fmt, cw, ch, cf)) => format!("{name} · {cw}×{ch} {fmt} @ {cf:.0} fps"),
                     None => name.clone(),
                 };
-                Ok((source, reader, ow, oh, desc))
+                Ok((source, reader, ow, oh, desc, card))
             }
         })();
-        let (source, reader, ow, oh, desc) = match opened {
+        let (source, reader, mut ow, mut oh, desc, mut card) = match opened {
             Ok(v) => v,
             Err(e) => {
                 let _ = tx.send(Err(e));
@@ -280,12 +313,33 @@ pub fn open_camera(info: &DeviceInfo, w: u32, h: u32, fps: u32, sink: FrameSink)
             }
         };
         let _ = tx.send(Ok((Mta(source.clone()), desc)));
+        let mut reader = Some(reader);
         let mut times = TimeMap { offset: None };
         let stream = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
+        // Pictures delivered, and ones the graphics card path couldn't give.
+        let (mut delivered, mut unusable) = (0u64, 0u32);
         while !s2.load(Ordering::Relaxed) {
             let (mut flags, mut ts, mut sample) = (0u32, 0i64, None);
+            let Some(r) = &reader else { break };
             // SAFETY: valid out pointers; blocks until a frame (or shutdown).
-            if let Err(e) = unsafe { reader.ReadSample(stream, 0, None, Some(&mut flags), Some(&mut ts), Some(&mut sample)) } {
+            let read = unsafe { r.ReadSample(stream, 0, None, Some(&mut flags), Some(&mut ts), Some(&mut sample)) };
+            let failed = read.is_err() || flags & MF_SOURCE_READERF_ERROR.0 as u32 != 0;
+            if card && delivered == 0 && !s2.load(Ordering::Relaxed) && (failed || unusable >= 30) {
+                // The graphics card couldn't do it after all: in software.
+                eprintln!("{name}: the graphics card couldn't decode it; decoding in software");
+                card = false;
+                // (The old reader lets go of the device first.)
+                drop(reader.take());
+                match open_reader(&source, &name, w, h, None) {
+                    Ok((r, w2, h2)) => (reader, ow, oh) = (Some(r), w2, h2),
+                    Err(e) => {
+                        eprintln!("{name}: {e:#}");
+                        break;
+                    }
+                }
+                continue;
+            }
+            if let Err(e) = read {
                 if !s2.load(Ordering::Relaxed) {
                     eprintln!("{name}: {}", explain(&e, "capture stopped"));
                 }
@@ -298,9 +352,14 @@ pub fn open_camera(info: &DeviceInfo, w: u32, h: u32, fps: u32, sink: FrameSink)
             // SAFETY: reading an optional attribute.
             let device_time = unsafe { sample.GetUINT64(&MFSampleExtension_DeviceReferenceSystemTime) }.ok();
             let pts = times.host(ts, device_time);
-            if let Some((y, uv)) = planes(&sample, ow, oh) {
-                let frame = VideoFrame::new_nv12(ow & !1, oh & !1, pts, y, uv, 0);
-                sink(if (ow, oh) == (w, h) { frame } else { frame.scaled(w, h) });
+            // (A picture on the graphics card is copied out by the lock.)
+            match planes(&sample, ow, oh) {
+                Some((y, uv)) => {
+                    delivered += 1;
+                    let frame = VideoFrame::new_nv12(ow & !1, oh & !1, pts, y, uv, 0);
+                    sink(if (ow, oh) == (w, h) { frame } else { frame.scaled(w, h) });
+                }
+                None => unusable += 1,
             }
         }
         // SAFETY: plain call; the reader is done.
