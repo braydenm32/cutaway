@@ -1835,6 +1835,9 @@ pub enum GuestAccess {
     Tunnel,
     /// Your own HTTPS address that forwards to the guest port.
     Custom,
+    /// Tailscale Funnel: an https://….ts.net address that stays the same,
+    /// so links can be sent ahead. Needs Tailscale installed and signed in.
+    Tailscale,
 }
 
 /// Guests join from their browser: no app, just a link. Each guest has a

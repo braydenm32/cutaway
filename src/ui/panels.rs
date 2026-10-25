@@ -192,6 +192,11 @@ impl App {
                 ui.label(RichText::new(format!("⚠ {e}")).color(AMBER).size(12.0));
             }
             crate::net::tunnel::TunnelState::Off => {}
+            crate::net::tunnel::TunnelState::NeedsYou(what, url) => {
+                ui.label(RichText::new(format!("⚠ {what}")).color(AMBER).size(12.0));
+                ui.hyperlink_to(RichText::new("Allow it on Tailscale's site").size(12.0), url);
+                ui.ctx().request_repaint_after(Duration::from_millis(500));
+            }
         }
         let mut kick = None;
         let mut copied = None;

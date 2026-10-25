@@ -1,7 +1,12 @@
-//! A Cloudflare quick tunnel: gives the guest page a public https://
-//! address (…trycloudflare.com) with nothing to set up — no account, no
-//! router changes. Cutaway runs Cloudflare's `cloudflared` program,
-//! downloading it the first time if it isn't installed.
+//! Gives the guest page a public https:// address with no router changes,
+//! one of two ways:
+//! - a Cloudflare quick tunnel (…trycloudflare.com): nothing to set up, no
+//!   account, but a new address every time. Cutaway runs Cloudflare's
+//!   `cloudflared` program, downloading it the first time if it isn't
+//!   installed.
+//! - Tailscale Funnel (…ts.net): an address that stays the same, so links
+//!   can be sent days ahead. Needs Tailscale installed and signed in; Cutaway
+//!   runs `tailscale funnel` for as long as the guest page is on.
 
 use crate::util::LockExt;
 use anyhow::{anyhow, bail, Context, Result};
@@ -20,6 +25,16 @@ pub enum TunnelState {
     Starting(String),
     Up(String),
     Failed(String),
+    /// Waiting on something only the user can do: what, and the page to do
+    /// it on (Tailscale asking for Funnel to be allowed, say).
+    NeedsYou(String, String),
+}
+
+/// Which way the guest page is reached.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Provider {
+    Cloudflare,
+    Tailscale,
 }
 
 pub struct Tunnel {
@@ -114,7 +129,7 @@ pub fn address_in(line: &str) -> Option<String> {
 
 impl Tunnel {
     /// Start a tunnel to `http://127.0.0.1:port` in the background.
-    pub fn start(port: u16, waker: Arc<dyn Fn() + Send + Sync>) -> Tunnel {
+    pub fn start(port: u16, provider: Provider, waker: Arc<dyn Fn() + Send + Sync>) -> Tunnel {
         let state = Arc::new(Mutex::new(TunnelState::Starting("Starting the tunnel…".into())));
         let child: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -127,7 +142,11 @@ impl Tunnel {
             let mut tries = 0;
             while !stop2.load(std::sync::atomic::Ordering::Relaxed) {
                 tries += 1;
-                match run_once(port, &c2, &stop2, &|st| set(st)) {
+                let run = match provider {
+                    Provider::Cloudflare => run_once(port, &c2, &stop2, &|st| set(st)),
+                    Provider::Tailscale => run_funnel(port, &c2, &stop2, &|st| set(st)),
+                };
+                match run {
                     Ok(()) => {}
                     Err(e) => set(TunnelState::Failed(format!("{e:#}"))),
                 }
@@ -197,6 +216,117 @@ fn run_once(port: u16, child_slot: &Arc<Mutex<Option<Child>>>, stop: &std::sync:
     bail!("the tunnel closed{}", if last.is_empty() { String::new() } else { format!(": {last}") })
 }
 
+/// The `tailscale` command on this computer: the Mac app (whose program
+/// doubles as the command), Homebrew's, Windows' or one on the PATH.
+pub fn tailscale_exe() -> Option<PathBuf> {
+    let name = if cfg!(windows) { "tailscale.exe" } else { "tailscale" };
+    let mut found: Vec<PathBuf> = vec![PathBuf::from("/Applications/Tailscale.app/Contents/MacOS/Tailscale")];
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    dirs.extend(["/opt/homebrew/bin", "/usr/local/bin"].map(PathBuf::from));
+    if let Some(pf) = std::env::var_os("ProgramFiles") {
+        dirs.push(PathBuf::from(pf).join("Tailscale"));
+    }
+    found.extend(dirs.into_iter().map(|d| d.join(name)));
+    found.into_iter().find(|p| p.is_file())
+}
+
+/// What a line `tailscale funnel` printed means.
+#[derive(Debug, PartialEq)]
+enum FunnelLine {
+    /// The public address (…ts.net), once it's serving.
+    Address(String),
+    /// A page on Tailscale's site where something has to be allowed first.
+    Allow(String),
+    Problem(String),
+    Other,
+}
+
+fn funnel_line(line: &str) -> FunnelLine {
+    let line = line.trim().trim_start_matches("|--").trim();
+    if let Some(i) = line.find("https://") {
+        let rest = &line[i..];
+        let url = &rest[..rest.find(char::is_whitespace).unwrap_or(rest.len())];
+        if url.starts_with("https://login.tailscale.com/") {
+            return FunnelLine::Allow(url.to_string());
+        }
+        let host = url.trim_start_matches("https://").split(['/', ':']).next().unwrap_or("");
+        if host.ends_with(".ts.net") {
+            return FunnelLine::Address(format!("https://{host}"));
+        }
+    }
+    let lower = line.to_lowercase();
+    if lower.contains("logged out") || lower.contains("needslogin") || lower.contains("not logged in") {
+        return FunnelLine::Problem("Tailscale isn't signed in: open Tailscale and sign in".into());
+    }
+    if lower.contains("failed to connect to local tailscale") || lower.contains("is tailscale running") || lower.contains("tailscaled") && lower.contains("not running") {
+        return FunnelLine::Problem("Tailscale isn't running: open the Tailscale app".into());
+    }
+    if lower.starts_with("error") || lower.contains("error:") {
+        return FunnelLine::Problem(line.to_string());
+    }
+    FunnelLine::Other
+}
+
+fn run_funnel(port: u16, child_slot: &Arc<Mutex<Option<Child>>>, stop: &std::sync::atomic::AtomicBool, set: &dyn Fn(TunnelState)) -> Result<()> {
+    let Some(exe) = tailscale_exe() else {
+        bail!("Tailscale isn't installed: get it from tailscale.com/download, sign in, then Cutaway connects by itself");
+    };
+    set(TunnelState::Starting("Opening Tailscale Funnel…".into()));
+    let mut cmd = Command::new(&exe);
+    // In the foreground: Funnel stops when Cutaway stops it (or quits).
+    cmd.args(["funnel", "--yes", "--https=443", &format!("http://127.0.0.1:{port}")]).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let mut child = cmd.spawn().with_context(|| format!("couldn't start {}", exe.display()))?;
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    for out in [child.stdout.take().map(|o| Box::new(o) as Box<dyn std::io::Read + Send>), child.stderr.take().map(|e| Box::new(e) as Box<dyn std::io::Read + Send>)].into_iter().flatten() {
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(out).lines() {
+                let Ok(line) = line else { break };
+                if tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+    drop(tx);
+    *child_slot.lock_ok() = Some(child);
+    if stop.load(std::sync::atomic::Ordering::Relaxed) {
+        kill(child_slot);
+        return Ok(());
+    }
+    let mut last = String::new();
+    let mut up = false;
+    // Both outputs closed: tailscale exited.
+    for line in rx {
+        match funnel_line(&line) {
+            FunnelLine::Address(a) if !up => {
+                up = true;
+                set(TunnelState::Up(a));
+            }
+            FunnelLine::Allow(url) if !up => {
+                set(TunnelState::NeedsYou("Tailscale asks you to allow Funnel for your network (once). Cutaway carries on by itself after that.".into(), url));
+            }
+            FunnelLine::Problem(p) => last = p,
+            _ => {
+                let l = line.to_lowercase();
+                if !up && (l.contains("funnel") && l.contains("not enabled") || l.contains("https") && l.contains("not enabled")) {
+                    last = line.trim().to_string();
+                }
+            }
+        }
+    }
+    kill(child_slot);
+    if stop.load(std::sync::atomic::Ordering::Relaxed) {
+        return Ok(());
+    }
+    bail!("Tailscale Funnel stopped{}", if last.is_empty() { String::new() } else { format!(": {last}") })
+}
+
 fn kill(child_slot: &Arc<Mutex<Option<Child>>>) {
     if let Some(mut c) = child_slot.lock_ok().take() {
         let _ = c.kill();
@@ -232,5 +362,19 @@ mod tests {
         assert_eq!(found, vec!["https://mild-sunset-river-lake.trycloudflare.com".to_string()]);
         assert_eq!(address_in("ERR failed to request quick Tunnel: Post \"https://api.trycloudflare.com/tunnel\""), None);
         assert!(download_url().unwrap().starts_with("https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-"));
+    }
+
+    #[test]
+    fn reads_tailscale_funnels_output() {
+        let out = "Available on the internet:\n\nhttps://studio-mac.tail1234.ts.net/\n|-- / proxy http://127.0.0.1:8792\n\nPress Ctrl+C to exit.";
+        let found: Vec<FunnelLine> = out.lines().map(funnel_line).filter(|l| *l != FunnelLine::Other).collect();
+        assert_eq!(found, vec![FunnelLine::Address("https://studio-mac.tail1234.ts.net".into())]);
+        assert_eq!(funnel_line("https://studio-mac.tail1234.ts.net:8443/"), FunnelLine::Address("https://studio-mac.tail1234.ts.net".into()));
+        let enable = "Funnel is not enabled on your tailnet.\nTo enable, visit:\n\n         https://login.tailscale.com/f/funnel?node=nXyZ123CNTRL\n";
+        let found: Vec<FunnelLine> = enable.lines().map(funnel_line).filter(|l| *l != FunnelLine::Other).collect();
+        assert_eq!(found, vec![FunnelLine::Allow("https://login.tailscale.com/f/funnel?node=nXyZ123CNTRL".into())]);
+        assert!(matches!(funnel_line("failed to connect to local Tailscale daemon for /localapi/v0/status; not running?"), FunnelLine::Problem(_)));
+        assert!(matches!(funnel_line("Logged out."), FunnelLine::Problem(_)));
+        assert_eq!(funnel_line("Press Ctrl+C to exit."), FunnelLine::Other);
     }
 }

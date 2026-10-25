@@ -437,7 +437,7 @@ hide_after_s = 0            # 0 = until you hide it
 
 [guests]
 enabled = false
-access = "tunnel"           # tunnel (a free Cloudflare address) | custom
+access = "tunnel"           # tunnel (a free Cloudflare address, new each start) | tailscale (Tailscale Funnel, stays the same) | custom
 port = 8792
 return_video = false        # guests see the program
 backup = false              # guests' browsers record them too, into the take's Guests folder
