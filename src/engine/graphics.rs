@@ -88,9 +88,17 @@ struct Item {
     /// Web pages: the page, and which of its pictures is showing.
     web: Option<super::web::WebPage>,
     web_seen: u64,
+    /// Titles that follow the program: on by its button (it shows while
+    /// someone with a name is on air), and on by itself until then.
+    wanted: bool,
+    auto_until: Option<Ns>,
 }
 
 impl Item {
+    fn follows(&self) -> bool {
+        self.cfg.kind == GraphicKind::Title && self.cfg.follow
+    }
+
     fn target(&self) -> f32 {
         if self.visible {
             self.cfg.opacity.clamp(0.0, 1.0)
@@ -121,6 +129,36 @@ pub struct Graphics {
     comment: Mutex<CommentItem>,
     /// Every time a graphic came on or went off: (when, name, on).
     log: Mutex<Vec<(Ns, String, bool)>>,
+    /// Who's on air, for titles that follow the program.
+    follow: Mutex<Follow>,
+}
+
+/// Who's in a source, for titles that follow the program.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Person {
+    pub name: String,
+    pub role: String,
+    /// A guest spot's link id: with no name set, the name the guest typed.
+    pub guest: Option<String>,
+}
+
+impl Person {
+    pub fn of(s: &crate::config::SourceConfig) -> Person {
+        Person { name: s.person.trim().to_string(), role: s.role.trim().to_string(), guest: s.guest_id().map(str::to_string) }
+    }
+}
+
+#[derive(Default)]
+struct Follow {
+    people: Vec<Person>,
+    /// The source filling the program when last looked (None: not yet).
+    lead: Option<Option<usize>>,
+    /// Who's being named: (name, role), None for nobody.
+    on_air: Option<(String, String)>,
+    /// When `on_air` was last worked out (guests' names arrive as they join).
+    checked: Ns,
+    /// When each person last came on by themselves.
+    last_auto: std::collections::HashMap<String, Ns>,
 }
 
 /// How long a graphic was on screen in a stretch of the show.
@@ -147,10 +185,15 @@ const STRIP_KEY: usize = 1 << 21;
 
 impl Graphics {
     pub fn new(cfgs: &[Graphic], canvas: (u32, u32), timers: Arc<Timers>) -> Arc<Self> {
-        let g = Arc::new(Graphics { canvas, items: Mutex::new(Vec::new()), versions: Default::default(), timers, comment: Mutex::new(CommentItem::default()), log: Mutex::new(Vec::new()) });
+        let g = Arc::new(Graphics { canvas, items: Mutex::new(Vec::new()), versions: Default::default(), timers, comment: Mutex::new(CommentItem::default()), log: Mutex::new(Vec::new()), follow: Mutex::new(Follow::default()) });
         g.update(cfgs);
         let now = clock::now();
         for it in g.items.lock_ok().iter_mut() {
+            if it.follows() {
+                // On once someone's on air.
+                it.wanted = it.cfg.visible;
+                continue;
+            }
             it.visible = it.cfg.visible;
             it.from_alpha = it.target();
             if it.visible {
@@ -231,7 +274,7 @@ impl Graphics {
         let mut old: Vec<Item> = std::mem::take(&mut *items);
         for cfg in cfgs {
             let prev = old.iter().position(|o| o.cfg.name == cfg.name).map(|i| old.remove(i));
-            let item = match prev {
+            let mut item = match prev {
                 Some(mut p) if p.cfg == *cfg => {
                     p.cfg = cfg.clone();
                     p
@@ -243,20 +286,95 @@ impl Graphics {
                     let same_page = p.cfg.kind == GraphicKind::Web && p.cfg.url == cfg.url && p.cfg.page_size == cfg.page_size;
                     let (web, web_seen) = if same_page { (p.web.take(), p.web_seen) } else { (open_page(cfg), 0) };
                     let image = if same_page { p.image.take() } else { image };
-                    Item { cfg: cfg.clone(), image, error, version: self.next_version(), visible: p.visible, changed_at: p.changed_at, from_alpha: p.from_alpha, text, strip, web, web_seen }
+                    Item { cfg: cfg.clone(), image, error, version: self.next_version(), visible: p.visible, changed_at: p.changed_at, from_alpha: p.from_alpha, text, strip, web, web_seen, wanted: p.wanted, auto_until: p.auto_until }
                 }
                 None => {
                     let (image, error, text) = self.render(cfg);
                     let strip = self.render_strip(cfg);
-                    Item { cfg: cfg.clone(), image, error, version: self.next_version(), visible: false, changed_at: 0, from_alpha: 0.0, text, strip, web: open_page(cfg), web_seen: 0 }
+                    Item { cfg: cfg.clone(), image, error, version: self.next_version(), visible: false, changed_at: 0, from_alpha: 0.0, text, strip, web: open_page(cfg), web_seen: 0, wanted: false, auto_until: None }
                 }
             };
+            if !item.follows() {
+                item.wanted = false;
+                item.auto_until = None;
+            }
             items.push(item);
         }
         // Gone (or renamed) while on screen: off as far as the log goes.
         let t = clock::now() - VIDEO_LATENCY;
         for o in old.iter().filter(|o| o.visible) {
             self.log_change(t, &o.cfg.name, false);
+        }
+        drop(items);
+        // Titles that follow are drawn again for whoever is on air.
+        let mut f = self.follow.lock_ok();
+        f.checked = 0;
+        f.on_air = None;
+    }
+
+    /// Who's in each source (by position), for titles that follow the
+    /// program.
+    pub fn set_people(&self, people: Vec<Person>) {
+        let mut f = self.follow.lock_ok();
+        if f.people != people {
+            f.people = people;
+            f.checked = 0;
+        }
+    }
+
+    /// The program's main source at `t` (see `Scene::main_source`): titles
+    /// that follow the program change to whoever is in it, come on by
+    /// themselves for someone new, and go off for nobody. Called every
+    /// program frame; `guest_name` finds the name a guest typed.
+    pub fn follow(&self, lead: Option<usize>, t: Ns, guest_name: &dyn Fn(&str) -> Option<String>) {
+        let mut f = self.follow.lock_ok();
+        let moved = f.lead != Some(lead);
+        if moved || f.checked == 0 || t - f.checked > 1_000_000_000 {
+            f.lead = Some(lead);
+            f.checked = t;
+            let person = lead.and_then(|i| f.people.get(i)).and_then(|p| {
+                let name = if p.name.is_empty() { p.guest.as_deref().and_then(guest_name).unwrap_or_default() } else { p.name.clone() };
+                (!name.trim().is_empty()).then(|| (name.trim().to_string(), p.role.clone()))
+            });
+            if person != f.on_air {
+                f.on_air = person.clone();
+                let mut items = self.items.lock_ok();
+                for it in items.iter_mut().filter(|i| i.follows()) {
+                    let Some((name, role)) = &person else { continue };
+                    it.cfg.title = name.clone();
+                    it.cfg.subtitle = role.clone();
+                    it.image = Some(Arc::new(render_title(&it.cfg, self.canvas)));
+                    it.version = self.next_version();
+                    if it.cfg.auto_secs > 0 && !it.visible {
+                        let again = it.cfg.again_after_min as i64 * 60_000_000_000;
+                        let key = format!("{}\u{1f}{}", it.cfg.name, name.to_lowercase());
+                        if f.last_auto.get(&key).is_none_or(|last| t - last >= again) {
+                            f.last_auto.insert(key, t);
+                            it.auto_until = Some(t + it.cfg.auto_secs as i64 * 1_000_000_000);
+                        }
+                    }
+                }
+            }
+        }
+        let someone = f.on_air.is_some();
+        drop(f);
+        let mut changes = Vec::new();
+        let mut items = self.items.lock_ok();
+        for it in items.iter_mut().filter(|i| i.follows()) {
+            if it.auto_until.is_some_and(|u| t >= u) {
+                it.auto_until = None;
+            }
+            let on = someone && (it.wanted || it.auto_until.is_some());
+            if on != it.visible {
+                it.from_alpha = it.alpha_at(t);
+                it.changed_at = t;
+                it.visible = on;
+                changes.push((it.cfg.name.clone(), on));
+            }
+        }
+        drop(items);
+        for (name, on) in changes {
+            self.log_change(t, &name, on);
         }
     }
 
@@ -329,7 +447,7 @@ impl Graphics {
 
     /// (name, on, problem) for each graphic.
     pub fn list(&self) -> Vec<(String, bool, Option<String>)> {
-        self.items.lock_ok().iter().map(|i| (i.cfg.name.clone(), i.visible, i.error.clone().or_else(|| i.web.as_ref().and_then(|w| w.problem())))).collect()
+        self.items.lock_ok().iter().map(|i| (i.cfg.name.clone(), i.visible || i.wanted, i.error.clone().or_else(|| i.web.as_ref().and_then(|w| w.problem())))).collect()
     }
 
     /// Load a web page again (to restart its animation or pick up changes).
@@ -340,14 +458,21 @@ impl Graphics {
     }
 
     pub fn is_visible(&self, index: usize) -> bool {
-        self.items.lock_ok().get(index).is_some_and(|i| i.visible)
+        self.items.lock_ok().get(index).is_some_and(|i| i.visible || i.wanted)
     }
 
     /// Show or hide a graphic (fading as set). Timed like a scene change,
     /// so it lands on the program frame the operator saw.
     pub fn set_visible(&self, index: usize, on: bool) {
+        let someone = self.follow.lock_ok().on_air.is_some();
         let mut items = self.items.lock_ok();
         let Some(it) = items.get_mut(index) else { return };
+        if it.follows() {
+            // On while someone's on air; off also ends a showing by itself.
+            it.wanted = on;
+            it.auto_until = None;
+        }
+        let on = on && (someone || !it.follows());
         if it.visible == on {
             return;
         }
@@ -664,6 +789,49 @@ pub fn render_comment(c: &Comment, style: &crate::config::CommentsConfig, canvas
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn names_follow_whoever_is_on_air() {
+        let g = Graphics::new(&[Graphic { auto_secs: 5, ..Graphic::names("Names") }], (1280, 720), Timers::new());
+        g.set_people(vec![
+            Person { name: "Ana Diaz".into(), role: "Host".into(), guest: None },
+            Person::default(),
+            Person { guest: Some("k3x9".into()), role: "Guest".into(), ..Default::default() },
+        ]);
+        let guest = |id: &str| (id == "k3x9").then(|| "Sam Lee".to_string());
+        let title = |g: &Graphics| g.items.lock_ok()[0].cfg.title.clone();
+        let on = |g: &Graphics| g.items.lock_ok()[0].visible;
+        let s = 1_000_000_000;
+        let t = clock::now();
+        g.follow(Some(0), t, &guest);
+        assert!(on(&g), "comes on by itself for someone new");
+        assert_eq!(title(&g), "Ana Diaz");
+        g.follow(Some(0), t + 4 * s, &guest);
+        assert!(on(&g));
+        g.follow(Some(0), t + 6 * s, &guest);
+        assert!(!on(&g), "off after its seconds");
+        // Nobody named on air, then Ana again soon after: not named again.
+        g.follow(Some(1), t + 7 * s, &guest);
+        g.follow(Some(0), t + 8 * s, &guest);
+        assert!(!on(&g));
+        // A guest, by the name they typed.
+        g.follow(Some(2), t + 9 * s, &guest);
+        assert!(on(&g));
+        assert_eq!(title(&g), "Sam Lee");
+        // Its button: off ends the showing; on stays on through cuts, but
+        // only while someone named is on air.
+        g.set_visible(0, false);
+        assert!(!on(&g) && !g.is_visible(0));
+        g.set_visible(0, true);
+        assert!(on(&g));
+        g.follow(Some(1), t + 20 * s, &guest);
+        assert!(!on(&g) && g.is_visible(0), "nobody on air: hidden, still wanted");
+        g.follow(Some(0), t + 21 * s, &guest);
+        assert!(on(&g));
+        assert_eq!(title(&g), "Ana Diaz");
+        let log = g.on_air(t, t + 30 * s);
+        assert_eq!(log[0].showings.len(), 3);
+    }
 
     #[test]
     fn titles_render_and_fade() {

@@ -31,6 +31,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
 
         // ---- Video sources
         (Sources, "Name") => "What this source is called on its button, in the multiview and scenes, and in the name of its own file (ISO_01_Name).",
+        (Sources, "Name title") => "Who's in this picture and their role, for a name title that names whoever is on air (Settings → Graphics → Who's on air). For a camera split into close-ups, set each close-up to its own person. A guest spot left empty uses the name the guest types.",
         (Sources, "Type") => "Where the picture comes from: a camera or capture card on this computer, a screen, window or app on this computer, a test picture, a media player, a network feed (SRT, RTMP or NDI), a phone, or a close-up or virtual camera cut out of another source.",
         (Sources, "Device") => "Which camera or capture card. If it's unplugged, the source waits and connects by itself when it's back.",
         (Sources, "Device modes") => "The sizes and frame rates the device says it can send. Picking one sets the capture size and frame rate to match.",
@@ -158,6 +159,9 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Graphics, "Page size") => "The size the page is laid out at, in pixels: usually the program's size, for a page made for a whole screen. Width (below) sets how big it is on the picture.",
         (Graphics, "Drawn by") => "Web pages are drawn by Chrome or Edge, run hidden in the background (nothing opens on screen). Install one if none is found.",
         (Graphics, "Image") => "The picture to show. A PNG with a transparent background works best for logos.",
+        (Graphics, "Names") => "A title can show fixed text, or name whoever is on air: the person set on the source that fills most of the program (Settings → Video sources → Name title), changing at each cut. With nobody named on air, it stays off until someone is.",
+        (Graphics, "By itself") => "Brings the name on by itself for a few seconds when someone new comes on air, like a broadcast name strap, so you never have to press it. It won't name the same person again until the minutes you set have passed (0 for every time). Its button still shows and hides it whenever you like.",
+        (Graphics, "Sample") => "Text to show in the preview here. On air, the title shows whoever is on.",
         (Graphics, "Name line") => "The title's top line, usually a name. Change it live from the title's button (✎), handy between guests.",
         (Graphics, "Second line") => "The line underneath: a role, a topic or a handle.",
         (Graphics, "Shows") => "What the clock shows: the time of day, a countdown to a time, a countdown, a stopwatch, or the time left in the rundown segment.",

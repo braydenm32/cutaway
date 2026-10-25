@@ -3183,7 +3183,7 @@ impl App {
                 if is_timer {
                     clock_menus.push((r.clone(), i));
                 }
-                let is_title = self.cfg.graphics.get(i).is_some_and(|g| matches!(g.kind, crate::config::GraphicKind::Title | crate::config::GraphicKind::Ticker));
+                let is_title = self.cfg.graphics.get(i).is_some_and(|g| matches!(g.kind, crate::config::GraphicKind::Title | crate::config::GraphicKind::Ticker) && !g.follow);
                 if is_title && ui.small_button("✎").on_hover_text("Change the text now").clicked() {
                     edit = Some(i);
                 }

@@ -140,6 +140,8 @@ name = "Host close-up"
 device = "frame:Wide"
 width = 1920
 height = 1080
+person = "Your Name"        # who's in it, for a title that names whoever is on air
+role = "Host"
 [sources.framing]
 follow = "left"             # everyone | largest (closest person) | left | middle | right
 shot = "close_up"           # close_up (head and shoulders) | medium | wide
@@ -297,6 +299,18 @@ text_color = "#ffffff"
 box_color = "#101820"
 box_opacity = 0.75
 # font = "/Library/Fonts/YourFont.ttf"   # default: built in
+
+# Names whoever fills the program (each source's person and role), changing
+# at each cut; comes on by itself for 6 seconds when someone new is on air.
+[[graphics]]
+name = "Names"
+kind = "title"
+follow = true
+auto_secs = 6               # 0: only when you press its button
+again_after_min = 10        # don't name the same person again sooner than this
+x = 0.04
+y = 0.78
+width = 0.4
 
 # A news-style ticker: the items one per line in `title`, a label in `subtitle`.
 [[graphics]]

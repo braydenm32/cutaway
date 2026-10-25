@@ -636,6 +636,13 @@ pub struct SourceConfig {
     /// Pan, tilt and zoom: a PTZ camera's controls, or a virtual one's
     /// (device "vptz:<source>") presets.
     pub ptz: PtzConfig,
+    /// Who's in this picture, for name titles that follow the program
+    /// ("" = nobody; a guest spot uses the name the guest typed).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub person: String,
+    /// The line under their name: a role, a topic or a handle.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub role: String,
     /// Which source this is while Cutaway runs (never saved): a settings
     /// change finds the same source by it, however it was renamed or moved.
     #[serde(skip)]
@@ -1042,6 +1049,8 @@ impl Default for SourceConfig {
             network_latency_ms: 300,
             framing: FramingConfig::default(),
             ptz: PtzConfig::default(),
+            person: String::new(),
+            role: String::new(),
             uid: 0,
         }
     }
@@ -1712,6 +1721,25 @@ pub struct Graphic {
     /// Web pages: the size the page is laid out at, in CSS pixels.
     #[serde(skip_serializing_if = "is_page_size")]
     pub page_size: [u32; 2],
+    /// Titles: show whoever is on air (the person set on the source that
+    /// fills most of the program) instead of fixed text.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub follow: bool,
+    /// Titles that follow: come on by themselves for this many seconds when
+    /// someone new is on air (0 = only when you press the button).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub auto_secs: u32,
+    /// ...but not again for the same person within this many minutes.
+    #[serde(skip_serializing_if = "is_ten")]
+    pub again_after_min: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
+fn is_ten(n: &u32) -> bool {
+    *n == 10
 }
 
 const PAGE_SIZE: [u32; 2] = [1920, 1080];
@@ -1747,6 +1775,9 @@ impl Default for Graphic {
             url: String::new(),
             page_size: PAGE_SIZE,
             speed: 6.0,
+            follow: false,
+            auto_secs: 0,
+            again_after_min: 10,
         }
     }
 }
@@ -1762,6 +1793,12 @@ impl Graphic {
 
     pub fn ticker(name: &str, text: &str, label: &str) -> Graphic {
         Graphic { name: name.into(), kind: GraphicKind::Ticker, title: text.into(), subtitle: label.into(), x: 0.0, y: 0.92, width: 1.0, box_opacity: 0.85, ..Default::default() }
+    }
+
+    /// A name title that names whoever is on air, coming on by itself for
+    /// a few seconds when someone new is.
+    pub fn names(name: &str) -> Graphic {
+        Graphic { follow: true, auto_secs: 6, ..Graphic::title(name, "Name", "Role") }
     }
 
     /// A web page over the whole picture.

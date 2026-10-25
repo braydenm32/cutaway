@@ -629,6 +629,7 @@ impl Engine {
         let tall = Arc::new(Mutex::new(TallState { generation: 1, cfg: cfg.vertical.clone(), names: cfg.sources.iter().map(|s| s.name.clone()).collect() }));
         let preview_bus = FrameSlot::new();
         let graphics = graphics::Graphics::new(&cfg.graphics, (cw, ch), timers::Timers::new());
+        graphics.set_people(cfg.sources.iter().map(graphics::Person::of).collect());
         let looks = Arc::new(Mutex::new(LookState { generation: 1, looks: cfg.sources.iter().map(|s| s.look.clone()).collect(), style: cfg.style.clone() }));
         let preview_width = Arc::new(AtomicU32::new(cfg.program.preview_width));
         let video_taps = Arc::new(Mutex::new(VideoTaps::default()));
@@ -1220,6 +1221,7 @@ impl Engine {
         if old.graphics != new.graphics {
             self.graphics.update(&new.graphics);
         }
+        self.graphics.set_people(new.sources.iter().map(graphics::Person::of).collect());
         self.apply_captions(&new.captions);
         self.apply_cutouts(&new.sources);
         self.apply_ndi_out(&new.ndi_out);
@@ -2085,6 +2087,9 @@ impl CompositorLoop {
                     Some(r) => self.comp.set_replay(Some(&r.frame), r.alpha, self.replay_label.load(Ordering::Relaxed)),
                     None => self.comp.set_replay(None, 0.0, false),
                 }
+                // Name titles that follow the program name whoever fills it.
+                let lead = self.switcher.scenes_now().1.main_source();
+                self.graphics.follow(lead, t, &|id| guests::hub().guest_name(id));
                 let mut graphics = self.graphics.layers(t);
                 if let Some((_, c)) = &*self.captions.lock_ok() {
                     graphics.extend(c.layer());
