@@ -118,9 +118,13 @@ pub fn note(text: &str) {
 
 /// Show the log file in Finder (or the folder in the file manager).
 pub fn reveal() {
-    let p = path();
+    reveal_file(&path());
+}
+
+/// Show a file in Finder or Explorer (or its folder in the file manager).
+pub fn reveal_file(p: &std::path::Path) {
     #[cfg(target_os = "macos")]
-    let _ = std::process::Command::new("open").arg("-R").arg(&p).spawn();
+    let _ = std::process::Command::new("open").arg("-R").arg(p).spawn();
     #[cfg(windows)]
     let _ = std::process::Command::new("explorer").arg(format!("/select,{}", p.display())).spawn();
     #[cfg(not(any(target_os = "macos", windows)))]

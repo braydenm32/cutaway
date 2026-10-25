@@ -551,6 +551,11 @@ Video Extensions** on some PCs.
 
 ## First run
 
+- **Your first show:** the first time Cutaway opens, a short guide walks
+  through cameras, the microphone, where recordings go, going live
+  (optional), the pre-show check and a test recording. Each step has a
+  button to the right page in Settings and ticks itself off when it's done.
+  Open it again any time with **?** at the top.
 - **Auto-setup:** on first launch Cutaway writes a settings file with every
   camera and capture card it finds, plus the first audio input, to
   `~/Library/Application Support/Cutaway/config.toml` (on Windows,
@@ -572,7 +577,10 @@ Video Extensions** on some PCs.
 - **The log:** everything Cutaway reports, including the full details of any
   internal error, goes to `~/Library/Logs/Cutaway/Cutaway.log`. Find it under
   **Settings → Diagnostics → Show**, or in Console.app under Log Reports.
-  Include it when reporting a problem.
+- **Problem report:** **Settings → Diagnostics → Save a problem report…**
+  saves one .zip to send: the log, the last take's note, your settings and
+  the devices found. Stream keys, passwords and tokens are taken out, even
+  where they appear in the log.
 - **Health:** the **Health** button shows each source's frame rate, each
   file being recorded (frames written, repeated, dropped, queued), each
   input's re-syncs and the drives. It turns amber when something needs a look.
@@ -664,7 +672,11 @@ General → Shortcuts**, where you can also add your own.
 - **The stream mix** can differ from the recording mix (**Heard in** on each
   input in Settings → Audio inputs), and stream levelling keeps it at a steady
   loudness (Settings → Mixing & headphones).
-- **Stream keys** are saved in the settings file. Treat that file as private.
+- **Stream keys** (and other passwords and tokens) are kept in the Keychain
+  on a Mac, or Credential Manager on Windows, not in the settings file. The
+  file only holds a placeholder like `@keychain:3f9a01c2b7de`. A Mac may ask
+  once, after an update, to let Cutaway use them: choose **Always Allow**.
+  **Export settings** leaves them out, so an exported file is safe to share.
 
 ### Scheduling a stream
 
