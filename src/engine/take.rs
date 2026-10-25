@@ -203,9 +203,18 @@ impl Engine {
             let keep = out.clip_seconds.max(cfg.replay.seconds.ceil() as u32).clamp(5, 600);
             self.clips.start(folder.clone(), fps, brand, audio_cfg.clone(), keep);
             let (path, vtx, muxes) = add_video("Program".into(), format!("Program.{ext}"), fps, (cw, ch), true, rate, None, (fps as usize / 2).max(8), track_cfgs.clone(), Some(self.clips.clone()));
-            export_files.push(ExportFile { path, name: "Program".into(), width: cw, height: ch, fps, has_audio: audio_cfg.is_some(), source: None, tc_frame: tc_for(fps), length: None });
+            export_files.push(ExportFile { path, name: "Program".into(), width: cw, height: ch, fps, has_audio: audio_cfg.is_some(), source: None, tc_frame: tc_for(fps), length: None, clean: false });
             self.video_taps.lock_ok().program = Some(ProgramTap { tx: vtx, from: t0 });
             program_muxes = muxes;
+        }
+
+        // The program without graphics, with the recording mix.
+        if out.clean_program {
+            let (cw, ch) = self.info.canvas;
+            let rate = encode::record_bitrate_kbps(codec, out.program_bitrate_kbps, cw, ch, fps);
+            let (path, vtx, _) = add_video("Program (clean)".into(), format!("Program_Clean.{ext}"), fps, (cw, ch), true, rate, None, (fps as usize / 2).max(8), Vec::new(), None);
+            export_files.push(ExportFile { path, name: "Program (clean)".into(), width: cw, height: ch, fps, has_audio: audio_cfg.is_some(), source: None, tc_frame: tc_for(fps), length: None, clean: true });
+            self.video_taps.lock_ok().clean = Some(ProgramTap { tx: vtx, from: t0 });
         }
 
         // The vertical version, with the recording mix.
@@ -241,7 +250,7 @@ impl Engine {
             });
             let (path, vtx, _) = add_video(label, file, s.fps, s.size, with_audio, rate, retimer, 8, Vec::new(), angle);
             // (By identity: the switch log's angles stay right if sources move.)
-            export_files.push(ExportFile { path, name: s.name.clone(), width: s.size.0, height: s.size.1, fps: s.fps, has_audio: with_audio, source: Some(s.uid as usize), tc_frame: tc_for(s.fps), length: None });
+            export_files.push(ExportFile { path, name: s.name.clone(), width: s.size.0, height: s.size.1, fps: s.fps, has_audio: with_audio, source: Some(s.uid as usize), tc_frame: tc_for(s.fps), length: None, clean: false });
             s.slot.start_iso_tap(vtx, t0);
         }
 
@@ -407,6 +416,7 @@ impl Engine {
                 let mut t = taps.lock_ok();
                 t.program = None;
                 t.tall = None;
+                t.clean = None;
             }
             let mut problems = Vec::new();
             for (name, s) in &slots {

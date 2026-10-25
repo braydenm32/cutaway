@@ -30,6 +30,7 @@ proxy_width = 960           # proxy width at most (height follows)
 input_tracks = false        # every audio input on its own track in Program (after the mix), to re-balance in an editor
 input_tracks_post_fader = false   # those tracks as heard in the mix, instead of before the fader
 mix_wav = false             # the recording mix as Mix.wav too
+clean_program = false       # also record the program without graphics (Program_Clean), for new titles in the edit
 
 # A podcast episode from each take: Mix.wav levelled to the target loudness,
 # as an M4A with the markers as chapters, made when the take ends.

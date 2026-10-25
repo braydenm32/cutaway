@@ -1159,6 +1159,7 @@ impl SettingsUi {
             (o.proxies, "proxies"),
             (o.input_tracks, "input tracks"),
             (o.mix_wav || podcast_on, "mix WAV"),
+            (o.clean_program, "program without graphics"),
         ]
         .into_iter()
         .filter(|(on, _)| *on)
@@ -1209,6 +1210,9 @@ impl SettingsUi {
                     });
                     ui.end_row();
                 }
+                label(ui, "Program without graphics");
+                ui.checkbox(&mut o.clean_program, "Program_Clean, to redo titles and logos in the edit");
+                ui.end_row();
                 label(ui, "Mix WAV");
                 if podcast_on {
                     ui.add_enabled(false, egui::Checkbox::new(&mut true.clone(), "saved (the podcast copy is made from it)"));
