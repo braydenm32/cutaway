@@ -2,7 +2,7 @@
 	"$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
 	"UUID": "app.cutaway.streamdeck",
 	"Name": "Cutaway",
-	"Version": "0.9.0.0",
+	"Version": "0.9.5.0",
 	"Author": "Cutaway",
 	"Description": "Run Cutaway from your Stream Deck: scenes and sources with live pictures and tally colours, take and cut, transitions, record, go live, markers, graphics, audio inputs (with Stream Deck+ dials), auto-switching, captions, media players, sound pads, Syrinscape, talkback, instant clips, timers, the rundown, remote guests, fade to black, instant replay, macros, PTZ cameras, the teleprompter, viewer comments and any Cutaway command.",
 	"Category": "Cutaway",
