@@ -33,6 +33,10 @@ pub struct ExportFile {
     /// Where the file ends (from the start of the take) when that's before
     /// the take did: its source left the show while recording.
     pub length: Option<Ns>,
+    /// The program without graphics: the shots of more than one camera cut
+    /// to it, so the whole edit is free of graphics like the cameras' own
+    /// files, ready for new titles.
+    pub clean: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -184,6 +188,11 @@ impl TakeExport {
     }
 
     fn file_for(&self, angle: Option<usize>) -> Option<&ExportFile> {
+        if angle.is_none() {
+            if let Some(clean) = self.files.iter().find(|f| f.clean) {
+                return Some(clean);
+            }
+        }
         self.files.iter().find(|f| f.source == angle).or_else(|| self.program())
     }
 
@@ -455,6 +464,7 @@ mod tests {
             source,
             tc_frame: Some(37230 * fps),
             length: None,
+            clean: false,
         };
         TakeExport {
             name: "Take & Co".into(),
@@ -483,6 +493,22 @@ mod tests {
         ];
         let cuts = cuts_from_switches("Wide", Some(0), &events, 0, 50_000_000, 30, 300, &recorded);
         assert_eq!(cuts.iter().map(|c| (c.frame, c.angle)).collect::<Vec<_>>(), vec![(0, Some(0)), (30, None), (59, Some(1)), (150, None)]);
+    }
+
+    #[test]
+    fn shots_of_several_cameras_use_the_clean_program_when_there_is_one() {
+        let mut t = sample();
+        let names = |t: &TakeExport| t.shots().iter().map(|s| s.2.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&t), ["Wide", "Program", "Host"]);
+        let mut clean = t.files[0].clone();
+        clean.name = "Program (clean)".into();
+        clean.path = PathBuf::from("/tmp/Take 1/Program_Clean.mp4");
+        clean.clean = true;
+        t.files.push(clean);
+        assert_eq!(names(&t), ["Wide", "Program (clean)", "Host"]);
+        assert_eq!(t.program().unwrap().name, "Program", "the sound still comes from the Program file");
+        let x = fcpxml(&t);
+        assert!(x.contains("Program_Clean.mp4") && x.contains("name=\"Program (clean)\""));
     }
 
     #[test]

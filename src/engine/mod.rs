@@ -271,6 +271,8 @@ pub struct VideoTaps {
     /// The vertical version: recorded, and streamed.
     pub tall: Option<ProgramTap>,
     pub tall_stream: Option<StreamTap>,
+    /// The program without graphics, recorded.
+    pub clean: Option<ProgramTap>,
     /// Other consumers of every program frame (the virtual camera).
     pub listeners: Vec<(u64, Sender<VideoFrame>)>,
 }
@@ -1927,6 +1929,7 @@ impl CompositorLoop {
         let mut stream_grid: Option<(Ns, i64)> = None; // (from, next stream frame index)
         let mut tall_grid: Option<(Ns, i64)> = None;
         let mut warned_tall = false;
+        let mut warned_clean = false;
         let mut warned_program = false;
         let mut warned_stream = false;
         let mut last_behind: Option<Instant> = None;
@@ -1973,7 +1976,7 @@ impl CompositorLoop {
                 }
             }
             // Who wants this frame?
-            let (program_tx, stream, listeners, tall_tx, tall_stream) = {
+            let (program_tx, stream, listeners, tall_tx, tall_stream, clean_tx) = {
                 let taps = self.taps.lock_ok();
                 (
                     taps.program.as_ref().filter(|p| t >= p.from).map(|p| p.tx.clone()),
@@ -1981,6 +1984,7 @@ impl CompositorLoop {
                     taps.listeners.iter().map(|l| l.1.clone()).collect::<Vec<_>>(),
                     taps.tall.as_ref().filter(|p| t >= p.from).map(|p| p.tx.clone()),
                     taps.tall_stream.as_ref().map(|s| (s.tx.clone(), s.from, s.fps.min(fps).max(1))),
+                    taps.clean.as_ref().filter(|p| t >= p.from).map(|p| p.tx.clone()),
                 )
             };
             // The vertical stream, on its own frame grid.
@@ -2033,8 +2037,9 @@ impl CompositorLoop {
                 thumbs,
                 tall: tall_tx.is_some() || tall_stream_now.is_some(),
                 tall_preview: preview_now && self.tall_on.is_some(),
+                clean: clean_tx.is_some(),
             };
-            if wants.program || wants.stream.is_some() || wants.preview || !wants.thumbs.is_empty() || wants.tall {
+            if wants.program || wants.stream.is_some() || wants.preview || !wants.thumbs.is_empty() || wants.tall || wants.clean {
                 self.comp.set_black(self.switcher.black_level());
                 let layout = self.switcher.layout();
                 // The vertical version follows the same scenes.
@@ -2128,6 +2133,12 @@ impl CompositorLoop {
                         }
                         if let Some((w, h, rgba)) = r.tall_preview {
                             self.tall_preview.put(Frame { width: w as usize, height: h as usize, rgba });
+                        }
+                        if let (Some(f), Some(tx)) = (r.clean, &clean_tx) {
+                            if tx.try_send(f).is_err() && !warned_clean {
+                                warned_clean = true;
+                                self.status.lock_ok().push(LogLevel::Warning, "Program without graphics: the encoder can't keep up, frames are being repeated.");
+                            }
                         }
                         if let Some(f) = r.tall {
                             if let Some(tx) = &tall_stream_now {

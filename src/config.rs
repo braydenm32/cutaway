@@ -284,6 +284,9 @@ pub struct OutputConfig {
     pub input_tracks_post_fader: bool,
     /// Save the recording mix as a WAV too.
     pub mix_wav: bool,
+    /// Also record the program without graphics (Program_Clean), so titles
+    /// and logos can be redone in the edit.
+    pub clean_program: bool,
     /// REAPER (.rpp) and DAWproject (Fender Studio Pro, Bitwig, Cubase)
     /// sessions with every WAV on its own track.
     pub daw_sessions: bool,
@@ -325,6 +328,7 @@ impl Default for OutputConfig {
             input_tracks: false,
             input_tracks_post_fader: false,
             mix_wav: false,
+            clean_program: false,
             daw_sessions: false,
             resolve_project: false,
             clip_seconds: 30,

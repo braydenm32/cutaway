@@ -278,6 +278,9 @@ pub struct Rendered {
     /// The vertical version, and its monitor picture (RGBA).
     pub tall: Option<VideoFrame>,
     pub tall_preview: Option<(u32, u32, Vec<u8>)>,
+    /// The program without graphics (titles, logos, tickers, captions,
+    /// comments, web pages, the replay label).
+    pub clean: Option<VideoFrame>,
 }
 
 /// What to produce this time.
@@ -292,6 +295,8 @@ pub struct Wants {
     /// The vertical version (when it's on), and its monitor picture.
     pub tall: bool,
     pub tall_preview: bool,
+    /// The program without graphics, for its own recording.
+    pub clean: bool,
 }
 
 pub struct Compositor {
@@ -324,6 +329,8 @@ pub struct Compositor {
     /// The stream's own canvas, for graphics only the stream gets
     /// (captions): a copy of the program with those on top.
     stream_canvas: Option<StreamCanvas>,
+    /// The program drawn again without graphics, and its NV12 output.
+    clean: Option<(Target, NvOut)>,
     preview: (Target, wgpu::BindGroup),
     preview_bus: Option<Target>,
     thumb_width: u32,
@@ -588,6 +595,7 @@ impl Compositor {
             bg_image: None,
             stream_out: None,
             stream_canvas: None,
+            clean: None,
             thumb_width: s.thumb_width.max(32),
         };
         c.program_out = c.nv_out(cw, ch);
@@ -1381,6 +1389,11 @@ impl Compositor {
                 self.stream_out = Some(self.nv_out(w, h));
             }
         }
+        if wants.clean && self.clean.is_none() {
+            let target = Target::new(&self.device, "clean canvas", self.canvas.width, self.canvas.height, wgpu::TextureFormat::Rgba8Unorm, 4);
+            let out = self.nv_out_from(&target.view, self.canvas.width, self.canvas.height);
+            self.clean = Some((target, out));
+        }
         self.prepare_graphics(graphics);
         let graphic_keys: Vec<(usize, u64)> = graphics.iter().filter(|g| !g.stream_only).map(|g| g.key).collect();
         let stream_keys: Vec<(usize, u64)> = graphics.iter().filter(|g| g.stream_only).map(|g| g.key).collect();
@@ -1570,6 +1583,59 @@ impl Compositor {
             rp.set_bind_group(0, &self.black_bind.1, &[]);
             rp.draw(0..4, 0..1);
         }
+        // The program again without graphics: the same scenes, transition,
+        // stinger, replay (without its label) and fade to black.
+        if let (true, Some((clean, _))) = (wants.clean, &self.clean) {
+            match &plan {
+                Plan::One(order) => draw_scene(&mut enc, &clean.view, order, SLOT_A, None),
+                Plan::Two(..) => {
+                    let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("clean transition"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &clean.view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations { load: wgpu::LoadOp::Clear(clear), store: wgpu::StoreOp::Store },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    rp.set_pipeline(&self.trans_pipe);
+                    rp.set_bind_group(0, &self.trans.as_ref().unwrap().1, &[]);
+                    rp.draw(0..4, 0..1);
+                }
+            }
+            let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("clean over"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &clean.view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            if let (true, true, Some(st)) = (self.stinger_draw, matches!(layout, Layout::Stinger { .. }), &self.stinger) {
+                rp.set_pipeline(&self.stinger_pipe);
+                rp.set_bind_group(0, &st.slots[SLOT_A].1, &[]);
+                rp.draw(0..4, 0..1);
+            }
+            if let (true, Some(r)) = (self.replay_draw, &self.replay) {
+                rp.set_pipeline(&self.yuv_pipe);
+                rp.set_bind_group(0, &r.slots[SLOT_A].1, &[]);
+                rp.draw(0..4, 0..1);
+            }
+            if self.black > 0.0 {
+                rp.set_pipeline(&self.rgba_pipe);
+                rp.set_bind_group(0, &self.black_bind.1, &[]);
+                rp.draw(0..4, 0..1);
+            }
+        }
         if want_bus {
             let t = self.preview_bus.as_ref().unwrap();
             draw_scene(&mut enc, &t.view, &bus_order, SLOT_PREVIEW, Some(false));
@@ -1711,6 +1777,14 @@ impl Compositor {
             reads.push(&o.y);
             reads.push(&o.uv);
         }
+        if let (true, Some((_, o))) = (wants.clean, &self.clean) {
+            pass(&mut enc, &o.y, &self.out_y_pipe, &o.y_bind);
+            pass(&mut enc, &o.uv, &self.out_uv_pipe, &o.uv_bind);
+            o.y.copy(&mut enc);
+            o.uv.copy(&mut enc);
+            reads.push(&o.y);
+            reads.push(&o.uv);
+        }
         if wants.preview {
             pass(&mut enc, &self.preview.0, &self.rgba_pipe, &self.preview.1);
             self.preview.0.copy(&mut enc);
@@ -1786,6 +1860,9 @@ impl Compositor {
         }
         if wants.program {
             out.program = Some(nv12(&self.program_out));
+        }
+        if let (true, Some((_, o))) = (wants.clean, &self.clean) {
+            out.clean = Some(nv12(o));
         }
         if use_sc {
             out.stream = Some(nv12(&self.stream_canvas.as_ref().unwrap().out));
@@ -2294,6 +2371,16 @@ mod tests {
         assert!((s1 - 173).abs() < 12 && (p1 - 173).abs() > 30, "stream {s1} program {p1}");
         let (s2, p2) = (luma(&st, 120, 60) as i32, luma(&p, 240, 120) as i32);
         assert!((s2 - p2).abs() < 10, "stream {s2} program {p2}");
+        // The program without graphics, drawn alongside: no magenta box.
+        let wants3 = Wants { program: true, clean: true, ..Default::default() };
+        for (layout, serial) in [(Layout::One(vec![full, hidden]), 11), (two(TransitionMode::Mix, 0.5), 12)] {
+            let r3 = c.render(&layout, None, std::slice::from_ref(&g), 0, serial, &wants3).unwrap();
+            let (p, cl) = (r3.program.unwrap(), r3.clean.unwrap());
+            let (gp, gc) = (luma(&p, 200, 110) as i32, luma(&cl, 200, 110) as i32);
+            assert!((gp - gc).abs() > 20, "graphic only on the program: {gp} vs {gc}");
+            let (op, oc) = (luma(&p, 40, 40) as i32, luma(&cl, 40, 40) as i32);
+            assert!((op - oc).abs() < 6, "the rest the same: {op} vs {oc}");
+        }
         let (bw, _, bus) = r.preview_bus.as_ref().unwrap();
         let i = (20 * *bw as usize + 20) * 4;
         assert!(bus[i] < 20 && bus[i + 1] > 235, "preview bus shows green: {:?}", &bus[i..i + 3]);

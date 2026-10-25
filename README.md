@@ -172,6 +172,13 @@ and [Install on Windows](#install-on-windows).
   records them (as their camera and mic capture them, before the internet
   gets at it) and uploads it into the take's `Guests` folder as it goes, so
   a bad connection doesn't spoil the recording.
+- **The program without graphics:** optionally record the show a second
+  time without titles, logos, tickers, captions or web pages
+  (`Program_Clean`, Settings → Recording → For editing), cut for cut with
+  the Program file. In the editor timelines and the Resolve project, shots
+  of more than one camera use it, so the whole edit is free of graphics
+  (like the cameras' own files) and a misspelt name can be fixed with a new
+  title.
 - **The vertical version:** optionally record a 9:16 version of the show
   alongside the program (see [The vertical version](#the-vertical-version)).
 - **Upload after the show:** send each take to **YouTube** (with the markers
@@ -197,6 +204,7 @@ A take looks like this:
 ```
 Take_2026-10-16_19-30-02/
   Program.mp4                        the switched show (+ program audio)
+  Program_Clean.mp4                  the show without graphics (if turned on)
   Program_Vertical.mp4               the 9:16 version (if turned on)
   ISO_01_Wide.mp4                    each source, full quality (+ program audio)
   ISO_02_Host.mp4
