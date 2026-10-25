@@ -12,6 +12,9 @@ use eframe::egui::{self, pos2, vec2, Align2, Color32, FontId, Rect, RichText, Se
 use std::time::Duration;
 
 /// "4:59", or "-0:12" when over.
+/// What's carried while a panel's heading is dragged.
+pub(super) struct PanelDrag(pub &'static str);
+
 pub(super) fn left_text(elapsed: f64, planned: f64) -> (String, bool) {
     use crate::engine::timers::fmt_span;
     if planned <= 0.0 {
@@ -29,15 +32,45 @@ fn color_of(s: &str, fallback: u32) -> Color32 {
 }
 
 impl App {
-    pub(super) fn section_heading(&mut self, ui: &mut egui::Ui, text: &str, section: Section) {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(text).color(TEXT_DIM).size(11.0));
+    /// A panel's heading in the column on the right: click it to fold the
+    /// panel away (or open it again), drag it onto another heading to move
+    /// it there. False while the panel is folded.
+    pub(super) fn section_heading(&mut self, ui: &mut egui::Ui, panel: &'static str, text: &str, section: Section) -> bool {
+        let folded = self.cfg.ui.is_folded(panel);
+        let row = ui.horizontal(|ui| {
+            let label = RichText::new(format!("{} {text}", if folded { "▸" } else { "▾" })).color(TEXT_DIM).size(11.0);
+            let r = ui
+                .add(egui::Label::new(label).selectable(false).sense(Sense::click_and_drag()))
+                .on_hover_text(if folded { "Click to open. Drag onto another heading to move it." } else { "Click to fold away. Drag onto another heading to move it." });
+            if r.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            r.dnd_set_drag_payload(PanelDrag(panel));
+            if r.clicked() {
+                self.cfg.ui.set_folded(panel, !folded);
+                self.cfg_dirty = true;
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.small_button("Set up").clicked() {
                     self.settings = Some(self.new_settings().open_at(section));
                 }
             });
         });
+        // Dropping another panel's heading here puts that panel above this one.
+        let zone = row.response.interact(Sense::hover());
+        if let Some(d) = zone.dnd_hover_payload::<PanelDrag>() {
+            if d.0 != panel {
+                let y = zone.rect.top() - 2.0;
+                ui.painter().hline(zone.rect.x_range(), y, Stroke::new(2.0, ACCENT));
+            }
+        }
+        if let Some(d) = zone.dnd_release_payload::<PanelDrag>() {
+            if d.0 != panel {
+                self.cfg.ui.move_panel(d.0, Some(panel));
+                self.cfg_dirty = true;
+            }
+        }
+        !folded
     }
 
     pub(super) fn act(&mut self, a: Action) {
@@ -52,7 +85,9 @@ impl App {
             return;
         }
         ui.add_space(4.0);
-        self.section_heading(ui, "RUNDOWN", Section::Rundown);
+        if !self.section_heading(ui, "rundown", "RUNDOWN", Section::Rundown) {
+            return;
+        }
         let segs = self.cfg.rundown.segments.clone();
         let st = self.rundown.status(&segs);
         let mut cmd = None;
@@ -143,7 +178,9 @@ impl App {
         ui.add_space(4.0);
         let phones = guests.iter().filter(|g| g.camera).count();
         let heading = if phones == 0 { "GUESTS" } else if phones == guests.len() { "PHONE CAMERAS" } else { "GUESTS & PHONES" };
-        self.section_heading(ui, heading, Section::Guests);
+        if !self.section_heading(ui, "guests", heading, Section::Guests) {
+            return;
+        }
         let reach = hub.reach();
         match &reach {
             crate::net::tunnel::TunnelState::Up(_) => {}
@@ -261,7 +298,9 @@ impl App {
             return;
         }
         ui.add_space(4.0);
-        self.section_heading(ui, "SOUND", Section::Pads);
+        if !self.section_heading(ui, "sound", "SOUND", Section::Pads) {
+            return;
+        }
         let mut press: Option<usize> = None;
         let mut release: Option<usize> = None;
         let mut stop_all = false;

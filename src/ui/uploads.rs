@@ -317,7 +317,9 @@ impl App {
             return;
         }
         ui.add_space(4.0);
-        self.section_heading(ui, "UPLOADS", Section::Upload);
+        if !self.section_heading(ui, "uploads", "UPLOADS", Section::Upload) {
+            return;
+        }
         if let Some(r) = &offer {
             let name = r.folder.file_name().unwrap_or_default().to_string_lossy().to_string();
             let mut go = false;
