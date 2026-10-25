@@ -64,13 +64,7 @@ impl<S: Store> Vault<S> {
     /// placeholder back, so it isn't lost. If saving to the safe place
     /// fails, values are left as they are (written to the file).
     pub fn hide(&mut self, mut fields: Vec<(String, &mut String)>, held: &[(String, String)]) {
-        for (name, v) in fields.iter_mut() {
-            if v.is_empty() {
-                if let Some((_, p)) = held.iter().find(|(n, _)| n == name) {
-                    **v = p.clone();
-                }
-            }
-        }
+        restore_held(&mut fields, held);
         let Some(map) = self.map() else { return };
         let mut added = Vec::new();
         let mut ids = Vec::new();
@@ -139,6 +133,18 @@ impl<S: Store> Vault<S> {
             let text = serde_json::to_string(&*map).unwrap_or_default();
             if let Err(e) = self.store.write(&text) {
                 eprintln!("Couldn't tidy saved keys and passwords ({e})");
+            }
+        }
+    }
+}
+
+/// Put back the placeholder of each empty field that couldn't be filled
+/// in at load.
+fn restore_held(fields: &mut [(String, &mut String)], held: &[(String, String)]) {
+    for (name, v) in fields.iter_mut() {
+        if v.is_empty() {
+            if let Some((_, p)) = held.iter().find(|(n, _)| n == name) {
+                **v = p.clone();
             }
         }
     }
@@ -308,8 +314,12 @@ fn with<T>(f: impl FnOnce(&mut Vault<system::System>) -> T) -> Option<T> {
 
 /// See `Vault::hide`.
 pub fn hide(fields: Vec<(String, &mut String)>, held: &[(String, String)]) {
-    // When the store is off, values simply stay as they are.
-    let _ = with(|v| v.hide(fields, held));
+    // When the store is off, values stay as they are; held placeholders
+    // still go back, so a key that couldn't be read isn't lost.
+    let mut fields = Some(fields);
+    if with(|v| v.hide(fields.take().unwrap_or_default(), held)).is_none() {
+        restore_held(&mut fields.unwrap_or_default(), held);
+    }
 }
 
 /// See `Vault::reveal`.
