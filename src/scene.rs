@@ -90,6 +90,23 @@ impl Scene {
         v
     }
 
+    /// The source that fills most of the picture: the full-frame one, or
+    /// else the biggest frame (the first, if two are as big). Name titles
+    /// that follow the program name whoever is in it.
+    pub fn main_source(&self) -> Option<usize> {
+        if let Some(s) = self.full_frame_source() {
+            return Some(s);
+        }
+        let area = |l: &Layer| l.w.clamp(0.0, 1.0) * l.h.clamp(0.0, 1.0);
+        let mut best: Option<&Layer> = None;
+        for l in &self.layers {
+            if best.is_none_or(|b| area(l) > area(b) + 1e-4) {
+                best = Some(l);
+            }
+        }
+        best.map(|l| l.source)
+    }
+
     /// The source this scene shows on its own, full frame (the top layer
     /// covers the whole canvas), if any.
     pub fn full_frame_source(&self) -> Option<usize> {
@@ -294,6 +311,20 @@ mod tests {
 
     fn names(n: usize) -> Vec<String> {
         (1..=n).map(|i| format!("Cam {i}")).collect()
+    }
+
+    #[test]
+    fn the_main_source_fills_most_of_the_picture() {
+        let p = presets(&names(3));
+        assert_eq!(p[1].main_source(), Some(1), "full screen");
+        let side = p.iter().find(|s| s.name == "Side by side").unwrap();
+        assert_eq!(side.main_source(), Some(side.layers[0].source), "as big: the first");
+        let pip = p.iter().find(|s| s.name == "Picture in picture").unwrap();
+        assert_eq!(pip.main_source(), Some(pip.layers[0].source), "the big one, not the inset");
+        let mut two = Scene { name: "Two".into(), ..Default::default() };
+        two.layers = vec![Layer::at(0, 0.0, 0.0, 0.3, 0.3), Layer::at(2, 0.3, 0.0, 0.7, 1.0)];
+        assert_eq!(two.main_source(), Some(2));
+        assert_eq!(Scene::default().main_source(), None);
     }
 
     #[test]

@@ -193,6 +193,14 @@ impl SettingsUi {
             ui.add_sized([240.0, 22.0], egui::TextEdit::singleline(&mut src.name));
             ui.end_row();
 
+            label(ui, "Name title");
+            ui.horizontal(|ui| {
+                let guest = src.guest_id().is_some();
+                ui.add(egui::TextEdit::singleline(&mut src.person).hint_text(if guest { "the name they type" } else { "who's in it" }).desired_width(170.0));
+                ui.add(egui::TextEdit::singleline(&mut src.role).hint_text("role or handle").desired_width(170.0));
+            });
+            ui.end_row();
+
             label(ui, "Type");
             egui::ComboBox::from_id_salt("source_kind").selected_text(kind.label()).width(300.0).show_ui(ui, |ui| {
                 for k in SourceKind::ALL {

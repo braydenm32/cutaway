@@ -50,6 +50,10 @@ impl SettingsUi {
                         self.draft.graphics.push(Graphic::title(&unique(names.clone(), "Title"), "Your Name", "Role or topic"));
                         self.sel_graphic = self.draft.graphics.len() - 1;
                     }
+                    if ui.button("＋ Who's on air").on_hover_text("A name title that names whoever is on air, from the names set on each source").clicked() {
+                        self.draft.graphics.push(Graphic::names(&unique(names.clone(), "Names")));
+                        self.sel_graphic = self.draft.graphics.len() - 1;
+                    }
                     if ui.button("＋ Clock or countdown").clicked() {
                         self.draft.graphics.push(Graphic::clock(&unique(names.clone(), "Clock"), ClockKind::Time, ""));
                         self.sel_graphic = self.draft.graphics.len() - 1;
@@ -86,6 +90,7 @@ impl SettingsUi {
 
     fn graphic_detail(&mut self, ui: &mut egui::Ui) {
         let canvas = (self.draft.program.width, self.draft.program.height);
+        let sources: Vec<(String, String)> = self.draft.sources.iter().map(|s| (s.name.clone(), s.person.clone())).collect();
         let Some(g) = self.draft.graphics.get_mut(self.sel_graphic) else {
             hint(ui, "No graphics yet. Add a logo (a PNG with a transparent background works best) or a name title.");
             return;
@@ -155,7 +160,38 @@ impl SettingsUi {
                     ui.end_row();
                 }
                 GraphicKind::Title => {
-                    label(ui, "Name line");
+                    label(ui, "Names");
+                    ui.vertical(|ui| {
+                        ui.radio_value(&mut g.follow, false, "the text below");
+                        ui.radio_value(&mut g.follow, true, "whoever is on air");
+                        if g.follow {
+                            let named = sources.iter().filter(|(_, p)| !p.trim().is_empty()).count();
+                            hint(ui, &format!("Their name and role come from each source's Name title (Settings → Video sources); guests' from the name they type. {named} of {} sources have a name.", sources.len()));
+                        }
+                    });
+                    ui.end_row();
+                    if g.follow {
+                        label(ui, "By itself");
+                        ui.vertical(|ui| {
+                            let mut auto = g.auto_secs > 0;
+                            ui.horizontal(|ui| {
+                                if ui.checkbox(&mut auto, "comes on when someone new is on air, for").changed() {
+                                    g.auto_secs = if auto { 6 } else { 0 };
+                                }
+                                ui.add_enabled(auto, egui::DragValue::new(&mut g.auto_secs).range(1..=60).suffix(" s"));
+                            });
+                            ui.add_enabled_ui(auto, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label("not again for the same person for");
+                                    ui.add(egui::DragValue::new(&mut g.again_after_min).range(0..=240).suffix(" min"));
+                                });
+                            });
+                        });
+                        ui.end_row();
+                        label(ui, "Sample");
+                    } else {
+                        label(ui, "Name line");
+                    }
                     ui.add(egui::TextEdit::singleline(&mut g.title).desired_width(300.0));
                     ui.end_row();
                     label(ui, "Second line");

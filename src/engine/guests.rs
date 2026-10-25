@@ -463,6 +463,12 @@ impl GuestHub {
         }
     }
 
+    /// The name the guest on a link typed, while they're connected.
+    pub fn guest_name(&self, id: &str) -> Option<String> {
+        let inner = self.inner.lock_ok();
+        inner.conns.get(id).map(|c| c.guest_name.trim().to_string()).filter(|n| !n.is_empty())
+    }
+
     /// Every guest source, connected or not.
     pub fn guests(&self) -> Vec<GuestInfo> {
         let inner = self.inner.lock_ok();

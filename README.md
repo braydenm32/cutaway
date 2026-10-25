@@ -251,6 +251,15 @@ Take_2026-10-16_19-30-02/
   right, a gentle rise, or a pop (**Comes on** in its settings, with how long
   it takes), and leaves the same way back. Title text can be changed live
   between guests.
+- **Names that follow people:** give each source the name and role of
+  whoever is in it (**Settings → Video sources → Name title**; a guest spot
+  uses the name the guest types), and add a **Who's on air** title in
+  Settings → Graphics. It names whoever fills the program, changing at each
+  cut, and can come on by itself for a few seconds when someone new is on
+  air (not again for the same person for 10 minutes, or as you set). Its
+  button keeps it on for as long as you like. For two people on one camera,
+  make a close-up of each (an auto-framed close-up following the person on
+  the left or right, or a virtual PTZ) and name each close-up.
 - **Graphics taking turns:** a group of graphics (sponsors, your social
   handles, a "subscribe" reminder) where every few minutes the next one
   comes on for as long as you set, then goes off. It starts and stops by
