@@ -3,8 +3,9 @@
 //! * Video encoding: the graphics card's H.264/HEVC encoder (NVIDIA NVENC,
 //!   AMD, Intel Quick Sync), or Microsoft's software H.264 encoder.
 //! * AAC encoding and decoding: Windows' own AAC codecs.
-//! * Video decoding (network sources, the media player): Microsoft's
-//!   H.264 decoder, and HEVC when the HEVC Video Extensions are installed.
+//! * Video decoding (network sources, the media player, replays, guests):
+//!   Microsoft's H.264 decoder, and HEVC when the HEVC Video Extensions are
+//!   installed, on the graphics card when there is one (else in software).
 //!
 //! Hardware encoders are asynchronous transforms (they say when they want
 //! input and have output); the rest are synchronous. Both are driven here.
@@ -726,6 +727,11 @@ pub struct MfVideoDecoder {
     coded: (u32, u32),
     visible: (u32, u32),
     output: (u32, u32),
+    /// Decoding on the graphics card (else in software).
+    hardware: bool,
+    setup: DecoderSetup,
+    /// After a switch to software: pictures are skipped until a keyframe.
+    want_key: bool,
 }
 
 unsafe impl Send for MfVideoDecoder {}
@@ -744,7 +750,25 @@ fn set_nv12_output(t: &mut Transform) -> Result<(u32, u32)> {
 }
 
 impl MfVideoDecoder {
+    /// On the graphics card when it can (it does the work the processor
+    /// would otherwise do), else in software.
     pub fn new(s: &DecoderSetup) -> Result<Self> {
+        if let Some(manager) = super::dxgi_manager() {
+            match Self::open(s, Some(&manager)) {
+                Ok(d) => return Ok(d),
+                Err(e) => eprintln!("video decoding: the graphics card can't decode this ({e:#}); decoding in software"),
+            }
+        }
+        Self::open(s, None)
+    }
+
+    /// Whether pictures are decoded on the graphics card.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn hardware(&self) -> bool {
+        self.hardware
+    }
+
+    fn open(s: &DecoderSetup, manager: Option<&IMFDXGIDeviceManager>) -> Result<Self> {
         mf()?;
         let sub = video_subtype(s.codec).ok_or_else(|| anyhow!("ProRes playback needs a Mac"))?;
         let found = enumerate(
@@ -760,14 +784,24 @@ impl MfVideoDecoder {
                 anyhow!("Windows' H.264 decoder isn't available")
             }
         })?;
-        // SAFETY: plain Media Foundation calls on valid objects.
+        // SAFETY: plain Media Foundation calls on valid objects; the device
+        // manager outlives the decoder (it's kept for the whole run).
         unsafe {
             let mft: IMFTransform = found.act.ActivateObject().map_err(|e| explain(&e, "Starting the decoder"))?;
-            if let Ok(a) = mft.GetAttributes() {
+            let attrs = mft.GetAttributes().ok();
+            if let Some(a) = &attrs {
                 let _ = a.SetUINT32(&MF_LOW_LATENCY, 1);
             }
             if let Ok(api) = mft.cast::<ICodecAPI>() {
                 let _ = api.SetValue(&CODECAPI_AVLowLatencyMode, &variant_bool(true));
+            }
+            if let Some(m) = manager {
+                // (Before the formats: the decoder picks them knowing it has the card.)
+                let aware = attrs.as_ref().and_then(|a| a.GetUINT32(&MF_SA_D3D11_AWARE).ok()).unwrap_or(0) != 0;
+                if !aware {
+                    bail!("the decoder doesn't use the graphics card");
+                }
+                mft.ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, m.as_raw() as usize).map_err(|e| explain(&e, "Giving the decoder the graphics card"))?;
             }
             let mut t = Transform::new(mft)?;
             let input = MFCreateMediaType()?;
@@ -780,8 +814,42 @@ impl MfVideoDecoder {
             let coded = set_nv12_output(&mut t)?;
             t.start()?;
             let visible = if s.width > 0 && s.height > 0 { (s.width, s.height) } else { coded };
-            Ok(MfVideoDecoder { t, params: s.parameter_sets.clone(), hevc: s.codec == VideoCodec::Hevc, sent_params: false, coded, visible, output: s.output })
+            Ok(MfVideoDecoder {
+                t,
+                params: s.parameter_sets.clone(),
+                hevc: s.codec == VideoCodec::Hevc,
+                sent_params: false,
+                coded,
+                visible,
+                output: s.output,
+                hardware: manager.is_some(),
+                setup: s.clone(),
+                want_key: false,
+            })
         }
+    }
+
+    fn is_key(&self, nals: &[&[u8]]) -> bool {
+        nals.iter().any(|n| if self.hevc { (16..=21).contains(&h264::hevc_nal_type(n)) } else { h264::h264_nal_type(n) == h264::NAL_IDR })
+    }
+
+    fn feed(&mut self, data: &[u8], pts: Ns, out: &mut Vec<VideoFrame>) -> Result<()> {
+        let nals = h264::split_avcc(data);
+        let key = self.is_key(&nals);
+        if self.want_key && !key {
+            return Ok(());
+        }
+        self.want_key = false;
+        let mut annexb = Vec::with_capacity(data.len() + 64);
+        if key || !self.sent_params {
+            annexb.extend(h264::to_annexb(self.params.iter().map(|p| p.as_slice())));
+            self.sent_params = true;
+        }
+        annexb.extend(h264::to_annexb(nals));
+        let sample = sample_with(&annexb, pts / 100, 0)?;
+        let (visible, output) = (self.visible, self.output);
+        let coded = &mut self.coded;
+        self.t.input(&sample, &mut |t, o| decoded(t, o, coded, visible, output, out))
     }
 }
 
@@ -792,6 +860,7 @@ fn decoded(t: &mut Transform, o: Out, coded: &mut (u32, u32), visible: (u32, u32
         Out::Sample(s) => {
             let pts = unsafe { s.GetSampleTime() }.unwrap_or(0) * 100;
             let (w, h) = (visible.0.min(coded.0.max(2)) & !1, visible.1.min(coded.1.max(2)) & !1);
+            // (A picture on the graphics card is copied out by the lock.)
             if let Some((y, uv)) = planes(&s, w, h) {
                 let f = VideoFrame::new_nv12(w, h, pts, y, uv, 0);
                 frames.push(if (w, h) == output || output.0 == 0 { f } else { f.scaled(output.0, output.1) });
@@ -803,18 +872,17 @@ fn decoded(t: &mut Transform, o: Out, coded: &mut (u32, u32), visible: (u32, u32
 
 impl VideoDecoder for MfVideoDecoder {
     fn decode(&mut self, data: &[u8], pts: Ns, out: &mut Vec<VideoFrame>) -> Result<()> {
-        let nals = h264::split_avcc(data);
-        let key = nals.iter().any(|n| if self.hevc { (16..=21).contains(&h264::hevc_nal_type(n)) } else { h264::h264_nal_type(n) == h264::NAL_IDR });
-        let mut annexb = Vec::with_capacity(data.len() + 64);
-        if key || !self.sent_params {
-            annexb.extend(h264::to_annexb(self.params.iter().map(|p| p.as_slice())));
-            self.sent_params = true;
+        match self.feed(data, pts, out) {
+            Err(e) if self.hardware => {
+                // The card gave up on this stream (an unusual profile, the
+                // driver reset): carry on in software from the next keyframe.
+                eprintln!("video decoding: the graphics card stopped ({e:#}); decoding in software");
+                *self = Self::open(&self.setup, None)?;
+                self.want_key = true;
+                self.feed(data, pts, out)
+            }
+            r => r,
         }
-        annexb.extend(h264::to_annexb(nals));
-        let sample = sample_with(&annexb, pts / 100, 0)?;
-        let (visible, output) = (self.visible, self.output);
-        let coded = &mut self.coded;
-        self.t.input(&sample, &mut |t, o| decoded(t, o, coded, visible, output, out))
     }
 
     fn flush(&mut self, out: &mut Vec<VideoFrame>) -> Result<()> {
@@ -958,13 +1026,27 @@ mod tests {
         assert!(packets.len() >= 55, "{backend}: {} packets", packets.len());
         assert!(packets[0].keyframe);
         let setup = DecoderSetup { codec: VideoCodec::H264, parameter_sets: packets[0].config.parameter_sets.clone(), width: 640, height: 360, output: (640, 360) };
-        let mut dec = MfVideoDecoder::new(&setup).unwrap();
-        let mut frames = Vec::new();
-        for p in packets.iter() {
-            dec.decode(&p.data, p.pts, &mut frames).unwrap();
-        }
-        dec.flush(&mut frames).unwrap();
+        let decode = |mut dec: MfVideoDecoder| {
+            let mut frames = Vec::new();
+            for p in packets.iter() {
+                dec.decode(&p.data, p.pts, &mut frames).unwrap();
+            }
+            dec.flush(&mut frames).unwrap();
+            frames
+        };
+        let dec = MfVideoDecoder::new(&setup).unwrap();
+        let hardware = dec.hardware();
+        let frames = decode(dec);
         assert!(frames.len() >= 55, "{} frames decoded", frames.len());
-        eprintln!("H.264 with {backend}: {} packets, {} frames back", packets.len(), frames.len());
+        eprintln!("H.264 with {backend}: {} packets, {} frames back (decoded {})", packets.len(), frames.len(), if hardware { "on the graphics card" } else { "in software" });
+        if hardware {
+            // The graphics card's pictures match software's.
+            let soft = decode(MfVideoDecoder::open(&setup, None).unwrap());
+            assert_eq!(soft.len(), frames.len());
+            let mean = |f: &VideoFrame| f.pixels.with_planes(|p| p.y.iter().map(|&v| v as f64).sum::<f64>() / p.y.len() as f64);
+            for (a, b) in frames.iter().zip(&soft) {
+                assert!((mean(a) - mean(b)).abs() < 2.0, "luma {} on the card, {} in software", mean(a), mean(b));
+            }
+        }
     }
 }

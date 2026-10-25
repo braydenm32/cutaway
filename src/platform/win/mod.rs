@@ -92,6 +92,65 @@ pub fn mf() -> Result<()> {
         .map_err(|e| anyhow!(e))
 }
 
+/// The graphics card, for Media Foundation: one Direct3D 11 device shared
+/// by every video decoder and camera, so that decoding (H.264, HEVC,
+/// MJPEG), colour conversion and scaling run on it rather than on the
+/// processor. None without a graphics card that decodes video (or with
+/// CUTAWAY_SOFTWARE_DECODE set): everything then works in software, as
+/// before.
+pub(crate) fn dxgi_manager() -> Option<windows::Win32::Media::MediaFoundation::IMFDXGIDeviceManager> {
+    use windows::Win32::Foundation::HMODULE;
+    use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1};
+    use windows::Win32::Graphics::Direct3D11::{D3D11CreateDevice, ID3D11Multithread, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_SDK_VERSION};
+    use windows::Win32::Media::MediaFoundation::{IMFDXGIDeviceManager, MFCreateDXGIDeviceManager};
+    struct Shared(Option<IMFDXGIDeviceManager>);
+    // SAFETY: the device manager is free-threaded, and the device behind it
+    // is multithread-protected below.
+    unsafe impl Send for Shared {}
+    unsafe impl Sync for Shared {}
+    static MANAGER: OnceLock<Shared> = OnceLock::new();
+    let made = MANAGER.get_or_init(|| {
+        if std::env::var_os("CUTAWAY_SOFTWARE_DECODE").is_some() || mf().is_err() {
+            return Shared(None);
+        }
+        // SAFETY: plain Direct3D and Media Foundation calls with valid out
+        // pointers; the device lives as long as the manager holds it.
+        let made = unsafe {
+            (|| -> windows::core::Result<IMFDXGIDeviceManager> {
+                let levels = [D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0];
+                let mut device = None;
+                D3D11CreateDevice(
+                    None,
+                    D3D_DRIVER_TYPE_HARDWARE,
+                    HMODULE::default(),
+                    D3D11_CREATE_DEVICE_VIDEO_SUPPORT | D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                    Some(&levels),
+                    D3D11_SDK_VERSION,
+                    Some(&mut device),
+                    None,
+                    None,
+                )?;
+                let device = device.ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_FAIL))?;
+                // Decoders and cameras on several threads use it at once.
+                let _ = device.cast::<ID3D11Multithread>()?.SetMultithreadProtected(true);
+                let (mut token, mut manager) = (0u32, None);
+                MFCreateDXGIDeviceManager(&mut token, &mut manager)?;
+                let manager = manager.ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_FAIL))?;
+                manager.ResetDevice(&device, token)?;
+                Ok(manager)
+            })()
+        };
+        match made {
+            Ok(m) => Shared(Some(m)),
+            Err(e) => {
+                eprintln!("video decoding: no graphics card for it ({}), using software", e.message().trim());
+                Shared(None)
+            }
+        }
+    });
+    made.0.clone()
+}
+
 /// A Windows error in words, with what to do about the common ones.
 pub(crate) fn explain(e: &windows::core::Error, what: &str) -> anyhow::Error {
     if e.code() == E_ACCESSDENIED {
