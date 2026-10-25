@@ -741,8 +741,8 @@ impl SettingsUi {
         ui.horizontal(|ui| {
             if ui.button("Export settings…").clicked() {
                 if let Some(path) = rfd::FileDialog::new().add_filter("Cutaway settings", &["toml"]).set_file_name("cutaway.toml").save_file() {
-                    self.message = Some(match self.draft.save(&path) {
-                        Ok(()) => (format!("Exported to {}", path.display()), false),
+                    self.message = Some(match self.draft.save_without_secrets(&path) {
+                        Ok(()) => (format!("Exported to {} (without stream keys and passwords)", path.display()), false),
                         Err(e) => (format!("Export failed: {e:#}"), true),
                     });
                 }
@@ -1451,6 +1451,34 @@ impl SettingsUi {
 
     // ---- Diagnostics ----------------------------------------------------------------
 
+    fn save_report(&mut self, info: &SettingsContext) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Zip", &["zip"])
+            .set_file_name(crate::report::file_name())
+            .save_file()
+        else {
+            return;
+        };
+        if self.video.is_empty() && self.audio.is_empty() {
+            self.video = devices::list(Kind::Video);
+            self.audio = devices::list(Kind::Audio);
+        }
+        let devices: Vec<String> = self
+            .video
+            .iter()
+            .map(|d| format!("Video: {} {}", d.name, d.summary))
+            .chain(self.audio.iter().map(|d| format!("Audio: {} {}", d.name, d.summary)))
+            .collect();
+        let report = crate::report::Report { cfg: &self.draft, facts: &info.engine_facts, devices: &devices, log: crate::logging::path() };
+        self.message = Some(match report.write(&path) {
+            Ok(()) => {
+                crate::logging::reveal_file(&path);
+                (format!("Saved {}. Send it by email or attach it to your message.", path.display()), false)
+            }
+            Err(e) => (format!("Couldn't save the report: {e:#}"), true),
+        });
+    }
+
     fn diagnostics(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
         title(ui, "Diagnostics", "What the engine is using, connected devices, and the log.");
         egui::Grid::new("facts").num_columns(2).spacing([16.0, 6.0]).show(ui, |ui| {
@@ -1460,9 +1488,17 @@ impl SettingsUi {
             label(ui, "Log file");
             ui.horizontal(|ui| {
                 ui.label(RichText::new(crate::logging::path().display().to_string()).monospace().color(TEXT_DIM));
-                if ui.small_button("Show").on_hover_text("Send this file along when reporting a problem").clicked() {
+                if ui.small_button("Show").clicked() {
                     crate::logging::reveal();
                 }
+            });
+            ui.end_row();
+            label(ui, "Problem report");
+            ui.vertical(|ui| {
+                if ui.button("Save a problem report…").clicked() {
+                    self.save_report(info);
+                }
+                hint(ui, "One .zip to send when something goes wrong: the log, the last take's note, your settings and devices. Stream keys and passwords are taken out.");
             });
             ui.end_row();
             for (k, v) in &info.engine_facts {

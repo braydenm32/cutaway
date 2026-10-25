@@ -22,6 +22,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 mod panels;
+mod guide;
 mod production;
 mod starting;
 mod undo;
@@ -69,7 +70,7 @@ fn logo_texture(ctx: &egui::Context) -> egui::TextureHandle {
     ctx.load_texture("cutaway-logo", image, egui::TextureOptions::LINEAR)
 }
 
-pub fn run(cfg: Config, save_path: Option<PathBuf>, self_test: bool, made_pin: bool) -> anyhow::Result<()> {
+pub fn run(cfg: Config, save_path: Option<PathBuf>, self_test: bool, made_pin: bool, first_run: bool) -> anyhow::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_title("Cutaway").with_icon(app_icon()).with_inner_size([1480.0, 920.0]).with_min_inner_size([1000.0, 640.0]),
         ..Default::default()
@@ -79,6 +80,7 @@ pub fn run(cfg: Config, save_path: Option<PathBuf>, self_test: bool, made_pin: b
         options,
         Box::new(move |cc| {
             let mut app = App::new(cc, cfg, save_path);
+            app.guide_open = first_run || std::env::var_os("CUTAWAY_UI_TEST_GUIDE").is_some();
             if made_pin {
                 // Said after any update news, so neither hides the other.
                 let pin = format!("The remote now needs a PIN: {} (Settings → Remote & MIDI)", app.cfg.remote.pin);
@@ -174,6 +176,12 @@ pub struct App {
     /// Closing was confirmed (or nothing was running): let the window go.
     quit_ok: bool,
     log_open: bool,
+    /// The first-show guide is showing.
+    guide_open: bool,
+    /// A recording was started (the guide's last step).
+    guide_recorded: bool,
+    /// The pre-show check was run from the guide.
+    guide_checked: bool,
     health_open: bool,
     peak_hold: HashMap<String, PeakHold>,
     toast: Option<(String, Instant, bool)>,
@@ -334,6 +342,9 @@ impl App {
             confirm: None,
             quit_ok: false,
             log_open: false,
+            guide_open: false,
+            guide_recorded: false,
+            guide_checked: false,
             health_open: false,
             peak_hold: HashMap::new(),
             toast: None,
@@ -351,6 +362,16 @@ impl App {
         app.vcam_wanted = app.cfg.display.virtual_camera;
         app.start_engine();
         app.apply_control_settings();
+        if !app.cfg.held_secrets.is_empty() {
+            app.toast(
+                format!(
+                    "{} saved key(s) or password(s) couldn't be read from the {}. Allow Cutaway to use them and restart, or type them in again in Settings.",
+                    app.cfg.held_secrets.len(),
+                    if cfg!(windows) { "Credential Manager" } else { "Keychain" }
+                ),
+                true,
+            );
+        }
         // How the last update went (and the old version let go of, once
         // this one has run a while).
         if let Ok(me) = crate::net::self_update::Install::here() {
@@ -593,6 +614,7 @@ impl App {
                     if !self.cfg.ui.profile.trim().is_empty() {
                         let _ = profiles::save(&crate::config::profiles_dir(p), &self.cfg.ui.profile, &self.cfg);
                     }
+                    crate::secrets::tidy(p);
                     self.toast(format!("Saved settings to {}", p.display()), false)
                 }
                 Err(e) => self.toast(format!("Couldn't save settings: {e:#}"), true),
@@ -781,6 +803,8 @@ impl App {
         if let Err(err) = e.start_recording() {
             let msg = format!("Couldn't start recording: {err:#}");
             self.toast(msg, true);
+        } else {
+            self.guide_recorded = true;
         }
     }
 
@@ -1744,6 +1768,7 @@ impl App {
     }
 
     fn header_right(&mut self, ui: &mut egui::Ui) {
+        ui.toggle_value(&mut self.guide_open, "?").on_hover_text("Your first show: a step-by-step guide");
         if ui.button("Settings").on_hover_text(format!("Settings{}", self.key_hint(Builtin::Settings))).clicked() {
             self.open_settings();
         }
@@ -4356,6 +4381,7 @@ impl eframe::App for App {
 
         self.display_window(&ctx);
         self.health_window(&ctx);
+        self.guide_window(&ctx);
         if self.settings.is_some() {
             self.settings_window(&ctx);
         }

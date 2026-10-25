@@ -338,6 +338,9 @@ max_retries = 0             # 0 = keep trying
 record_when_live = false    # also start recording when you go live
 adaptive_bitrate = true     # ease the bitrate off while a connection can't keep up
 
+# Stream keys, passwords and tokens: type them here or in Settings. When
+# Cutaway saves, it moves them to the Keychain (Mac) or Credential Manager
+# (Windows) and leaves a placeholder like "@keychain:3f9a01c2b7de" here.
 [[streaming.destinations]]
 name = "YouTube"
 service = "youtube"         # youtube | twitch | facebook | kick | custom_rtmp | srt

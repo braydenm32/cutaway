@@ -60,6 +60,10 @@ pub struct Config {
     pub keys: KeysConfig,
     /// The next live stream, set up ahead.
     pub schedule: ScheduleConfig,
+    /// Keys and passwords whose saved value couldn't be found when this
+    /// was loaded (field, placeholder): saving keeps the placeholder.
+    #[serde(skip)]
+    pub held_secrets: Vec<(String, String)>,
 }
 
 /// Graphics taking turns: every few minutes the next one comes on for a
@@ -1243,7 +1247,7 @@ pub struct StreamDestination {
     pub service: Service,
     /// rtmp://, rtmps:// or srt:// address, without the key.
     pub server: String,
-    /// Stream key (kept in this settings file; treat the file as private).
+    /// Stream key (kept in the Keychain or Credential Manager; see secrets.rs).
     pub key: String,
     pub enabled: bool,
     /// Gets the vertical (9:16) version instead of the program.
@@ -2136,20 +2140,62 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading {}", path.display()))?;
-        let cfg: Config =
+        let mut cfg: Config =
             toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         cfg.validate()?;
+        cfg.held_secrets = crate::secrets::reveal(cfg.secrets_mut());
+        for (field, _) in &cfg.held_secrets {
+            eprintln!("{}: the saved value for {field} is missing", path.display());
+        }
         Ok(cfg)
     }
 
+    /// Stream keys, passwords and tokens, by name. They're kept in the
+    /// Keychain (Mac) or Credential Manager (Windows), not the file.
+    pub fn secrets_mut(&mut self) -> Vec<(String, &mut String)> {
+        let mut v: Vec<(String, &mut String)> = Vec::new();
+        for (i, d) in self.streaming.destinations.iter_mut().enumerate() {
+            v.push((format!("streaming.destinations.{i}.key"), &mut d.key));
+        }
+        v.push(("upload.client_secret".into(), &mut self.upload.client_secret));
+        v.push(("upload.refresh_token".into(), &mut self.upload.refresh_token));
+        v.push(("syrinscape.token".into(), &mut self.syrinscape.token));
+        v.push(("guests.turn_password".into(), &mut self.guests.turn_password));
+        v.push(("comments.youtube_api_key".into(), &mut self.comments.youtube_api_key));
+        v
+    }
+
+    /// A copy without any keys or passwords (to share or send in a report).
+    pub fn without_secrets(&self) -> Config {
+        let mut c = self.clone();
+        for (_, v) in c.secrets_mut() {
+            v.clear();
+        }
+        c.held_secrets.clear();
+        c
+    }
+
+    /// Write the settings with keys and passwords left out (exports).
+    pub fn save_without_secrets(&self, path: &Path) -> Result<()> {
+        self.without_secrets().write_file(path)
+    }
+
     pub fn save(&self, path: &Path) -> Result<()> {
+        let mut c = self.clone();
+        let held = std::mem::take(&mut c.held_secrets);
+        crate::secrets::hide(c.secrets_mut(), &held);
+        c.write_file(path)
+    }
+
+    fn write_file(&self, path: &Path) -> Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
         let text = toml::to_string_pretty(self)?;
         // Write a copy and swap it in, so a crash or a full disk mid-write
         // can't leave half a settings file. It holds stream keys and
-        // tokens: on Mac only this user may read it.
+        // tokens (when the Keychain can't be used): on Mac only this user
+        // may read it.
         let tmp = path.with_extension("toml.saving");
         let write = || -> std::io::Result<()> {
             let mut f = std::fs::File::create(&tmp)?;
@@ -2327,6 +2373,22 @@ mod tests {
         let back: Config = toml::from_str(&text).unwrap();
         assert_eq!(cfg, back);
         back.validate().unwrap();
+    }
+
+    #[test]
+    fn a_missing_saved_key_is_kept_not_used() {
+        let dir = std::env::temp_dir().join(format!("cutaway-held-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[[streaming.destinations]]\nname = \"YouTube\"\nkey = \"@keychain:0123456789ab\"\n").unwrap();
+        let cfg = Config::load(&path).unwrap();
+        assert_eq!(cfg.streaming.destinations[0].key, "");
+        assert_eq!(cfg.held_secrets.len(), 1);
+        cfg.save(&path).unwrap();
+        assert!(std::fs::read_to_string(&path).unwrap().contains("@keychain:0123456789ab"));
+        cfg.save_without_secrets(&path).unwrap();
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("@keychain"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

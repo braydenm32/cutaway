@@ -18,7 +18,9 @@ mod media;
 mod net;
 mod platform;
 mod recovery;
+mod report;
 mod scene;
+mod secrets;
 mod settings;
 mod ui;
 mod util;
@@ -196,6 +198,7 @@ fn run() -> Result<()> {
     }
 
     let cfg_path = args.config.clone().unwrap_or_else(config::default_config_path);
+    let first_run = args.demo.is_none() && !cfg_path.exists();
     let mut cfg = if let Some(n) = args.demo {
         demo_config(n)
     } else if cfg_path.exists() {
@@ -283,7 +286,7 @@ fn run() -> Result<()> {
 
     // With --demo, edits from the UI shouldn't overwrite the real settings.
     let save_path = if args.demo.is_some() { None } else { Some(cfg_path) };
-    ui::run(cfg, save_path, args.ui_test, made_pin)
+    ui::run(cfg, save_path, args.ui_test, made_pin && !first_run, first_run)
 }
 
 /// Listen for a clap and print the delays that would line everything up.
