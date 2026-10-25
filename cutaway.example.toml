@@ -300,6 +300,16 @@ box_color = "#101820"
 box_opacity = 0.75
 # font = "/Library/Fonts/YourFont.ttf"   # default: built in
 
+# A news-style ticker: the items one per line in `title`, a label in `subtitle`.
+[[graphics]]
+name = "Ticker"
+kind = "ticker"
+title = "Tonight: cameras, microphones and everything in between\nFollow us for the next show"
+subtitle = "LIVE"
+y = 0.92
+speed = 6.0                 # picture widths a minute
+visible = false
+
 # Names whoever fills the program (each source's person and role), changing
 # at each cut; comes on by itself for 6 seconds when someone new is on air.
 [[graphics]]
@@ -311,16 +321,6 @@ again_after_min = 10        # don't name the same person again sooner than this
 x = 0.04
 y = 0.78
 width = 0.4
-
-# A news-style ticker: the items one per line in `title`, a label in `subtitle`.
-[[graphics]]
-name = "Ticker"
-kind = "ticker"
-title = "Tonight: cameras, microphones and everything in between\nFollow us for the next show"
-subtitle = "LIVE"
-y = 0.92
-speed = 6.0                 # picture widths a minute
-visible = false
 
 # ---- live streaming ------------------------------------------------------------
 # The program is encoded once (H.264 + AAC, constant bitrate, keyframe every

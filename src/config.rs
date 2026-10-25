@@ -2258,6 +2258,8 @@ mod tests {
         assert_eq!(cfg.sources[1].look.lut_strength, 1.0);
         assert_eq!(cfg.sources[1].ptz.presets.len(), 1);
         assert_eq!(cfg.graphics[2].kind, GraphicKind::Ticker);
+        assert!(cfg.graphics[3].follow && cfg.graphics[3].auto_secs == 6);
+        assert_eq!(cfg.sources[3].person, "Your Name");
         assert!(cfg.streaming.adaptive_bitrate && cfg.streaming.destinations[3].vertical);
         assert_eq!(cfg.vertical.layouts[0].mode, VerticalMode::Stack);
         assert_eq!(cfg.vertical.framing[0].zoom, 1.2);
