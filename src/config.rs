@@ -1362,11 +1362,66 @@ pub struct UiConfig {
     pub auto_update: bool,
     /// A newer version you chose not to hear about again.
     pub skip_version: String,
+    /// The panels on the right, in the order you dragged them into (see
+    /// `PANELS`; any left out keep their usual place).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub panel_order: Vec<String>,
+    /// Panels on the right folded down to their heading.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub folded: Vec<String>,
+}
+
+/// The panels in the column on the right of the main window, in their usual
+/// order.
+pub const PANELS: [&str; 10] = ["stream", "uploads", "rundown", "guests", "ptz", "comments", "prompter", "macros", "graphics", "sound"];
+
+impl UiConfig {
+    /// The panels on the right in the order they're shown: the ones you
+    /// moved where you put them, and any you didn't (or new ones) after the
+    /// panel they usually follow.
+    pub fn panel_order(&self) -> Vec<&'static str> {
+        let mut out: Vec<&'static str> = Vec::new();
+        for p in &self.panel_order {
+            if let Some(known) = PANELS.iter().find(|k| **k == p.as_str()) {
+                if !out.contains(known) {
+                    out.push(known);
+                }
+            }
+        }
+        for (i, p) in PANELS.iter().enumerate() {
+            if !out.contains(p) {
+                let at = PANELS[..i].iter().rev().find_map(|q| out.iter().position(|o| o == q)).map_or(0, |x| x + 1);
+                out.insert(at, p);
+            }
+        }
+        out
+    }
+
+    /// Put `panel` just above `before` (or at the bottom, for `None`).
+    pub fn move_panel(&mut self, panel: &str, before: Option<&str>) {
+        let mut order = self.panel_order();
+        let Some(from) = order.iter().position(|p| *p == panel) else { return };
+        let p = order.remove(from);
+        let to = before.and_then(|b| order.iter().position(|o| *o == b)).unwrap_or(order.len());
+        order.insert(to, p);
+        self.panel_order = if order == PANELS { Vec::new() } else { order.iter().map(|s| s.to_string()).collect() };
+    }
+
+    pub fn is_folded(&self, panel: &str) -> bool {
+        self.folded.iter().any(|p| p == panel)
+    }
+
+    pub fn set_folded(&mut self, panel: &str, folded: bool) {
+        self.folded.retain(|p| p != panel);
+        if folded {
+            self.folded.push(panel.to_string());
+        }
+    }
 }
 
 impl Default for UiConfig {
     fn default() -> Self {
-        UiConfig { scale: 1.0, confirm_stop_recording: false, confirm_end_stream: true, profile: String::new(), check_before_start: false, check_updates: true, auto_update: false, skip_version: String::new() }
+        UiConfig { scale: 1.0, confirm_stop_recording: false, confirm_end_stream: true, profile: String::new(), check_before_start: false, check_updates: true, auto_update: false, skip_version: String::new(), panel_order: Vec::new(), folded: Vec::new() }
     }
 }
 
@@ -2187,6 +2242,37 @@ mod tests {
         assert!(!r.ensure_pin(), "kept once made");
         let mut off = RemoteConfig::default();
         assert!(!off.ensure_pin() && off.pin.is_empty(), "not while it's off");
+    }
+
+    #[test]
+    fn panels_keep_the_order_they_were_dragged_into() {
+        let mut ui = UiConfig::default();
+        assert_eq!(ui.panel_order(), PANELS);
+        ui.move_panel("sound", Some("stream"));
+        assert_eq!(ui.panel_order()[..2], ["sound", "stream"]);
+        ui.move_panel("stream", None);
+        assert_eq!(*ui.panel_order().last().unwrap(), "stream");
+        assert_eq!(ui.panel_order().len(), PANELS.len());
+        // Back where they started: nothing to save.
+        ui.move_panel("stream", Some("uploads"));
+        ui.move_panel("sound", None);
+        assert!(ui.panel_order.is_empty());
+        // A saved order from before a panel existed (or with one that's gone).
+        ui.panel_order = vec!["macros".into(), "gone".into(), "stream".into(), "macros".into()];
+        let order = ui.panel_order();
+        assert_eq!(order.len(), PANELS.len());
+        assert_eq!(order[..2], ["macros", "graphics"], "graphics still follows macros");
+        assert_eq!(order[2..4], ["sound", "stream"]);
+    }
+
+    #[test]
+    fn panels_fold() {
+        let mut ui = UiConfig::default();
+        ui.set_folded("ptz", true);
+        ui.set_folded("ptz", true);
+        assert!(ui.is_folded("ptz") && ui.folded.len() == 1);
+        ui.set_folded("ptz", false);
+        assert!(!ui.is_folded("ptz"));
     }
 
     #[test]

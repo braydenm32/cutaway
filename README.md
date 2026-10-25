@@ -613,6 +613,7 @@ Video Extensions** on some PCs.
 | Go live / end stream | The **GO LIVE** button. It has no key unless you give it one in Settings → Shortcuts, so a stray key can't start or end a broadcast (a key gets the same checks and "are you sure?" as the button) |
 | Edit layout | `E`, or **Edit layout**: drag frames, drag the corner to resize (Shift keeps shape), **Fit/Fill** and **Zoom** for the selected frame (or double-click a frame to fill it, scroll to zoom, Option/Alt-drag to move the picture), add/remove sources, scene audio, duplicate, rename, **Save scenes** |
 | Audio strip | Fader = level (double-click resets), **ON** = in the mixes, 🎧 = solo in the headphones |
+| Fold or move a panel on the right | Click its heading (▾) to fold it down to one line, again to open it. Drag a heading onto another panel's heading to move it above that one. Each show remembers its own |
 | Second screen | **Screen** in the header. On that window: double-click or `F` for full screen, Esc to leave full screen, Esc again (or ✕, or Cmd/Ctrl+W) to close |
 | Switch show | The show name next to the logo |
 | Settings | ⌘, |

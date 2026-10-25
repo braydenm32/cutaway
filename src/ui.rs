@@ -3035,14 +3035,9 @@ impl App {
 
     fn stream_panel(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("STREAM").color(TEXT_DIM).size(11.0));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("Set up").clicked() {
-                    self.settings = Some(self.new_settings().open_at(Section::Streaming));
-                }
-            });
-        });
+        if !self.section_heading(ui, "stream", "STREAM", Section::Streaming) {
+            return;
+        }
         let Some(engine) = &self.engine else { return };
         let stream = engine.status.lock_ok().stream.clone();
         let dot = |ui: &mut egui::Ui, color: Color32| {
@@ -3119,15 +3114,8 @@ impl App {
             return;
         }
         ui.add_space(4.0);
-        let mut set_up = false;
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("GRAPHICS").color(TEXT_DIM).size(11.0));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                set_up = ui.small_button("Set up").clicked();
-            });
-        });
-        if set_up {
-            self.settings = Some(self.new_settings().open_at(Section::Graphics));
+        if !self.section_heading(ui, "graphics", "GRAPHICS", Section::Graphics) {
+            return;
         }
         let Some(engine) = &self.engine else { return };
         let mut toggle = None;
@@ -4162,7 +4150,10 @@ impl App {
     }
 
     /// Apply new settings: live where possible, otherwise rebuild the engine.
-    fn apply_settings(&mut self, new: Config, ctx: &egui::Context) -> Result<(), String> {
+    fn apply_settings(&mut self, mut new: Config, ctx: &egui::Context) -> Result<(), String> {
+        // Panels folded or moved while Settings was open stay that way.
+        new.ui.panel_order = self.cfg.ui.panel_order.clone();
+        new.ui.folded = self.cfg.ui.folded.clone();
         self.apply_settings_as(new, ctx, false)
     }
 
@@ -4337,18 +4328,27 @@ impl eframe::App for App {
             // Leave the audio strips at least half the height.
             let max_top = (ui.available_height() - 260.0).max(200.0);
             egui::ScrollArea::vertical().id_salt("right_top").max_height(max_top).show(ui, |ui| {
-                self.stream_panel(ui);
-                ui.add_space(4.0);
-                ui.separator();
-                self.uploads_panel(ui);
-                self.rundown_panel(ui);
-                self.guests_panel(ui);
-                self.ptz_panel(ui);
-                self.comments_panel(ui);
-                self.prompter_panel(ui);
-                self.macros_panel(ui);
-                self.graphics_panel(ui);
-                self.sound_panel(ui);
+                // In the order chosen by dragging their headings.
+                for panel in self.cfg.ui.panel_order() {
+                    match panel {
+                        "stream" => {
+                            self.stream_panel(ui);
+                            if !self.cfg.ui.is_folded("stream") {
+                                ui.add_space(4.0);
+                                ui.separator();
+                            }
+                        }
+                        "uploads" => self.uploads_panel(ui),
+                        "rundown" => self.rundown_panel(ui),
+                        "guests" => self.guests_panel(ui),
+                        "ptz" => self.ptz_panel(ui),
+                        "comments" => self.comments_panel(ui),
+                        "prompter" => self.prompter_panel(ui),
+                        "macros" => self.macros_panel(ui),
+                        "graphics" => self.graphics_panel(ui),
+                        _ => self.sound_panel(ui),
+                    }
+                }
             });
             self.audio_panel(ui);
         });

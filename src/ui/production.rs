@@ -126,7 +126,9 @@ impl App {
             return;
         }
         ui.add_space(4.0);
-        self.section_heading(ui, "MACROS", Section::Macros);
+        if !self.section_heading(ui, "macros", "MACROS", Section::Macros) {
+            return;
+        }
         let running: Vec<String> = self.queued.iter().map(|q| q.from.clone()).collect();
         let mut run = None;
         ui.horizontal_wrapped(|ui| {
@@ -223,7 +225,9 @@ impl App {
             self.ptz_cam = cams[0].0;
         }
         ui.add_space(4.0);
-        self.section_heading(ui, "PTZ", Section::Sources);
+        if !self.section_heading(ui, "ptz", "PTZ", Section::Sources) {
+            return;
+        }
         let live = self.engine.as_ref().map(|e| e.switcher.live().sources()).unwrap_or_default();
         ui.horizontal_wrapped(|ui| {
             for (i, name) in &cams {
@@ -410,7 +414,9 @@ impl App {
         let messages = chat.messages();
         let (tw, yt) = chat.status();
         ui.add_space(4.0);
-        self.section_heading(ui, "COMMENTS", Section::Comments);
+        if !self.section_heading(ui, "comments", "COMMENTS", Section::Comments) {
+            return;
+        }
         for (p, st) in [("Twitch", tw), ("YouTube", yt)] {
             if !st.is_empty() {
                 let ok = st.starts_with("reading");
@@ -617,7 +623,9 @@ impl App {
             return;
         }
         ui.add_space(4.0);
-        self.section_heading(ui, "PROMPTER", Section::Prompter);
+        if !self.section_heading(ui, "prompter", "PROMPTER", Section::Prompter) {
+            return;
+        }
         let total = self.prompter.chars.max(1) as f64;
         let mut cmd = None;
         ui.horizontal(|ui| {
