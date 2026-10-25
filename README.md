@@ -98,7 +98,8 @@ and [Install on Windows](#install-on-windows).
   one window or a browser tab), arriving as a source of its own while their
   camera stays on. Signal bars warn you when a guest's connection is
   struggling, before their picture freezes. Cutaway reaches them through a
-  free Cloudflare tunnel, so there's no router setup (see
+  free Cloudflare tunnel, so there's no router setup, or through Tailscale
+  Funnel for links that stay the same from one show to the next (see
   [Remote guests](#remote-guests)).
 - **Media player.** A source that plays a playlist of video files and still
   images, with sound: intros, stings, holding slides, B-roll. Play, pause,
@@ -828,7 +829,8 @@ one in preview, recording, live, auto, graphics and inputs that are on.
    link — **Copy link** and send it by message or email. The first time,
    Cutaway downloads Cloudflare's small tunnel program (or uses `cloudflared`
    if it's installed); the address is new each time Cutaway starts, so send
-   links on the day.
+   links on the day. For links you can send days ahead, use Tailscale Funnel
+   (below).
 3. **The guest** opens the link in Chrome, Edge, Safari or Firefox, checks
    their camera and mic, types their name and presses **Join**. Their spot
    turns green with their name. They hear the show without their own voice,
@@ -861,6 +863,14 @@ one in preview, recording, live, auto, graphics and inputs that are on.
   almost every home and mobile network. A few office, school and hotel
   networks block that; set a TURN server (Cloudflare Calls, Twilio, your own
   coturn) under **Strict networks** to relay for them.
+- **Links that stay the same (Tailscale Funnel):** install
+  [Tailscale](https://tailscale.com/download) and sign in (a free account),
+  then choose **Tailscale Funnel** under **Reached through** and apply.
+  The first time, Cutaway shows a link to allow Funnel for your Tailscale
+  network; after that it connects by itself whenever Cutaway starts. Links
+  look like `https://your-mac.tail1234.ts.net/g/…` and keep working from one
+  show to the next, so you can send them days ahead. The address is named
+  after the computer: renaming it in Tailscale changes the links.
 - **Your own address:** instead of the tunnel, choose **my own https://
   address** and forward it to the guest port (8792); browsers only allow the
   camera on https pages.

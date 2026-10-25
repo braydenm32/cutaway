@@ -31,7 +31,7 @@ use super::sources::{Running, SourceSlot};
 use super::{LogLevel, RecState, Status, VideoTaps, Waker};
 use crate::config::{Config, GuestAccess, GuestsConfig, SourceConfig};
 use crate::media::{clock, h264, AudioBlock, Ns, VideoCodec, VideoFrame, NS_PER_SEC};
-use crate::net::tunnel::{Tunnel, TunnelState};
+use crate::net::tunnel::{Provider, Tunnel, TunnelState};
 use anyhow::{anyhow, bail, Context, Result};
 use crossbeam_channel::{bounded, RecvTimeoutError};
 use rtc::media::io::sample_builder::SampleBuilder;
@@ -295,7 +295,7 @@ struct Inner {
     engine: Option<EngineLink>,
     server: Option<Server>,
     server_problem: Option<String>,
-    tunnel: Option<(u16, Tunnel)>,
+    tunnel: Option<(u16, Provider, Tunnel)>,
     program_feed: Option<Arc<AtomicBool>>,
     /// Recent takes guests may upload to: (token, folder).
     takes: Vec<(String, std::path::PathBuf)>,
@@ -400,11 +400,20 @@ impl GuestHub {
                 Err(e) => inner.server_problem = Some(format!("{e:#}")),
             }
         }
-        let want_tunnel = g.enabled && g.access == GuestAccess::Tunnel && inner.server.is_some();
-        if !want_tunnel {
-            inner.tunnel = None;
-        } else if inner.tunnel.as_ref().is_none_or(|(p, _)| *p != g.port) {
-            inner.tunnel = Some((g.port, Tunnel::start(g.port, waker)));
+        let provider = match g.access {
+            GuestAccess::Tunnel => Some(Provider::Cloudflare),
+            GuestAccess::Tailscale => Some(Provider::Tailscale),
+            GuestAccess::Custom => None,
+        };
+        match provider.filter(|_| g.enabled && inner.server.is_some()) {
+            None => inner.tunnel = None,
+            Some(provider) => {
+                if inner.tunnel.as_ref().is_none_or(|(p, was, _)| *p != g.port || *was != provider) {
+                    // The old one closes first, so the port is free for the new one.
+                    inner.tunnel = None;
+                    inner.tunnel = Some((g.port, provider, Tunnel::start(g.port, provider, waker)));
+                }
+            }
         }
         if !g.enabled {
             // Everyone leaves.
@@ -424,7 +433,7 @@ impl GuestHub {
         let inner = self.inner.lock_ok();
         inner.server.as_ref()?;
         match inner.cfg.access {
-            GuestAccess::Tunnel => inner.tunnel.as_ref().and_then(|(_, t)| t.address()),
+            GuestAccess::Tunnel | GuestAccess::Tailscale => inner.tunnel.as_ref().and_then(|(_, _, t)| t.address()),
             GuestAccess::Custom => Some(inner.cfg.public_url.trim().trim_end_matches('/').to_string()).filter(|u| u.starts_with("https://") || u.starts_with("http://")),
         }
     }
@@ -443,7 +452,7 @@ impl GuestHub {
             return TunnelState::Failed(format!("the guest page couldn't start: {p}"));
         }
         match inner.cfg.access {
-            GuestAccess::Tunnel => inner.tunnel.as_ref().map(|(_, t)| t.state.lock_ok().clone()).unwrap_or_default(),
+            GuestAccess::Tunnel | GuestAccess::Tailscale => inner.tunnel.as_ref().map(|(_, _, t)| t.state.lock_ok().clone()).unwrap_or_default(),
             GuestAccess::Custom => {
                 if inner.cfg.public_url.trim().starts_with("https://") {
                     TunnelState::Up(inner.cfg.public_url.trim().trim_end_matches('/').to_string())

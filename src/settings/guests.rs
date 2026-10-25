@@ -68,6 +68,14 @@ impl SettingsUi {
             label(ui, "Reached through");
             ui.vertical(|ui| {
                 ui.radio_value(&mut g.access, GuestAccess::Tunnel, "a free Cloudflare tunnel (nothing to set up)");
+                ui.radio_value(&mut g.access, GuestAccess::Tailscale, "Tailscale Funnel (free, and the links stay the same)");
+                if g.access == GuestAccess::Tailscale && crate::net::tunnel::tailscale_exe().is_none() {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new("Tailscale isn't on this computer yet:").color(AMBER).size(12.0));
+                        ui.hyperlink_to(RichText::new("get it from tailscale.com").size(12.0), "https://tailscale.com/download");
+                        ui.label(RichText::new("and sign in (a free account).").color(TEXT_DIM).size(12.0));
+                    });
+                }
                 ui.radio_value(&mut g.access, GuestAccess::Custom, "my own https:// address");
                 if g.access == GuestAccess::Custom {
                     ui.add(egui::TextEdit::singleline(&mut g.public_url).hint_text("https://guests.example.com").desired_width(320.0));
@@ -91,9 +99,15 @@ impl SettingsUi {
                 TunnelState::Starting(s) => ui.label(RichText::new(s).color(TEXT_DIM)),
                 TunnelState::Failed(e) => ui.label(RichText::new(format!("⚠ {e}")).color(AMBER)),
                 TunnelState::Off => ui.label(RichText::new("Apply to start the guest page.").color(TEXT_DIM)),
+                TunnelState::NeedsYou(what, url) => {
+                    ui.label(RichText::new(format!("⚠ {what}")).color(AMBER));
+                    ui.hyperlink_to("Allow it on Tailscale's site", url)
+                }
             };
-            if g.access == GuestAccess::Tunnel {
-                hint(ui, "The address is new each time Cutaway starts: send links on the day.");
+            match g.access {
+                GuestAccess::Tunnel => hint(ui, "The address is new each time Cutaway starts: send links on the day. For links that stay the same, use Tailscale Funnel."),
+                GuestAccess::Tailscale => hint(ui, "The address stays the same, so you can send links days ahead. It's named after this computer: rename it in Tailscale's admin console to change it (old links stop working)."),
+                GuestAccess::Custom => {}
             }
         }
 
