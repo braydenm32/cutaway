@@ -769,6 +769,12 @@ impl SourceConfig {
         let d = self.device.trim();
         crate::util::strip_prefix_ci(d, "frame:").map(str::trim).filter(|s| !s.is_empty())
     }
+
+    /// The wide source an auto-framed or virtual PTZ source is cut from
+    /// (it shares that camera's timing: delay and rate).
+    pub fn cut_from(&self) -> Option<&str> {
+        self.framed_from().or_else(|| self.virtual_ptz_of())
+    }
 }
 
 /// Who an auto-framed source follows.
@@ -1013,10 +1019,19 @@ impl SourceLook {
 }
 
 /// A source's settings without those that change while it runs (its look,
-/// playlist, framing, PTZ and whether it's recorded): if these differ, the
-/// source is reopened.
+/// playlist, framing, PTZ, whether it's recorded and who's in it): if these
+/// differ, the source is reopened.
 pub fn source_key(s: &SourceConfig) -> SourceConfig {
-    SourceConfig { look: SourceLook::default(), media: MediaConfig::default(), framing: FramingConfig::default(), ptz: PtzConfig::default(), record: true, ..s.clone() }
+    SourceConfig {
+        look: SourceLook::default(),
+        media: MediaConfig::default(),
+        framing: FramingConfig::default(),
+        ptz: PtzConfig::default(),
+        record: true,
+        person: String::new(),
+        role: String::new(),
+        ..s.clone()
+    }
 }
 
 /// The same for an audio input (level, routing, processing, ducking and
@@ -2096,11 +2111,12 @@ pub struct MidiMapping {
 
 impl Config {
     /// Settings that need the engine restarted when they change.
-    /// Auto-framed sources run at their camera's rate, whatever they say.
+    /// Auto-framed and virtual PTZ sources run at their camera's rate,
+    /// whatever they say.
     pub fn with_framed_rates(&self) -> Config {
         let mut c = self.clone();
         for i in 0..c.sources.len() {
-            let parent = c.sources[i].framed_from().and_then(|from| self.sources.iter().find(|p| p.name.trim().eq_ignore_ascii_case(from)));
+            let parent = c.sources[i].cut_from().and_then(|from| self.sources.iter().find(|p| p.name.trim().eq_ignore_ascii_case(from)));
             if let Some(p) = parent {
                 c.sources[i].fps = p.fps;
             }
@@ -2322,6 +2338,25 @@ pub fn parse_color(s: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A virtual PTZ close-up keeps its wide camera's timing; a new name
+    /// title doesn't reopen a source.
+    #[test]
+    fn close_ups_share_their_camera() {
+        let mut cfg = Config::default();
+        cfg.sources = vec![
+            SourceConfig { name: "Wide".into(), device: "test:bars".into(), fps: 25, ..Default::default() },
+            SourceConfig { name: "Alex".into(), device: "vptz: Wide".into(), fps: 30, ..Default::default() },
+        ];
+        assert_eq!(cfg.sources[1].cut_from(), Some("Wide"));
+        assert_eq!(cfg.with_framed_rates().sources[1].fps, 25);
+        let mut named = cfg.clone();
+        named.sources[1].person = "Alex Smith".into();
+        named.sources[1].role = "Host".into();
+        assert!(!cfg.lineup_changed(&named));
+        named.sources[0].delay_ms = 40;
+        assert!(cfg.lineup_changed(&named));
+    }
 
     #[test]
     fn the_remote_always_has_a_pin() {

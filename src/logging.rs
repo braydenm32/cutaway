@@ -105,6 +105,12 @@ pub fn init() {
     }));
 }
 
+/// Started from Finder/Dock or the Start menu (what's printed goes to the
+/// log, where nobody sees it).
+pub fn started_from_desktop() -> bool {
+    STDERR_IS_LOG.load(Ordering::Relaxed)
+}
+
 /// Write a line to the log (for problems outside the engine's own log,
 /// e.g. a controller sending a command Cutaway doesn't know).
 pub fn note(text: &str) {

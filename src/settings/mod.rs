@@ -222,6 +222,8 @@ struct RemoveCheck {
     names: Vec<String>,
     /// Of those, the ones on the program right now.
     on_air: Vec<String>,
+    /// Sources that stay but restart (a changed device, size, delay…).
+    restarting: Vec<String>,
     recording: bool,
     streaming: bool,
     close: bool,
@@ -604,16 +606,44 @@ impl SettingsUi {
     }
 
     /// Apply the draft, unless that takes sources or inputs out of a show
-    /// that's recording or live: then ask first.
+    /// that's recording or live, or restarts one: then ask first.
     fn apply(&mut self, close: bool, info: &SettingsContext) -> SettingsAction {
         if info.recording || info.streaming {
             let (names, on_air) = self.leaving(&info.on_air);
-            if !names.is_empty() {
-                self.confirm_remove = Some(RemoveCheck { names, on_air, recording: info.recording, streaming: info.streaming, close });
+            let restarting = self.restarting();
+            if !names.is_empty() || !restarting.is_empty() {
+                self.confirm_remove = Some(RemoveCheck { names, on_air, restarting, recording: info.recording, streaming: info.streaming, close });
                 return SettingsAction::None;
             }
         }
         SettingsAction::Apply { cfg: self.draft.clone(), close }
+    }
+
+    /// The sources that stay but reopen when applied (what the engine's
+    /// `apply_lineup` remakes), close-ups following their wide camera.
+    fn restarting(&self) -> Vec<String> {
+        use crate::config::source_key;
+        let (old, new) = (self.original.with_framed_rates(), self.draft.with_framed_rates());
+        let mut names: Vec<String> = new
+            .sources
+            .iter()
+            .filter(|s| s.uid != 0 && old.sources.iter().find(|o| o.uid == s.uid).is_some_and(|o| source_key(o) != source_key(s)))
+            .map(|s| s.name.clone())
+            .collect();
+        loop {
+            let more: Vec<String> = new
+                .sources
+                .iter()
+                .filter(|s| s.uid != 0 && old.sources.iter().any(|o| o.uid == s.uid) && !names.iter().any(|n| n.eq_ignore_ascii_case(&s.name)))
+                .filter(|s| s.cut_from().is_some_and(|from| names.iter().any(|n| n.trim().eq_ignore_ascii_case(from.trim()))))
+                .map(|s| s.name.clone())
+                .collect();
+            if more.is_empty() {
+                break;
+            }
+            names.extend(more);
+        }
+        names
     }
 
     /// The sources and inputs applying would remove, and which of them are
@@ -645,11 +675,28 @@ impl SettingsUi {
         let r = egui::Modal::new(egui::Id::unique("confirm_remove_sources")).show(ctx, |ui| {
             ui.set_width(420.0);
             let one = check.names.len() == 1;
-            ui.heading(format!("Remove {} while {what}?", if one { "this" } else { "these" }));
-            ui.add_space(4.0);
-            ui.label(format!("{} {} the show as soon as you apply.", list_names(&check.names), if one { "leaves" } else { "leave" }));
-            if check.recording {
-                ui.label(if one { "Its recording ends there; everything else keeps recording." } else { "Their recordings end there; everything else keeps recording." });
+            if check.names.is_empty() {
+                let one = check.restarting.len() == 1;
+                ui.heading(format!("Restart {} while {what}?", if one { "this source" } else { "these sources" }));
+                ui.add_space(4.0);
+                ui.label(format!("{} {} for a moment as soon as you apply, to take the new settings.", list_names(&check.restarting), if one { "restarts" } else { "restart" }));
+                if check.recording {
+                    ui.label(if one {
+                        "Its own recording ends there and starts again from the next take; the program keeps recording."
+                    } else {
+                        "Their own recordings end there and start again from the next take; the program keeps recording."
+                    });
+                }
+            } else {
+                ui.heading(format!("Remove {} while {what}?", if one { "this" } else { "these" }));
+                ui.add_space(4.0);
+                ui.label(format!("{} {} the show as soon as you apply.", list_names(&check.names), if one { "leaves" } else { "leave" }));
+                if check.recording {
+                    ui.label(if one { "Its recording ends there; everything else keeps recording." } else { "Their recordings end there; everything else keeps recording." });
+                }
+                if !check.restarting.is_empty() {
+                    ui.label(format!("{} also {} for a moment.", list_names(&check.restarting), if check.restarting.len() == 1 { "restarts" } else { "restart" }));
+                }
             }
             if !check.on_air.is_empty() {
                 ui.add_space(4.0);
@@ -659,7 +706,8 @@ impl SettingsUi {
             }
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                if ui.button(RichText::new("Remove and apply").color(RED)).clicked() {
+                let go = if check.names.is_empty() { "Restart and apply" } else { "Remove and apply" };
+                if ui.button(RichText::new(go).color(RED)).clicked() {
                     action = Some(SettingsAction::Apply { cfg: self.draft.clone(), close: check.close });
                     done = true;
                 }
@@ -2092,6 +2140,29 @@ mod tests {
         let mut win = SettingsUi::new(cfg.clone());
         win.draft.sources.push(SourceConfig { name: "New".into(), device: "test:smpte".into(), ..Default::default() });
         assert!(matches!(win.apply(false, &ctx(true)), SettingsAction::Apply { .. }));
+    }
+
+    /// While recording, a change that restarts a source asks first (with
+    /// the close-ups cut from it); a new name title doesn't.
+    #[test]
+    fn asks_before_restarting_while_recording() {
+        let mut cfg = Config::default();
+        cfg.sources = vec![
+            SourceConfig { name: "Wide".into(), device: "test:bars".into(), ..Default::default() },
+            SourceConfig { name: "Alex".into(), device: "vptz:Wide".into(), ..Default::default() },
+        ];
+        cfg.assign_uids();
+        let mut win = SettingsUi::new(cfg.clone());
+        win.draft.sources[1].person = "Alex Smith".into();
+        win.draft.sources[1].role = "Host".into();
+        assert!(matches!(win.apply(false, &ctx(true)), SettingsAction::Apply { .. }));
+        let mut win = SettingsUi::new(cfg.clone());
+        win.draft.sources[0].delay_ms = 80;
+        assert!(matches!(win.apply(false, &ctx(true)), SettingsAction::None));
+        let check = win.confirm_remove.take().expect("asks");
+        assert!(check.names.is_empty());
+        assert_eq!(check.restarting, vec!["Wide".to_string(), "Alex".to_string()]);
+        assert!(matches!(win.apply(false, &ctx(false)), SettingsAction::Apply { .. }));
     }
 
     /// After applying, a source added in the window keeps the identity it
