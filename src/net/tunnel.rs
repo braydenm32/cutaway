@@ -142,6 +142,7 @@ impl Tunnel {
             let mut tries = 0;
             while !stop2.load(std::sync::atomic::Ordering::Relaxed) {
                 tries += 1;
+                let started = std::time::Instant::now();
                 let run = match provider {
                     Provider::Cloudflare => run_once(port, &c2, &stop2, &|st| set(st)),
                     Provider::Tailscale => run_funnel(port, &c2, &stop2, &|st| set(st)),
@@ -149,6 +150,11 @@ impl Tunnel {
                 match run {
                     Ok(()) => {}
                     Err(e) => set(TunnelState::Failed(format!("{e:#}"))),
+                }
+                // A link that worked for a while starts counting again: only
+                // one failing over and over gives up.
+                if started.elapsed() > Duration::from_secs(60) {
+                    tries = 1;
                 }
                 if stop2.load(std::sync::atomic::Ordering::Relaxed) || tries > 20 {
                     break;

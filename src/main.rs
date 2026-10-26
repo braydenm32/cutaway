@@ -178,6 +178,39 @@ fn main() {
     }
 }
 
+/// The settings file can't be read (edited by hand, or written by a newer
+/// version): keep a copy, say what's wrong and offer fresh settings.
+fn settings_unreadable(path: &std::path::Path, e: &anyhow::Error) -> Result<Config> {
+    eprintln!("error: {e:#}");
+    let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "cutaway".into());
+    let copy = path.with_file_name(format!("{stem} (couldn't open {}).toml", chrono::Local::now().format("%Y-%m-%d %H-%M-%S")));
+    let kept = std::fs::copy(path, &copy).is_ok();
+    let why = format!("{:#}", e.root_cause());
+    let mut text = format!("Cutaway couldn't read its settings file:\n\n{why}\n\n");
+    if kept {
+        text.push_str(&format!("A copy is kept as \"{}\", next to it, so nothing is lost. ", copy.file_name().unwrap_or_default().to_string_lossy()));
+    }
+    text.push_str("Your saved shows are still there (switch to one from the show list).");
+    let fresh = "Start with fresh settings";
+    let answer = rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Error)
+        .set_title("Cutaway")
+        .set_description(text)
+        .set_buttons(rfd::MessageButtons::OkCancelCustom(fresh.into(), "Quit".into()))
+        .show();
+    let go = match answer {
+        rfd::MessageDialogResult::Custom(s) => s == fresh,
+        rfd::MessageDialogResult::Ok | rfd::MessageDialogResult::Yes => true,
+        _ => false,
+    };
+    // Without a copy, fresh settings would overwrite the only one.
+    anyhow::ensure!(go && kept, "{e:#}");
+    let cfg = auto_config();
+    cfg.save(path)?;
+    eprintln!("Started with fresh settings; the old file is {}", copy.display());
+    Ok(cfg)
+}
+
 fn run() -> Result<()> {
     // --version (as the updater asks a new version) answers without touching
     // the log.
@@ -202,7 +235,12 @@ fn run() -> Result<()> {
     let mut cfg = if let Some(n) = args.demo {
         demo_config(n)
     } else if cfg_path.exists() {
-        Config::load(&cfg_path)?
+        match Config::load(&cfg_path) {
+            Ok(cfg) => cfg,
+            // Nobody reads the log at the start of a show: say so on screen.
+            Err(e) if logging::started_from_desktop() && !args.ui_test => settings_unreadable(&cfg_path, &e)?,
+            Err(e) => return Err(e),
+        }
     } else {
         let cfg = auto_config();
         cfg.save(&cfg_path)?;
@@ -214,7 +252,7 @@ fn run() -> Result<()> {
     let made_pin = cfg.remote.ensure_pin() && args.demo.is_none();
     if made_pin {
         cfg.save(&cfg_path)?;
-        eprintln!("Made a PIN for the remote: {}", cfg.remote.pin);
+        eprintln!("Made a PIN for the remote (see Settings → Remote & MIDI)");
     }
     if args.demo.is_some() {
         // Keep demo output next to the real recordings but don't overwrite settings.
