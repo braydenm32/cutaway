@@ -1441,7 +1441,9 @@ impl App {
                 self.act(a);
             }
         }
-        if ctx.egui_wants_keyboard_input() || self.settings.is_some() || self.title_edit.is_some() || self.confirm.is_some() || self.precheck.is_some() || self.sync.is_some() {
+        // (Settings lets them through after a click outside it, while the
+        // pointer's away from it.)
+        if ctx.egui_wants_keyboard_input() || self.settings.as_ref().is_some_and(|s| !s.keys_beside(ctx)) || self.title_edit.is_some() || self.confirm.is_some() || self.precheck.is_some() || self.sync.is_some() {
             return;
         }
         if self.keymap.as_ref().is_none_or(|(c, _)| *c != self.cfg.keys) {
