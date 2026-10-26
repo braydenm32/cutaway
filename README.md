@@ -972,7 +972,9 @@ source.
 - **Viewer comments:** **Settings → Viewer comments:** your Twitch channel
   (no sign-in needed) and/or a YouTube live video with a YouTube API key.
   Comments appear in the main window's **Comments** panel; click one to put
-  it on screen (styled in those settings), or **Show next**.
+  it on screen (styled in those settings), or **Show next**. The page shows
+  under **Show** once you've added a stream destination (a show that only
+  records doesn't need it), and stays once it's set up.
 - **Teleprompter:** **Settings → Teleprompter:** type or paste the script, or
   use the rundown's segment notes (it then jumps to each segment as the
   rundown moves on). Show it on the second screen (**Settings → Screens &
