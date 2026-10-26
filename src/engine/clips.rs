@@ -12,6 +12,10 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+/// Memory the kept stretch may take at most, whatever its length: ProRes
+/// at 4K is close to 100 MB a second.
+const MAX_BYTES: usize = 2 << 30;
+
 #[derive(Default)]
 struct Inner {
     /// The take being recorded (None between takes).
@@ -21,6 +25,9 @@ struct Inner {
     audio_cfg: Option<AudioConfig>,
     keep: Ns,
     video: VecDeque<VideoPacket>,
+    /// Size of `video`'s pictures, and the most it may be.
+    bytes: usize,
+    max_bytes: usize,
     audio: VecDeque<(Ns, Arc<Vec<u8>>)>,
     saved: u32,
 }
@@ -45,7 +52,7 @@ impl ClipBuffer {
     /// A take started: keep the last `keep_seconds` of its program.
     pub fn start(&self, folder: PathBuf, fps: u32, brand: Brand, audio_cfg: Option<AudioConfig>, keep_seconds: u32) {
         let mut i = self.inner.lock_ok();
-        *i = Inner { folder: Some(folder), fps, brand: Some(brand), audio_cfg, keep: (keep_seconds.max(5) as Ns + 4) * NS_PER_SEC, ..Default::default() };
+        *i = Inner { folder: Some(folder), fps, brand: Some(brand), audio_cfg, keep: (keep_seconds.max(5) as Ns + 4) * NS_PER_SEC, max_bytes: MAX_BYTES, ..Default::default() };
     }
 
     /// The take ended.
@@ -53,6 +60,7 @@ impl ClipBuffer {
         let mut i = self.inner.lock_ok();
         i.folder = None;
         i.video.clear();
+        i.bytes = 0;
         i.audio.clear();
     }
 
@@ -63,18 +71,22 @@ impl ClipBuffer {
             return;
         }
         match msg {
-            MuxMsg::Video(p) => i.video.push_back(p.clone()),
+            MuxMsg::Video(p) => {
+                i.bytes += p.data.len();
+                i.video.push_back(p.clone());
+            }
             MuxMsg::Audio(t, d) => i.audio.push_back((*t, d.clone())),
             _ => return,
         }
-        // Forget what's too old, keeping a keyframe to start from.
+        // Forget what's too old (or too much), keeping a keyframe to start from.
         let newest = i.video.back().map(|p| p.dts).unwrap_or(0);
-        let keep = i.keep;
-        while i.video.len() > 1 && newest - i.video[0].dts > keep {
+        let (keep, max) = (i.keep, i.max_bytes);
+        while i.video.len() > 1 && (newest - i.video[0].dts > keep || i.bytes > max) {
             let next_key = i.video.iter().skip(1).position(|p| p.keyframe);
             match next_key {
-                Some(k) if newest - i.video[k + 1].dts > keep => {
-                    i.video.drain(..=k);
+                Some(k) if newest - i.video[k + 1].dts > keep || i.bytes > max => {
+                    let gone: usize = i.video.drain(..=k).map(|p| p.data.len()).sum();
+                    i.bytes -= gone;
                 }
                 _ => break,
             }
@@ -191,5 +203,20 @@ mod tests {
         assert!(b.reserve().is_err());
         assert!(b.save(5, 3).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Big pictures (ProRes) are kept by size as well as by length.
+    #[test]
+    fn keeps_no_more_than_its_memory() {
+        let cfg = Arc::new(VideoConfig { codec: VideoCodec::H264, width: 64, height: 36, record: vec![1, 0x64, 0, 0x1f, 0xff, 0xe0, 0, 0xe1, 0], parameter_sets: Vec::new() });
+        let b = ClipBuffer::new();
+        b.start(std::env::temp_dir(), 30, Brand::Mov, None, 600);
+        b.inner.lock_ok().max_bytes = 6 * 300;
+        for i in 0..1800 {
+            b.push(&MuxMsg::Video(packet(i, 30, &cfg)));
+        }
+        let i = b.inner.lock_ok();
+        assert!(i.bytes <= 6 * 300 && i.bytes == i.video.len() * 6, "{} bytes", i.bytes);
+        assert!(i.video.len() >= 240 && i.video[0].keyframe, "kept {}", i.video.len());
     }
 }

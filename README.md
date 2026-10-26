@@ -399,7 +399,9 @@ Take_2026-10-16_19-30-02/
   layout) for what you build: moving, resizing, filling and zooming frames,
   adding, renaming, duplicating and deleting scenes, a title's text, and
   changes applied in Settings or by switching shows. The show itself (taking
-  scenes, recording, going live) is never undone.
+  scenes, recording, going live) is never undone. While recording or live,
+  an undo that would take out or restart sources, or switch shows, says so
+  and waits until you've stopped.
 - **Phone and tablet remote:** a web page served by Cutaway, on any device on
   the same network, with a PIN. Program picture, scenes, take/cut, record,
   live, markers, clips, replay, fade to black, graphics, macros, PTZ presets

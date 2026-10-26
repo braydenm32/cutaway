@@ -531,10 +531,10 @@ impl Engine {
         *hub.pads.lock_ok() = Some(pads.clone());
         let mut sources = Vec::new();
         let mut aspects = Vec::new();
-        // Every source's frames first: an auto-framed source is cut from
-        // another (and keeps that camera's delay).
+        // Every source's frames first: an auto-framed or virtual PTZ source
+        // is cut from another (and keeps that camera's delay).
         let delay_of = |sc: &crate::config::SourceConfig| {
-            let parent = sc.framed_from().and_then(|from| cfg.sources.iter().find(|p| p.name.trim().eq_ignore_ascii_case(from)));
+            let parent = sc.cut_from().and_then(|from| cfg.sources.iter().find(|p| p.name.trim().eq_ignore_ascii_case(from)));
             parent.unwrap_or(sc).delay_ms
         };
         let slots: Vec<Arc<SourceSlot>> = cfg.sources.iter().enumerate().map(|(i, sc)| SourceSlot::new(i, delay_of(sc), VIDEO_LATENCY)).collect();
@@ -1286,7 +1286,7 @@ impl Engine {
         loop {
             let mut again = false;
             for (i, sc) in new.sources.iter().enumerate() {
-                let Some(parent) = sc.framed_from().or_else(|| sc.virtual_ptz_of()) else { continue };
+                let Some(parent) = sc.cut_from() else { continue };
                 if keep[i].is_some() {
                     let p = new.sources.iter().position(|p| p.name.trim().eq_ignore_ascii_case(parent.trim()));
                     if p.is_none_or(|p| keep[p].is_none()) {
@@ -1300,7 +1300,7 @@ impl Engine {
             }
         }
         let delay_of = |sc: &crate::config::SourceConfig| {
-            let parent = sc.framed_from().and_then(|from| new.sources.iter().find(|p| p.name.trim().eq_ignore_ascii_case(from)));
+            let parent = sc.cut_from().and_then(|from| new.sources.iter().find(|p| p.name.trim().eq_ignore_ascii_case(from)));
             parent.unwrap_or(sc).delay_ms
         };
         let slots: Vec<Arc<SourceSlot>> = new.sources.iter().enumerate().map(|(i, sc)| match keep[i] {

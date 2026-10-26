@@ -26,9 +26,13 @@ pub fn file_name() -> String {
 
 impl Report<'_> {
     pub fn write(&self, path: &Path) -> Result<()> {
+        // Keys and passwords, and the remote's PIN (it lets anyone on the
+        // network run the show).
         let secrets: Vec<String> = {
             let mut c = self.cfg.clone();
-            c.secrets_mut().into_iter().map(|(_, v)| v.clone()).filter(|v| v.trim().len() >= 4).collect()
+            let mut v: Vec<String> = c.secrets_mut().into_iter().map(|(_, v)| v.clone()).collect();
+            v.push(self.cfg.remote.pin.trim().to_string());
+            v.into_iter().filter(|v| v.trim().len() >= 4).collect()
         };
         let scrub = |text: &str| -> String {
             let mut t = text.to_string();
@@ -48,7 +52,9 @@ impl Report<'_> {
         };
 
         add("About this computer.txt", &self.about())?;
-        let settings = toml::to_string_pretty(&self.cfg.without_secrets())?;
+        let mut shared = self.cfg.without_secrets();
+        shared.remote.pin.clear();
+        let settings = toml::to_string_pretty(&shared)?;
         add("Settings (no keys or passwords).toml", &scrub(&settings))?;
         for (name, p) in [("Cutaway.log", self.log.clone()), ("Cutaway.previous.log", self.log.with_extension("previous.log"))] {
             if let Some(text) = tail(&p, LOG_TAIL) {
@@ -129,6 +135,7 @@ mod tests {
         cfg.streaming.destinations.push(Default::default());
         cfg.streaming.destinations[0].key = "live_secret_123".into();
         cfg.guests.turn_password = "hunter22".into();
+        cfg.remote.pin = "975318".into();
 
         let out = dir.join("report.zip");
         Report { cfg: &cfg, facts: &[("Engine".into(), "Metal".into())], devices: &["FaceTime camera".into()], log }
@@ -148,6 +155,7 @@ mod tests {
         assert!(all.contains("FaceTime camera"));
         assert!(all.contains("live2/[hidden]"));
         assert!(!all.contains("live_secret_123"));
+        assert!(!all.contains("975318"));
         assert!(!all.contains("hunter22"));
         let _ = std::fs::remove_dir_all(&dir);
     }

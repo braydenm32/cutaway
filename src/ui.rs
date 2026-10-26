@@ -688,6 +688,16 @@ impl App {
     fn restore(&mut self, s: &undo::Snapshot, ctx: &egui::Context) -> Result<(), String> {
         match s.kind {
             undo::Kind::Settings if s.settings_differ(&self.cfg) => {
+                // While recording or live, the same care as Settings and the
+                // show list: no sources taken out or restarted, no other show.
+                if self.engine.as_ref().is_some_and(|e| e.is_recording() || e.is_streaming()) {
+                    if s.cfg.ui.profile != self.cfg.ui.profile {
+                        return Err("stop recording and streaming before switching shows".into());
+                    }
+                    if s.cfg.lineup_changed(&self.cfg) {
+                        return Err("it changes the sources or inputs: stop recording and streaming first, or change them in Settings".into());
+                    }
+                }
                 self.apply_settings_as(s.cfg.clone(), ctx, true)?;
                 if let Some(win) = self.settings.as_mut() {
                     win.applied(Ok(()), &self.cfg);
