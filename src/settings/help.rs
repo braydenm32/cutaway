@@ -32,7 +32,8 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         // ---- Video sources
         (Sources, "Name") => "What this source is called on its button, in the multiview and scenes, and in the name of its own file (ISO_01_Name).",
         (Sources, "Name title") => "Who's in this picture and their role, for a name title that names whoever is on air (Settings → Graphics → Who's on air). For a camera split into close-ups, set each close-up to its own person. A guest spot left empty uses the name the guest types.",
-        (Sources, "Type") => "Where the picture comes from: a camera or capture card on this computer, a screen, window or app on this computer, a test picture, a media player, a network feed (SRT, RTMP or NDI), a phone, or a close-up or virtual camera cut out of another source.",
+        (Sources, "Feed") => "How the network feed arrives. SRT (wait for a sender): another computer or app sends to this one. SRT (pull from an address): Cutaway fetches it from an address you type. RTMP: point OBS, a phone app or an encoder at Cutaway's own RTMP server.",
+        (Sources, "Type") => "Where the picture comes from, in groups: cameras and screens on this computer (or a phone), close-ups cut from another source, feeds from the network (SRT or RTMP, picked under Network feed, or NDI), and a media player or test picture. Two people on one camera? Use Virtual PTZ (you aim it) or Auto-framed (it follows them).",
         (Sources, "Device") => "Which camera or capture card. If it's unplugged, the source waits and connects by itself when it's back.",
         (Sources, "Device modes") => "The sizes and frame rates the device says it can send. Picking one sets the capture size and frame rate to match.",
         (Sources, "Pattern") => "Which generated picture to show. Test pictures are for trying layouts and checking that sources line up; each flashes once a second.",

@@ -728,8 +728,9 @@ time.
 
 ## Network sources
 
-In **Settings → Video sources**, set a source's type to **RTMP input**,
-**SRT input** or **NDI** and the settings show the address to send to. To
+In **Settings → Video sources**, set a source's type to **Network feed**
+(then pick SRT or RTMP under **Feed**) or **NDI** and the settings show the
+address to send to. To
 hear a network source (or the media player), add an audio input whose device
 is **Sound from <source name>**.
 
