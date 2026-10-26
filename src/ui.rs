@@ -47,6 +47,9 @@ pub mod theme {
 }
 use theme::*;
 
+/// The right-hand column's usual width.
+const COLUMN_WIDTH: f32 = 400.0;
+
 /// Cutaway's icon for its windows and, while it runs, the Dock or taskbar
 /// (drawn by assets/logo/make_logo.py). Without it they'd show egui's.
 fn app_icon() -> Arc<egui::IconData> {
@@ -162,6 +165,8 @@ pub struct App {
     scenes_dirty: bool,
     cfg_dirty: bool,
     textures: HashMap<String, (u64, egui::TextureHandle)>,
+    /// The right-hand column's edge is being dragged.
+    column_dragged: bool,
     waker: Waker,
     edit_mode: bool,
     selected_layer: Option<usize>,
@@ -332,6 +337,7 @@ impl App {
             scenes_dirty: false,
             cfg_dirty: false,
             textures: HashMap::new(),
+            column_dragged: false,
             waker,
             edit_mode: false,
             selected_layer: None,
@@ -1735,6 +1741,30 @@ impl App {
         // A sharper monitor picture while a second screen shows it.
         let want = if self.cfg.display.output != DisplayOutput::Off { e.info.canvas.0.min(1920) } else { self.cfg.program.preview_width };
         e.preview_width.store(want, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The right-hand column's edge: a grip to show it can be dragged, and
+    /// its width kept (with the show) once it's let go.
+    fn column_edge(&mut self, ctx: &egui::Context, rect: Rect) {
+        let edge = Rect::from_center_size(pos2(rect.left(), rect.center().y), vec2(6.0, 36.0));
+        let near = ctx.input(|i| i.pointer.hover_pos().is_some_and(|p| (p.x - rect.left()).abs() < 6.0 && rect.y_range().contains(p.y)));
+        let painter = ctx.layer_painter(egui::LayerId::background());
+        for k in -1..=1 {
+            painter.circle_filled(edge.center() + vec2(0.0, k as f32 * 7.0), 1.6, if near { ACCENT } else { LINE });
+        }
+        // Only a drag of the edge changes it (not the window getting smaller).
+        if near && ctx.input(|i| i.pointer.primary_pressed()) {
+            self.column_dragged = true;
+        }
+        if !self.column_dragged || ctx.input(|i| i.pointer.any_down()) {
+            return;
+        }
+        self.column_dragged = false;
+        let w = rect.width().round();
+        if (w - self.cfg.ui.column_width).abs() >= 1.0 {
+            self.cfg.ui.column_width = w;
+            self.cfg_dirty = true;
+        }
     }
 
     fn texture(&mut self, ctx: &egui::Context, key: &str, slot: &FrameSlot) -> Option<egui::TextureId> {
@@ -4348,7 +4378,15 @@ impl eframe::App for App {
         if self.log_open {
             egui::Panel::bottom("log").resizable(true).default_size(150.0).frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin::same(8))).show(ui, |ui| self.log_panel(ui));
         }
-        egui::Panel::right("audio").resizable(true).default_size(400.0).frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(12, 8))).show(ui, |ui| {
+        // The column on the right: drag its edge to make it wider (kept with the show).
+        let widest = (ui.available_width() * 0.6).max(COLUMN_WIDTH);
+        let width = if self.cfg.ui.column_width > 0.0 { self.cfg.ui.column_width } else { COLUMN_WIDTH };
+        let column = egui::Panel::right("audio")
+            .resizable(true)
+            .default_size(width.clamp(280.0, widest))
+            .size_range(280.0..=widest)
+            .frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(12, 8)))
+            .show(ui, |ui| {
             ui.set_min_width(280.0);
             // Leave the audio strips at least half the height.
             let max_top = (ui.available_height() - 260.0).max(200.0);
@@ -4377,6 +4415,7 @@ impl eframe::App for App {
             });
             self.audio_panel(ui);
         });
+        self.column_edge(&ctx, column.response.rect);
         egui::CentralPanel::default().frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin::same(14))).show(ui, |ui| self.monitors(ui));
 
         self.display_window(&ctx);
