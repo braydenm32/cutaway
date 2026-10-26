@@ -128,7 +128,20 @@ and [Install on Windows](#install-on-windows).
   (over IP, TCP or UDP) or NDI, from a joystick in the PTZ panel, the
   phone remote, the Stream Deck, MIDI and OSC.
 - **Virtual PTZ:** a camera operator inside one wide (ideally 4K) camera:
-  pan, tilt and zoom around its picture, with presets it glides to.
+  pan, tilt and zoom around its picture, with presets it glides to. Frame
+  the presets in Settings by dragging boxes on the wide picture; it starts
+  on preset 1.
+- **Split a camera into close-ups:** right-click a camera's tile (or
+  **Split…** in Settings → Video sources) and choose 2 or 3 close-ups. Each
+  person gets a virtual PTZ camera of their own ("Cam 1 left", "Cam 1
+  right"…), with a box on the wide picture to drag onto them and a name
+  title to fill in. Each records to its own file, ready for the edit. Each
+  close-up is sized to the part of the picture it shows (half a 4K camera
+  is 1080p), so it stays sharp and is cheap to cut out.
+- **See it before you apply it:** in **Settings → Video sources** each source
+  shows its picture above its settings (the multiview's own, so nothing is
+  opened twice). Crop and mirror show what they'll look like as you change
+  them; a source you've only just added or changed shows once you press Apply.
 
 ### Recording
 
@@ -399,7 +412,9 @@ Take_2026-10-16_19-30-02/
   layout) for what you build: moving, resizing, filling and zooming frames,
   adding, renaming, duplicating and deleting scenes, a title's text, and
   changes applied in Settings or by switching shows. The show itself (taking
-  scenes, recording, going live) is never undone.
+  scenes, recording, going live) is never undone. While recording or live,
+  an undo that would take out or restart sources, or switch shows, says so
+  and waits until you've stopped.
 - **Phone and tablet remote:** a web page served by Cutaway, on any device on
   the same network, with a PIN. Program picture, scenes, take/cut, record,
   live, markers, clips, replay, fade to black, graphics, macros, PTZ presets
@@ -584,6 +599,11 @@ Video Extensions** on some PCs.
 - **Settings** are in six groups (Inputs, Sound, Look, Show, Output and
   General), each with its pages as tabs; less-used parts fold away, showing how
   they're set. Hover a setting's name, or its ⓘ, for what it does.
+- **The Settings window** can be dragged by its title and resized from its
+  corner, so it needn't cover the camera you're adjusting. It opens where you
+  left it on this computer; **Centre** puts it back. While it's open, click the
+  main window and your show's keys work again (it says **Show keys active**)
+  as long as the pointer's away from Settings; click in Settings to type there.
 - **Starting up:** the window opens straight away; while the cameras come up,
   the monitors show a clapperboard with a line from the studio floor.
 - **Check your hardware:** `cutaway --probe-encoders` shows the encoders
@@ -641,6 +661,7 @@ Video Extensions** on some PCs.
 | Edit layout | `E`, or **Edit layout**: drag frames, drag the corner to resize (Shift keeps shape), **Fit/Fill** and **Zoom** for the selected frame (or double-click a frame to fill it, scroll to zoom, Option/Alt-drag to move the picture), add/remove sources, scene audio, duplicate, rename, **Save scenes** |
 | Audio strip | Fader = level (double-click resets), **ON** = in the mixes, 🎧 = solo in the headphones |
 | Fold or move a panel on the right | Click its heading (▾) to fold it down to one line, again to open it. Drag a heading onto another panel's heading to move it above that one. Each show remembers its own |
+| Widen the column on the right | Drag its left edge (the three dots), up to about 60% of the window. Each show remembers its width |
 | Second screen | **Screen** in the header. On that window: double-click or `F` for full screen, Esc to leave full screen, Esc again (or ✕, or Cmd/Ctrl+W) to close |
 | Switch show | The show name next to the logo |
 | Settings | ⌘, |
@@ -943,7 +964,14 @@ recall presets and move it too.
 A **Virtual PTZ camera** (a video source type) is a camera operator inside
 another source: it pans, tilts and zooms around that picture (best from a 4K
 camera), with presets it glides to in the time you set. It records like any
-source.
+source, and starts on its first preset.
+
+Its presets are framed in **Settings → Video sources**: the wide camera's
+picture shows each preset as a numbered box, the shot it's on now in red.
+Drag a box to move that preset and scroll over the picture to zoom it; the
+small picture beside shows what it sends out. **＋ Preset** adds a close-up in
+the middle to drag into place. Apply, and the presets change without the
+camera stopping.
 
 ## Replay, macros, ticker, comments and the teleprompter
 
