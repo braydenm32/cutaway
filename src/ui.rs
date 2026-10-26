@@ -47,6 +47,9 @@ pub mod theme {
 }
 use theme::*;
 
+/// The right-hand column's usual width.
+const COLUMN_WIDTH: f32 = 400.0;
+
 /// Cutaway's icon for its windows and, while it runs, the Dock or taskbar
 /// (drawn by assets/logo/make_logo.py). Without it they'd show egui's.
 fn app_icon() -> Arc<egui::IconData> {
@@ -162,6 +165,8 @@ pub struct App {
     scenes_dirty: bool,
     cfg_dirty: bool,
     textures: HashMap<String, (u64, egui::TextureHandle)>,
+    /// The right-hand column's edge is being dragged.
+    column_dragged: bool,
     waker: Waker,
     edit_mode: bool,
     selected_layer: Option<usize>,
@@ -332,6 +337,7 @@ impl App {
             scenes_dirty: false,
             cfg_dirty: false,
             textures: HashMap::new(),
+            column_dragged: false,
             waker,
             edit_mode: false,
             selected_layer: None,
@@ -688,6 +694,16 @@ impl App {
     fn restore(&mut self, s: &undo::Snapshot, ctx: &egui::Context) -> Result<(), String> {
         match s.kind {
             undo::Kind::Settings if s.settings_differ(&self.cfg) => {
+                // While recording or live, the same care as Settings and the
+                // show list: no sources taken out or restarted, no other show.
+                if self.engine.as_ref().is_some_and(|e| e.is_recording() || e.is_streaming()) {
+                    if s.cfg.ui.profile != self.cfg.ui.profile {
+                        return Err("stop recording and streaming before switching shows".into());
+                    }
+                    if s.cfg.lineup_changed(&self.cfg) {
+                        return Err("it changes the sources or inputs: stop recording and streaming first, or change them in Settings".into());
+                    }
+                }
                 self.apply_settings_as(s.cfg.clone(), ctx, true)?;
                 if let Some(win) = self.settings.as_mut() {
                     win.applied(Ok(()), &self.cfg);
@@ -1431,7 +1447,9 @@ impl App {
                 self.act(a);
             }
         }
-        if ctx.egui_wants_keyboard_input() || self.settings.is_some() || self.title_edit.is_some() || self.confirm.is_some() || self.precheck.is_some() || self.sync.is_some() {
+        // (Settings lets them through after a click outside it, while the
+        // pointer's away from it.)
+        if ctx.egui_wants_keyboard_input() || self.settings.as_ref().is_some_and(|s| !s.keys_beside(ctx)) || self.title_edit.is_some() || self.confirm.is_some() || self.precheck.is_some() || self.sync.is_some() {
             return;
         }
         if self.keymap.as_ref().is_none_or(|(c, _)| *c != self.cfg.keys) {
@@ -1735,6 +1753,30 @@ impl App {
         // A sharper monitor picture while a second screen shows it.
         let want = if self.cfg.display.output != DisplayOutput::Off { e.info.canvas.0.min(1920) } else { self.cfg.program.preview_width };
         e.preview_width.store(want, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The right-hand column's edge: a grip to show it can be dragged, and
+    /// its width kept (with the show) once it's let go.
+    fn column_edge(&mut self, ctx: &egui::Context, rect: Rect) {
+        let edge = Rect::from_center_size(pos2(rect.left(), rect.center().y), vec2(6.0, 36.0));
+        let near = ctx.input(|i| i.pointer.hover_pos().is_some_and(|p| (p.x - rect.left()).abs() < 6.0 && rect.y_range().contains(p.y)));
+        let painter = ctx.layer_painter(egui::LayerId::background());
+        for k in -1..=1 {
+            painter.circle_filled(edge.center() + vec2(0.0, k as f32 * 7.0), 1.6, if near { ACCENT } else { LINE });
+        }
+        // Only a drag of the edge changes it (not the window getting smaller).
+        if near && ctx.input(|i| i.pointer.primary_pressed()) {
+            self.column_dragged = true;
+        }
+        if !self.column_dragged || ctx.input(|i| i.pointer.any_down()) {
+            return;
+        }
+        self.column_dragged = false;
+        let w = rect.width().round();
+        if (w - self.cfg.ui.column_width).abs() >= 1.0 {
+            self.cfg.ui.column_width = w;
+            self.cfg_dirty = true;
+        }
     }
 
     fn texture(&mut self, ctx: &egui::Context, key: &str, slot: &FrameSlot) -> Option<egui::TextureId> {
@@ -2707,6 +2749,9 @@ impl App {
         let mut clicked: Option<(usize, bool)> = None;
         let mut player_cmd: Option<(usize, PlayerCmd)> = None;
         let mut framing_change: Option<(usize, crate::config::FramingConfig)> = None;
+        let mut split: Option<(usize, usize)> = None;
+        // Sources that can be split into close-ups (not ones cut from another).
+        let splittable: Vec<bool> = (0..n).map(|i| self.cfg.sources.get(i).is_some_and(|s| s.framed_from().is_none() && s.virtual_ptz_of().is_none())).collect();
         for (i, (name, slot, inv_aspect, offline, detail)) in infos.iter().enumerate() {
             let (r, c) = (i / cols, i % cols);
             let tile_h = tile_w * inv_aspect;
@@ -2830,11 +2875,24 @@ impl App {
                     }
                 });
             }
+            if players[i].is_none() && framers[i].is_none() && splittable.get(i).copied().unwrap_or(false) {
+                resp.context_menu(|ui| {
+                    ui.label(RichText::new("Close-ups of the people in it").strong());
+                    for k in [2, 3] {
+                        if ui.button(format!("Split into {k} close-ups…")).clicked() {
+                            split = Some((i, k));
+                            ui.close();
+                        }
+                    }
+                });
+            }
             let base = if self.preview_mode() { "Click: preview this source full screen. Shift+click: cut to it." } else { "Click: this source full screen. Shift+click: cut." };
             let tip = if players[i].is_some() {
                 format!("{base} Right-click: playlist.")
             } else if framers[i].is_some() {
                 format!("{base} Right-click: who to follow, and how tight.")
+            } else if splittable.get(i).copied().unwrap_or(false) {
+                format!("{base} Right-click: split into close-ups.")
             } else {
                 base.to_string()
             };
@@ -2853,6 +2911,15 @@ impl App {
         if let Some((i, cmd)) = player_cmd {
             if let Some(p) = &players[i] {
                 p.send(cmd);
+            }
+            clicked = None;
+        }
+        if let Some((i, k)) = split {
+            // Settings, with the close-ups made and waiting to be framed.
+            if self.settings.is_none() {
+                self.settings = Some(self.new_settings().with_split(i, k));
+            } else if let Some(win) = self.settings.as_mut() {
+                win.split_source(i, k);
             }
             clicked = None;
         }
@@ -4139,11 +4206,27 @@ impl App {
             guest_status: crate::engine::guests::hub().guests(),
             ndi_watchers: self.engine.as_ref().and_then(|e| e.ndi_watchers()),
             on_air: self.engine.as_ref().map(|e| e.switcher.live().layers.iter().filter_map(|l| self.cfg.sources.get(l.source).map(|s| s.uid)).collect()).unwrap_or_default(),
+            pictures: Vec::new(),
+            virtual_ptz: Vec::new(),
         }
     }
 
     fn settings_window(&mut self, ctx: &egui::Context) {
-        let info = self.settings_context();
+        if self.settings.is_none() {
+            return;
+        }
+        let mut info = self.settings_context();
+        // The sources' pictures, as the multiview shows them.
+        if let Some(e) = &self.engine {
+            let slots: Vec<(usize, u64, Arc<FrameSlot>)> = e.sources.iter().enumerate().map(|(i, s)| (i, s.uid, s.preview.clone())).collect();
+            info.virtual_ptz = e.sources.iter().enumerate().filter_map(|(i, s)| Some((s.uid, e.ptz(i)?.virt.clone()?))).collect();
+            for (i, uid, slot) in slots {
+                let size = slot.latest().map(|(_, f)| [f.width, f.height]);
+                if let (Some(tex), Some(size)) = (self.texture(ctx, &format!("src{i}"), &slot), size) {
+                    info.pictures.push(crate::settings::Picture { uid, tex, size });
+                }
+            }
+        }
         let Some(win) = self.settings.as_mut() else { return };
         match win.show(ctx, &info) {
             SettingsAction::None => {}
@@ -4348,7 +4431,15 @@ impl eframe::App for App {
         if self.log_open {
             egui::Panel::bottom("log").resizable(true).default_size(150.0).frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin::same(8))).show(ui, |ui| self.log_panel(ui));
         }
-        egui::Panel::right("audio").resizable(true).default_size(400.0).frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(12, 8))).show(ui, |ui| {
+        // The column on the right: drag its edge to make it wider (kept with the show).
+        let widest = (ui.available_width() * 0.6).max(COLUMN_WIDTH);
+        let width = if self.cfg.ui.column_width > 0.0 { self.cfg.ui.column_width } else { COLUMN_WIDTH };
+        let column = egui::Panel::right("audio")
+            .resizable(true)
+            .default_size(width.clamp(280.0, widest))
+            .size_range(280.0..=widest)
+            .frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(12, 8)))
+            .show(ui, |ui| {
             ui.set_min_width(280.0);
             // Leave the audio strips at least half the height.
             let max_top = (ui.available_height() - 260.0).max(200.0);
@@ -4377,6 +4468,7 @@ impl eframe::App for App {
             });
             self.audio_panel(ui);
         });
+        self.column_edge(&ctx, column.response.rect);
         egui::CentralPanel::default().frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin::same(14))).show(ui, |ui| self.monitors(ui));
 
         self.display_window(&ctx);
