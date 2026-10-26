@@ -135,7 +135,9 @@ and [Install on Windows](#install-on-windows).
   **Split…** in Settings → Video sources) and choose 2 or 3 close-ups. Each
   person gets a virtual PTZ camera of their own ("Cam 1 left", "Cam 1
   right"…), with a box on the wide picture to drag onto them and a name
-  title to fill in. Each records to its own file, ready for the edit.
+  title to fill in. Each records to its own file, ready for the edit. Each
+  close-up is sized to the part of the picture it shows (half a 4K camera
+  is 1080p), so it stays sharp and is cheap to cut out.
 - **See it before you apply it:** in **Settings → Video sources** each source
   shows its picture above its settings (the multiview's own, so nothing is
   opened twice). Crop and mirror show what they'll look like as you change

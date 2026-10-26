@@ -581,8 +581,11 @@ impl SettingsUi {
             let close = SourceConfig {
                 name,
                 device: format!("vptz:{}", wide.name),
-                width: wide.width,
-                height: wide.height,
+                // At zoom n the shot is 1/n of the camera's picture: that
+                // size keeps every pixel without blowing any up (and is
+                // the cheapest to cut out and record).
+                width: (wide.width / n as u32).max(640) & !1,
+                height: (wide.height / n as u32).max(360) & !1,
                 fps: wide.fps,
                 record: true,
                 ptz,
