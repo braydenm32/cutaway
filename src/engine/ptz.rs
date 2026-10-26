@@ -311,6 +311,13 @@ impl VirtualPtz {
             st: Mutex::new(VirtState { pos: Shot::default(), drive: [0.0; 3], goal: None, vel: [0.0; 3], presets: Vec::new(), max_zoom: 3.0, glide: 1.5 }),
         });
         v.configure(cfg);
+        // It starts on preset 1 (where it's meant to be), not the whole picture.
+        {
+            let mut st = v.st.lock_ok();
+            if let Some(&first) = st.presets.first() {
+                st.pos = first;
+            }
+        }
         v
     }
 
@@ -530,6 +537,9 @@ mod tests {
     fn virtual_ptz_moves_and_glides_to_presets() {
         let cfg = PtzConfig { max_zoom: 3.0, glide_seconds: 1.0, presets: vec![crate::config::PtzPreset { name: "Left".into(), x: 0.25, y: 0.4, zoom: 2.0 }], ..Default::default() };
         let v = VirtualPtz::new(&cfg);
+        // It starts on preset 1; then from the whole picture.
+        assert_eq!(v.step(0.1), Shot { x: 0.25, y: 0.4, zoom: 2.0 });
+        v.st.lock_ok().pos = Shot::default();
         assert_eq!(v.step(0.1), Shot::default());
         // Zooming in, then panning right.
         v.apply(Move::Zoom(1.0));

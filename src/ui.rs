@@ -4139,11 +4139,27 @@ impl App {
             guest_status: crate::engine::guests::hub().guests(),
             ndi_watchers: self.engine.as_ref().and_then(|e| e.ndi_watchers()),
             on_air: self.engine.as_ref().map(|e| e.switcher.live().layers.iter().filter_map(|l| self.cfg.sources.get(l.source).map(|s| s.uid)).collect()).unwrap_or_default(),
+            pictures: Vec::new(),
+            virtual_ptz: Vec::new(),
         }
     }
 
     fn settings_window(&mut self, ctx: &egui::Context) {
-        let info = self.settings_context();
+        if self.settings.is_none() {
+            return;
+        }
+        let mut info = self.settings_context();
+        // The sources' pictures, as the multiview shows them.
+        if let Some(e) = &self.engine {
+            let slots: Vec<(usize, u64, Arc<FrameSlot>)> = e.sources.iter().enumerate().map(|(i, s)| (i, s.uid, s.preview.clone())).collect();
+            info.virtual_ptz = e.sources.iter().enumerate().filter_map(|(i, s)| Some((s.uid, e.ptz(i)?.virt.clone()?))).collect();
+            for (i, uid, slot) in slots {
+                let size = slot.latest().map(|(_, f)| [f.width, f.height]);
+                if let (Some(tex), Some(size)) = (self.texture(ctx, &format!("src{i}"), &slot), size) {
+                    info.pictures.push(crate::settings::Picture { uid, tex, size });
+                }
+            }
+        }
         let Some(win) = self.settings.as_mut() else { return };
         match win.show(ctx, &info) {
             SettingsAction::None => {}

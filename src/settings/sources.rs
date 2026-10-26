@@ -168,6 +168,7 @@ impl SettingsUi {
     }
 
     fn source_detail(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
+        self.source_picture(ui, info);
         let applied: Vec<String> = self.original.sources.iter().map(|s| s.device.trim().to_string()).collect();
         let mut guests_on = false;
         let ndi = self.ndi_found.lock_ok().clone();
@@ -598,12 +599,15 @@ fn ptz_editor(ui: &mut egui::Ui, p: &mut crate::config::PtzConfig, is_virtual: b
     }
     if ui.button("＋ Preset").clicked() {
         let name = format!("Preset {}", p.presets.len() + 1);
-        p.presets.push(PtzPreset { name, ..Default::default() });
+        // A virtual camera's starts as a close-up in the middle, to drag
+        // where it's wanted in the picture above.
+        let zoom = if is_virtual { 2.0_f32.min(p.max_zoom.max(1.0)) } else { 1.0 };
+        p.presets.push(PtzPreset { name, zoom, ..Default::default() });
     }
     hint(
         ui,
         if is_virtual {
-            "Frame a shot with the PTZ panel, then right-click a preset there and choose Save, or press ＋ in the panel. Presets are recalled with a smooth move."
+            "Drag each preset's box on the picture above (scroll to zoom), or frame a shot with the PTZ panel and right-click a preset there to Save it. It starts on preset 1; presets are recalled with a smooth move."
         } else {
             "Presets live in the camera, in this order (preset 1 is the camera's memory 0). Frame a shot with the PTZ panel, then right-click a preset there to save it into the camera."
         },
