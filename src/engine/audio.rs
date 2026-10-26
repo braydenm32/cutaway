@@ -1230,10 +1230,24 @@ mod tests {
         let st = Arc::new(Mutex::new(Status::default()));
         let (s2, m2) = (stop.clone(), master.clone());
         let th = std::thread::spawn(move || run_mixer(inputs, names, taps, m2, st, s2, 60_000_000));
-        std::thread::sleep(std::time::Duration::from_millis(1200));
+        // Let it settle for 1.2 s of mixing, however busy the computer is
+        // (a fixed sleep could end before a starved mixer had sent anything).
+        let mut last: Vec<Option<Vec<f32>>> = vec![None; rxs.len()];
+        let mut counts = vec![0usize; rxs.len()];
+        let enough = (1_200_000_000 / BLOCK_NS) as usize;
+        let start = std::time::Instant::now();
+        while counts.iter().any(|&c| c < enough) && start.elapsed() < std::time::Duration::from_secs(20) {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            for (i, r) in rxs.iter().enumerate() {
+                for b in r.try_iter() {
+                    counts[i] += 1;
+                    last[i] = Some(b.samples);
+                }
+            }
+        }
         stop.store(true, Ordering::Relaxed);
         th.join().unwrap();
-        rxs.iter().map(|r| r.try_iter().last().map(|b| b.samples).unwrap_or_default()).collect()
+        last.into_iter().map(Option::unwrap_or_default).collect()
     }
 
     fn input(duck: bool) -> crate::config::AudioConfig {
