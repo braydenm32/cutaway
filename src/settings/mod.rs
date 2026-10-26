@@ -559,11 +559,11 @@ impl SettingsUi {
                         // ---- content: the group's pages as tabs, then the page
                         ui.vertical(|ui| {
                             ui.set_width(size.x - 234.0);
-                            let tabs = self.section.group().sections();
+                            let tabs: Vec<Section> = self.section.group().sections().iter().copied().filter(|&t| self.shown(t)).collect();
                             let mut tabs_h = 0.0;
                             if tabs.len() > 1 {
                                 let r = ui.horizontal(|ui| {
-                                    for &t in tabs {
+                                    for &t in &tabs {
                                         let text = if self.section_dirty(t) { format!("{}  •", t.label()) } else { t.label().to_string() };
                                         let on = self.section == t;
                                         let b = egui::Button::selectable(on, RichText::new(text).size(14.5)).min_size(vec2(0.0, 30.0));
@@ -1469,6 +1469,22 @@ impl SettingsUi {
 
     // ---- Streaming ----------------------------------------------------------------
 
+    /// Whether a page is in the sidebar. Viewer comments reads a live
+    /// stream's chat, so it waits until there's somewhere to stream to,
+    /// unless it's already set up (or asked for directly).
+    fn shown(&self, s: Section) -> bool {
+        match s {
+            Section::Comments => {
+                self.section == s
+                    || !self.draft.streaming.destinations.is_empty()
+                    || !self.original.streaming.destinations.is_empty()
+                    || self.draft.comments != crate::config::CommentsConfig::default()
+                    || self.original.comments != crate::config::CommentsConfig::default()
+            }
+            _ => true,
+        }
+    }
+
     fn streaming(&mut self, ui: &mut egui::Ui) {
         title(ui, "Streaming", "Go live to any number of places at once: the program is encoded once and sent to each.");
         let scan = self.encoders.lock_ok().clone();
@@ -1526,7 +1542,7 @@ impl SettingsUi {
             ui.vertical(|ui| {
                 let sel = self.sel_dest;
                 let Some(d) = self.draft.streaming.destinations.get_mut(sel) else {
-                    hint(ui, "Add YouTube, Twitch, Facebook, Kick, any RTMP server, or an SRT receiver.");
+                    hint(ui, "Add YouTube, Twitch, Facebook, Kick, any RTMP server, or an SRT receiver. Once there's one, Show → Viewer comments appears too, to put your stream's chat on screen.");
                     return;
                 };
                 egui::Grid::new("dest_detail").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
@@ -2271,6 +2287,23 @@ mod tests {
             pictures: Vec::new(),
             virtual_ptz: Vec::new(),
         }
+    }
+
+    /// Viewer comments waits for a stream destination, unless it's
+    /// already set up or asked for.
+    #[test]
+    fn viewer_comments_waits_for_a_stream() {
+        let mut win = SettingsUi::new(Config::default());
+        assert!(!win.shown(Section::Comments));
+        assert!(win.shown(Section::Vertical) && win.shown(Section::Upload) && win.shown(Section::Captions));
+        win.draft.streaming.destinations.push(StreamDestination::default());
+        assert!(win.shown(Section::Comments));
+        let mut cfg = Config::default();
+        cfg.comments.twitch_channel = "mine".into();
+        assert!(SettingsUi::new(cfg).shown(Section::Comments));
+        let mut win = SettingsUi::new(Config::default());
+        win.section = Section::Comments;
+        assert!(win.shown(Section::Comments));
     }
 
     /// Taking a source out while recording asks first; while not, it doesn't.
