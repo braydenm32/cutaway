@@ -201,24 +201,34 @@ impl VideoFrame {
     }
 
     /// Part of the picture (`rect`: x, y, width, height in pixels) scaled
-    /// to `width` × `height` (bilinear). Large pictures are done on a few
-    /// threads at once.
+    /// to `width` × `height` (bilinear). A part the same size as the output
+    /// is copied straight across; large pictures are done on a few threads
+    /// at once.
     pub fn crop_scaled(&self, rect: [f32; 4], width: u32, height: u32) -> VideoFrame {
         let (ow, oh) = ((width.max(2) & !1) as usize, (height.max(2) & !1) as usize);
         let (w, h) = (self.width.max(2) as usize, self.height.max(2) as usize);
         let mut y = vec![0u8; ow * oh];
         let mut uv = vec![0u8; ow * oh / 2];
-        // For each output column/row: the two source pixels and the weight
-        // of the second (0-256).
-        fn taps(start: f32, len: f32, out: usize, size: usize) -> Vec<(usize, usize, u32)> {
-            let step = len / out as f32;
-            (0..out)
-                .map(|o| {
-                    let x = (start + (o as f32 + 0.5) * step - 0.5).clamp(0.0, (size - 1) as f32);
-                    let x0 = x as usize;
-                    (x0, (x0 + 1).min(size - 1), ((x - x0 as f32) * 256.0).round() as u32)
-                })
-                .collect()
+        let same_size = (rect[2] - ow as f32).abs() < 0.01 && (rect[3] - oh as f32).abs() < 0.01 && ow <= w && oh <= h;
+        if same_size {
+            // Pixel for pixel: copy rows (from an even spot, so colour
+            // stays lined up with brightness).
+            let even = |v: f32, max: usize| (((v / 2.0).round() as isize).max(0) as usize * 2).min(max & !1);
+            let (left, top) = (even(rect[0], w - ow), even(rect[1], h - oh));
+            self.pixels.with_planes(|p| {
+                if p.y.len() < (top + oh - 1) * p.y_stride + left + ow || p.uv.len() < (top / 2 + oh / 2 - 1) * p.uv_stride + left + ow {
+                    return;
+                }
+                for (r, out) in y.chunks_exact_mut(ow).enumerate() {
+                    let at = (top + r) * p.y_stride + left;
+                    out.copy_from_slice(&p.y[at..at + ow]);
+                }
+                for (r, out) in uv.chunks_exact_mut(ow).enumerate() {
+                    let at = (top / 2 + r) * p.uv_stride + left;
+                    out.copy_from_slice(&p.uv[at..at + ow]);
+                }
+            });
+            return VideoFrame::new_nv12(ow as u32, oh as u32, self.pts, y, uv, self.serial);
         }
         let (yx, yy) = (taps(rect[0], rect[2], ow, w), taps(rect[1], rect[3], oh, h));
         let (cx, cy) = (taps(rect[0] / 2.0, rect[2] / 2.0, ow / 2, w / 2), taps(rect[1] / 2.0, rect[3] / 2.0, oh / 2, h / 2));
@@ -229,26 +239,8 @@ impl VideoFrame {
             let (yx, yy, cx, cy) = (&yx, &yy, &cx, &cy);
             let work = move |part: usize, ys: &mut [u8], cs: &mut [u8]| {
                 let first = part * chroma_rows;
-                for (r, out) in ys.chunks_exact_mut(ow).enumerate() {
-                    let (y0, y1, fy) = yy[first * 2 + r];
-                    let (a, b) = (&p.y[y0 * p.y_stride..], &p.y[y1 * p.y_stride..]);
-                    for (o, &(x0, x1, fx)) in out.iter_mut().zip(yx.iter()) {
-                        let top = a[x0] as u32 * (256 - fx) + a[x1] as u32 * fx;
-                        let bot = b[x0] as u32 * (256 - fx) + b[x1] as u32 * fx;
-                        *o = ((top * (256 - fy) + bot * fy + 32768) >> 16) as u8;
-                    }
-                }
-                for (r, out) in cs.chunks_exact_mut(ow).enumerate() {
-                    let (y0, y1, fy) = cy[first + r];
-                    let (a, b) = (&p.uv[y0 * p.uv_stride..], &p.uv[y1 * p.uv_stride..]);
-                    for (o, &(x0, x1, fx)) in out.chunks_exact_mut(2).zip(cx.iter()) {
-                        for c in 0..2 {
-                            let top = a[x0 * 2 + c] as u32 * (256 - fx) + a[x1 * 2 + c] as u32 * fx;
-                            let bot = b[x0 * 2 + c] as u32 * (256 - fx) + b[x1 * 2 + c] as u32 * fx;
-                            o[c] = ((top * (256 - fy) + bot * fy + 32768) >> 16) as u8;
-                        }
-                    }
-                }
+                scale_plane::<1>(p.y, p.y_stride, yx, &yy[first * 2..], ys, ow);
+                scale_plane::<2>(p.uv, p.uv_stride, cx, &cy[first..], cs, ow);
             };
             if threads == 1 {
                 work(0, &mut y, &mut uv);
@@ -328,6 +320,81 @@ impl VideoFrame {
             }
         });
         (y, u, v)
+    }
+}
+
+/// For each output column/row: the two source pixels and the weight of the
+/// second (0-256).
+fn taps(start: f32, len: f32, out: usize, size: usize) -> Vec<(usize, usize, u32)> {
+    let step = len / out as f32;
+    (0..out)
+        .map(|o| {
+            let x = (start + (o as f32 + 0.5) * step - 0.5).clamp(0.0, (size - 1) as f32);
+            let x0 = x as usize;
+            (x0, (x0 + 1).min(size - 1), ((x - x0 as f32) * 256.0).round() as u32)
+        })
+        .collect()
+}
+
+/// Bilinear scaling of one plane (`C` bytes a pixel) into `out` rows of
+/// `row_bytes`: each source row is blended sideways once, then
+/// neighbouring rows are mixed, so rows shared by several output rows
+/// (zoomed in) aren't redone.
+fn scale_plane<const C: usize>(src: &[u8], stride: usize, xs: &[(usize, usize, u32)], ys: &[(usize, usize, u32)], out: &mut [u8], row_bytes: usize) {
+    let used = xs.iter().map(|t| t.1 + 1).max().unwrap_or(0) * C;
+    let across = |row: usize, buf: &mut [u32]| {
+        let Some(line) = src.get(row * stride..row * stride + used) else {
+            buf.fill(0);
+            return;
+        };
+        for (o, &(x0, x1, fx)) in buf.chunks_exact_mut(C).zip(xs) {
+            let (a, b) = (&line[x0 * C..x0 * C + C], &line[x1 * C..x1 * C + C]);
+            for c in 0..C {
+                o[c] = a[c] as u32 * (256 - fx) + b[c] as u32 * fx;
+            }
+        }
+    };
+    if ys.len() > 1 && ys[ys.len() - 1].0 > ys[0].0 + ys.len() {
+        // Shrinking: rows are hardly ever shared, so mix each pixel from
+        // its four neighbours straight away.
+        for (o, &(y0, y1, fy)) in out.chunks_exact_mut(row_bytes).zip(ys) {
+            let (Some(a), Some(b)) = (src.get(y0 * stride..y0 * stride + used), src.get(y1 * stride..y1 * stride + used)) else { continue };
+            for (o, &(x0, x1, fx)) in o.chunks_exact_mut(C).zip(xs) {
+                for c in 0..C {
+                    let top = a[x0 * C + c] as u32 * (256 - fx) + a[x1 * C + c] as u32 * fx;
+                    let bot = b[x0 * C + c] as u32 * (256 - fx) + b[x1 * C + c] as u32 * fx;
+                    o[c] = ((top * (256 - fy) + bot * fy + 32768) >> 16) as u8;
+                }
+            }
+        }
+        return;
+    }
+    // The two most recent blended rows and which source rows they are.
+    let (mut a, mut b) = (vec![0u32; row_bytes], vec![0u32; row_bytes]);
+    let (mut ra, mut rb) = (usize::MAX, usize::MAX);
+    for (o, &(y0, y1, fy)) in out.chunks_exact_mut(row_bytes).zip(ys) {
+        if ra != y0 {
+            if rb == y0 {
+                std::mem::swap(&mut a, &mut b);
+                std::mem::swap(&mut ra, &mut rb);
+            } else {
+                across(y0, &mut a);
+                ra = y0;
+            }
+        }
+        if fy == 0 {
+            for (o, &t) in o.iter_mut().zip(&a) {
+                *o = ((t + 128) >> 8) as u8;
+            }
+            continue;
+        }
+        if rb != y1 {
+            across(y1, &mut b);
+            rb = y1;
+        }
+        for ((o, &t), &u) in o.iter_mut().zip(&a).zip(&b) {
+            *o = ((t * (256 - fy) + u * fy + 32768) >> 16) as u8;
+        }
     }
 }
 
@@ -561,5 +628,67 @@ mod convert_tests {
         let (y2, _) = super::bgra_to_nv12(&src, pitch, sw, sh, 4, 2);
         assert_eq!(y2[0], 235);
         assert!((y2[3] as i32 - 63).abs() <= 1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Plain bilinear, one pixel at a time, to check the quicker paths.
+    fn reference(f: &VideoFrame, rect: [f32; 4], ow: usize, oh: usize) -> (Vec<u8>, Vec<u8>) {
+        let (w, h) = (f.width as usize, f.height as usize);
+        let (yx, yy) = (taps(rect[0], rect[2], ow, w), taps(rect[1], rect[3], oh, h));
+        let (cx, cy) = (taps(rect[0] / 2.0, rect[2] / 2.0, ow / 2, w / 2), taps(rect[1] / 2.0, rect[3] / 2.0, oh / 2, h / 2));
+        let mix = |plane: &[u8], stride: usize, c: usize, n: usize, (x0, x1, fx): (usize, usize, u32), (y0, y1, fy): (usize, usize, u32)| {
+            let at = |x: usize, y: usize| plane[y * stride + x * n + c] as u32;
+            let top = at(x0, y0) * (256 - fx) + at(x1, y0) * fx;
+            let bot = at(x0, y1) * (256 - fx) + at(x1, y1) * fx;
+            ((top * (256 - fy) + bot * fy + 32768) >> 16) as u8
+        };
+        f.pixels.with_planes(|p| {
+            let y = yy.iter().flat_map(|&ty| yx.iter().map(move |&tx| (tx, ty))).map(|(tx, ty)| mix(p.y, p.y_stride, 0, 1, tx, ty)).collect();
+            let uv = cy.iter().flat_map(|&ty| cx.iter().flat_map(move |&tx| [(tx, ty, 0), (tx, ty, 1)])).map(|(tx, ty, c)| mix(p.uv, p.uv_stride, c, 2, tx, ty)).collect();
+            (y, uv)
+        })
+    }
+
+    #[test]
+    fn crop_scaled_matches_plain_bilinear() {
+        let (w, h) = (1280usize, 720usize);
+        let noise = |i: usize| ((i as u64).wrapping_mul(2654435761) >> 7) as u8;
+        let f = VideoFrame::new_nv12(w as u32, h as u32, 0, (0..w * h).map(noise).collect(), (0..w * h / 2).map(|i| noise(i + 7)).collect(), 0);
+        // Zoomed in (big and small), shrunk, and stretched.
+        for (rect, ow, oh) in [([100.3, 50.7, 600.0, 337.5], 1280, 720), ([10.0, 20.0, 100.0, 60.0], 320, 180), ([0.0, 0.0, 1280.0, 720.0], 640, 360), ([0.0, 0.0, 1280.0, 720.0], 1100, 300)] {
+            let out = f.crop_scaled(rect, ow, oh);
+            let (y, uv) = reference(&f, rect, ow as usize, oh as usize);
+            out.pixels.with_planes(|p| {
+                assert!(p.y == &y[..], "brightness differs for {rect:?}");
+                assert!(p.uv == &uv[..], "colour differs for {rect:?}");
+            });
+        }
+    }
+
+    #[test]
+    fn same_size_crop_is_copied_exactly() {
+        let (w, h) = (64usize, 32usize);
+        let f = VideoFrame::new_nv12(w as u32, h as u32, 0, (0..w * h).map(|i| i as u8).collect(), (0..w * h / 2).map(|i| (i * 3) as u8).collect(), 0);
+        // Half the size, from (20, 10), even when the spot isn't whole pixels.
+        for rect in [[20.0, 10.0, 32.0, 16.0], [20.4, 9.8, 32.0, 16.0]] {
+            let out = f.crop_scaled(rect, 32, 16);
+            f.pixels.with_planes(|src| {
+                out.pixels.with_planes(|p| {
+                    for r in 0..16 {
+                        assert_eq!(&p.y[r * 32..r * 32 + 32], &src.y[(10 + r) * w + 20..(10 + r) * w + 52]);
+                    }
+                    for r in 0..8 {
+                        assert_eq!(&p.uv[r * 32..r * 32 + 32], &src.uv[(5 + r) * w + 20..(5 + r) * w + 52]);
+                    }
+                })
+            });
+        }
+        // Off the edge: held inside the picture.
+        let out = f.crop_scaled([50.0, 30.0, 32.0, 16.0], 32, 16);
+        out.pixels.with_planes(|p| assert_eq!(p.y[0], f.pixels.with_planes(|s| s.y[16 * w + 32])));
     }
 }
