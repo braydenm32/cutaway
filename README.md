@@ -128,7 +128,13 @@ and [Install on Windows](#install-on-windows).
   (over IP, TCP or UDP) or NDI, from a joystick in the PTZ panel, the
   phone remote, the Stream Deck, MIDI and OSC.
 - **Virtual PTZ:** a camera operator inside one wide (ideally 4K) camera:
-  pan, tilt and zoom around its picture, with presets it glides to.
+  pan, tilt and zoom around its picture, with presets it glides to. Frame
+  the presets in Settings by dragging boxes on the wide picture; it starts
+  on preset 1.
+- **See it before you apply it:** in **Settings → Video sources** each source
+  shows its picture above its settings (the multiview's own, so nothing is
+  opened twice). Crop and mirror show what they'll look like as you change
+  them; a source you've only just added or changed shows once you press Apply.
 
 ### Recording
 
@@ -950,7 +956,14 @@ recall presets and move it too.
 A **Virtual PTZ camera** (a video source type) is a camera operator inside
 another source: it pans, tilts and zooms around that picture (best from a 4K
 camera), with presets it glides to in the time you set. It records like any
-source.
+source, and starts on its first preset.
+
+Its presets are framed in **Settings → Video sources**: the wide camera's
+picture shows each preset as a numbered box, the shot it's on now in red.
+Drag a box to move that preset and scroll over the picture to zoom it; the
+small picture beside shows what it sends out. **＋ Preset** adds a close-up in
+the middle to drag into place. Apply, and the presets change without the
+camera stopping.
 
 ## Replay, macros, ticker, comments and the teleprompter
 

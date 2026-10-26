@@ -12,6 +12,7 @@ mod help;
 mod macros;
 mod prompter;
 mod mixing;
+mod preview;
 mod outputs;
 mod rotations;
 mod rundown;
@@ -214,7 +215,13 @@ pub struct SettingsContext {
     pub ndi_watchers: Option<u32>,
     /// The sources on the program right now (by uid).
     pub on_air: Vec<u64>,
+    /// Running sources' pictures (by uid), as the multiview shows them.
+    pub pictures: Vec<preview::Picture>,
+    /// Virtual PTZ cameras (by uid), for the shot they're on.
+    pub virtual_ptz: Vec<(u64, Arc<crate::engine::ptz::VirtualPtz>)>,
 }
+
+pub use preview::Picture;
 
 /// Applying would take sources or inputs out of a show that's recording or
 /// live: asked first.
@@ -284,6 +291,8 @@ pub struct SettingsUi {
     lut_check: Option<(PathBuf, Result<String, String>)>,
     /// The tab last open in each group.
     last_tab: std::collections::HashMap<Group, Section>,
+    /// The virtual PTZ preset picked in the picture: (source, preset).
+    sel_preset: Option<(usize, usize)>,
     /// Where the window sits (as fractions of the main window), as last
     /// saved on this computer; and where it was put back to the middle.
     place: Option<Place>,
@@ -416,6 +425,7 @@ impl SettingsUi {
             resolve_note: None,
             lut_check: None,
             last_tab: Default::default(),
+            sel_preset: None,
             place: Place::load(),
             centre: false,
             rect: None,
@@ -2252,6 +2262,8 @@ mod tests {
             guest_status: Vec::new(),
             ndi_watchers: None,
             on_air: Vec::new(),
+            pictures: Vec::new(),
+            virtual_ptz: Vec::new(),
         }
     }
 
