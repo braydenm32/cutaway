@@ -7,7 +7,7 @@ use super::*;
 use crate::config::{FramingConfig, FramingFollow, FramingShot, MediaConfig, SourceLook};
 use crate::engine::netsrc::{self, NetSpec};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum SourceKind {
     Device,
     Screen,
@@ -25,19 +25,19 @@ enum SourceKind {
 }
 
 impl SourceKind {
-    const ALL: [SourceKind; 11] = [
-        SourceKind::Device,
-        SourceKind::Screen,
-        SourceKind::Test,
-        SourceKind::Media,
-        SourceKind::SrtListen,
-        SourceKind::SrtCall,
-        SourceKind::Rtmp,
-        SourceKind::Ndi,
-        SourceKind::Framed,
-        SourceKind::VirtualPtz,
-        SourceKind::Phone,
+    /// The Type menu, in groups. The SRT and RTMP kinds share one entry
+    /// ("Network feed") and are picked under it.
+    const MENU: [(&'static str, &'static [SourceKind]); 4] = [
+        ("Cameras and screens", &[SourceKind::Device, SourceKind::Screen, SourceKind::Phone]),
+        ("Close-ups cut from another source", &[SourceKind::VirtualPtz, SourceKind::Framed]),
+        ("From the network", &[SourceKind::SrtListen, SourceKind::Ndi]),
+        ("Other", &[SourceKind::Media, SourceKind::Test]),
     ];
+    const NETWORK: [SourceKind; 3] = [SourceKind::SrtListen, SourceKind::SrtCall, SourceKind::Rtmp];
+
+    fn is_network_feed(self) -> bool {
+        Self::NETWORK.contains(&self)
+    }
 
     fn of(device: &str) -> SourceKind {
         let d = device.trim().to_lowercase();
@@ -73,12 +73,12 @@ impl SourceKind {
             SourceKind::Screen => "Screen, window or app",
             SourceKind::Test => "Test picture",
             SourceKind::Media => "Media player (video files, images)",
-            SourceKind::SrtListen => "SRT input (wait for a sender)",
-            SourceKind::SrtCall => "SRT input (pull from an address)",
-            SourceKind::Rtmp => "RTMP input (OBS, phones, encoders)",
-            SourceKind::Ndi => "NDI",
-            SourceKind::Framed => "Auto-framed close-up (from another source)",
-            SourceKind::VirtualPtz => "Virtual PTZ camera (pan, tilt and zoom in another source)",
+            SourceKind::SrtListen => "SRT (wait for a sender)",
+            SourceKind::SrtCall => "SRT (pull from an address)",
+            SourceKind::Rtmp => "RTMP (OBS, phones, encoders)",
+            SourceKind::Ndi => "NDI (from another computer or device)",
+            SourceKind::Framed => "Auto-framed close-up (follows the people)",
+            SourceKind::VirtualPtz => "Virtual PTZ camera (you aim it)",
             SourceKind::Phone => "Phone camera (scan a QR code)",
             SourceKind::Guest => "Remote guest (set up in Remote guests)",
         }
@@ -218,30 +218,58 @@ impl SettingsUi {
             ui.end_row();
 
             label(ui, "Type");
-            egui::ComboBox::from_id_salt("source_kind").selected_text(kind.label()).width(300.0).show_ui(ui, |ui| {
-                for k in SourceKind::ALL {
-                    if ui.selectable_label(k == kind, k.label()).clicked() && k != kind {
-                        src.device = k.default_device(devices);
-                        if k == SourceKind::Framed {
-                            src.device = format!("frame:{}", wides.first().map(|w| w.0.as_str()).unwrap_or(""));
-                            src.framing = FramingConfig::default();
-                        }
-                        if k == SourceKind::VirtualPtz {
-                            src.device = format!("vptz:{}", wides.first().map(|w| w.0.as_str()).unwrap_or(""));
-                            src.ptz = crate::config::PtzConfig::default();
-                        }
-                        if k == SourceKind::Media || matches!(k, SourceKind::SrtListen | SourceKind::SrtCall | SourceKind::Rtmp | SourceKind::Ndi | SourceKind::Phone) {
-                            src.record = k != SourceKind::Media;
-                        }
-                        if k == SourceKind::Phone {
-                            let p = super::guests::phone_source(&src.name);
-                            (src.device, src.width, src.height, src.fps, src.network_latency_ms) = (p.device, p.width, p.height, p.fps, p.network_latency_ms);
-                            guests_on = true;
+            let mut chosen = None;
+            let shown = if kind.is_network_feed() { "Network feed (SRT or RTMP)" } else { kind.label() };
+            egui::ComboBox::from_id_salt("source_kind").selected_text(shown).width(300.0).height(520.0).show_ui(ui, |ui| {
+                for (g, (group, kinds)) in SourceKind::MENU.iter().enumerate() {
+                    if g > 0 {
+                        ui.add_space(4.0);
+                    }
+                    ui.label(RichText::new(*group).size(12.0).color(TEXT_DIM));
+                    for &k in kinds.iter() {
+                        let (on, text) = if k.is_network_feed() { (kind.is_network_feed(), "Network feed (SRT or RTMP)") } else { (k == kind, k.label()) };
+                        if ui.selectable_label(on, text).clicked() && !on {
+                            chosen = Some(k);
                         }
                     }
                 }
             });
             ui.end_row();
+            if kind.is_network_feed() {
+                label(ui, "Feed");
+                egui::ComboBox::from_id_salt("feed_kind").selected_text(kind.label()).width(300.0).show_ui(ui, |ui| {
+                    for k in SourceKind::NETWORK {
+                        if ui.selectable_label(k == kind, k.label()).clicked() && k != kind {
+                            chosen = Some(k);
+                        }
+                    }
+                });
+                ui.end_row();
+            }
+            if matches!(kind, SourceKind::VirtualPtz | SourceKind::Framed) {
+                ui.label("");
+                hint(ui, "Two people on one camera? Use Virtual PTZ (you aim it) or Auto-framed (it follows them).");
+                ui.end_row();
+            }
+            if let Some(k) = chosen {
+                src.device = k.default_device(devices);
+                if k == SourceKind::Framed {
+                    src.device = format!("frame:{}", wides.first().map(|w| w.0.as_str()).unwrap_or(""));
+                    src.framing = FramingConfig::default();
+                }
+                if k == SourceKind::VirtualPtz {
+                    src.device = format!("vptz:{}", wides.first().map(|w| w.0.as_str()).unwrap_or(""));
+                    src.ptz = crate::config::PtzConfig::default();
+                }
+                if k == SourceKind::Media || matches!(k, SourceKind::SrtListen | SourceKind::SrtCall | SourceKind::Rtmp | SourceKind::Ndi | SourceKind::Phone) {
+                    src.record = k != SourceKind::Media;
+                }
+                if k == SourceKind::Phone {
+                    let p = super::guests::phone_source(&src.name);
+                    (src.device, src.width, src.height, src.fps, src.network_latency_ms) = (p.device, p.width, p.height, p.fps, p.network_latency_ms);
+                    guests_on = true;
+                }
+            }
 
             match kind {
                 SourceKind::Device => {
@@ -953,4 +981,34 @@ fn look_editor(ui: &mut egui::Ui, l: &mut SourceLook, lut_check: &mut Option<(st
         }
         hint(ui, "The program only (its own file stays untouched); applies live.");
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SourceKind;
+
+    /// Every kind you can make here is in the Type menu (or under its
+    /// Network feed entry), once.
+    #[test]
+    fn type_menu_offers_every_kind() {
+        let mut offered: Vec<SourceKind> = SourceKind::MENU.iter().flat_map(|(_, k)| k.iter().copied()).collect();
+        offered.extend(SourceKind::NETWORK.iter().filter(|k| !offered.contains(k)).copied().collect::<Vec<_>>());
+        for k in [
+            SourceKind::Device,
+            SourceKind::Screen,
+            SourceKind::Test,
+            SourceKind::Media,
+            SourceKind::SrtListen,
+            SourceKind::SrtCall,
+            SourceKind::Rtmp,
+            SourceKind::Ndi,
+            SourceKind::Framed,
+            SourceKind::VirtualPtz,
+            SourceKind::Phone,
+        ] {
+            assert_eq!(offered.iter().filter(|&&o| o == k).count(), 1, "{}", k.label());
+            assert_eq!(SourceKind::of(&k.default_device(&[])), k, "{}", k.label());
+        }
+        assert!(!offered.contains(&SourceKind::Guest));
+    }
 }
