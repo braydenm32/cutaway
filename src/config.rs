@@ -769,6 +769,12 @@ impl SourceConfig {
         let d = self.device.trim();
         crate::util::strip_prefix_ci(d, "frame:").map(str::trim).filter(|s| !s.is_empty())
     }
+
+    /// The wide source an auto-framed or virtual PTZ source is cut from
+    /// (it shares that camera's timing: delay and rate).
+    pub fn cut_from(&self) -> Option<&str> {
+        self.framed_from().or_else(|| self.virtual_ptz_of())
+    }
 }
 
 /// Who an auto-framed source follows.
@@ -1013,10 +1019,19 @@ impl SourceLook {
 }
 
 /// A source's settings without those that change while it runs (its look,
-/// playlist, framing, PTZ and whether it's recorded): if these differ, the
-/// source is reopened.
+/// playlist, framing, PTZ, whether it's recorded and who's in it): if these
+/// differ, the source is reopened.
 pub fn source_key(s: &SourceConfig) -> SourceConfig {
-    SourceConfig { look: SourceLook::default(), media: MediaConfig::default(), framing: FramingConfig::default(), ptz: PtzConfig::default(), record: true, ..s.clone() }
+    SourceConfig {
+        look: SourceLook::default(),
+        media: MediaConfig::default(),
+        framing: FramingConfig::default(),
+        ptz: PtzConfig::default(),
+        record: true,
+        person: String::new(),
+        role: String::new(),
+        ..s.clone()
+    }
 }
 
 /// The same for an audio input (level, routing, processing, ducking and
@@ -1386,6 +1401,13 @@ pub struct UiConfig {
     /// Panels on the right folded down to their heading.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub folded: Vec<String>,
+    /// How wide the column on the right was dragged (0 = its usual width).
+    #[serde(skip_serializing_if = "is_zero_f32")]
+    pub column_width: f32,
+}
+
+fn is_zero_f32(v: &f32) -> bool {
+    *v == 0.0
 }
 
 /// The panels in the column on the right of the main window, in their usual
@@ -1438,7 +1460,7 @@ impl UiConfig {
 
 impl Default for UiConfig {
     fn default() -> Self {
-        UiConfig { scale: 1.0, confirm_stop_recording: false, confirm_end_stream: true, profile: String::new(), check_before_start: false, check_updates: true, auto_update: false, skip_version: String::new(), panel_order: Vec::new(), folded: Vec::new() }
+        UiConfig { scale: 1.0, confirm_stop_recording: false, confirm_end_stream: true, profile: String::new(), check_before_start: false, check_updates: true, auto_update: false, skip_version: String::new(), panel_order: Vec::new(), folded: Vec::new(), column_width: 0.0 }
     }
 }
 
@@ -2096,11 +2118,12 @@ pub struct MidiMapping {
 
 impl Config {
     /// Settings that need the engine restarted when they change.
-    /// Auto-framed sources run at their camera's rate, whatever they say.
+    /// Auto-framed and virtual PTZ sources run at their camera's rate,
+    /// whatever they say.
     pub fn with_framed_rates(&self) -> Config {
         let mut c = self.clone();
         for i in 0..c.sources.len() {
-            let parent = c.sources[i].framed_from().and_then(|from| self.sources.iter().find(|p| p.name.trim().eq_ignore_ascii_case(from)));
+            let parent = c.sources[i].cut_from().and_then(|from| self.sources.iter().find(|p| p.name.trim().eq_ignore_ascii_case(from)));
             if let Some(p) = parent {
                 c.sources[i].fps = p.fps;
             }
@@ -2322,6 +2345,25 @@ pub fn parse_color(s: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A virtual PTZ close-up keeps its wide camera's timing; a new name
+    /// title doesn't reopen a source.
+    #[test]
+    fn close_ups_share_their_camera() {
+        let mut cfg = Config::default();
+        cfg.sources = vec![
+            SourceConfig { name: "Wide".into(), device: "test:bars".into(), fps: 25, ..Default::default() },
+            SourceConfig { name: "Alex".into(), device: "vptz: Wide".into(), fps: 30, ..Default::default() },
+        ];
+        assert_eq!(cfg.sources[1].cut_from(), Some("Wide"));
+        assert_eq!(cfg.with_framed_rates().sources[1].fps, 25);
+        let mut named = cfg.clone();
+        named.sources[1].person = "Alex Smith".into();
+        named.sources[1].role = "Host".into();
+        assert!(!cfg.lineup_changed(&named));
+        named.sources[0].delay_ms = 40;
+        assert!(cfg.lineup_changed(&named));
+    }
 
     #[test]
     fn the_remote_always_has_a_pin() {

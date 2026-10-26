@@ -154,8 +154,8 @@ impl Engine {
         // Taps on every source and input.
         let mut videos: Vec<(String, u32, u64, Arc<super::sources::SourceSlot>, Receiver<VideoFrame>)> = Vec::new();
         for (i, s) in self.sources.iter().enumerate() {
-            // Auto-framed sources share their camera's timing.
-            if cfg.sources.get(i).is_some_and(|c| c.framed_from().is_some()) {
+            // Auto-framed and virtual PTZ sources share their camera's timing.
+            if cfg.sources.get(i).is_some_and(|c| c.cut_from().is_some()) {
                 continue;
             }
             let (tx, rx) = bounded(240);
