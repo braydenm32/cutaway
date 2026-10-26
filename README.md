@@ -412,7 +412,9 @@ Take_2026-10-16_19-30-02/
   layout) for what you build: moving, resizing, filling and zooming frames,
   adding, renaming, duplicating and deleting scenes, a title's text, and
   changes applied in Settings or by switching shows. The show itself (taking
-  scenes, recording, going live) is never undone.
+  scenes, recording, going live) is never undone. While recording or live,
+  an undo that would take out or restart sources, or switch shows, says so
+  and waits until you've stopped.
 - **Phone and tablet remote:** a web page served by Cutaway, on any device on
   the same network, with a PIN. Program picture, scenes, take/cut, record,
   live, markers, clips, replay, fade to black, graphics, macros, PTZ presets
@@ -597,6 +599,11 @@ Video Extensions** on some PCs.
 - **Settings** are in six groups (Inputs, Sound, Look, Show, Output and
   General), each with its pages as tabs; less-used parts fold away, showing how
   they're set. Hover a setting's name, or its ⓘ, for what it does.
+- **The Settings window** can be dragged by its title and resized from its
+  corner, so it needn't cover the camera you're adjusting. It opens where you
+  left it on this computer; **Centre** puts it back. While it's open, click the
+  main window and your show's keys work again (it says **Show keys active**)
+  as long as the pointer's away from Settings; click in Settings to type there.
 - **Starting up:** the window opens straight away; while the cameras come up,
   the monitors show a clapperboard with a line from the studio floor.
 - **Check your hardware:** `cutaway --probe-encoders` shows the encoders
