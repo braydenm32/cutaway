@@ -149,6 +149,21 @@ impl SettingsUi {
                         self.draft.sources.insert(self.sel_source + 1, s);
                         self.sel_source += 1;
                     }
+                    let can_split = self.draft.sources.get(self.sel_source).is_some_and(|s| s.framed_from().is_none() && s.virtual_ptz_of().is_none());
+                    ui.add_enabled_ui(can_split, |ui| {
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                        ui.menu_button("Split…", |ui| {
+                            ui.label(RichText::new("Close-ups of the people in it, each its own source").color(TEXT_DIM).size(12.5));
+                            for n in [2, 3] {
+                                if ui.button(format!("Into {n} close-ups")).clicked() {
+                                    self.split_source(self.sel_source, n);
+                                    ui.close();
+                                }
+                            }
+                        })
+                        .response
+                        .on_hover_text("Make close-ups of the people in this camera (virtual PTZ cameras), to frame on its picture");
+                    });
                     if ui.add_enabled(has, egui::Button::new("Remove")).clicked() {
                         self.draft.sources.remove(self.sel_source);
                     }
@@ -535,6 +550,53 @@ impl SettingsUi {
                 }
             }
         }
+    }
+}
+
+impl SettingsUi {
+    /// Split source `i` into `n` close-ups side by side: virtual PTZ
+    /// cameras cut from it, each with one preset over its part of the
+    /// picture, named for where they are, for the boxes to be dragged onto
+    /// the people. The first is picked (its picture shows the boxes).
+    pub fn split_source(&mut self, i: usize, n: usize) {
+        let Some(wide) = self.draft.sources.get(i).cloned() else { return };
+        if wide.framed_from().is_some() || wide.virtual_ptz_of().is_some() || n < 2 {
+            return;
+        }
+        let places: &[&str] = if n == 2 { &["left", "right"] } else { &["left", "middle", "right"] };
+        let mut at = i + 1;
+        // After close-ups already cut from it.
+        while self.draft.sources.get(at).is_some_and(|s| s.virtual_ptz_of().or(s.framed_from()).is_some_and(|f| f.trim().eq_ignore_ascii_case(wide.name.trim()))) {
+            at += 1;
+        }
+        let first = at;
+        for (k, place) in places.iter().enumerate().take(n) {
+            let names = self.draft.sources.iter().map(|s| s.name.clone()).collect();
+            let name = unique(names, &format!("{} {place}", wide.name));
+            let ptz = crate::config::PtzConfig {
+                max_zoom: 3.0,
+                presets: vec![crate::config::PtzPreset { name: place.to_string(), x: (k as f32 + 0.5) / n as f32, y: 0.5, zoom: n as f32 }],
+                ..Default::default()
+            };
+            let close = SourceConfig {
+                name,
+                device: format!("vptz:{}", wide.name),
+                // At zoom n the shot is 1/n of the camera's picture: that
+                // size keeps every pixel without blowing any up (and is
+                // the cheapest to cut out and record).
+                width: (wide.width / n as u32).max(640) & !1,
+                height: (wide.height / n as u32).max(360) & !1,
+                fps: wide.fps,
+                record: true,
+                ptz,
+                ..Default::default()
+            };
+            self.draft.sources.insert(at, close);
+            at += 1;
+        }
+        self.sel_source = first;
+        self.sel_preset = Some((first, 0));
+        self.section = Section::Sources;
     }
 }
 

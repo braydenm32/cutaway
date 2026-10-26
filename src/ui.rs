@@ -2719,6 +2719,9 @@ impl App {
         let mut clicked: Option<(usize, bool)> = None;
         let mut player_cmd: Option<(usize, PlayerCmd)> = None;
         let mut framing_change: Option<(usize, crate::config::FramingConfig)> = None;
+        let mut split: Option<(usize, usize)> = None;
+        // Sources that can be split into close-ups (not ones cut from another).
+        let splittable: Vec<bool> = (0..n).map(|i| self.cfg.sources.get(i).is_some_and(|s| s.framed_from().is_none() && s.virtual_ptz_of().is_none())).collect();
         for (i, (name, slot, inv_aspect, offline, detail)) in infos.iter().enumerate() {
             let (r, c) = (i / cols, i % cols);
             let tile_h = tile_w * inv_aspect;
@@ -2842,11 +2845,24 @@ impl App {
                     }
                 });
             }
+            if players[i].is_none() && framers[i].is_none() && splittable.get(i).copied().unwrap_or(false) {
+                resp.context_menu(|ui| {
+                    ui.label(RichText::new("Close-ups of the people in it").strong());
+                    for k in [2, 3] {
+                        if ui.button(format!("Split into {k} close-ups…")).clicked() {
+                            split = Some((i, k));
+                            ui.close();
+                        }
+                    }
+                });
+            }
             let base = if self.preview_mode() { "Click: preview this source full screen. Shift+click: cut to it." } else { "Click: this source full screen. Shift+click: cut." };
             let tip = if players[i].is_some() {
                 format!("{base} Right-click: playlist.")
             } else if framers[i].is_some() {
                 format!("{base} Right-click: who to follow, and how tight.")
+            } else if splittable.get(i).copied().unwrap_or(false) {
+                format!("{base} Right-click: split into close-ups.")
             } else {
                 base.to_string()
             };
@@ -2865,6 +2881,15 @@ impl App {
         if let Some((i, cmd)) = player_cmd {
             if let Some(p) = &players[i] {
                 p.send(cmd);
+            }
+            clicked = None;
+        }
+        if let Some((i, k)) = split {
+            // Settings, with the close-ups made and waiting to be framed.
+            if self.settings.is_none() {
+                self.settings = Some(self.new_settings().with_split(i, k));
+            } else if let Some(win) = self.settings.as_mut() {
+                win.split_source(i, k);
             }
             clicked = None;
         }

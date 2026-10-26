@@ -448,6 +448,12 @@ impl SettingsUi {
         self
     }
 
+    /// Open with source `i` split into `n` close-ups, ready to frame.
+    pub fn with_split(mut self, i: usize, n: usize) -> Self {
+        self.split_source(i, n);
+        self
+    }
+
     /// Show this source on the Video sources page.
     pub fn select_source(mut self, i: usize) -> Self {
         self.sel_source = i;
@@ -2292,6 +2298,54 @@ mod tests {
         let mut win = SettingsUi::new(cfg.clone());
         win.draft.sources.push(SourceConfig { name: "New".into(), device: "test:smpte".into(), ..Default::default() });
         assert!(matches!(win.apply(false, &ctx(true)), SettingsAction::Apply { .. }));
+    }
+
+    /// Splitting a camera makes a close-up per person, side by side, cut
+    /// from it and placed after it.
+    #[test]
+    fn splits_a_camera_into_close_ups() {
+        let mut cfg = Config::default();
+        cfg.sources = vec![
+            SourceConfig { name: "Wide".into(), device: "test:bars".into(), width: 3840, height: 2160, ..Default::default() },
+            SourceConfig { name: "Screen".into(), device: "test:gradient".into(), ..Default::default() },
+        ];
+        let mut win = SettingsUi::new(cfg).with_split(0, 2);
+        let names: Vec<&str> = win.draft.sources.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["Wide", "Wide left", "Wide right", "Screen"]);
+        assert_eq!(win.sel_source, 1);
+        let right = &win.draft.sources[2];
+        assert_eq!(right.virtual_ptz_of(), Some("Wide"));
+        assert_eq!((right.ptz.presets[0].x, right.ptz.presets[0].zoom), (0.75, 2.0));
+        // Pixel for pixel: half a 4K picture is 1080p.
+        assert_eq!((right.width, right.height), (1920, 1080));
+        assert!(win.draft.validate().is_ok(), "{:?}", win.draft.validate());
+        // Again: three more, after the first two, with names of their own.
+        win.split_source(0, 3);
+        let names: Vec<&str> = win.draft.sources.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names[3..6], ["Wide left 2", "Wide middle", "Wide right 2"]);
+        // A close-up isn't split again.
+        let before = win.draft.sources.len();
+        win.split_source(1, 2);
+        assert_eq!(win.draft.sources.len(), before);
+    }
+
+    /// Where the window was left comes back on another size of screen,
+    /// whole and on it; anything odd in the file is ignored.
+    #[test]
+    fn window_place_fits_the_screen() {
+        let big = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(2000.0, 1200.0));
+        let r = egui::Rect::from_min_size(egui::pos2(1000.0, 600.0), vec2(800.0, 500.0));
+        let p = Place::of(r, big);
+        assert_eq!(Place::parse(&format!("{} {} {} {}", p.x, p.y, p.w, p.h)), Some(p));
+        assert!((p.rect(big).min - r.min).length() < 0.5);
+        // A small screen: no smaller than the window can be, and fully on it.
+        let small = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(1000.0, 700.0));
+        let fit = p.rect(small);
+        assert!(small.contains_rect(fit), "{fit:?}");
+        assert!(fit.width() >= MIN_SIZE.x && fit.height() >= MIN_SIZE.y);
+        assert_eq!(Place::parse(""), None);
+        assert_eq!(Place::parse("0.1 0.1 2 0.5"), None);
+        assert_eq!(Place::parse("0.1 0.1 NaN 0.5"), None);
     }
 
     /// While recording, a change that restarts a source asks first (with
