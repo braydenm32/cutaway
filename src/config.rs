@@ -1401,6 +1401,13 @@ pub struct UiConfig {
     /// Panels on the right folded down to their heading.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub folded: Vec<String>,
+    /// How wide the column on the right was dragged (0 = its usual width).
+    #[serde(skip_serializing_if = "is_zero_f32")]
+    pub column_width: f32,
+}
+
+fn is_zero_f32(v: &f32) -> bool {
+    *v == 0.0
 }
 
 /// The panels in the column on the right of the main window, in their usual
@@ -1453,7 +1460,7 @@ impl UiConfig {
 
 impl Default for UiConfig {
     fn default() -> Self {
-        UiConfig { scale: 1.0, confirm_stop_recording: false, confirm_end_stream: true, profile: String::new(), check_before_start: false, check_updates: true, auto_update: false, skip_version: String::new(), panel_order: Vec::new(), folded: Vec::new() }
+        UiConfig { scale: 1.0, confirm_stop_recording: false, confirm_end_stream: true, profile: String::new(), check_before_start: false, check_updates: true, auto_update: false, skip_version: String::new(), panel_order: Vec::new(), folded: Vec::new(), column_width: 0.0 }
     }
 }
 
