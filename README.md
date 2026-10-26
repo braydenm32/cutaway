@@ -131,6 +131,11 @@ and [Install on Windows](#install-on-windows).
   pan, tilt and zoom around its picture, with presets it glides to. Frame
   the presets in Settings by dragging boxes on the wide picture; it starts
   on preset 1.
+- **Split a camera into close-ups:** right-click a camera's tile (or
+  **Split…** in Settings → Video sources) and choose 2 or 3 close-ups. Each
+  person gets a virtual PTZ camera of their own ("Cam 1 left", "Cam 1
+  right"…), with a box on the wide picture to drag onto them and a name
+  title to fill in. Each records to its own file, ready for the edit.
 - **See it before you apply it:** in **Settings → Video sources** each source
   shows its picture above its settings (the multiview's own, so nothing is
   opened twice). Crop and mirror show what they'll look like as you change
