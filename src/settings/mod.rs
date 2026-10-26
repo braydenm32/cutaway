@@ -229,6 +229,8 @@ struct RemoveCheck {
     names: Vec<String>,
     /// Of those, the ones on the program right now.
     on_air: Vec<String>,
+    /// Sources that stay but restart (a changed device, size, delay…).
+    restarting: Vec<String>,
     recording: bool,
     streaming: bool,
     close: bool,
@@ -291,7 +293,80 @@ pub struct SettingsUi {
     last_tab: std::collections::HashMap<Group, Section>,
     /// The virtual PTZ preset picked in the picture: (source, preset).
     sel_preset: Option<(usize, usize)>,
+    /// Where the window sits (as fractions of the main window), as last
+    /// saved on this computer; and where it was put back to the middle.
+    place: Option<Place>,
+    centre: bool,
+    /// The window's rect this frame, and whether the last click was
+    /// outside it (then show keys work while the pointer's away).
+    rect: Option<egui::Rect>,
+    outside: bool,
+    /// The bottom bar's height, as last drawn.
+    bar_h: f32,
+    /// While the mouse is down: where the window was if it went down on it.
+    held: Option<Option<egui::Rect>>,
 }
+
+/// Where the Settings window was left: fractions of the main window's
+/// size, so it lands in the same spot when that's another size.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Place {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+}
+
+impl Place {
+    /// Kept per computer (not in the show's settings): beside the settings file.
+    fn file() -> Option<PathBuf> {
+        crate::config::default_config_path().parent().map(|d| d.join("Settings window.txt"))
+    }
+
+    fn load() -> Option<Place> {
+        let text = std::fs::read_to_string(Self::file()?).ok()?;
+        Self::parse(&text)
+    }
+
+    fn parse(text: &str) -> Option<Place> {
+        let v: Vec<f32> = text.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+        let ok = |f: f32| f.is_finite() && (0.0..=1.0).contains(&f);
+        match v[..] {
+            [x, y, w, h] if [x, y, w, h].into_iter().all(ok) && w > 0.05 && h > 0.05 => Some(Place { x, y, w, h }),
+            _ => None,
+        }
+    }
+
+    fn save(&self) {
+        if cfg!(test) {
+            return;
+        }
+        if let Some(f) = Self::file() {
+            let _ = std::fs::write(f, format!("{:.4} {:.4} {:.4} {:.4}\n", self.x, self.y, self.w, self.h));
+        }
+    }
+
+    fn of(r: egui::Rect, screen: egui::Rect) -> Place {
+        let (sw, sh) = (screen.width().max(1.0), screen.height().max(1.0));
+        Place {
+            x: ((r.min.x - screen.min.x) / sw).clamp(0.0, 1.0),
+            y: ((r.min.y - screen.min.y) / sh).clamp(0.0, 1.0),
+            w: (r.width() / sw).clamp(0.0, 1.0),
+            h: (r.height() / sh).clamp(0.0, 1.0),
+        }
+    }
+
+    /// On this screen, no smaller than the window can be and fully on it.
+    fn rect(&self, screen: egui::Rect) -> egui::Rect {
+        let size = vec2((self.w * screen.width()).max(MIN_SIZE.x), (self.h * screen.height()).max(MIN_SIZE.y)).min(screen.size());
+        let min = egui::pos2(screen.min.x + self.x * screen.width(), screen.min.y + self.y * screen.height());
+        let min = min.min(screen.max - size).max(screen.min);
+        egui::Rect::from_min_size(min, size)
+    }
+}
+
+/// The Settings window's smallest size.
+const MIN_SIZE: egui::Vec2 = vec2(640.0, 420.0);
 
 const RESOLUTIONS: &[(u32, u32, &str)] = &[
     (1280, 720, "1280×720 (720p)"),
@@ -351,7 +426,21 @@ impl SettingsUi {
             lut_check: None,
             last_tab: Default::default(),
             sel_preset: None,
+            place: Place::load(),
+            centre: false,
+            rect: None,
+            outside: false,
+            bar_h: 48.0,
+            held: None,
         }
+    }
+
+    /// Show keys work while Settings is open: after a click outside it,
+    /// while the pointer's away from it and nothing in it waits for a key.
+    pub fn keys_beside(&self, ctx: &egui::Context) -> bool {
+        let busy = self.key_capture.is_some() || self.confirm_discard || self.confirm_reset || self.confirm_remove.is_some();
+        let over = self.rect.is_some_and(|r| ctx.input(|i| i.pointer.hover_pos().is_some_and(|p| r.contains(p))));
+        self.outside && !busy && !over
     }
 
     pub fn open_at(mut self, section: Section) -> Self {
@@ -418,94 +507,109 @@ impl SettingsUi {
         let esc = self.key_capture.is_none() && ctx.input(|i| i.key_pressed(egui::Key::Escape));
 
         let screen = ctx.content_rect();
-        let size = vec2((screen.width() - 80.0).clamp(640.0, 1120.0), (screen.height() - 80.0).clamp(420.0, 780.0));
-        egui::Window::new("Settings")
+        let size = vec2((screen.width() - 80.0).clamp(MIN_SIZE.x, 1120.0), (screen.height() - 80.0).clamp(MIN_SIZE.y, 780.0));
+        let middle = egui::Rect::from_center_size(screen.center(), size.min(screen.size()));
+        let start = self.place.map(|p| p.rect(screen)).unwrap_or(middle);
+        // Esc closes Settings unless show keys are being used beside it.
+        let esc = esc && !self.keys_beside(ctx);
+        let mut window = egui::Window::new("Settings")
             .open(&mut open)
             .collapsible(false)
-            .resizable(false)
-            .fixed_size(size)
-            .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0))
-            .show(ctx, |ui| {
-                let body_h = size.y - 64.0;
-                ui.horizontal_top(|ui| {
-                    // ---- sidebar: the groups
-                    ui.vertical(|ui| {
-                        ui.set_width(204.0);
-                        ui.set_min_height(body_h);
-                        let here = self.section.group();
-                        for g in Group::ALL {
-                            let changed = g.sections().iter().any(|s| self.section_dirty(*s));
-                            let mut text = egui::text::LayoutJob::default();
-                            let name = if changed { format!("{}  •\n", g.label()) } else { format!("{}\n", g.label()) };
-                            text.append(&name, 0.0, egui::TextFormat::simple(egui::FontId::proportional(16.0), if g == here { Color32::WHITE } else { Color32::from_rgb(214, 218, 226) }));
-                            text.append(g.summary(), 0.0, egui::TextFormat::simple(egui::FontId::proportional(12.5), TEXT_DIM));
-                            let b = egui::Button::selectable(g == here, text).min_size(vec2(204.0, 50.0));
-                            if ui.add(b).clicked() && g != here {
-                                self.last_tab.insert(here, self.section);
-                                self.section = self.last_tab.get(&g).copied().unwrap_or(g.sections()[0]);
+            .resizable(true)
+            .min_size(MIN_SIZE)
+            .default_rect(start)
+            .constrain_to(screen);
+        if std::mem::take(&mut self.centre) {
+            window = window.current_pos(middle.min);
+        }
+        let bar_h = self.bar_h;
+        let shown = window.show(ctx, |ui| {
+                // The window's size, as the person has dragged it: the pages
+                // take what the bottom bar leaves (exactly, or it would grow).
+                let size = ui.available_size();
+                let body_h = (size.y - bar_h).max(160.0);
+                ui.allocate_ui_with_layout(vec2(size.x, body_h), Layout::top_down(Align::Min), |ui| {
+                    ui.horizontal_top(|ui| {
+                        // ---- sidebar: the groups
+                        ui.vertical(|ui| {
+                            ui.set_width(204.0);
+                            ui.set_min_height(body_h);
+                            let here = self.section.group();
+                            for g in Group::ALL {
+                                let changed = g.sections().iter().any(|s| self.section_dirty(*s));
+                                let mut text = egui::text::LayoutJob::default();
+                                let name = if changed { format!("{}  •\n", g.label()) } else { format!("{}\n", g.label()) };
+                                text.append(&name, 0.0, egui::TextFormat::simple(egui::FontId::proportional(16.0), if g == here { Color32::WHITE } else { Color32::from_rgb(214, 218, 226) }));
+                                text.append(g.summary(), 0.0, egui::TextFormat::simple(egui::FontId::proportional(12.5), TEXT_DIM));
+                                let b = egui::Button::selectable(g == here, text).min_size(vec2(204.0, 50.0));
+                                if ui.add(b).clicked() && g != here {
+                                    self.last_tab.insert(here, self.section);
+                                    self.section = self.last_tab.get(&g).copied().unwrap_or(g.sections()[0]);
+                                }
+                                ui.add_space(2.0);
                             }
-                            ui.add_space(2.0);
-                        }
-                    });
-                    ui.separator();
-                    // ---- content: the group's pages as tabs, then the page
-                    ui.vertical(|ui| {
-                        ui.set_width(size.x - 234.0);
-                        let tabs = self.section.group().sections();
-                        let mut tabs_h = 0.0;
-                        if tabs.len() > 1 {
-                            let r = ui.horizontal(|ui| {
-                                for &t in tabs {
-                                    let text = if self.section_dirty(t) { format!("{}  •", t.label()) } else { t.label().to_string() };
-                                    let on = self.section == t;
-                                    let b = egui::Button::selectable(on, RichText::new(text).size(14.5)).min_size(vec2(0.0, 30.0));
-                                    if ui.add(b).clicked() {
-                                        self.section = t;
+                        });
+                        ui.separator();
+                        // ---- content: the group's pages as tabs, then the page
+                        ui.vertical(|ui| {
+                            ui.set_width(size.x - 234.0);
+                            let tabs = self.section.group().sections();
+                            let mut tabs_h = 0.0;
+                            if tabs.len() > 1 {
+                                let r = ui.horizontal(|ui| {
+                                    for &t in tabs {
+                                        let text = if self.section_dirty(t) { format!("{}  •", t.label()) } else { t.label().to_string() };
+                                        let on = self.section == t;
+                                        let b = egui::Button::selectable(on, RichText::new(text).size(14.5)).min_size(vec2(0.0, 30.0));
+                                        if ui.add(b).clicked() {
+                                            self.section = t;
+                                        }
                                     }
-                                }
-                            });
-                            ui.add_space(2.0);
-                            ui.separator();
-                            tabs_h = r.response.rect.height() + 10.0;
-                        }
-                        egui::ScrollArea::vertical().id_salt(self.section).max_height(body_h - tabs_h).auto_shrink([false, false]).show(
-                            ui,
-                            |ui| {
-                                ui.add_space(4.0);
-                                help::set_page(Some(self.section));
-                                match self.section {
-                                    Section::General => self.general(ui, info),
-                                    Section::Sources => self.sources(ui, info),
-                                    Section::Audio => self.audio_inputs(ui),
-                                    Section::Mixing => self.mixing(ui),
-                                    Section::Pads => self.pads(ui),
-                                    Section::Syrinscape => self.syrinscape(ui),
-                                    Section::Program => self.program(ui),
-                                    Section::Switching => self.switching(ui, info),
-                                    Section::Graphics => self.graphics(ui),
-                                    Section::Rundown => self.rundown(ui),
-                                    Section::Macros => self.macros(ui),
-                                    Section::Prompter => self.prompter(ui),
-                                    Section::Comments => self.comments(ui),
-                                    Section::Guests => self.guests(ui, info),
-                                    Section::Captions => self.captions(ui, info),
-                                    Section::Recording => self.recording(ui),
-                                    Section::Streaming => self.streaming(ui),
-                                    Section::Vertical => self.vertical(ui),
-                                    Section::Upload => self.upload(ui),
-                                    Section::Outputs => self.outputs(ui, info),
-                                    Section::Control => self.control(ui, info),
-                                    Section::Shortcuts => self.shortcuts(ui),
-                                    Section::Diagnostics => self.diagnostics(ui, info),
-                                }
-                                help::set_page(None);
-                                ui.add_space(12.0);
-                            },
-                        );
+                                });
+                                ui.add_space(2.0);
+                                ui.separator();
+                                tabs_h = r.response.rect.height() + 10.0;
+                            }
+                            egui::ScrollArea::vertical().id_salt(self.section).max_height(body_h - tabs_h).auto_shrink([false, false]).show(
+                                ui,
+                                |ui| {
+                                    ui.add_space(4.0);
+                                    help::set_page(Some(self.section));
+                                    match self.section {
+                                        Section::General => self.general(ui, info),
+                                        Section::Sources => self.sources(ui, info),
+                                        Section::Audio => self.audio_inputs(ui),
+                                        Section::Mixing => self.mixing(ui),
+                                        Section::Pads => self.pads(ui),
+                                        Section::Syrinscape => self.syrinscape(ui),
+                                        Section::Program => self.program(ui),
+                                        Section::Switching => self.switching(ui, info),
+                                        Section::Graphics => self.graphics(ui),
+                                        Section::Rundown => self.rundown(ui),
+                                        Section::Macros => self.macros(ui),
+                                        Section::Prompter => self.prompter(ui),
+                                        Section::Comments => self.comments(ui),
+                                        Section::Guests => self.guests(ui, info),
+                                        Section::Captions => self.captions(ui, info),
+                                        Section::Recording => self.recording(ui),
+                                        Section::Streaming => self.streaming(ui),
+                                        Section::Vertical => self.vertical(ui),
+                                        Section::Upload => self.upload(ui),
+                                        Section::Outputs => self.outputs(ui, info),
+                                        Section::Control => self.control(ui, info),
+                                        Section::Shortcuts => self.shortcuts(ui),
+                                        Section::Diagnostics => self.diagnostics(ui, info),
+                                    }
+                                    help::set_page(None);
+                                    ui.add_space(12.0);
+                                },
+                            );
+                        });
                     });
                 });
-                ui.separator();
                 // ---- bottom bar
+                let top = ui.cursor().top();
+                ui.separator();
                 let valid = self.draft.validate();
                 let restart = self.original.needs_restart(&self.draft);
                 let live = info.recording || info.streaming;
@@ -552,9 +656,22 @@ impl SettingsUi {
                         if ui.add_enabled(self.dirty(), egui::Button::new("Revert")).on_hover_text("Undo every change since the last save").clicked() {
                             self.draft = self.original.clone();
                         }
+                        if ui.small_button("Centre").on_hover_text("Put this window back in the middle, at its usual size").clicked() {
+                            self.centre = true;
+                            self.place = None;
+                            if let Some(f) = Place::file() {
+                                let _ = std::fs::remove_file(f);
+                            }
+                        }
+                        if self.keys_beside(ui.ctx()) {
+                            ui.label(RichText::new("⌨ Show keys active").color(TEXT_DIM))
+                                .on_hover_text("Your show's keys work while the pointer's over the main window. Click in Settings to type here again.");
+                        }
                     });
                 });
+                self.bar_h = ui.min_rect().bottom() - top + ui.spacing().item_spacing.y;
             });
+        self.track_window(ctx, shown.map(|r| r.response.rect), screen);
         if let Some(a) = self.pending.take() {
             action = a;
         }
@@ -613,17 +730,70 @@ impl SettingsUi {
         action
     }
 
+    /// Remember where the window was left (once it's let go after a drag
+    /// or resize), and whether the last click was outside it.
+    fn track_window(&mut self, ctx: &egui::Context, rect: Option<egui::Rect>, screen: egui::Rect) {
+        self.rect = rect;
+        let Some(rect) = rect else { return };
+        let (pressed, down) = ctx.input(|i| (i.pointer.any_pressed().then(|| i.pointer.interact_pos()).flatten(), i.pointer.any_down()));
+        if let Some(p) = pressed {
+            // (A drop-down's list can hang outside the window: that's still Settings.)
+            self.outside = !rect.contains(p) && ctx.layer_id_at(p).is_none_or(|l| l.order == egui::Order::Background);
+            // (The resize corner sits just outside the frame.)
+            self.held = Some(rect.expand(8.0).contains(p).then_some(rect));
+        }
+        if down {
+            return;
+        }
+        if let Some(Some(before)) = self.held.take() {
+            let moved = (before.min - rect.min).length() > 1.0 || (before.size() - rect.size()).length() > 1.0;
+            if moved && !self.centre {
+                let now = Place::of(rect, screen);
+                now.save();
+                self.place = Some(now);
+            }
+        }
+    }
+
     /// Apply the draft, unless that takes sources or inputs out of a show
-    /// that's recording or live: then ask first.
+    /// that's recording or live, or restarts one: then ask first.
     fn apply(&mut self, close: bool, info: &SettingsContext) -> SettingsAction {
         if info.recording || info.streaming {
             let (names, on_air) = self.leaving(&info.on_air);
-            if !names.is_empty() {
-                self.confirm_remove = Some(RemoveCheck { names, on_air, recording: info.recording, streaming: info.streaming, close });
+            let restarting = self.restarting();
+            if !names.is_empty() || !restarting.is_empty() {
+                self.confirm_remove = Some(RemoveCheck { names, on_air, restarting, recording: info.recording, streaming: info.streaming, close });
                 return SettingsAction::None;
             }
         }
         SettingsAction::Apply { cfg: self.draft.clone(), close }
+    }
+
+    /// The sources that stay but reopen when applied (what the engine's
+    /// `apply_lineup` remakes), close-ups following their wide camera.
+    fn restarting(&self) -> Vec<String> {
+        use crate::config::source_key;
+        let (old, new) = (self.original.with_framed_rates(), self.draft.with_framed_rates());
+        let mut names: Vec<String> = new
+            .sources
+            .iter()
+            .filter(|s| s.uid != 0 && old.sources.iter().find(|o| o.uid == s.uid).is_some_and(|o| source_key(o) != source_key(s)))
+            .map(|s| s.name.clone())
+            .collect();
+        loop {
+            let more: Vec<String> = new
+                .sources
+                .iter()
+                .filter(|s| s.uid != 0 && old.sources.iter().any(|o| o.uid == s.uid) && !names.iter().any(|n| n.eq_ignore_ascii_case(&s.name)))
+                .filter(|s| s.cut_from().is_some_and(|from| names.iter().any(|n| n.trim().eq_ignore_ascii_case(from.trim()))))
+                .map(|s| s.name.clone())
+                .collect();
+            if more.is_empty() {
+                break;
+            }
+            names.extend(more);
+        }
+        names
     }
 
     /// The sources and inputs applying would remove, and which of them are
@@ -655,11 +825,28 @@ impl SettingsUi {
         let r = egui::Modal::new(egui::Id::unique("confirm_remove_sources")).show(ctx, |ui| {
             ui.set_width(420.0);
             let one = check.names.len() == 1;
-            ui.heading(format!("Remove {} while {what}?", if one { "this" } else { "these" }));
-            ui.add_space(4.0);
-            ui.label(format!("{} {} the show as soon as you apply.", list_names(&check.names), if one { "leaves" } else { "leave" }));
-            if check.recording {
-                ui.label(if one { "Its recording ends there; everything else keeps recording." } else { "Their recordings end there; everything else keeps recording." });
+            if check.names.is_empty() {
+                let one = check.restarting.len() == 1;
+                ui.heading(format!("Restart {} while {what}?", if one { "this source" } else { "these sources" }));
+                ui.add_space(4.0);
+                ui.label(format!("{} {} for a moment as soon as you apply, to take the new settings.", list_names(&check.restarting), if one { "restarts" } else { "restart" }));
+                if check.recording {
+                    ui.label(if one {
+                        "Its own recording ends there and starts again from the next take; the program keeps recording."
+                    } else {
+                        "Their own recordings end there and start again from the next take; the program keeps recording."
+                    });
+                }
+            } else {
+                ui.heading(format!("Remove {} while {what}?", if one { "this" } else { "these" }));
+                ui.add_space(4.0);
+                ui.label(format!("{} {} the show as soon as you apply.", list_names(&check.names), if one { "leaves" } else { "leave" }));
+                if check.recording {
+                    ui.label(if one { "Its recording ends there; everything else keeps recording." } else { "Their recordings end there; everything else keeps recording." });
+                }
+                if !check.restarting.is_empty() {
+                    ui.label(format!("{} also {} for a moment.", list_names(&check.restarting), if check.restarting.len() == 1 { "restarts" } else { "restart" }));
+                }
             }
             if !check.on_air.is_empty() {
                 ui.add_space(4.0);
@@ -669,7 +856,8 @@ impl SettingsUi {
             }
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                if ui.button(RichText::new("Remove and apply").color(RED)).clicked() {
+                let go = if check.names.is_empty() { "Restart and apply" } else { "Remove and apply" };
+                if ui.button(RichText::new(go).color(RED)).clicked() {
                     action = Some(SettingsAction::Apply { cfg: self.draft.clone(), close: check.close });
                     done = true;
                 }
@@ -2104,6 +2292,29 @@ mod tests {
         let mut win = SettingsUi::new(cfg.clone());
         win.draft.sources.push(SourceConfig { name: "New".into(), device: "test:smpte".into(), ..Default::default() });
         assert!(matches!(win.apply(false, &ctx(true)), SettingsAction::Apply { .. }));
+    }
+
+    /// While recording, a change that restarts a source asks first (with
+    /// the close-ups cut from it); a new name title doesn't.
+    #[test]
+    fn asks_before_restarting_while_recording() {
+        let mut cfg = Config::default();
+        cfg.sources = vec![
+            SourceConfig { name: "Wide".into(), device: "test:bars".into(), ..Default::default() },
+            SourceConfig { name: "Alex".into(), device: "vptz:Wide".into(), ..Default::default() },
+        ];
+        cfg.assign_uids();
+        let mut win = SettingsUi::new(cfg.clone());
+        win.draft.sources[1].person = "Alex Smith".into();
+        win.draft.sources[1].role = "Host".into();
+        assert!(matches!(win.apply(false, &ctx(true)), SettingsAction::Apply { .. }));
+        let mut win = SettingsUi::new(cfg.clone());
+        win.draft.sources[0].delay_ms = 80;
+        assert!(matches!(win.apply(false, &ctx(true)), SettingsAction::None));
+        let check = win.confirm_remove.take().expect("asks");
+        assert!(check.names.is_empty());
+        assert_eq!(check.restarting, vec!["Wide".to_string(), "Alex".to_string()]);
+        assert!(matches!(win.apply(false, &ctx(false)), SettingsAction::Apply { .. }));
     }
 
     /// After applying, a source added in the window keeps the identity it
