@@ -2327,6 +2327,27 @@ mod tests {
         let before = win.draft.sources.len();
         win.split_source(1, 2);
         assert_eq!(win.draft.sources.len(), before);
+    }
+
+    /// Where the window was left comes back on another size of screen,
+    /// whole and on it; anything odd in the file is ignored.
+    #[test]
+    fn window_place_fits_the_screen() {
+        let big = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(2000.0, 1200.0));
+        let r = egui::Rect::from_min_size(egui::pos2(1000.0, 600.0), vec2(800.0, 500.0));
+        let p = Place::of(r, big);
+        assert_eq!(Place::parse(&format!("{} {} {} {}", p.x, p.y, p.w, p.h)), Some(p));
+        assert!((p.rect(big).min - r.min).length() < 0.5);
+        // A small screen: no smaller than the window can be, and fully on it.
+        let small = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(1000.0, 700.0));
+        let fit = p.rect(small);
+        assert!(small.contains_rect(fit), "{fit:?}");
+        assert!(fit.width() >= MIN_SIZE.x && fit.height() >= MIN_SIZE.y);
+        assert_eq!(Place::parse(""), None);
+        assert_eq!(Place::parse("0.1 0.1 2 0.5"), None);
+        assert_eq!(Place::parse("0.1 0.1 NaN 0.5"), None);
+    }
+
     /// While recording, a change that restarts a source asks first (with
     /// the close-ups cut from it); a new name title doesn't.
     #[test]
