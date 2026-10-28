@@ -185,6 +185,10 @@ pub struct App {
     guide_open: bool,
     /// A recording was started (the guide's last step).
     guide_recorded: bool,
+    /// The Settings page last open, so the window comes back to it (this run only).
+    settings_page: Option<Section>,
+    /// Sound was heard once while the guide was open (latched so the mic step doesn't flicker).
+    guide_heard: bool,
     /// The pre-show check was run from the guide.
     guide_checked: bool,
     health_open: bool,
@@ -350,6 +354,8 @@ impl App {
             log_open: false,
             guide_open: false,
             guide_recorded: false,
+            settings_page: None,
+            guide_heard: false,
             guide_checked: false,
             health_open: false,
             peak_hold: HashMap::new(),
@@ -1206,6 +1212,10 @@ impl App {
             RecState::Recording { since, .. } => since.elapsed().as_secs_f64(),
             _ => 0.0,
         };
+        let saving = match &st.rec {
+            RecState::Finalizing { step, done, .. } => Some(crate::control::state::SavingState { step: step.clone(), percent: (done * 100.0).round().clamp(0.0, 100.0) as u32 }),
+            _ => None,
+        };
         let live_seconds = st.stream.since.map(|s| s.elapsed().as_secs_f64()).unwrap_or(0.0);
         let mut problems = st.health.problems();
         if st.rec_failed.is_some() {
@@ -1217,6 +1227,7 @@ impl App {
         drop(st);
         let tally = |i: usize| if live_sources.contains(&i) { "program" } else if preview_sources.contains(&i) { "preview" } else { "off" }.to_string();
         Some(ShowState {
+            saving,
             version: env!("CARGO_PKG_VERSION").into(),
             recording: e.is_recording(),
             rec_seconds,
@@ -2131,6 +2142,27 @@ impl App {
         }
     }
 
+    /// The same report as Settings → Diagnostics, for when the engine won't start.
+    fn save_problem_report(&mut self) {
+        let Some(path) = rfd::FileDialog::new().add_filter("Zip", &["zip"]).set_file_name(crate::report::file_name()).save_file() else { return };
+        let facts = self.settings_context().engine_facts;
+        let devices: Vec<String> = crate::devices::list(crate::devices::Kind::Video)
+            .iter()
+            .map(|d| format!("Video: {} {}", d.name, d.summary))
+            .chain(crate::devices::list(crate::devices::Kind::Audio).iter().map(|d| format!("Audio: {} {}", d.name, d.summary)))
+            .collect();
+        let mut cfg = self.cfg.clone();
+        cfg.scenes = self.scenes.clone();
+        let report = crate::report::Report { cfg: &cfg, facts: &facts, devices: &devices, log: crate::logging::path() };
+        match report.write(&path) {
+            Ok(()) => {
+                crate::logging::reveal_file(&path);
+                self.toast(format!("Saved {}. Send it by email or attach it to your message.", path.display()), false)
+            }
+            Err(e) => self.toast(format!("Couldn't save the report: {e:#}"), true),
+        }
+    }
+
     // ---- monitors --------------------------------------------------------------
 
     fn monitors(&mut self, ui: &mut egui::Ui) {
@@ -2150,6 +2182,9 @@ impl App {
                 }
                 if ui.button("Try again").clicked() {
                     self.start_engine();
+                }
+                if ui.button("Save a problem report…").on_hover_text("One .zip with the log, your settings and devices, to send when asking for help").clicked() {
+                    self.save_problem_report();
                 }
             });
             return;
@@ -2628,7 +2663,7 @@ impl App {
                         }
                     });
                 });
-                ui.label(RichText::new("e.g. start a Syrinscape mood, play a pad, show a title. Any command works (Settings → Remote & MIDI lists them); edit them in the settings file.").size(11.5).color(TEXT_DIM));
+                ui.label(RichText::new("e.g. start a Syrinscape mood, play a pad, show a title. Pick from ＋ Add; ✕ takes one off. Several run in order.").size(11.5).color(TEXT_DIM));
             });
             ui.separator();
             if ui.button("Duplicate scene").clicked() {
@@ -2917,7 +2952,7 @@ impl App {
         if let Some((i, k)) = split {
             // Settings, with the close-ups made and waiting to be framed.
             if self.settings.is_none() {
-                self.settings = Some(self.new_settings().with_split(i, k));
+                self.settings = Some(self.new_settings().open_at(Section::Sources).with_split(i, k));
             } else if let Some(win) = self.settings.as_mut() {
                 win.split_source(i, k);
             }
@@ -3722,6 +3757,8 @@ impl App {
                 Some(Then::Live) => "Before going live",
                 None => "Pre-show check",
             });
+            let (verdict, vcolor) = precheck_verdict(&items, done);
+            ui.label(RichText::new(verdict).strong().color(vcolor));
             ui.add_space(4.0);
             egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
                 egui::Grid::new("checks").num_columns(3).spacing([10.0, 6.0]).show(ui, |ui| {
@@ -4150,7 +4187,11 @@ impl App {
     fn new_settings(&self) -> SettingsUi {
         let mut cfg = self.cfg.clone();
         cfg.scenes = self.scenes.clone();
-        SettingsUi::new(cfg)
+        let win = SettingsUi::new(cfg);
+        match self.settings_page {
+            Some(section) => win.open_at(section),
+            None => win,
+        }
     }
 
     fn settings_context(&self) -> SettingsContext {
@@ -4186,9 +4227,11 @@ impl App {
             }
             None => (None, Vec::new()),
         };
+        let disk_rate = self.engine.as_ref().and_then(|e| e.status.lock_ok().disk.clone()).filter(|d| d.measured).map(|d| d.rate);
         SettingsContext {
             recording,
             streaming,
+            disk_rate,
             engine_facts: facts,
             log,
             config_path: self.save_path.clone(),
@@ -4228,7 +4271,9 @@ impl App {
             }
         }
         let Some(win) = self.settings.as_mut() else { return };
-        match win.show(ctx, &info) {
+        let action = win.show(ctx, &info);
+        self.settings_page = Some(win.section());
+        match action {
             SettingsAction::None => {}
             SettingsAction::Close => self.settings = None,
             SettingsAction::VirtualCamera(on) => self.set_virtual_camera(on),
@@ -4697,6 +4742,16 @@ mod small_tests {
     }
 
     #[test]
+    fn precheck_verdict_reads_worst_level() {
+        use crate::engine::precheck::{CheckItem, Level};
+        let it = |level| CheckItem { level, what: "x".into(), detail: String::new() };
+        assert_eq!(super::precheck_verdict(&[it(Level::Ok)], true).0, "Ready to record");
+        assert_eq!(super::precheck_verdict(&[it(Level::Ok), it(Level::Warn)], true).0, "1 warning: you can still start");
+        assert_eq!(super::precheck_verdict(&[it(Level::Warn), it(Level::Warn), it(Level::Ok)], true).0, "2 warnings: you can still start");
+        assert_eq!(super::precheck_verdict(&[it(Level::Warn), it(Level::Fail)], true).0, "Fix before going live");
+    }
+
+    #[test]
     fn app_icon_loads() {
         let icon = super::app_icon();
         assert!(icon.width >= 256 && icon.width == icon.height, "{}x{}", icon.width, icon.height);
@@ -4713,5 +4768,17 @@ fn minutes(m: f32) -> String {
         format!("{m:.0} minutes")
     } else {
         format!("{m:.1} minutes")
+    }
+}
+
+/// The one-line verdict under the pre-show check's heading, from its worst result so far.
+fn precheck_verdict(items: &[CheckItem], done: bool) -> (String, Color32) {
+    let worst = items.iter().map(|i| i.level).max().unwrap_or(Level::Ok);
+    let warnings = items.iter().filter(|i| i.level == Level::Warn).count();
+    match worst {
+        Level::Fail => ("Fix before going live".into(), RED),
+        Level::Warn => (format!("{warnings} {}: you can still start", if warnings == 1 { "warning" } else { "warnings" }), AMBER),
+        Level::Ok if done => ("Ready to record".into(), GREEN),
+        Level::Ok => ("Checking…".into(), TEXT_DIM),
     }
 }

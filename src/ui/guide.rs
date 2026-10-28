@@ -7,6 +7,8 @@ use super::App;
 use crate::settings::Section;
 use eframe::egui::{self, RichText};
 
+const CAMERA_PRIVACY: &str = "on Mac: System Settings → Privacy & Security → Camera; on Windows: Settings → Privacy & security → Camera";
+
 enum Step {
     Done,
     Todo,
@@ -32,6 +34,10 @@ impl App {
         let folder = self.cfg.output.folder.clone();
         let free = crate::engine::health::disk_space(&folder).map(|(free, _)| free as f64 / 1e9);
         let dests = self.cfg.streaming.destinations.iter().filter(|d| d.enabled && !d.key.trim().is_empty()).count();
+        if mics > 0 && sound_peak > -60.0 {
+            self.guide_heard = true;
+        }
+        let heard = self.guide_heard;
         let recorded = self.engine.as_ref().is_some_and(|e| e.is_recording()) || self.guide_recorded;
 
         let mut open = true;
@@ -74,20 +80,22 @@ impl App {
                 let cam_state = if cams > 0 && cams_alive == cams { Step::Done } else { Step::Todo };
                 let cam_text = match (cams, cams_alive) {
                     (0, _) => "No cameras yet. Plug one in, then add it here (a capture card, a USB camera or a phone).".to_string(),
-                    (c, a) if a == c => format!("{c} camera(s) with a picture. Name them so scenes and titles make sense."),
-                    (c, a) => format!("{a} of {c} cameras have a picture. Check the cable, or that no other app is using it."),
+                    (1, 1) => "1 camera with a picture. Name it so scenes and titles make sense.".to_string(),
+                    (c, a) if a == c => format!("{c} cameras with a picture. Name them so scenes and titles make sense."),
+                    (c, 0) => format!("{} Check the cable, that no other app is using {}, and that Cutaway may use the camera ({CAMERA_PRIVACY}).", if c == 1 { "The camera has no picture." } else { "None of the cameras has a picture." }, if c == 1 { "it" } else { "them" }),
+                    (c, a) => format!("{a} of {c} cameras have a picture. Check the cable, or that no other app is using {}.", if c - a == 1 { "the one without" } else { "them" }),
                 };
                 if step(ui, cam_state, "Cameras", cam_text, Some("Cameras…")) {
                     go = Some(Section::Sources);
                 }
 
-                let mic_state = if mics > 0 && sound_peak > -60.0 { Step::Done } else { Step::Todo };
+                let mic_state = if mics > 0 && heard { Step::Done } else { Step::Todo };
                 let mic_text = if mics == 0 {
                     "No microphone yet. Add one so the recording has sound.".to_string()
-                } else if sound_peak > -60.0 {
-                    format!("{mics} input(s), and Cutaway can hear you. Say a few words and watch the meters at the bottom.")
+                } else if heard {
+                    format!("{mics} {}, and Cutaway can hear you. Say a few words and watch the meters at the bottom.", if mics == 1 { "input" } else { "inputs" })
                 } else {
-                    format!("{mics} input(s), but it's quiet. Say something, check the mic is unmuted, and that Cutaway may use it (on Mac: System Settings → Privacy & Security → Microphone).")
+                    format!("{mics} {}, but it's quiet. Say something, check the mic is unmuted, and that Cutaway may use it (on Mac: System Settings → Privacy & Security → Microphone; on Windows: Settings → Privacy & security → Microphone).", if mics == 1 { "input" } else { "inputs" })
                 };
                 if step(ui, mic_state, "Microphone", mic_text, Some("Sound…")) {
                     go = Some(Section::Audio);
@@ -104,7 +112,7 @@ impl App {
                 }
 
                 let (live_state, live_text) = if dests > 0 {
-                    (Step::Done, format!("{dests} destination(s) ready."))
+                    (Step::Done, format!("{dests} {} ready.", if dests == 1 { "destination" } else { "destinations" }))
                 } else {
                     (Step::Skip, "Optional: skip this if you only record. Otherwise add YouTube, Twitch or another service with its stream key.".to_string())
                 };

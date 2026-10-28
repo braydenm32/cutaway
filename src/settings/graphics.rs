@@ -39,12 +39,11 @@ impl SettingsUi {
                 ui.horizontal_wrapped(|ui| {
                     let names: Vec<String> = self.draft.graphics.iter().map(|g| g.name.clone()).collect();
                     if ui.button("＋ Logo").clicked() {
-                        let mut g = Graphic { name: unique(names.clone(), "Logo"), visible: true, ..Default::default() };
+                        // Cancelling the picker adds nothing.
                         if let Some(f) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg"]).pick_file() {
-                            g.image = f;
+                            self.draft.graphics.push(Graphic { name: unique(names.clone(), "Logo"), visible: true, image: f, ..Default::default() });
+                            self.sel_graphic = self.draft.graphics.len() - 1;
                         }
-                        self.draft.graphics.push(g);
-                        self.sel_graphic = self.draft.graphics.len() - 1;
                     }
                     if ui.button("＋ Name title").clicked() {
                         self.draft.graphics.push(Graphic::title(&unique(names.clone(), "Title"), "Your Name", "Role or topic"));

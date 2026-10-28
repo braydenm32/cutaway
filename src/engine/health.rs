@@ -46,6 +46,19 @@ impl DiskStatus {
     }
 }
 
+/// How long a take must run before its measured write rate is trusted over the settings' estimate.
+pub const RATE_SETTLE_SECONDS: f64 = 30.0;
+
+/// The one write-rate figure used for "time left": the measured rate once
+/// the take has run long enough to settle, otherwise the estimate from the
+/// settings. Returns the rate and whether it was measured.
+pub fn pick_rate(measured: Option<f64>, running_for: f64, estimate: f64) -> (f64, bool) {
+    match measured {
+        Some(r) if running_for >= RATE_SETTLE_SECONDS => (r.max(estimate * 0.25), true),
+        _ => (estimate, false),
+    }
+}
+
 pub fn fmt_left(secs: f64) -> String {
     let m = (secs / 60.0) as u64;
     if m >= 600 {
@@ -201,11 +214,12 @@ pub struct TakeMonitor {
     sizes: VecDeque<(Instant, u64)>,
     warned: u8,
     backup_warned: bool,
+    started: Instant,
 }
 
 impl TakeMonitor {
     pub fn new(folder: PathBuf, backup: Option<PathBuf>, stats: Vec<(String, Arc<VideoStats>)>) -> Self {
-        TakeMonitor { folder, backup, stats, sizes: VecDeque::new(), warned: 0, backup_warned: false }
+        TakeMonitor { folder, backup, stats, sizes: VecDeque::new(), warned: 0, backup_warned: false, started: Instant::now() }
     }
 
     /// Bytes per second written, once there's enough history.
@@ -292,10 +306,8 @@ impl HealthMonitor {
                         failed: s.failed.load(Ordering::Relaxed),
                     });
                 }
-                match t.measured_rate() {
-                    Some(r) => (r.max(estimate * 0.25), true),
-                    None => (estimate, false),
-                }
+                let measured = t.measured_rate();
+                pick_rate(measured, t.started.elapsed().as_secs_f64(), estimate)
             }
             None => (estimate, false),
         };
@@ -347,6 +359,15 @@ impl HealthMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rate_is_estimated_until_settled() {
+        assert_eq!(pick_rate(Some(8e6), 10.0, 2e6), (2e6, false));
+        assert_eq!(pick_rate(None, 100.0, 2e6), (2e6, false));
+        assert_eq!(pick_rate(Some(8e6), 40.0, 2e6), (8e6, true));
+        // A stalled write rate doesn't promise endless time.
+        assert_eq!(pick_rate(Some(0.0), 40.0, 2e6), (5e5, true));
+    }
 
     #[test]
     fn estimates_and_formats() {

@@ -59,6 +59,16 @@ pub struct ShowState {
     pub ptz: Vec<PtzState>,
     /// Viewer comments, while they're on.
     pub comments: Option<CommentsState>,
+    /// The take is being finished and saved (null otherwise).
+    pub saving: Option<SavingState>,
+}
+
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+pub struct SavingState {
+    /// What it's doing now.
+    pub step: String,
+    /// 0 to 100.
+    pub percent: u32,
 }
 
 #[derive(Serialize, Clone, Debug, Default, PartialEq)]

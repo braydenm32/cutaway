@@ -376,7 +376,7 @@ fn auto_config() -> Config {
     }
     let audio = devices::list(devices::Kind::Audio);
     if let Some(d) = audio.first() {
-        cfg.audio.push(AudioConfig { name: "DAW".into(), device: d.name.clone(), ..Default::default() });
+        cfg.audio.push(AudioConfig { name: config::audio_input_name(&d.name), device: d.name.clone(), ..Default::default() });
     }
     cfg
 }
@@ -391,7 +391,7 @@ fn demo_config(n: usize) -> Config {
     for i in 0..n.clamp(1, 16) {
         cfg.sources.push(SourceConfig { name: format!("Cam {}", i + 1), device: "test".into(), ..Default::default() });
     }
-    cfg.audio.push(AudioConfig { name: "DAW".into(), device: "test".into(), ..Default::default() });
+    cfg.audio.push(AudioConfig { name: "Mic".into(), device: "test".into(), ..Default::default() });
     cfg
 }
 
