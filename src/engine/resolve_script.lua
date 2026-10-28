@@ -2,7 +2,7 @@
 --
 -- In DaVinci Resolve: Workspace > Scripts > Cutaway - Build project from a take.
 -- Pick a take folder recorded by Cutaway (it starts at the latest take).
--- You get a new project named after the take, at the take's frame rate,
+-- You get a new project named after the take, at the take's frame rate and size,
 -- with bins for the cameras, the program and the audio, proxies linked,
 -- and the live edit as a timeline (with the markers).
 --
@@ -63,7 +63,7 @@ end
 folder = folder:gsub("[/\\]+$", "")
 local file = take_file(folder)
 if not file then
-  say("that folder isn't a Cutaway take (there's no \"(Resolve).lua\" file in it).")
+  say("that folder isn't a Cutaway take (there's no \"(Resolve).lua\" file in it). In Cutaway, turn on Settings > Recording > For editing > DaVinci Resolve: \"a project from each take\"; takes recorded after that can be built here.")
   return
 end
 local ok, take = pcall(dofile, file)
@@ -71,6 +71,40 @@ if not ok or type(take) ~= "table" then
   say("couldn't read " .. file)
   return
 end
+
+-- The take may have moved (copied to another drive): its files are in the
+-- folder picked, wherever they were recorded.
+local function here(path)
+  if type(path) ~= "string" or type(take.folder) ~= "string" then
+    return path
+  end
+  local was = take.folder
+  local head = path:sub(1, #was)
+  local same = head == was
+  if not same and sep == "\\" then
+    same = head:gsub("/", "\\"):lower() == was:gsub("/", "\\"):lower()
+  end
+  if not same then
+    return path
+  end
+  local rest = path:sub(#was + 1):gsub("[/\\]", sep)
+  return folder .. rest
+end
+local function all_here(list)
+  local out = {}
+  for i, p in ipairs(list or {}) do
+    out[i] = here(p)
+  end
+  return out
+end
+take.cameras = all_here(take.cameras)
+take.audio = all_here(take.audio)
+take.timeline = here(take.timeline)
+local proxies = {}
+for k, v in pairs(take.proxies or {}) do
+  proxies[here(k)] = here(v)
+end
+take.proxies = proxies
 
 local pm = resolve:GetProjectManager()
 local name = take.name
@@ -86,6 +120,11 @@ end
 local fps = tostring(take.fps)
 project:SetSetting("timelineFrameRate", fps)
 project:SetSetting("timelinePlaybackFrameRate", fps)
+-- The take's picture size (before any timeline is made).
+if take.width and take.height then
+  project:SetSetting("timelineResolutionWidth", tostring(take.width))
+  project:SetSetting("timelineResolutionHeight", tostring(take.height))
+end
 
 local pool = project:GetMediaPool()
 local root = pool:GetRootFolder()

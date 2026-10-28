@@ -34,6 +34,12 @@ pub struct TakeReport {
     pub duration: Duration,
     /// Markers (seconds into the take, name), for chapters.
     pub markers: Vec<(f64, String)>,
+    /// Wall-clock time of the take's first frame (dates in titles and notes).
+    pub recorded_at: Option<chrono::DateTime<chrono::Local>>,
+    /// The podcast copy is still being made (uploads wait for it).
+    pub podcast_pending: bool,
+    /// The podcast copy, once made.
+    pub podcast: Option<PathBuf>,
 }
 
 /// A marker dropped during a take (time from the start of the files).
@@ -43,6 +49,8 @@ pub struct Marker {
     pub name: String,
     /// The scene on air at the time.
     pub scene: String,
+    /// Left by a saved clip: on the editing timelines, not a chapter.
+    pub clip: bool,
 }
 
 pub type Markers = Arc<Mutex<Vec<Marker>>>;
@@ -225,7 +233,7 @@ pub fn spawn_mp4(
                             w.set_duration(id, ns);
                         }
                     }
-                    let chapters = opts.markers.lock_ok().iter().map(|m| (m.at, m.name.clone())).collect();
+                    let chapters = opts.markers.lock_ok().iter().filter(|m| !m.clip).map(|m| (m.at, m.name.clone())).collect();
                     w.set_chapters(chapters);
                     report_backup(&mut w);
                     Ok((path, w.finish()?))
@@ -736,6 +744,8 @@ pub struct Take {
     pub t0: Ns,
     pub t1: Arc<AtomicI64>,
     pub started: std::time::Instant,
+    /// Wall-clock time of the first frame.
+    pub wall: chrono::DateTime<chrono::Local>,
     pub first_scene: String,
     pub first_angle: Option<usize>,
     pub video_jobs: Vec<(String, JoinHandle<Result<()>>)>,
@@ -762,7 +772,7 @@ impl Take {
     /// first), saying what it's waiting for and how far along it is (0 to 1)
     /// as it goes.
     pub fn collect_with(self, mut step: impl FnMut(String, f32)) -> TakeReport {
-        let mut report = TakeReport { folder: self.folder.clone(), duration: self.started.elapsed(), ..Default::default() };
+        let mut report = TakeReport { folder: self.folder.clone(), duration: self.started.elapsed(), recorded_at: Some(self.wall), ..Default::default() };
         let total = (self.video_jobs.len() + self.audio_job.is_some() as usize + self.track_jobs.len() + self.writers.len() + self.wavs.len()).max(1);
         let mut k = 0;
         let mut next = |what: String| {

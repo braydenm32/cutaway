@@ -73,9 +73,24 @@ fn logo_texture(ctx: &egui::Context) -> egui::TextureHandle {
     ctx.load_texture("cutaway-logo", image, egui::TextureOptions::LINEAR)
 }
 
+const MIN_WINDOW: [f32; 2] = [1000.0, 640.0];
+
+/// The first window's size on a screen of `screen` points: the usual size,
+/// smaller to leave room for the menu bar, title bar and dock or taskbar.
+fn first_window_size(inner: egui::Vec2, screen: egui::Vec2) -> egui::Vec2 {
+    let room = egui::vec2(screen.x - 40.0, screen.y - 140.0);
+    inner.min(room).max(egui::Vec2::from(MIN_WINDOW))
+}
+
 pub fn run(cfg: Config, save_path: Option<PathBuf>, self_test: bool, made_pin: bool, first_run: bool) -> anyhow::Result<()> {
+    // The window's size and place, remembered per computer beside the
+    // settings (eframe puts it back on a screen that's still there).
+    let window_file = crate::config::default_config_path().parent().map(|d| d.join("Main window.ron"));
+    let remembered = window_file.as_ref().is_some_and(|f| f.exists());
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_title("Cutaway").with_icon(app_icon()).with_inner_size([1480.0, 920.0]).with_min_inner_size([1000.0, 640.0]),
+        viewport: egui::ViewportBuilder::default().with_title("Cutaway").with_icon(app_icon()).with_inner_size([1480.0, 920.0]).with_min_inner_size(MIN_WINDOW),
+        persist_window: true,
+        persistence_path: window_file,
         ..Default::default()
     };
     eframe::run_native(
@@ -84,6 +99,7 @@ pub fn run(cfg: Config, save_path: Option<PathBuf>, self_test: bool, made_pin: b
         Box::new(move |cc| {
             let mut app = App::new(cc, cfg, save_path);
             app.guide_open = first_run || std::env::var_os("CUTAWAY_UI_TEST_GUIDE").is_some();
+            app.fit_window = !remembered;
             if made_pin {
                 // Said after any update news, so neither hides the other.
                 let pin = format!("The remote now needs a PIN: {} (Settings → Remote & MIDI)", app.cfg.remote.pin);
@@ -183,6 +199,8 @@ pub struct App {
     log_open: bool,
     /// The first-show guide is showing.
     guide_open: bool,
+    /// No remembered window yet: fit the first one to the screen.
+    fit_window: bool,
     /// A recording was started (the guide's last step).
     guide_recorded: bool,
     /// The pre-show check was run from the guide.
@@ -349,6 +367,7 @@ impl App {
             quit_ok: false,
             log_open: false,
             guide_open: false,
+            fit_window: false,
             guide_recorded: false,
             guide_checked: false,
             health_open: false,
@@ -4389,7 +4408,33 @@ impl App {
     }
 }
 
+impl App {
+    /// The first time, make the window fit the screen it opened on.
+    fn fit_first_window(&mut self, ctx: &egui::Context) {
+        if !self.fit_window {
+            return;
+        }
+        let (screen, inner) = ctx.input(|i| (i.viewport().monitor_size, i.viewport().inner_rect));
+        let (Some(screen), Some(inner)) = (screen, inner) else { return };
+        self.fit_window = false;
+        if screen.x <= 0.0 || screen.y <= 0.0 {
+            return;
+        }
+        let size = first_window_size(inner.size(), screen);
+        if size != inner.size() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(((screen.x - size.x) / 2.0).max(0.0), 30.0)));
+        }
+    }
+}
+
 impl eframe::App for App {
+    /// Only the window's size and place are remembered (eframe's
+    /// persistence), not egui's own state.
+    fn persist_egui_memory(&self) -> bool {
+        false
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         // Closing the window (or Cmd+Q / Alt+F4) mid-show asks first.
@@ -4397,6 +4442,7 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.confirm = Some(Confirm::Quit);
         }
+        self.fit_first_window(&ctx);
         self.tick_starting(&ctx);
         self.handle_requests();
         self.run_queued();
@@ -4694,6 +4740,18 @@ mod small_tests {
         assert_eq!(super::quit_text(true, false).0, "Quit while recording?");
         assert_eq!(super::quit_text(false, true).0, "Quit while live?");
         assert!(super::quit_text(true, true).1.contains("broadcast ends"));
+    }
+
+    #[test]
+    fn first_window_fits_the_screen() {
+        use eframe::egui::vec2;
+        // A 13" MacBook Air: 1470 × 956 points.
+        let s = super::first_window_size(vec2(1480.0, 920.0), vec2(1470.0, 956.0));
+        assert!(s.x <= 1430.0 && s.y <= 816.0 && s.x >= 1000.0 && s.y >= 640.0, "{s:?}");
+        // A big screen: the usual size.
+        assert_eq!(super::first_window_size(vec2(1480.0, 920.0), vec2(2560.0, 1440.0)), vec2(1480.0, 920.0));
+        // Never below the smallest.
+        assert_eq!(super::first_window_size(vec2(1480.0, 920.0), vec2(800.0, 600.0)), vec2(1000.0, 640.0));
     }
 
     #[test]

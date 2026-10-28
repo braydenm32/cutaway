@@ -111,7 +111,8 @@ fn jobs_for(cfg: &Config, report: &TakeReport) -> (Vec<Job>, Vec<String>) {
         match file_named(report, "Program") {
             Some(file) if granted("youtube") => {
                 let show = [cfg.podcast.show.trim(), cfg.ui.profile.trim()].into_iter().find(|s| !s.is_empty()).unwrap_or("").to_string();
-                let date = chrono::Local::now().format("%-d %B %Y").to_string();
+                // The day it was recorded (a show past midnight, or sent the next day).
+                let date = report.recorded_at.unwrap_or_else(chrono::Local::now).format("%-d %B %Y").to_string();
                 let title = if !u.youtube_title.trim().is_empty() {
                     u.youtube_title.trim().replace("{date}", &date).replace("{show}", &show)
                 } else if !show.is_empty() {
@@ -121,7 +122,7 @@ fn jobs_for(cfg: &Config, report: &TakeReport) -> (Vec<Job>, Vec<String>) {
                 };
                 let mut description = u.youtube_description.trim().replace("{date}", &date).replace("{show}", &show);
                 if u.youtube_chapters {
-                    if let Some(ch) = google::chapters(&report.markers, report.duration.as_secs_f64()) {
+                    if let Some(ch) = crate::engine::export::youtube_chapters(&report.markers, report.duration.as_secs_f64()) {
                         if !description.is_empty() {
                             description.push_str("\n\n");
                         }
@@ -140,7 +141,7 @@ fn jobs_for(cfg: &Config, report: &TakeReport) -> (Vec<Job>, Vec<String>) {
         } else {
             let files: Vec<(PathBuf, Vec<String>)> = match u.drive_files {
                 DriveFiles::Program => file_named(report, "Program").into_iter().map(|f| (f, Vec::new())).collect(),
-                DriveFiles::ProgramAndMix => ["Program", "Program_Vertical", "Mix"].iter().filter_map(|s| file_named(report, s)).map(|f| (f, Vec::new())).collect(),
+                DriveFiles::ProgramAndMix => ["Program", "Program_Vertical", "Mix"].iter().filter_map(|s| file_named(report, s)).chain(report.podcast.clone().filter(|p| p.exists())).map(|f| (f, Vec::new())).collect(),
                 DriveFiles::Everything => {
                     let mut v = Vec::new();
                     all_files(&report.folder, Vec::new(), &mut v);
@@ -283,7 +284,8 @@ impl App {
         let report = {
             let st = engine.status.lock_ok();
             match &st.last_take {
-                Some(r) if self.uploads.seen.as_ref() != Some(&r.folder) => r.clone(),
+                // (Once its podcast is made, so that goes up too.)
+                Some(r) if self.uploads.seen.as_ref() != Some(&r.folder) && !r.podcast_pending => r.clone(),
                 _ => return,
             }
         };
@@ -424,13 +426,16 @@ mod tests {
             files.push((p, n as u64));
         }
         std::fs::write(dir.join("Guests").join("Guest_1_backup.webm"), b"guest").unwrap();
-        TakeReport { folder: dir.to_path_buf(), files, problems: Vec::new(), duration: Duration::from_secs(600), markers: vec![(0.0, "Welcome".into()), (120.0, "News".into()), (300.0, "Guest".into())] }
+        TakeReport { folder: dir.to_path_buf(), files, problems: Vec::new(), duration: Duration::from_secs(600), markers: vec![(0.0, "Welcome".into()), (120.0, "News".into()), (300.0, "Guest".into())], ..Default::default() }
     }
 
     #[test]
     fn takes_go_where_the_settings_say() {
         let dir = std::env::temp_dir().join(format!("cutaway-uptake-{}", std::process::id())).join("Take_2026-10-20_19-00-00");
-        let report = take(&dir);
+        let mut report = take(&dir);
+        // Recorded late in the evening, sent the next day: its own date.
+        use chrono::TimeZone;
+        report.recorded_at = chrono::Local.with_ymd_and_hms(2026, 10, 20, 23, 50, 0).single();
         let mut cfg = Config::default();
         cfg.podcast.show = "The Show".into();
         cfg.upload = UploadConfig { refresh_token: "r1".into(), granted: vec!["youtube".into()], youtube: true, drive: true, youtube_description: "About {show}.".into(), ..Default::default() };
@@ -438,7 +443,7 @@ mod tests {
         assert_eq!(jobs.len(), 1, "YouTube only: Drive wasn't allowed at sign-in");
         assert!(problems[0].contains("Google Drive"));
         let Work::Youtube { title, description, file, privacy } = &jobs[0].work else { panic!() };
-        assert!(title.starts_with("The Show – "), "{title}");
+        assert_eq!(title, "The Show – 20 October 2026");
         assert_eq!(description, "About The Show.\n\n0:00 Welcome\n2:00 News\n5:00 Guest");
         assert!(file.ends_with("Program.mp4"));
         assert_eq!(*privacy, "private");
@@ -449,6 +454,16 @@ mod tests {
             let (jobs, _) = jobs_for(&cfg, &report);
             let Work::Drive { files, take, base } = &jobs[1].work else { panic!() };
             assert_eq!((files.len(), take.as_str(), base.as_str()), (want, "Take_2026-10-20_19-00-00", "Cutaway"), "{what:?}");
+            if what == DriveFiles::ProgramAndMix {
+                // With the podcast, once it's made.
+                let podcast = dir.join("Take (Podcast).m4a");
+                std::fs::write(&podcast, b"m4a").unwrap();
+                let r = TakeReport { podcast: Some(podcast.clone()), ..report.clone() };
+                let (jobs, _) = jobs_for(&cfg, &r);
+                let Work::Drive { files, .. } = &jobs[1].work else { panic!() };
+                assert!(files.len() == 4 && files[3].0 == podcast);
+                std::fs::remove_file(&podcast).unwrap();
+            }
             if what == DriveFiles::Everything {
                 assert!(files.iter().any(|(f, path)| f.ends_with("Guest_1_backup.webm") && path == &vec!["Guests".to_string()]));
             }

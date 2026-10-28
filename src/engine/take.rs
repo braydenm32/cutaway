@@ -298,6 +298,7 @@ impl Engine {
             t0,
             t1,
             started: Instant::now(),
+            wall,
             first_scene: live.name.clone(),
             first_angle: self.switcher.angle_now(),
             video_jobs,
@@ -333,13 +334,17 @@ impl Engine {
 
     /// Drop a marker at what the program shows now. Returns its name.
     pub fn add_marker(&self, name: Option<String>) -> Result<String> {
+        self.add_marker_as(name, false)
+    }
+
+    fn add_marker_as(&self, name: Option<String>, clip: bool) -> Result<String> {
         let guard = self.take.lock_ok();
         let Some(take) = guard.as_ref() else { bail!("markers go into a recording; start recording first") };
         // The program monitor shows frames VIDEO_LATENCY behind real time.
         let at = (clock::now() - VIDEO_LATENCY - take.t0).max(0);
         let mut markers = take.markers.lock_ok();
         let name = name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| format!("Marker {}", markers.len() + 1));
-        markers.push(Marker { at, name: name.clone(), scene: self.switcher.live().name });
+        markers.push(Marker { at, name: name.clone(), scene: self.switcher.live().name, clip });
         markers.sort_by_key(|m| m.at);
         let count = markers.len();
         drop(markers);
@@ -358,7 +363,7 @@ impl Engine {
         let number = self.clips.reserve()?;
         let seconds = seconds.unwrap_or(self.config().output.clip_seconds).clamp(1, 600);
         let name = format!("Clip {number}");
-        let _ = self.add_marker(Some(name.clone()));
+        let _ = self.add_marker_as(Some(name.clone()), true);
         let (clips, status, waker) = (self.clips.clone(), self.status.clone(), self.waker.clone());
         std::thread::Builder::new().name("save clip".into()).spawn(move || {
             // Let what's on screen now reach the file first.
@@ -430,6 +435,7 @@ impl Engine {
                 i.stop_raw_tap();
             }
             let t0 = take.t0;
+            let wall = take.wall;
             let side = SideFiles {
                 folder: folder.clone(),
                 backup: take.opts.backup_folder.clone(),
@@ -460,10 +466,11 @@ impl Engine {
             });
             report.problems.extend(problems);
             report.duration = Duration::from_nanos((t1 - t0).max(0) as u64);
-            report.markers = side.markers.iter().map(|m| (m.at as f64 / NS_PER_SEC as f64, m.name.clone())).collect();
+            report.markers = side.markers.iter().filter(|m| !m.clip).map(|m| (m.at as f64 / NS_PER_SEC as f64, m.name.clone())).collect();
+            report.podcast_pending = cfg.podcast.enabled && folder.join("Mix.wav").exists();
             let events = switcher.events_between(t0 + VIDEO_LATENCY, t1 + VIDEO_LATENCY);
             saving("Writing the timeline and notes".into(), 0.95);
-            let written = side.write(&cfg, &report, &summary, &events, t0, t1, fps, (cw, ch), stream_since, cues.as_deref());
+            let written = side.write(&cfg, &report, &summary, &events, t0, t1, wall, fps, (cw, ch), stream_since, cues.as_deref());
             let mut st = status.lock_ok();
             let total: u64 = report.files.iter().map(|f| f.1).sum();
             st.push(
@@ -477,11 +484,18 @@ impl Engine {
                 st.push(LogLevel::Warning, p.clone());
             }
             st.rec = RecState::Idle;
+            let pending = report.podcast_pending;
             st.last_take = Some(report);
             drop(st);
             waker();
-            if cfg.podcast.enabled {
-                make_podcast(&cfg, &folder, side.backup.as_deref(), &side.markers, &status, &waker);
+            if pending {
+                let made = make_podcast(&cfg, &folder, side.backup.as_deref(), &side.markers, wall, &status, &waker);
+                // Now uploads can go, with the podcast.
+                if let Some(r) = status.lock_ok().last_take.as_mut().filter(|r| r.folder == folder) {
+                    r.podcast_pending = false;
+                    r.podcast = made;
+                }
+                waker();
             }
         });
         self.finalizers.lock_ok().push(handle);
@@ -489,16 +503,19 @@ impl Engine {
 }
 
 /// The podcast copy, made from the mix WAV after the take is saved.
-fn make_podcast(cfg: &crate::config::Config, folder: &std::path::Path, backup: Option<&std::path::Path>, markers: &[Marker], status: &Arc<Mutex<super::Status>>, waker: &super::Waker) {
+/// Returns the file, when made.
+#[allow(clippy::too_many_arguments)]
+fn make_podcast(cfg: &crate::config::Config, folder: &std::path::Path, backup: Option<&std::path::Path>, markers: &[Marker], recorded: chrono::DateTime<chrono::Local>, status: &Arc<Mutex<super::Status>>, waker: &super::Waker) -> Option<PathBuf> {
     let wav = folder.join("Mix.wav");
     if !wav.exists() {
-        return;
+        return None;
     }
     let take_name = folder.file_name().unwrap_or_default().to_string_lossy().to_string();
     let file = format!("{take_name} (Podcast).m4a");
     let p = &cfg.podcast;
     let show = [p.show.trim(), cfg.ui.profile.trim()].into_iter().find(|s| !s.is_empty()).unwrap_or("").to_string();
-    let now = chrono::Local::now();
+    // The day the show was recorded, not when it finished saving.
+    let now = recorded;
     let title = if !p.title.trim().is_empty() {
         p.title.trim().to_string()
     } else if !show.is_empty() {
@@ -507,7 +524,7 @@ fn make_podcast(cfg: &crate::config::Config, folder: &std::path::Path, backup: O
         take_name.clone()
     };
     let episode = podcast::Episode { title, show, author: p.author.clone(), date: now.format("%Y-%m-%d").to_string() };
-    let chapters: Vec<(Ns, String)> = markers.iter().map(|m| (m.at, m.name.clone())).collect();
+    let chapters: Vec<(Ns, String)> = markers.iter().filter(|m| !m.clip).map(|m| (m.at, m.name.clone())).collect();
     let backup_file = backup.map(|b| b.join(&file));
     status.lock_ok().background = Some(("Making the podcast".into(), 0.0));
     waker();
@@ -521,15 +538,22 @@ fn make_podcast(cfg: &crate::config::Config, folder: &std::path::Path, backup: O
     });
     let mut st = status.lock_ok();
     st.background = None;
-    match result {
-        Ok(r) => st.push(
-            LogLevel::Info,
-            format!("Podcast saved: {file} ({}, {}; the mix was {:.1} LUFS, levelled {:+.1} dB)", human_size(r.size), fmt_duration(Duration::from_secs_f64(r.seconds)), r.measured_lufs, r.gain_db),
-        ),
-        Err(e) => st.push(LogLevel::Warning, format!("The podcast copy couldn't be made: {e:#}")),
-    }
+    let made = match result {
+        Ok(r) => {
+            st.push(
+                LogLevel::Info,
+                format!("Podcast saved: {file} ({}, {}; the mix was {:.1} LUFS, levelled {:+.1} dB)", human_size(r.size), fmt_duration(Duration::from_secs_f64(r.seconds)), r.measured_lufs, r.gain_db),
+            );
+            Some(folder.join(&file))
+        }
+        Err(e) => {
+            st.push(LogLevel::Warning, format!("The podcast copy couldn't be made: {e:#}"));
+            None
+        }
+    };
     drop(st);
     waker();
+    made
 }
 
 /// What's needed to write a take's side files once its media is done.
@@ -557,6 +581,7 @@ impl SideFiles {
         events: &[switcher::SwitchEvent],
         t0: Ns,
         t1: Ns,
+        recorded: chrono::DateTime<chrono::Local>,
         fps: u32,
         canvas: (u32, u32),
         stream_since: Option<Ns>,
@@ -577,16 +602,21 @@ impl SideFiles {
             files.push(("Captions.vtt".into(), vtt));
             extra.push("transcript and caption files".to_string());
         }
-        let marks: Vec<(Ns, String)> = self.markers.iter().map(|m| (m.at, m.name.clone())).collect();
-        if !marks.is_empty() {
-            files.push(("Chapters.txt".into(), export::youtube_chapters(&marks)));
+        // Chapters: the markers (not the clips), by YouTube's rules.
+        let secs = |ns: Ns| ns as f64 / NS_PER_SEC as f64;
+        let marks: Vec<(f64, String)> = self.markers.iter().filter(|m| !m.clip).map(|m| (secs(m.at), m.name.clone())).collect();
+        let chapters = export::youtube_chapters(&marks, secs(t1 - t0));
+        if let Some(c) = &chapters {
+            files.push(("Chapters.txt".into(), format!("{c}\n")));
             extra.push("Chapters.txt".to_string());
             // Chapters for the stream's own recording (it started at a different moment).
             if let Some(s) = stream_since {
-                let shift = t0 - s;
-                if shift.abs() > NS_PER_SEC {
-                    let m: Vec<(Ns, String)> = marks.iter().map(|(t, n)| (t + shift, n.clone())).filter(|(t, _)| *t >= 0).collect();
-                    files.push(("Chapters (stream).txt".into(), export::youtube_chapters(&m)));
+                let shift = secs(t0 - s);
+                if shift.abs() > 1.0 {
+                    let m: Vec<(f64, String)> = marks.iter().map(|(t, n)| (t + shift, n.clone())).filter(|(t, _)| *t >= 0.0).collect();
+                    if let Some(c) = export::youtube_chapters(&m, secs(t1 - s)) {
+                        files.push(("Chapters (stream).txt".into(), format!("{c}\n")));
+                    }
                 }
             }
         }
@@ -612,7 +642,7 @@ impl SideFiles {
                 extra.push("Final Cut / Resolve and Premiere timelines".to_string());
             }
         }
-        files.push(("Take.txt".into(), take_info(setup, report, &self.markers, self.tc_seconds, cfg, !timelines.is_empty())));
+        files.push(("Take.txt".into(), take_info(setup, report, &self.markers, self.tc_seconds, recorded, cfg, !timelines.is_empty(), chapters.is_some())));
 
         // Projects for audio software and Resolve.
         let session = if cfg.output.daw_sessions || cfg.output.resolve_project {
@@ -653,7 +683,7 @@ impl SideFiles {
                 }
                 if cfg.output.resolve_project {
                     let timeline = timelines.iter().find(|t| t.0.ends_with(".fcpxml")).map(|t| t.0.as_str());
-                    let _ = std::fs::write(dir.join(format!("{take_name} (Resolve).lua")), s.resolve_lua(dir, &videos, timeline));
+                    let _ = std::fs::write(dir.join(format!("{take_name} (Resolve).lua")), s.resolve_lua(dir, &videos, timeline, canvas));
                 }
             }
         }
@@ -715,9 +745,10 @@ fn graphics_log(t0: Ns, fps: u32, on_air: &[super::graphics::OnAir]) -> String {
     s
 }
 
-fn take_info(setup: &str, report: &recorder::TakeReport, markers: &[Marker], tc_seconds: f64, cfg: &crate::config::Config, timelines: bool) -> String {
+#[allow(clippy::too_many_arguments)]
+fn take_info(setup: &str, report: &recorder::TakeReport, markers: &[Marker], tc_seconds: f64, recorded: chrono::DateTime<chrono::Local>, cfg: &crate::config::Config, timelines: bool, chapters: bool) -> String {
     let timecode_on = cfg.output.timecode;
-    let mut s = format!("Cutaway take\nRecorded: {}\nLength: {}\n", chrono::Local::now().format("%Y-%m-%d %H:%M"), fmt_duration(report.duration));
+    let mut s = format!("Cutaway take\nRecorded: {}\nLength: {}\n", recorded.format("%Y-%m-%d %H:%M"), fmt_duration(report.duration));
     if timecode_on {
         let t = tc_seconds as u64;
         s += &format!("Timecode at start: {:02}:{:02}:{:02} (time of day)\n", t / 3600, (t / 60) % 60, t % 60);
@@ -742,8 +773,10 @@ fn take_info(setup: &str, report: &recorder::TakeReport, markers: &[Marker], tc_
         s += "  .fcpxml  (open in Final Cut Pro or DaVinci Resolve: a multicam clip and the live edit)\n";
         s += "  (Premiere).xml  (File → Import in Premiere Pro: the live edit, every camera on its own track)\n";
     }
-    if !markers.is_empty() {
+    if chapters {
         s += "  Chapters.txt  (markers as a YouTube chapter list; paste into the video description)\n";
+    }
+    if !markers.is_empty() {
         s += "\nMarkers:\n";
         for m in markers {
             s += &format!("  {}  {}  (on air: {})\n", fmt_duration(Duration::from_nanos(m.at as u64)), m.name, m.scene);
@@ -769,6 +802,18 @@ mod tests {
         assert_eq!(timecode(0, 30), "00:00:00:00");
         assert_eq!(timecode(1_500_000_000, 30), "00:00:01:15");
         assert_eq!(timecode(3_661_000_000_000, 25), "01:01:01:00");
+    }
+
+    #[test]
+    fn notes_say_when_the_take_started() {
+        use chrono::TimeZone;
+        let at = chrono::Local.with_ymd_and_hms(2026, 10, 20, 23, 50, 0).single().unwrap();
+        let report = recorder::TakeReport { duration: Duration::from_secs(1800), ..Default::default() };
+        let cfg = crate::config::Config::default();
+        let clip = Marker { at: 0, name: "Clip 1".into(), scene: "Wide".into(), clip: true };
+        let s = take_info("", &report, &[clip], 0.0, at, &cfg, false, false);
+        assert!(s.contains("Recorded: 2026-10-20 23:50"), "{s}");
+        assert!(!s.contains("Chapters.txt") && s.contains("Clip 1"), "the clip is listed, but there are no chapters");
     }
 
     #[test]

@@ -176,7 +176,7 @@ and [Install on Windows](#install-on-windows).
   Cubase) with every WAV on its own track, lined up, with the markers.
 - **DaVinci Resolve project in one click:** install Cutaway's Resolve script
   (Settings → Recording) and run **Workspace → Scripts → Cutaway - Build
-  project from a take**: a new project at the take's frame rate, with bins
+  project from a take**: a new project at the take's frame rate and size, with bins
   for the cameras and the audio, proxies linked and the live edit as a
   timeline.
 - **Podcast episode:** optionally, each take also gives an M4A of the mix,
@@ -1135,13 +1135,13 @@ it: a project, the YouTube Data API and/or Google Drive API turned on, and a
 **Desktop app** client whose ID and secret you paste in). Then:
 
 - **YouTube** gets the program, private, unlisted or public, titled with the
-  show's name and the date (or your own title), with the markers as
-  chapters in the description.
+  show's name and the day it was recorded (or your own title), with the
+  markers (not the clips) as chapters in the description.
 - **Google Drive** gets the program, the program with the vertical version
-  and the mix, or the whole take, in a folder per take (inside a "Cutaway"
-  folder).
+  and the mix (and the podcast, when one's made), or the whole take, in a
+  folder per take (inside a "Cutaway" folder).
 - An **Upload** button appears in the main window's Uploads panel when a take
-  is saved, or uploads start straight away if you choose. They go on in the
+  is saved (and its podcast made), or uploads start straight away if you choose. They go on in the
   background, one at a time, with their progress, and pick up again if the
   connection drops.
 
@@ -1160,10 +1160,13 @@ Cutaway only sees the Drive files it made.
   viewer to change any cut.
 - **DaVinci Resolve:** File → Import → Timeline, and pick the `.fcpxml`. Or,
   for the whole project in one go, press **Install the Resolve script** in
-  Settings → Recording once, then in Resolve choose **Workspace → Scripts →
-  Cutaway - Build project from a take** and pick the take: you get a project
-  named after it with bins for the cameras and the audio, proxies linked and
-  the live edit as a timeline with the markers.
+  Settings → Recording once (it also turns on **a project from each take**,
+  which saves what the script needs with every take from then on), then in
+  Resolve choose **Workspace → Scripts → Cutaway - Build project from a
+  take** and pick the take: you get a project named after it, at its frame
+  rate and picture size, with bins for the cameras and the audio, proxies
+  linked and the live edit as a timeline with the markers. A take moved or
+  copied to another drive still works: pick it where it is now.
 - **REAPER:** open the take's `.rpp`: every WAV is on its own track, lined
   up, with the markers.
 - **Fender Studio Pro (Studio One), Bitwig, Cubase:** open (or import) the
@@ -1175,7 +1178,10 @@ Cutaway only sees the Drive files it made.
 - **Proxies:** the `Proxies` folder has matching small files with the same
   names, timecode and length, for Final Cut's, Resolve's and Premiere's proxy
   workflows.
-- **YouTube chapters:** paste `Chapters.txt` into the video description.
+- **YouTube chapters:** paste `Chapters.txt` into the video description. It
+  follows YouTube's rules (the first at 0:00, at least three, ten seconds
+  apart), so it's only there when the markers make that; clips are on the
+  timelines as markers but aren't chapters.
 
 ## Performance: 4K and many sources
 
