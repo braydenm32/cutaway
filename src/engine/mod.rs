@@ -139,6 +139,8 @@ pub enum LogLevel {
 
 #[derive(Debug, Clone)]
 pub struct LogLine {
+    /// Its place among every line written (the log keeps the last 200).
+    pub seq: u64,
     pub time: String,
     pub level: LogLevel,
     pub text: String,
@@ -171,6 +173,10 @@ pub struct Status {
     /// Keys: "a0", "a1", ... for inputs, "mix" for the program mix.
     pub meters: HashMap<String, Meter>,
     pub log: VecDeque<LogLine>,
+    /// How many lines have ever been written.
+    pub logged: u64,
+    /// Warnings to put on screen, not just in the log (taken by the desk).
+    pub alerts: Vec<String>,
     pub rec: RecState,
     pub last_take: Option<recorder::TakeReport>,
     /// Names of sources/inputs that aren't delivering.
@@ -204,7 +210,8 @@ impl Status {
             LogLevel::Warning => eprintln!("warning: {text}"),
             LogLevel::Info => eprintln!("{text}"),
         }
-        self.log.push_back(LogLine { time: chrono::Local::now().format("%H:%M:%S").to_string(), level, text });
+        self.logged += 1;
+        self.log.push_back(LogLine { seq: self.logged, time: chrono::Local::now().format("%H:%M:%S").to_string(), level, text });
         while self.log.len() > 200 {
             self.log.pop_front();
         }

@@ -87,13 +87,9 @@ pub fn run(cfg: Config, save_path: Option<PathBuf>, self_test: bool, made_pin: b
             if made_pin {
                 // Said after any update news, so neither hides the other.
                 let pin = format!("The remote now needs a PIN: {} (Settings → Remote & MIDI)", app.cfg.remote.pin);
-                let (text, error) = match app.toast.take() {
-                    Some((before, _, error)) => (format!("{before}\n{pin}"), error),
-                    None => (pin, false),
-                };
                 // Up for half a minute rather than the usual few seconds:
                 // phones and the Stream Deck stop working until it's typed in.
-                app.toast = Some((text, Instant::now() + Duration::from_secs(24), error));
+                app.toasts.push(Toast { text: pin, until: Some(Instant::now() + Duration::from_secs(30)), error: false });
             }
             if self_test {
                 app.self_test = Some((Instant::now(), 0));
@@ -189,7 +185,12 @@ pub struct App {
     guide_checked: bool,
     health_open: bool,
     peak_hold: HashMap<String, PeakHold>,
-    toast: Option<(String, Instant, bool)>,
+    /// Messages at the bottom, newest last. Errors stay until clicked;
+    /// the rest go after a few seconds.
+    toasts: Vec<Toast>,
+    /// How many log lines had been written when the log was last looked at.
+    log_seen: u64,
+    log_warnings_only: bool,
     /// Commands from the phone remote and MIDI.
     requests_tx: Sender<Request>,
     requests_rx: Receiver<Request>,
@@ -353,7 +354,9 @@ impl App {
             guide_checked: false,
             health_open: false,
             peak_hold: HashMap::new(),
-            toast: None,
+            toasts: Vec::new(),
+            log_seen: 0,
+            log_warnings_only: false,
             requests_tx,
             requests_rx,
             remote_shared,
@@ -642,7 +645,59 @@ impl App {
     }
 
     fn toast(&mut self, text: String, error: bool) {
-        self.toast = Some((text, Instant::now(), error));
+        // One passing message at a time; errors pile up until they're read.
+        self.toasts.retain(|t| t.error || t.until.is_none());
+        self.toasts.retain(|t| t.text != text);
+        if error {
+            // Errors go in the log too, to look back at (and for problem reports).
+            if let Some(e) = &self.engine {
+                let mut st = e.status.lock_ok();
+                if !st.log.iter().rev().take(5).any(|l| l.text == text) {
+                    st.push(LogLevel::Error, text.clone());
+                }
+            }
+            while self.toasts.iter().filter(|t| t.error).count() >= 4 {
+                if let Some(i) = self.toasts.iter().position(|t| t.error) {
+                    self.toasts.remove(i);
+                }
+            }
+        }
+        let until = (!error).then(|| Instant::now() + Duration::from_secs(6));
+        self.toasts.push(Toast { text, until, error });
+    }
+
+    fn toasts(&mut self, ctx: &egui::Context) {
+        self.toasts.retain(|t| t.until.is_none_or(|u| Instant::now() < u));
+        if self.toasts.is_empty() {
+            return;
+        }
+        let mut gone = None;
+        egui::Area::new(egui::Id::unique("toasts")).anchor(Align2::CENTER_BOTTOM, vec2(0.0, -120.0)).show(ctx, |ui| {
+            ui.spacing_mut().item_spacing.y = 6.0;
+            for (i, t) in self.toasts.iter().enumerate() {
+                let r = egui::Frame::new()
+                    .fill(if t.error { RED_DIM } else { RAISED })
+                    .corner_radius(CornerRadius::same(6))
+                    .inner_margin(egui::Margin::symmetric(14, 10))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(&t.text).color(Color32::WHITE));
+                            if t.error {
+                                ui.label(RichText::new("✕").color(Color32::WHITE));
+                            }
+                        });
+                    })
+                    .response
+                    .interact(Sense::click());
+                if t.error && r.on_hover_text("Click to close (it's kept in the Log)").clicked() {
+                    gone = Some(i);
+                }
+            }
+        });
+        if let Some(i) = gone {
+            self.toasts.remove(i);
+        }
+        ctx.request_repaint_after(Duration::from_millis(500));
     }
 
     // ---- undo ---------------------------------------------------------------------------
@@ -1851,11 +1906,17 @@ impl App {
             .as_ref()
             .map(|e| {
                 let st = e.status.lock_ok();
-                (st.log.iter().filter(|l| l.level != LogLevel::Info).count(), st.health.problems().len())
+                (st.log.iter().filter(|l| l.level != LogLevel::Info && l.seq > self.log_seen).count(), st.health.problems().len())
             })
             .unwrap_or((0, 0));
-        let log_label = if warn_count > 0 { format!("Log ({warn_count})") } else { "Log".into() };
-        ui.toggle_value(&mut self.log_open, log_label);
+        // A box in the main window has the keyboard: say why scene keys don't work.
+        if self.settings.is_none() && ui.ctx().egui_wants_keyboard_input() {
+            ui.label(RichText::new("⌨ Typing: show keys off (Esc)").color(AMBER).size(12.5))
+                .on_hover_text("A box here has the keyboard, so number keys, Space and the rest type into it. Press Esc or click elsewhere to use your show keys again.");
+        }
+        // Only warnings not seen yet: a number that stays up all show means nothing.
+        let log_label = if warn_count > 0 { RichText::new(format!("Log ({warn_count})")).color(AMBER) } else { RichText::new("Log") };
+        ui.toggle_value(&mut self.log_open, log_label).on_hover_text(if warn_count > 0 { "Warnings since you last looked at the log" } else { "Everything Cutaway has noted this session" });
         let health_text = if problems > 0 { RichText::new(format!("⚠ Health ({problems})")).color(AMBER) } else { RichText::new("Health") };
         ui.toggle_value(&mut self.health_open, health_text).on_hover_text("Sources, files, inputs and disk at a glance");
         if ui.button("Check").on_hover_text("Pre-show check: sources, sound, disk, encoder and stream servers").clicked() {
@@ -3420,10 +3481,10 @@ impl App {
                                 gain_changes.push((i, ac.gain_db));
                             }
                             ui.label(RichText::new(format!("{:+.1} dB", ac.gain_db)).size(10.5).color(TEXT_DIM));
-                            let btn = egui::Button::new(RichText::new("ON").strong().size(11.5).color(if *on { Color32::BLACK } else { TEXT_DIM }))
-                                .fill(if *on { GREEN } else { RAISED })
+                            let btn = egui::Button::new(RichText::new(if *on { "ON" } else { "OFF" }).strong().size(11.5).color(if *on { Color32::BLACK } else { Color32::WHITE }))
+                                .fill(if *on { GREEN } else { RED_DIM })
                                 .min_size(vec2(56.0, 22.0));
-                            if ui.add(btn).on_hover_text("Heard in the mixes").clicked() {
+                            if ui.add(btn).on_hover_text(if *on { "Heard in the mixes: click to turn it off" } else { "Off: not heard in the mixes. Click to turn it on" }).clicked() {
                                 on_changes.push((i, !*on));
                             }
                             ui.horizontal(|ui| {
@@ -3541,9 +3602,20 @@ impl App {
 
     fn log_panel(&mut self, ui: &mut egui::Ui) {
         let Some(engine) = &self.engine else { return };
-        let log: Vec<_> = engine.status.lock_ok().log.iter().cloned().collect();
+        let (log, logged): (Vec<_>, u64) = {
+            let st = engine.status.lock_ok();
+            (st.log.iter().cloned().collect(), st.logged)
+        };
+        self.log_seen = logged;
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut self.log_warnings_only, "Warnings only");
+            if ui.small_button("Copy").on_hover_text("Copy what's shown, to paste into a message").clicked() {
+                let text: Vec<String> = log.iter().filter(|l| !self.log_warnings_only || l.level != LogLevel::Info).map(|l| format!("{}  {}", l.time, l.text)).collect();
+                ui.ctx().copy_text(text.join("\n"));
+            }
+        });
         egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
-            for l in log {
+            for l in log.iter().filter(|l| !self.log_warnings_only || l.level != LogLevel::Info) {
                 let color = match l.level {
                     LogLevel::Info => TEXT_DIM,
                     LogLevel::Warning => AMBER,
@@ -4482,19 +4554,11 @@ impl eframe::App for App {
         self.precheck_dialog(&ctx);
         self.sync_dialog(&ctx);
         self.rescue_card(&ctx);
-        if let Some((text, at, error)) = self.toast.clone() {
-            if at.elapsed() < Duration::from_secs(6) {
-                egui::Area::new(egui::Id::unique("toast")).anchor(Align2::CENTER_BOTTOM, vec2(0.0, -120.0)).show(&ctx, |ui| {
-                    egui::Frame::new()
-                        .fill(if error { RED_DIM } else { RAISED })
-                        .corner_radius(CornerRadius::same(6))
-                        .inner_margin(egui::Margin::symmetric(14, 10))
-                        .show(ui, |ui| ui.label(RichText::new(text).color(Color32::WHITE)));
-                });
-                ctx.request_repaint_after(Duration::from_millis(500));
-            } else {
-                self.toast = None;
-            }
+        self.toasts(&ctx);
+        // Warnings the engine wants seen (disk filling up, backup drive full).
+        let alerts = self.engine.as_ref().map(|e| std::mem::take(&mut e.status.lock_ok().alerts)).unwrap_or_default();
+        for a in alerts {
+            self.toast(a, true);
         }
     }
 
@@ -4515,6 +4579,13 @@ impl eframe::App for App {
             eprintln!("update: {e}");
         }
     }
+}
+
+struct Toast {
+    text: String,
+    /// When it goes; None stays until clicked.
+    until: Option<Instant>,
+    error: bool,
 }
 
 /// What the quit confirmation says, for what's running.
