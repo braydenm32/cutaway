@@ -65,8 +65,8 @@
 <body>
 <header>
   <div class="brand">CUTAWAY</div>
-  <button class="pill rec" id="rec" onclick="act('record')">● RECORD</button>
-  <button class="pill live" id="live" onclick="act('live')">◉ GO LIVE</button>
+  <button class="pill rec" id="rec" onclick="guarded('record')">● RECORD</button>
+  <button class="pill live" id="live" onclick="guarded('live')">◉ GO LIVE</button>
   <button id="marker" onclick="act('marker')">＋ Marker</button>
   <button id="clip" onclick="act('clip')">✂ Clip</button>
   <button class="replay" id="replay" onclick="act('replay')">⟲ Replay</button>
@@ -119,6 +119,16 @@ async function act(cmd) {
     if (!wsLive) poll();
   } catch (e) { flash('Cutaway isn\'t answering', true); }
 }
+// Stopping a take or ending the stream takes a second tap within 3 s, like
+// the Stream Deck's hold, so a stray tap in a pocket can't split the show.
+let armed = null, armTimer = null;
+function guarded(cmd) {
+  const on = state && (cmd === 'record' ? state.recording : state.live);
+  if (!on || armed === cmd) { armed = null; clearTimeout(armTimer); act(cmd); return; }
+  armed = cmd; clearTimeout(armTimer);
+  armTimer = setTimeout(() => { armed = null; if (state) render(); }, 3000);
+  if (state) render();
+}
 function flash(text, bad) { const s = document.getElementById('status'); s.textContent = text; s.className = 'status' + (bad ? ' warn' : ''); }
 function el(tag, cls, text, onclick) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; if (onclick) e.onclick = onclick; return e; }
 function clock(s) { s = Math.floor(s); return [s / 3600, s / 60 % 60, s % 60].map(v => String(Math.floor(v)).padStart(2, '0')).join(':'); }
@@ -128,9 +138,9 @@ function render() {
   if (tallySource !== null) return renderTally();
   const rec = document.getElementById('rec'), live = document.getElementById('live');
   rec.className = 'pill rec' + (s.recording ? ' on' : '');
-  rec.textContent = s.recording ? '■ REC ' + clock(s.rec_seconds) : '● RECORD';
+  rec.textContent = s.recording ? (armed === 'record' ? 'Tap again to stop' : '■ REC ' + clock(s.rec_seconds)) : '● RECORD';
   live.className = 'pill live' + (s.live ? ' on' : '');
-  live.textContent = s.live ? '◉ LIVE ' + clock(s.live_seconds) : '◉ GO LIVE';
+  live.textContent = s.live ? (armed === 'live' ? 'Tap again to end' : '◉ LIVE ' + clock(s.live_seconds)) : '◉ GO LIVE';
   document.getElementById('marker').style.display = s.recording ? '' : 'none';
   const clip = document.getElementById('clip');
   clip.style.display = s.recording ? '' : 'none';

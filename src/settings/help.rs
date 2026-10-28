@@ -25,8 +25,8 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
     let text = match (page, name) {
         // ---- General & shows
         (General, "Interface size") => "Makes everything in Cutaway's window bigger or smaller: text, buttons and monitors. Handy on a big screen across the room, or a small laptop.",
-        (General, "Ask before") => "Asks you to confirm before a recording stops or a stream ends, so a stray click or key can't end the show.",
-        (General, "Pre-show check") => "Before you record or go live, Cutaway checks that every source has a picture, the inputs have sound, the disk has room and the stream servers answer. Anything wrong is listed, and you can still go ahead.",
+        (General, "Ask before") => "Asks you to confirm before a recording stops or a stream ends, so a stray click or key can't end the show. The phone remote always needs a second tap to stop or end, and the Stream Deck a one-second hold.",
+        (General, "Pre-show check") => "Before you record or go live, Cutaway checks that every source has a picture, the inputs have sound, the disk has room and the stream servers answer. Anything wrong is listed, and you can still go ahead. Starting from the phone remote, the Stream Deck, MIDI or OSC runs it too.",
         (General, "Updates") => "When Cutaway starts, it asks GitHub whether there's a newer release and tells you if there is (nothing about you or your show is sent); Update now in that notice downloads and puts it in. With the second box ticked, Cutaway downloads it by itself and puts it in the next time you close Cutaway, keeping your settings and shows.",
 
         // ---- Video sources
