@@ -219,7 +219,7 @@ impl App {
         }
         self.takes.recent_frame = frame;
         ui.set_min_width(440.0);
-        ui.label(RichText::new("RECENT TAKES").size(11.0).strong().color(TEXT_DIM).extra_letter_spacing(1.0));
+        ui.label(RichText::new("RECENT TAKES").size(TEXT_SMALL).strong().color(TEXT_DIM).extra_letter_spacing(1.0));
         if self.takes.recent.is_empty() {
             ui.label(RichText::new(format!("No takes yet in {}", self.cfg.output.folder.display())).color(TEXT_DIM));
         }
@@ -232,7 +232,7 @@ impl App {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     ui.set_width(250.0);
-                    ui.add(egui::Label::new(RichText::new(&name).size(13.0)).truncate()).on_hover_text(t.folder.display().to_string());
+                    ui.add(egui::Label::new(RichText::new(&name).size(TEXT_BODY)).truncate()).on_hover_text(t.folder.display().to_string());
                     let mut what = Vec::new();
                     if let Some(r) = t.recorded {
                         what.push(r.format("%-d %b %H:%M").to_string());
@@ -241,9 +241,9 @@ impl App {
                         what.push(fmt_length(l));
                     }
                     what.push(crate::util::human_size(t.size));
-                    let mut line = RichText::new(what.join(" · ")).size(11.5).color(TEXT_DIM);
+                    let mut line = RichText::new(what.join(" · ")).size(TEXT_SMALL).color(TEXT_DIM);
                     if t.problems {
-                        line = RichText::new(format!("{} · ⚠ see Take.txt", what.join(" · "))).size(11.5).color(AMBER);
+                        line = RichText::new(format!("{} · ⚠ see Take.txt", what.join(" · "))).size(TEXT_SMALL).color(AMBER);
                     }
                     ui.label(line);
                 });
@@ -316,35 +316,35 @@ impl App {
                 .show(ui, |ui| {
                     ui.set_width(360.0);
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Take saved").size(16.0).strong().color(Color32::WHITE));
+                        ui.label(RichText::new("Take saved").size(TEXT_HEADING).strong().color(Color32::WHITE));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.add(egui::Button::new("✕").frame(false)).on_hover_text("Put this away").clicked() {
                                 close = true;
                             }
                         });
                     });
-                    ui.add(egui::Label::new(RichText::new(&name).size(11.5).color(TEXT_DIM)).truncate()).on_hover_text(r.folder.display().to_string());
+                    ui.add(egui::Label::new(RichText::new(&name).size(TEXT_SMALL).color(TEXT_DIM)).truncate()).on_hover_text(r.folder.display().to_string());
                     ui.add_space(4.0);
                     let files = if r.files.len() == 1 { "1 file".to_string() } else { format!("{} files", r.files.len()) };
-                    ui.label(RichText::new(format!("{} long · {} · {files}", fmt_length(r.duration), crate::util::human_size(total))).size(13.0));
+                    ui.label(RichText::new(format!("{} long · {} · {files}", fmt_length(r.duration), crate::util::human_size(total))).size(TEXT_BODY));
                     ui.add_space(2.0);
                     if problems.is_empty() {
-                        ui.label(RichText::new("✓ All files saved").size(13.0).color(GREEN));
+                        ui.label(RichText::new("✓ All files saved").size(TEXT_BODY).color(GREEN));
                     } else {
                         for p in problems.iter().take(4) {
-                            ui.add(egui::Label::new(RichText::new(format!("⚠ {p}")).size(12.5).color(AMBER)).wrap());
+                            ui.add(egui::Label::new(RichText::new(format!("⚠ {p}")).size(TEXT_BODY).color(AMBER)).wrap());
                         }
                         if problems.len() > 4 {
-                            ui.label(RichText::new(format!("…and {} more (see the Log)", problems.len() - 4)).size(12.0).color(AMBER));
+                            ui.label(RichText::new(format!("…and {} more (see the Log)", problems.len() - 4)).size(TEXT_BODY).color(AMBER));
                         }
                     }
                     if r.podcast_pending {
-                        ui.label(RichText::new(format!("Making the podcast copy{}", waiting::ellipsis(ui.input(|i| i.time) as f32))).size(12.0).color(ACCENT));
+                        ui.label(RichText::new(format!("Making the podcast copy{}", waiting::ellipsis(ui.input(|i| i.time) as f32))).size(TEXT_BODY).color(ACCENT));
                         ui.ctx().request_repaint_after(Duration::from_millis(250));
                     }
                     if note {
                         ui.add_space(4.0);
-                        ui.add(egui::Label::new(RichText::new("In Resolve: Workspace → Scripts → Cutaway, then pick this folder. It starts there, and its path is copied.").size(12.0).color(ACCENT)).wrap());
+                        ui.add(egui::Label::new(RichText::new("In Resolve: Workspace → Scripts → Cutaway, then pick this folder. It starts there, and its path is copied.").size(TEXT_BODY).color(ACCENT)).wrap());
                     }
                     ui.add_space(8.0);
                     let button = |text: &str| egui::Button::new(text).fill(Color32::from_rgb(46, 51, 62)).min_size(vec2(0.0, 28.0));

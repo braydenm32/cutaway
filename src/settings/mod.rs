@@ -617,8 +617,8 @@ impl SettingsUi {
                                 let changed = g.sections().iter().any(|s| self.section_dirty(*s));
                                 let mut text = egui::text::LayoutJob::default();
                                 let name = if changed { format!("{}  •\n", g.label()) } else { format!("{}\n", g.label()) };
-                                text.append(&name, 0.0, egui::TextFormat::simple(egui::FontId::proportional(16.0), if g == here { Color32::WHITE } else { Color32::from_rgb(214, 218, 226) }));
-                                text.append(g.summary(), 0.0, egui::TextFormat::simple(egui::FontId::proportional(12.5), TEXT_DIM));
+                                text.append(&name, 0.0, egui::TextFormat::simple(egui::FontId::proportional(TEXT_HEADING), if g == here { Color32::WHITE } else { Color32::from_rgb(214, 218, 226) }));
+                                text.append(g.summary(), 0.0, egui::TextFormat::simple(egui::FontId::proportional(TEXT_BODY), TEXT_DIM));
                                 let b = egui::Button::selectable(g == here, text).min_size(vec2(204.0, 50.0));
                                 if ui.add(b).clicked() && g != here {
                                     self.last_tab.insert(here, self.section);
@@ -638,7 +638,7 @@ impl SettingsUi {
                                     for &t in &tabs {
                                         let text = if self.section_dirty(t) { format!("{}  •", t.label()) } else { t.label().to_string() };
                                         let on = self.section == t;
-                                        let b = egui::Button::selectable(on, RichText::new(text).size(14.5)).min_size(vec2(0.0, 30.0));
+                                        let b = egui::Button::selectable(on, RichText::new(text).size(TEXT_STATE)).min_size(vec2(0.0, 30.0));
                                         if ui.add(b).clicked() {
                                             self.section = t;
                                         }
@@ -1006,7 +1006,7 @@ impl SettingsUi {
 
     fn general(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
         title(ui, "General & shows", "The window, safety checks, and saved shows.");
-        egui::Grid::new("general").num_columns(2).spacing([18.0, 10.0]).show(ui, |ui| {
+        egui::Grid::new("general").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
             label(ui, "Interface size");
             ui.add(egui::Slider::new(&mut self.draft.ui.scale, 0.75..=2.0).step_by(0.05).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
             ui.end_row();
@@ -1095,7 +1095,7 @@ impl SettingsUi {
                     let level = input_level(&self.original, &info.input_levels, a.uid);
                     let b = egui::Button::selectable(
                         self.sel_audio == i,
-                        RichText::new(format!("{}\n{} · {} ch", a.name, short_audio_device(&a.device), a.channels)).size(14.0),
+                        RichText::new(format!("{}\n{} · {} ch", a.name, short_audio_device(&a.device), a.channels)).size(TEXT_STATE),
                     )
                     .min_size(vec2(220.0, 52.0));
                     let r = ui.add(b);
@@ -1104,7 +1104,7 @@ impl SettingsUi {
                     match level {
                         Some(db) => paint_level(ui, strip, db),
                         None if self.original.audio.iter().all(|o| o.uid != a.uid || a.uid == 0) => {
-                            ui.painter().text(egui::pos2(strip.right(), strip.center().y), egui::Align2::RIGHT_CENTER, "Apply to hear it", egui::FontId::proportional(11.0), TEXT_DIM);
+                            ui.painter().text(egui::pos2(strip.right(), strip.center().y), egui::Align2::RIGHT_CENTER, "Apply to hear it", egui::FontId::proportional(TEXT_SMALL), TEXT_DIM);
                         }
                         None => {}
                     }
@@ -1154,7 +1154,7 @@ impl SettingsUi {
                 let max = devices.iter().find(|d| d.name == a.device).map(|d| d.max_channels.max(1)).unwrap_or(64).min(64);
                 let level = input_level(&self.original, &info.input_levels, a.uid);
                 let unapplied = self.original.audio.iter().all(|o| o.uid != a.uid || a.uid == 0);
-                egui::Grid::new("audio_detail").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+                egui::Grid::new("audio_detail").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                     label(ui, "Name");
                     ui.add_sized([240.0, 22.0], egui::TextEdit::singleline(&mut a.name));
                     ui.end_row();
@@ -1258,7 +1258,7 @@ impl SettingsUi {
     fn program(&mut self, ui: &mut egui::Ui) {
         title(ui, "Program", "The switched picture you record and stream, and how frames look in it.");
         let p = &mut self.draft.program;
-        egui::Grid::new("program").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+        egui::Grid::new("program").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
             label(ui, "Size");
             size_combo(ui, "prog_size", &mut p.width, &mut p.height, (7680, 4320));
             ui.end_row();
@@ -1306,7 +1306,7 @@ impl SettingsUi {
         ui.add_space(14.0);
         subtitle(ui, "Frames that don't fill the screen");
         let st = &mut self.draft.style;
-        egui::Grid::new("style").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+        egui::Grid::new("style").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
             label(ui, "Rounded corners");
             ui.add(egui::Slider::new(&mut st.corner_radius, 0.0..=80.0).suffix(" px"));
             ui.end_row();
@@ -1333,7 +1333,7 @@ impl SettingsUi {
         let show = self.draft.ui.profile.clone();
         let o = &mut self.draft.output;
         let (pw, ph, pfps) = (self.draft.program.width, self.draft.program.height, self.draft.program.fps);
-        egui::Grid::new("recording").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+        egui::Grid::new("recording").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
             label(ui, "Save takes in");
             ui.horizontal(|ui| {
                 let mut folder = o.folder.display().to_string();
@@ -1408,7 +1408,7 @@ impl SettingsUi {
             if o.codec.is_prores() || (o.iso_bitrate_kbps == 0 && o.program_bitrate_kbps == 0) { "automatic quality".to_string() } else { "set bitrates".to_string() }
         );
         part(ui, "rec_quality", "Formats and quality", &quality, false, |ui| {
-            egui::Grid::new("rec_quality_grid").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            egui::Grid::new("rec_quality_grid").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "File format");
                 egui::ComboBox::from_id_salt("container").selected_text(container_label(o.container)).width(260.0).show_ui(ui, |ui| {
                     for c in [Container::Mp4, Container::Mov] {
@@ -1433,7 +1433,7 @@ impl SettingsUi {
                         });
                     }
                     if !prores_ok {
-                        ui.label(RichText::new("ProRes needs a Mac").color(TEXT_DIM).size(12.5));
+                        ui.label(RichText::new("ProRes needs a Mac").color(TEXT_DIM).size(TEXT_BODY));
                     }
                 });
                 ui.end_row();
@@ -1496,7 +1496,7 @@ impl SettingsUi {
         .collect();
         let state = if extras.is_empty() { "nothing extra".to_string() } else { extras.join(", ") };
         part(ui, "rec_editing", "For editing", &state, false, |ui| {
-            egui::Grid::new("rec_editing_grid").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            egui::Grid::new("rec_editing_grid").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "Timecode");
                 ui.checkbox(&mut o.timecode, "the time of day, in every file");
                 ui.end_row();
@@ -1522,7 +1522,7 @@ impl SettingsUi {
                         }
                     });
                     if let Some((note, err)) = &self.resolve_note {
-                        ui.label(RichText::new(note).color(if *err { AMBER } else { GREEN }).size(13.0));
+                        ui.label(RichText::new(note).color(if *err { AMBER } else { GREEN }).size(TEXT_BODY));
                     }
                 });
                 ui.end_row();
@@ -1559,7 +1559,7 @@ impl SettingsUi {
         let p = &mut self.draft.podcast;
         let state = if p.enabled { format!("on · {} LUFS", p.target_lufs) } else { "off".to_string() };
         part(ui, "rec_podcast", "Podcast", &state, false, |ui| {
-            egui::Grid::new("podcast").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            egui::Grid::new("podcast").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "Podcast copy");
                 ui.checkbox(&mut p.enabled, "an .m4a of the mix after each take");
                 ui.end_row();
@@ -1619,7 +1619,7 @@ impl SettingsUi {
                 Some(l) => format!("{l} — {}", h.page.label()),
                 None => format!("{} (page)", h.page.label()),
             };
-            if ui.add(egui::Button::new(RichText::new(text).size(13.5)).min_size(vec2(204.0, 28.0)).wrap()).clicked() {
+            if ui.add(egui::Button::new(RichText::new(text).size(TEXT_BODY)).min_size(vec2(204.0, 28.0)).wrap()).clicked() {
                 go = Some(h.clone());
             }
         }
@@ -1667,7 +1667,7 @@ impl SettingsUi {
                         let warn = if d.problem().is_some() { "  ⚠" } else { "" };
                         let b = egui::Button::selectable(
                             self.sel_dest == i,
-                            RichText::new(format!("{}{warn}\n{}", d.name, d.service.label())).size(14.0),
+                            RichText::new(format!("{}{warn}\n{}", d.name, d.service.label())).size(TEXT_STATE),
                         )
                         .min_size(vec2(186.0, 40.0));
                         if ui.add(b).clicked() {
@@ -1720,7 +1720,7 @@ impl SettingsUi {
                     hint(ui, "Add YouTube, Twitch, Facebook, Kick, any RTMP server, or an SRT receiver. Once there's one, Show → Viewer comments appears too, to put your stream's chat on screen.");
                     return;
                 };
-                egui::Grid::new("dest_detail").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+                egui::Grid::new("dest_detail").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                     label(ui, "Name");
                     ui.add_sized([240.0, 22.0], egui::TextEdit::singleline(&mut d.name));
                     ui.end_row();
@@ -1781,7 +1781,7 @@ impl SettingsUi {
         let enabled = s.destinations.iter().filter(|d| d.enabled).count();
         let state = format!("{}×{} · {} fps · {:.1} Mbps", s.width, s.height, s.fps, up);
         part(ui, "stream_quality", "Quality", &state, false, |ui| {
-            egui::Grid::new("stream_quality_grid").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            egui::Grid::new("stream_quality_grid").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "Size");
                 size_combo(ui, "stream_size", &mut s.width, &mut s.height, (3840, 2160));
                 ui.end_row();
@@ -1817,7 +1817,7 @@ impl SettingsUi {
             .collect::<Vec<_>>()
             .join(", ");
         part(ui, "stream_rel", "Going live", &state, false, |ui| {
-            egui::Grid::new("stream_rel_grid").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            egui::Grid::new("stream_rel_grid").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "If a connection drops");
                 ui.checkbox(&mut s.auto_reconnect, "reconnect");
                 ui.end_row();
@@ -1872,7 +1872,7 @@ impl SettingsUi {
 
     fn diagnostics(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
         title(ui, "Diagnostics", "What the engine is using, connected devices, and the log.");
-        egui::Grid::new("facts").num_columns(2).spacing([16.0, 6.0]).show(ui, |ui| {
+        egui::Grid::new("facts").num_columns(2).spacing(TABLE_GAP).show(ui, |ui| {
             label(ui, "Version");
             ui.label(format!("Cutaway {}", env!("CARGO_PKG_VERSION")));
             ui.end_row();
@@ -1914,7 +1914,7 @@ impl SettingsUi {
             for d in list {
                 ui.label(format!("• {}", d.name));
                 if !d.summary.is_empty() {
-                    ui.label(RichText::new(format!("    {}", d.summary)).size(12.5).color(TEXT_DIM));
+                    ui.label(RichText::new(format!("    {}", d.summary)).size(TEXT_BODY).color(TEXT_DIM));
                 }
             }
             ui.add_space(4.0);
@@ -1939,7 +1939,7 @@ impl SettingsUi {
                     LogLevel::Warning => AMBER,
                     LogLevel::Error => ERROR,
                 };
-                ui.label(RichText::new(format!("{}  {}", l.time, l.text)).monospace().size(12.0).color(color));
+                ui.label(RichText::new(format!("{}  {}", l.time, l.text)).monospace().size(TEXT_BODY).color(color));
             }
         });
     }
@@ -1956,9 +1956,9 @@ pub(super) fn title(ui: &mut egui::Ui, _text: &str, sub: &str) {
 /// A part of a page that folds away, with how it's set when folded.
 pub(super) fn part<R>(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, name: &str, state: &str, open: bool, body: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
     let mut job = egui::text::LayoutJob::default();
-    job.append(name, 0.0, egui::TextFormat::simple(egui::FontId::proportional(15.5), Color32::WHITE));
+    job.append(name, 0.0, egui::TextFormat::simple(egui::FontId::proportional(TEXT_HEADING), Color32::WHITE));
     if !state.is_empty() {
-        job.append(&format!("   {state}"), 0.0, egui::TextFormat::simple(egui::FontId::proportional(13.5), TEXT_DIM));
+        job.append(&format!("   {state}"), 0.0, egui::TextFormat::simple(egui::FontId::proportional(TEXT_BODY), TEXT_DIM));
     }
     let mut header = egui::CollapsingHeader::new(job).default_open(open);
     if help::take_open_part(&format!("{id:?}")) {
@@ -1975,7 +1975,7 @@ pub(super) fn part<R>(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::De
 }
 
 pub(super) fn subtitle(ui: &mut egui::Ui, text: &str) {
-    ui.label(RichText::new(text.to_uppercase()).size(12.5).strong().color(TEXT_DIM).extra_letter_spacing(1.0));
+    ui.label(RichText::new(text.to_uppercase()).size(TEXT_BODY).strong().color(TEXT_DIM).extra_letter_spacing(1.0));
     ui.add_space(2.0);
 }
 
@@ -2014,14 +2014,14 @@ pub(super) fn label(ui: &mut egui::Ui, text: &str) {
 
 fn help_text(ui: &mut egui::Ui, text: &str) {
     ui.set_max_width(360.0);
-    ui.label(RichText::new(text).size(14.0));
+    ui.label(RichText::new(text).size(TEXT_STATE));
 }
 
 /// A table's column heading, explained on hover like a setting's name.
 pub(super) fn column_head(ui: &mut egui::Ui, text: &str) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        ui.label(RichText::new(text).color(TEXT_DIM).size(13.0));
+        ui.label(RichText::new(text).color(TEXT_DIM).size(TEXT_BODY));
         if let Some(h) = help::get(text) {
             let i = info_icon(ui);
             if i.hovered() {
@@ -2037,7 +2037,7 @@ pub(super) fn info_icon(ui: &mut egui::Ui) -> egui::Response {
     let c = if resp.hovered() { ACCENT } else { Color32::from_rgb(120, 128, 142) };
     let p = ui.painter();
     p.circle_stroke(rect.center(), 6.5, egui::Stroke::new(1.1, c));
-    p.text(rect.center() + vec2(0.0, 0.5), egui::Align2::CENTER_CENTER, "i", egui::FontId::proportional(10.5), c);
+    p.text(rect.center() + vec2(0.0, 0.5), egui::Align2::CENTER_CENTER, "i", egui::FontId::proportional(TEXT_SMALL), c);
     resp
 }
 
@@ -2053,7 +2053,7 @@ pub(super) fn check(ui: &mut egui::Ui, value: &mut bool, text: impl Into<egui::W
 }
 
 pub(super) fn hint(ui: &mut egui::Ui, text: &str) {
-    ui.add(egui::Label::new(RichText::new(text).size(13.0).color(TEXT_DIM)).wrap());
+    ui.add(egui::Label::new(RichText::new(text).size(TEXT_BODY).color(TEXT_DIM)).wrap());
 }
 
 pub(super) fn short_audio_device(device: &str) -> String {
@@ -2082,6 +2082,52 @@ pub(super) fn short_device(device: &str) -> String {
         d if d.starts_with("srt-in:") => format!("SRT input :{}", &d[7..]),
         d if d.starts_with("rtmp-in:") => format!("RTMP input :{}", d[8..].split('/').next().unwrap_or("")),
         d => d.chars().take(28).collect(),
+    }
+}
+
+/// The gaps in a page's settings (name on the left, setting on the right)
+/// and in its tables: the same on every page.
+pub(super) const FORM_GAP: [f32; 2] = [16.0, 10.0];
+pub(super) const TABLE_GAP: [f32; 2] = [12.0, 8.0];
+
+/// What the buttons on a row of a table can ask for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum RowEdit {
+    Up,
+    Down,
+    Remove,
+}
+
+/// The same small buttons at the end of every row that can move or go
+/// (row `i` of `n`): ↑, ↓ (when `movable`) and ✕.
+pub(super) fn row_buttons(ui: &mut egui::Ui, i: usize, n: usize, movable: bool) -> Option<RowEdit> {
+    let mut edit = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        if movable {
+            if ui.add_enabled(i > 0, egui::Button::new("↑").small()).on_hover_text("Move up").clicked() {
+                edit = Some(RowEdit::Up);
+            }
+            if ui.add_enabled(i + 1 < n, egui::Button::new("↓").small()).on_hover_text("Move down").clicked() {
+                edit = Some(RowEdit::Down);
+            }
+        }
+        if ui.add(egui::Button::new("✕").small()).on_hover_text("Remove").clicked() {
+            edit = Some(RowEdit::Remove);
+        }
+    });
+    edit
+}
+
+/// Do what a row's buttons asked to `list` (`i`: the row).
+pub(super) fn apply_row_edit<T>(list: &mut Vec<T>, i: usize, edit: RowEdit) {
+    match edit {
+        RowEdit::Up if i > 0 && i < list.len() => list.swap(i, i - 1),
+        RowEdit::Down if i + 1 < list.len() => list.swap(i, i + 1),
+        RowEdit::Remove if i < list.len() => {
+            list.remove(i);
+        }
+        _ => {}
     }
 }
 
@@ -2201,7 +2247,7 @@ pub(super) fn audio_device_combo(ui: &mut egui::Ui, value: &mut String, devices:
         }
         if crate::platform::app_audio::available() {
             ui.separator();
-            ui.label(RichText::new("Sound from an app").color(TEXT_DIM).size(13.0));
+            ui.label(RichText::new("Sound from an app").color(TEXT_DIM).size(TEXT_BODY));
             match apps {
                 None => {
                     ui.spinner();
@@ -2296,7 +2342,7 @@ pub(super) fn fps_picker(ui: &mut egui::Ui, id: &str, fps: &mut u32, allowed: Op
         }
         if let Some(a) = allowed {
             if !a.contains(fps) {
-                ui.label(RichText::new("(converted from the device's rate)").size(12.5).color(TEXT_DIM));
+                ui.label(RichText::new("(converted from the device's rate)").size(TEXT_BODY).color(TEXT_DIM));
             }
         }
     });
@@ -2431,9 +2477,9 @@ pub(crate) fn display_map_with(ui: &mut egui::Ui, displays: &[crate::platform::d
             if name.chars().count() > max_chars {
                 name = name.chars().take(max_chars.saturating_sub(1)).collect::<String>() + "…";
             }
-            painter.text(r.center() + vec2(0.0, 8.0), Align2::CENTER_CENTER, name, FontId::proportional(11.5), Color32::from_gray(225));
+            painter.text(r.center() + vec2(0.0, 8.0), Align2::CENTER_CENTER, name, FontId::proportional(TEXT_SMALL), Color32::from_gray(225));
             let note = if ours == Some(i) { format!("{}×{} · Cutaway is here", d.pixels.0, d.pixels.1) } else { format!("{}×{}", d.pixels.0, d.pixels.1) };
-            painter.text(r.center() + vec2(0.0, 23.0), Align2::CENTER_CENTER, note, FontId::proportional(10.5), TEXT_DIM);
+            painter.text(r.center() + vec2(0.0, 23.0), Align2::CENTER_CENTER, note, FontId::proportional(TEXT_SMALL), TEXT_DIM);
         }
         let resp = resp.on_hover_text(format!("{} {}: {}×{}{}", i + 1, d.name, d.pixels.0, d.pixels.1, if d.main { " (main display)" } else { "" }));
         if resp.clicked() {
@@ -2504,8 +2550,8 @@ pub fn ndi_offer(ui: &mut egui::Ui) {
 pub fn ndi_credit(ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        ui.label(RichText::new(crate::net::ndi_install::TRADEMARK).size(12.0).color(TEXT_DIM));
-        ui.hyperlink_to(RichText::new("ndi.video").size(12.0), crate::net::ndi_install::SITE);
+        ui.label(RichText::new(crate::net::ndi_install::TRADEMARK).size(TEXT_BODY).color(TEXT_DIM));
+        ui.hyperlink_to(RichText::new("ndi.video").size(TEXT_BODY), crate::net::ndi_install::SITE);
     });
 }
 

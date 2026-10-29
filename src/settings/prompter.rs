@@ -7,7 +7,7 @@ impl SettingsUi {
         title(ui, "Teleprompter", "A script that scrolls for the presenters, on the second screen or a tablet. Roll it from the main window, the Stream Deck, the remote or MIDI.");
         let has_rundown = !self.draft.rundown.segments.is_empty();
         let p = &mut self.draft.prompter;
-        egui::Grid::new("prompter").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+        egui::Grid::new("prompter").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
             label(ui, "Script");
             ui.vertical(|ui| {
                 ui.add(egui::TextEdit::multiline(&mut p.script).desired_width(460.0).desired_rows(12).hint_text("Paste or type the script. A blank line starts a new paragraph (◀ ▶▶ jump between them)."));

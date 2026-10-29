@@ -53,7 +53,7 @@ impl SettingsUi {
         let n = self.draft.pads.len();
         let mut remove = None;
         let mut swap = None;
-        egui::Grid::new("pads").num_columns(8).spacing([10.0, 8.0]).striped(true).show(ui, |ui| {
+        egui::Grid::new("pads").num_columns(8).spacing(TABLE_GAP).striped(true).show(ui, |ui| {
             for h in ["Key", "Name", "Sound", "Plays", "Level", "Fade out", "Colour", ""] {
                 column_head(ui, h);
             }
@@ -79,17 +79,12 @@ impl SettingsUi {
                 ui.add(egui::DragValue::new(&mut p.gain_db).range(-40.0..=12.0).speed(0.2).suffix(" dB"));
                 ui.add(egui::DragValue::new(&mut p.fade_ms).range(0..=5000).speed(10).suffix(" ms"));
                 color_button(ui, &mut p.color, [59, 111, 216]);
-                ui.horizontal(|ui| {
-                    if ui.add_enabled(i > 0, egui::Button::new("↑").small()).clicked() {
-                        swap = Some((i, i - 1));
-                    }
-                    if ui.add_enabled(i + 1 < n, egui::Button::new("↓").small()).clicked() {
-                        swap = Some((i, i + 1));
-                    }
-                    if ui.small_button("✕").clicked() {
-                        remove = Some(i);
-                    }
-                });
+                match row_buttons(ui, i, n, true) {
+                    Some(RowEdit::Up) => swap = Some((i, i - 1)),
+                    Some(RowEdit::Down) => swap = Some((i, i + 1)),
+                    Some(RowEdit::Remove) => remove = Some(i),
+                    None => {}
+                }
                 ui.end_row();
             }
         });
@@ -109,7 +104,7 @@ impl SettingsUi {
     pub(super) fn syrinscape(&mut self, ui: &mut egui::Ui) {
         title(ui, "Syrinscape", "Start Syrinscape moods and sounds from Cutaway, the Stream Deck, scenes and the rundown.");
         let s = &mut self.draft.syrinscape;
-        egui::Grid::new("syrin").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+        egui::Grid::new("syrin").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
             label(ui, "Control Syrinscape");
             ui.checkbox(&mut s.enabled, "on");
             ui.end_row();
@@ -154,7 +149,7 @@ impl SettingsUi {
         let n = self.draft.syrinscape.buttons.len();
         let mut remove = None;
         let mut swap = None;
-        egui::Grid::new("syrin_buttons").num_columns(4).spacing([10.0, 8.0]).striped(true).show(ui, |ui| {
+        egui::Grid::new("syrin_buttons").num_columns(4).spacing(TABLE_GAP).striped(true).show(ui, |ui| {
             for (i, b) in self.draft.syrinscape.buttons.iter_mut().enumerate() {
                 ui.label(RichText::new(format!("{}", i + 1)).monospace());
                 ui.add_sized([170.0, 22.0], egui::TextEdit::singleline(&mut b.name));
@@ -164,17 +159,12 @@ impl SettingsUi {
                     SyrinKind::StopAll => "stop everything".into(),
                 };
                 ui.label(RichText::new(if b.soundset.is_empty() { what } else { format!("{what} · {}", b.soundset) }).color(TEXT_DIM));
-                ui.horizontal(|ui| {
-                    if ui.add_enabled(i > 0, egui::Button::new("↑").small()).clicked() {
-                        swap = Some((i, i - 1));
-                    }
-                    if ui.add_enabled(i + 1 < n, egui::Button::new("↓").small()).clicked() {
-                        swap = Some((i, i + 1));
-                    }
-                    if ui.small_button("✕").clicked() {
-                        remove = Some(i);
-                    }
-                });
+                match row_buttons(ui, i, n, true) {
+                    Some(RowEdit::Up) => swap = Some((i, i - 1)),
+                    Some(RowEdit::Down) => swap = Some((i, i + 1)),
+                    Some(RowEdit::Remove) => remove = Some(i),
+                    None => {}
+                }
                 ui.end_row();
             }
         });
@@ -247,10 +237,10 @@ impl SettingsUi {
                     Ok(items) => {
                         let have: Vec<(SyrinKind, u64)> = self.draft.syrinscape.buttons.iter().map(|b| (b.kind, b.id)).collect();
                         egui::ScrollArea::vertical().id_salt("syrin_items").max_height(260.0).show(ui, |ui| {
-                            egui::Grid::new("items").num_columns(3).spacing([12.0, 4.0]).striped(true).show(ui, |ui| {
+                            egui::Grid::new("items").num_columns(3).spacing(TABLE_GAP).striped(true).show(ui, |ui| {
                                 for it in items {
                                     let kind = if it.kind == SyrinKind::Mood { "mood".to_string() } else if it.what.is_empty() { "sound".to_string() } else { it.what.clone() };
-                                    ui.label(RichText::new(kind).color(TEXT_DIM).size(13.0));
+                                    ui.label(RichText::new(kind).color(TEXT_DIM).size(TEXT_BODY));
                                     ui.label(&it.name);
                                     let added = have.contains(&(it.kind, it.id));
                                     if ui.add_enabled(!added, egui::Button::new(if added { "added" } else { "＋ Add" }).small()).clicked() {

@@ -12,39 +12,27 @@ pub(super) fn cues_editor(ui: &mut egui::Ui, id: &str, cues: &mut Vec<String>, s
 /// Edit a list of commands; `scenes`: scene changes are allowed (macros).
 pub(super) fn commands_editor(ui: &mut egui::Ui, id: &str, cues: &mut Vec<String>, suggestions: &[(String, String)], scenes: bool) {
     let label_of = |c: &str| suggestions.iter().find(|(cmd, _)| cmd.eq_ignore_ascii_case(c)).map(|(_, l)| l.clone()).or_else(|| crate::control::Action::parse(c).ok().map(|a| a.describe())).unwrap_or_else(|| c.to_string());
-    let mut remove = None;
-    let mut swap = None;
+    let mut row_edit = None;
     let n = cues.len();
     for (i, c) in cues.iter_mut().enumerate() {
         ui.horizontal(|ui| {
-            if scenes {
-                if ui.add_enabled(i > 0, egui::Button::new("↑").small()).clicked() {
-                    swap = Some(i - 1);
-                }
-                if ui.add_enabled(i + 1 < n, egui::Button::new("↓").small()).clicked() {
-                    swap = Some(i);
-                }
-            }
             ui.add(egui::TextEdit::singleline(c).desired_width(200.0).font(egui::TextStyle::Monospace));
             let parsed = crate::control::Action::parse(c);
             match parsed {
                 Ok(_) => {
-                    ui.label(RichText::new(label_of(c)).color(TEXT_DIM).size(13.0));
+                    ui.label(RichText::new(label_of(c)).color(TEXT_DIM).size(TEXT_BODY));
                 }
                 Err(e) => {
-                    ui.label(RichText::new(format!("⚠ {e}")).color(AMBER).size(13.0));
+                    ui.label(RichText::new(format!("⚠ {e}")).color(AMBER).size(TEXT_BODY));
                 }
             }
-            if ui.small_button("✕").clicked() {
-                remove = Some(i);
+            if let Some(e) = row_buttons(ui, i, n, scenes) {
+                row_edit = Some((i, e));
             }
         });
     }
-    if let Some(i) = remove {
-        cues.remove(i);
-    }
-    if let Some(i) = swap {
-        cues.swap(i, i + 1);
+    if let Some((i, e)) = row_edit {
+        apply_row_edit(cues, i, e);
     }
     let add = if scenes { "＋ Add a step…" } else { "＋ Add a cue…" };
     egui::ComboBox::from_id_salt(("add_cue", id)).selected_text(add).width(240.0).height(360.0).show_ui(ui, |ui| {
@@ -87,7 +75,7 @@ impl SettingsUi {
                 ui.set_width(240.0);
                 for i in 0..n {
                     let s = &self.draft.rundown.segments[i];
-                    let b = egui::Button::selectable(self.sel_segment == i, RichText::new(format!("{}. {}\n{}", i + 1, s.name, fmt_len(s.seconds))).size(14.0)).min_size(vec2(240.0, 40.0));
+                    let b = egui::Button::selectable(self.sel_segment == i, RichText::new(format!("{}. {}\n{}", i + 1, s.name, fmt_len(s.seconds))).size(TEXT_STATE)).min_size(vec2(240.0, 40.0));
                     if ui.add(b).clicked() {
                         self.sel_segment = i;
                     }
@@ -118,7 +106,7 @@ impl SettingsUi {
                     hint(ui, "No segments yet. Add one for each part of the show — intro, interview, ad break, outro…");
                     return;
                 };
-                egui::Grid::new("segment").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+                egui::Grid::new("segment").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                     label(ui, "Name");
                     ui.add_sized([260.0, 22.0], egui::TextEdit::singleline(&mut s.name));
                     ui.end_row();
@@ -153,7 +141,7 @@ impl SettingsUi {
             });
         });
         ui.add_space(12.0);
-        egui::Grid::new("rundown_marks").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+        egui::Grid::new("rundown_marks").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
             label(ui, "Chapters");
             ui.checkbox(&mut self.draft.rundown.markers, "mark each segment in the recording");
             ui.end_row();

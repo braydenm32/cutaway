@@ -38,7 +38,7 @@ impl App {
     pub(super) fn section_heading(&mut self, ui: &mut egui::Ui, panel: &'static str, text: &str, section: Section) -> bool {
         let folded = self.cfg.ui.is_folded(panel);
         let row = ui.horizontal(|ui| {
-            let label = RichText::new(format!("{} {text}", if folded { "▸" } else { "▾" })).color(TEXT_DIM).size(11.0);
+            let label = RichText::new(format!("{} {text}", if folded { "▸" } else { "▾" })).color(TEXT_DIM).size(TEXT_SMALL);
             let r = ui
                 .add(egui::Label::new(label).selectable(false).sense(Sense::click_and_drag()))
                 .on_hover_text(if folded { "Click to open. Drag onto another heading to move it." } else { "Click to fold away. Drag onto another heading to move it." });
@@ -98,9 +98,9 @@ impl App {
                     let (left, over) = left_text(st.elapsed, st.planned);
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(format!("{}/{}", i + 1, st.count)).color(TEXT_DIM).monospace());
-                        ui.add(egui::Label::new(RichText::new(&st.name).strong().size(16.0).color(Color32::WHITE)).truncate());
+                        ui.add(egui::Label::new(RichText::new(&st.name).strong().size(TEXT_HEADING).color(Color32::WHITE)).truncate());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(RichText::new(left).monospace().size(22.0).strong().color(if over { ERROR } else { Color32::WHITE }));
+                            ui.label(RichText::new(left).monospace().size(TEXT_TITLE).strong().color(if over { ERROR } else { Color32::WHITE }));
                         });
                     });
                     if st.planned > 0.0 {
@@ -111,7 +111,7 @@ impl App {
                     }
                     ui.horizontal(|ui| {
                         let next = st.next.clone().map(|n| format!("Next: {n}")).unwrap_or_else(|| "Last segment".into());
-                        ui.add(egui::Label::new(RichText::new(next).color(TEXT_DIM).size(12.0)).truncate());
+                        ui.add(egui::Label::new(RichText::new(next).color(TEXT_DIM).size(TEXT_BODY)).truncate());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let d = st.drift.round() as i64;
                             let (text, color) = if d.abs() < 5 {
@@ -121,11 +121,11 @@ impl App {
                             } else {
                                 (format!("{} under", crate::engine::timers::fmt_span(Duration::from_secs((-d) as u64), false)), TEXT_DIM)
                             };
-                            ui.label(RichText::new(text).color(color).size(12.0)).on_hover_text(format!("Show running {}", crate::engine::timers::fmt_span(Duration::from_secs_f64(st.show), false)));
+                            ui.label(RichText::new(text).color(color).size(TEXT_BODY)).on_hover_text(format!("Show running {}", crate::engine::timers::fmt_span(Duration::from_secs_f64(st.show), false)));
                         });
                     });
                     if let Some(notes) = segs.get(i).map(|s| s.notes.trim().to_string()).filter(|n| !n.is_empty()) {
-                        ui.add(egui::Label::new(RichText::new(notes).color(Color32::from_gray(200)).size(12.0)).wrap());
+                        ui.add(egui::Label::new(RichText::new(notes).color(Color32::from_gray(200)).size(TEXT_BODY)).wrap());
                     }
                     ui.ctx().request_repaint_after(Duration::from_millis(250));
                 }
@@ -185,16 +185,16 @@ impl App {
         match &reach {
             crate::net::tunnel::TunnelState::Up(_) => {}
             crate::net::tunnel::TunnelState::Starting(s) => {
-                ui.label(RichText::new(s).color(TEXT_DIM).size(12.0));
+                ui.label(RichText::new(s).color(TEXT_DIM).size(TEXT_BODY));
                 ui.ctx().request_repaint_after(Duration::from_millis(500));
             }
             crate::net::tunnel::TunnelState::Failed(e) => {
-                ui.label(RichText::new(format!("⚠ {e}")).color(AMBER).size(12.0));
+                ui.label(RichText::new(format!("⚠ {e}")).color(AMBER).size(TEXT_BODY));
             }
             crate::net::tunnel::TunnelState::Off => {}
             crate::net::tunnel::TunnelState::NeedsYou(what, url) => {
-                ui.label(RichText::new(format!("⚠ {what}")).color(AMBER).size(12.0));
-                ui.hyperlink_to(RichText::new("Allow it on Tailscale's site").size(12.0), url);
+                ui.label(RichText::new(format!("⚠ {what}")).color(AMBER).size(TEXT_BODY));
+                ui.hyperlink_to(RichText::new("Allow it on Tailscale's site").size(TEXT_BODY), url);
                 ui.ctx().request_repaint_after(Duration::from_millis(500));
             }
         }
@@ -234,7 +234,7 @@ impl App {
                     };
                     r.on_hover_text(word);
                 }
-                let r = ui.add(egui::Label::new(RichText::new(detail).color(TEXT_DIM).size(12.0)).truncate());
+                let r = ui.add(egui::Label::new(RichText::new(detail).color(TEXT_DIM).size(TEXT_BODY)).truncate());
                 if let Some(b) = &g.backup {
                     r.on_hover_text(format!("Their backup recording: {}", b.file.display()));
                 }
@@ -269,8 +269,8 @@ impl App {
                 Some(link) => {
                     egui::Window::new(format!("{name}: scan with the phone")).id(egui::Id::unique("phone_qr")).open(&mut open).collapsible(false).resizable(false).show(ui.ctx(), |ui| {
                         crate::settings::qr_code(ui, &link, 260.0);
-                        ui.label(RichText::new(&link).monospace().size(11.0).color(TEXT_DIM));
-                        ui.label(RichText::new("Open it in the phone's camera app, allow the camera and hold the phone sideways.").size(12.0).color(TEXT_DIM));
+                        ui.label(RichText::new(&link).monospace().size(TEXT_SMALL).color(TEXT_DIM));
+                        ui.label(RichText::new("Open it in the phone's camera app, allow the camera and hold the phone sideways.").size(TEXT_BODY).color(TEXT_DIM));
                     });
                 }
                 None => open = false,
@@ -326,7 +326,7 @@ impl App {
                     painter.rect_stroke(rect, 6.0, Stroke::new(if p.playing { 2.0 } else { 1.0 }, base), StrokeKind::Inside);
                     let name: String = p.name.chars().take(14).collect();
                     let text_color = if p.problem.is_some() { AMBER } else { Color32::WHITE };
-                    painter.text(rect.left_top() + vec2(7.0, 6.0), Align2::LEFT_TOP, name, FontId::proportional(13.0), text_color);
+                    painter.text(rect.left_top() + vec2(7.0, 6.0), Align2::LEFT_TOP, name, FontId::proportional(TEXT_BODY), text_color);
                     let corner = if p.playing {
                         format!("{:.0}s", p.remaining.ceil())
                     } else if p.loading {
@@ -336,7 +336,7 @@ impl App {
                     } else {
                         String::new()
                     };
-                    painter.text(rect.right_bottom() + vec2(-7.0, -5.0), Align2::RIGHT_BOTTOM, corner, FontId::monospace(11.0), Color32::from_white_alpha(180));
+                    painter.text(rect.right_bottom() + vec2(-7.0, -5.0), Align2::RIGHT_BOTTOM, corner, FontId::monospace(TEXT_SMALL), Color32::from_white_alpha(180));
                     // Sound starts the moment the button goes down.
                     let down = resp.is_pointer_button_down_on();
                     if down && self.pad_held != Some(i) {
@@ -375,7 +375,7 @@ impl App {
             ui.add_space(4.0);
             let st = self.syrinscape.state.lock_ok().clone();
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Syrinscape").color(TEXT_DIM).size(11.0));
+                ui.label(RichText::new("Syrinscape").color(TEXT_DIM).size(TEXT_SMALL));
                 if st.busy {
                     ui.spinner();
                 }
@@ -388,7 +388,7 @@ impl App {
             ui.horizontal_wrapped(|ui| {
                 for (i, b) in buttons.iter().enumerate() {
                     let playing = self.syrinscape.is_playing(b);
-                    let text = RichText::new(&b.name).size(12.5).color(if playing { Color32::BLACK } else { Color32::WHITE });
+                    let text = RichText::new(&b.name).size(TEXT_BODY).color(if playing { Color32::BLACK } else { Color32::WHITE });
                     let fill = match (b.kind, playing) {
                         (SyrinKind::StopAll, _) => ERROR_DIM,
                         (_, true) => Color32::from_rgb(150, 110, 220),
@@ -416,7 +416,7 @@ impl App {
             let painter = ui.painter_at(rect);
             painter.rect_filled(rect, 17.0, if talking { AMBER } else { RAISED });
             painter.rect_stroke(rect, 17.0, Stroke::new(1.0, if talking { AMBER } else { LINE }), StrokeKind::Inside);
-            painter.text(rect.center(), Align2::CENTER_CENTER, if talking { "TALKING" } else { "TALK  (hold, or B)" }, FontId::proportional(13.5), if talking { Color32::BLACK } else { Color32::WHITE });
+            painter.text(rect.center(), Align2::CENTER_CENTER, if talking { "TALKING" } else { "TALK  (hold, or B)" }, FontId::proportional(TEXT_BODY), if talking { Color32::BLACK } else { Color32::WHITE });
             let down = resp.is_pointer_button_down_on();
             if down != self.talk_held {
                 self.talk_held = down;

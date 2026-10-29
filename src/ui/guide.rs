@@ -75,7 +75,7 @@ impl App {
                             Step::Todo => ("○", ACCENT),
                             Step::Skip => ("–", TEXT_DIM),
                         };
-                        ui.label(RichText::new(sym).color(color).strong().size(16.0));
+                        ui.label(RichText::new(sym).color(color).strong().size(TEXT_HEADING));
                         ui.vertical(|ui| {
                             ui.label(RichText::new(format!("{n}. {title}")).strong());
                             ui.add(egui::Label::new(RichText::new(detail).color(TEXT_DIM)).wrap());

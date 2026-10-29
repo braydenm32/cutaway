@@ -39,7 +39,7 @@ impl SettingsUi {
         let r = &mut self.draft.remote;
         let state = if r.enabled { format!("on, port {}, PIN {}", r.port, r.pin.trim()) } else { "off".to_string() };
         part(ui, "remote", "Phone and tablet remote", &state, true, |ui| {
-            egui::Grid::new("remote").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            egui::Grid::new("remote").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "Remote control");
                 ui.checkbox(&mut r.enabled, "devices on this network can run the show");
                 ui.end_row();
@@ -53,9 +53,9 @@ impl SettingsUi {
                         r.pin = crate::config::new_pin();
                     }
                     if r.enabled && r.pin.trim().is_empty() {
-                        ui.label(RichText::new("a PIN is made when you apply").color(TEXT_DIM).size(12.5));
+                        ui.label(RichText::new("a PIN is made when you apply").color(TEXT_DIM).size(TEXT_BODY));
                     } else if r.pin.trim().chars().count() < 4 {
-                        ui.label(RichText::new("short PINs are easy to guess: use 4 or more").color(AMBER).size(12.5));
+                        ui.label(RichText::new("short PINs are easy to guess: use 4 or more").color(AMBER).size(TEXT_BODY));
                     }
                 });
                 ui.end_row();
@@ -75,7 +75,7 @@ impl SettingsUi {
                     qr_code(ui, &remote_link(&url, &r.pin), 132.0);
                     ui.vertical(|ui| {
                         ui.add_space(4.0);
-                        ui.label(RichText::new("Scan with your phone's camera").size(12.5).color(TEXT_DIM));
+                        ui.label(RichText::new("Scan with your phone's camera").size(TEXT_BODY).color(TEXT_DIM));
                         hint(ui, "It opens the remote already signed in with the PIN.");
                     });
                 });
@@ -88,7 +88,7 @@ impl SettingsUi {
                 hint(ui, "Any button that can open a web address can run a command:");
                 let pin = format!("&pin={}", if r.pin.trim().is_empty() { "PIN" } else { r.pin.trim() });
                 for (cmd, what) in [("scene:1", "take scene 1"), ("preview:2", "preview scene 2"), ("take", "take preview to program"), ("record", "record on/off"), ("marker", "add a marker"), ("graphic:1", "graphic 1 on/off")] {
-                    ui.label(RichText::new(format!("{url}/api/action?do={cmd}{pin}    ({what})")).monospace().size(12.5).color(TEXT_DIM));
+                    ui.label(RichText::new(format!("{url}/api/action?do={cmd}{pin}    ({what})")).monospace().size(TEXT_BODY).color(TEXT_DIM));
                 }
                 hint(ui, "The full command list is in the README. Scripts can also connect to ws://…/api/ws for live state.");
             }
@@ -122,7 +122,7 @@ impl SettingsUi {
         let o = &mut self.draft.osc;
         let state = if o.enabled { format!("on, UDP port {}", o.port) } else { "off".to_string() };
         part(ui, "osc", "OSC (show-control software)", &state, false, |ui| {
-            egui::Grid::new("osc").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            egui::Grid::new("osc").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "OSC");
                 ui.checkbox(&mut o.enabled, "accept OSC commands");
                 ui.end_row();
@@ -150,8 +150,8 @@ impl SettingsUi {
                     ("/cutaway/marker \"Guest arrives\"  ·  /cutaway/source/3", "a marker; a source full screen"),
                 ] {
                     ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new(addr).monospace().size(12.5).color(TEXT_DIM));
-                        ui.label(RichText::new(what).size(12.5).color(TEXT_DIM));
+                        ui.label(RichText::new(addr).monospace().size(TEXT_BODY).color(TEXT_DIM));
+                        ui.label(RichText::new(what).size(TEXT_BODY).color(TEXT_DIM));
                     });
                 }
                 hint(ui, "State goes back to the address above whenever it changes: /cutaway/scene/N and /cutaway/preview/N (1 or 0), /cutaway/record, /cutaway/live, /cutaway/graphic/N, /cutaway/audio/N, /cutaway/level/N (0–1), /cutaway/tally/N and more (see the README).");
@@ -172,7 +172,7 @@ impl SettingsUi {
         };
         part(ui, "midi", "MIDI controller", &state, self.draft.midi.enabled, |ui| {
             let m = &mut self.draft.midi;
-            egui::Grid::new("midi").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            egui::Grid::new("midi").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "MIDI control");
                 ui.checkbox(&mut m.enabled, "use MIDI controllers");
                 ui.end_row();
@@ -203,7 +203,7 @@ impl SettingsUi {
                     self.learning = None;
                 }
             }
-            egui::Grid::new("mappings").num_columns(4).spacing([10.0, 6.0]).show(ui, |ui| {
+            egui::Grid::new("mappings").num_columns(4).spacing(TABLE_GAP).show(ui, |ui| {
                 for (i, map) in m.mappings.iter_mut().enumerate() {
                     ui.add(egui::TextEdit::singleline(&mut map.message).desired_width(110.0).hint_text("note 36"));
                     let learning = self.learning == Some(i);
@@ -220,7 +220,7 @@ impl SettingsUi {
                             ui.selectable_value(&mut map.action, format!("fader:{}", a.name), format!("Fader: {} level", a.name));
                         }
                     });
-                    if ui.small_button("✕").clicked() {
+                    if row_buttons(ui, i, 0, false) == Some(RowEdit::Remove) {
                         remove = Some(i);
                     }
                     ui.end_row();
@@ -283,7 +283,7 @@ impl SettingsUi {
                     }
                     ui.label(RichText::new(name).strong().color(if is_current { GREEN } else { Color32::WHITE }));
                     if is_current {
-                        ui.label(RichText::new("(these settings)").size(12.5).color(TEXT_DIM));
+                        ui.label(RichText::new("(these settings)").size(TEXT_BODY).color(TEXT_DIM));
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if self.deleting.as_deref() == Some(name.as_str()) {

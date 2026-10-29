@@ -175,18 +175,18 @@ impl App {
         stripes(sticks.translate(vec2(0.0, base.top() - sticks.bottom())), open);
         // The slate's writing.
         let inner = board.shrink(18.0);
-        painter.text(egui::pos2(inner.left(), inner.top()), egui::Align2::LEFT_TOP, "CUTAWAY", egui::FontId::monospace(13.0), TEXT_DIM);
+        painter.text(egui::pos2(inner.left(), inner.top()), egui::Align2::LEFT_TOP, "CUTAWAY", egui::FontId::monospace(TEXT_BODY), TEXT_DIM);
         let take = format!("TAKE {}", self.starts_count);
-        painter.text(egui::pos2(inner.right(), inner.top()), egui::Align2::RIGHT_TOP, take, egui::FontId::monospace(13.0), TEXT_DIM);
+        painter.text(egui::pos2(inner.right(), inner.top()), egui::Align2::RIGHT_TOP, take, egui::FontId::monospace(TEXT_BODY), TEXT_DIM);
         painter.text(egui::pos2(inner.center().x, inner.center().y - 6.0), egui::Align2::CENTER_CENTER, title, egui::FontId::proportional((w / 13.0).clamp(20.0, 32.0)), Color32::WHITE);
-        painter.text(egui::pos2(inner.center().x, inner.center().y + 26.0), egui::Align2::CENTER_CENTER, sub, egui::FontId::proportional(15.0), TEXT_DIM);
+        painter.text(egui::pos2(inner.center().x, inner.center().y + 26.0), egui::Align2::CENTER_CENTER, sub, egui::FontId::proportional(TEXT_STATE), TEXT_DIM);
         let what = match s.sources {
             0 => "Getting the studio ready".to_string(),
             1 => "Starting 1 camera".to_string(),
             n => format!("Starting {n} cameras"),
         };
         let dots = ".".repeat(1 + (t * 2.0) as usize % 3);
-        painter.text(egui::pos2(inner.center().x, inner.bottom()), egui::Align2::CENTER_BOTTOM, format!("{what}{dots}"), egui::FontId::monospace(12.5), ACCENT);
+        painter.text(egui::pos2(inner.center().x, inner.bottom()), egui::Align2::CENTER_BOTTOM, format!("{what}{dots}"), egui::FontId::monospace(TEXT_BODY), ACCENT);
         ui.allocate_rect(area, egui::Sense::hover());
         ui.ctx().request_repaint_after(Duration::from_millis(33));
     }

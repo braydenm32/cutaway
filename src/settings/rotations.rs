@@ -15,7 +15,7 @@ impl SettingsUi {
             for (ri, r) in self.draft.rotations.iter_mut().enumerate() {
                 ui.add_space(6.0);
                 egui::Frame::new().fill(RAISED).corner_radius(6.0).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
-                    egui::Grid::new(("rotation", ri)).num_columns(2).spacing([14.0, 8.0]).show(ui, |ui| {
+                    egui::Grid::new(("rotation", ri)).num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                         label(ui, "Group name");
                         ui.horizontal(|ui| {
                             ui.add(egui::TextEdit::singleline(&mut r.name).desired_width(180.0));
@@ -38,14 +38,11 @@ impl SettingsUi {
                                     } else {
                                         ui.label(RichText::new(format!("⚠ {g}: there's no graphic called that now")).color(AMBER));
                                     }
-                                    if ui.add_enabled(gi > 0, egui::Button::new("↑").small()).clicked() {
-                                        up = Some(gi);
-                                    }
-                                    if ui.add_enabled(gi + 1 < len, egui::Button::new("↓").small()).clicked() {
-                                        up = Some(gi + 1);
-                                    }
-                                    if ui.small_button("✕").clicked() {
-                                        drop = Some(gi);
+                                    match row_buttons(ui, gi, len, true) {
+                                        Some(RowEdit::Up) => up = Some(gi),
+                                        Some(RowEdit::Down) => up = Some(gi + 1),
+                                        Some(RowEdit::Remove) => drop = Some(gi),
+                                        None => {}
                                     }
                                 });
                             }

@@ -92,7 +92,7 @@ impl SettingsUi {
                 let p = PtzPreset { name: String::new(), x: s.x, y: s.y, zoom: s.zoom };
                 let b = to_screen(preset_rect(&p, pic.size, out));
                 painter.rect_stroke(b, 0.0, Stroke::new(2.0, ON_AIR), StrokeKind::Inside);
-                painter.text(b.left_bottom() + vec2(4.0, -3.0), egui::Align2::LEFT_BOTTOM, "now", egui::FontId::proportional(12.0), ON_AIR);
+                painter.text(b.left_bottom() + vec2(4.0, -3.0), egui::Align2::LEFT_BOTTOM, "now", egui::FontId::proportional(TEXT_BODY), ON_AIR);
             }
             let boxes: Vec<Rect> = src.ptz.presets.iter().map(|p| to_screen(preset_rect(p, pic.size, out))).collect();
             for (i, b) in boxes.iter().enumerate() {
@@ -102,7 +102,7 @@ impl SettingsUi {
                     painter.rect_filled(*b, 0.0, ACCENT.gamma_multiply(0.12));
                 }
                 dashed_rect(&painter, *b, Stroke::new(if on { 2.0 } else { 1.2 }, colour));
-                painter.text(b.left_top() + vec2(4.0, 2.0), egui::Align2::LEFT_TOP, format!("{}", i + 1), egui::FontId::proportional(13.0), colour);
+                painter.text(b.left_top() + vec2(4.0, 2.0), egui::Align2::LEFT_TOP, format!("{}", i + 1), egui::FontId::proportional(TEXT_BODY), colour);
             }
             // Pick a box (the smallest under the pointer: a close-up inside a wider one).
             if resp.drag_started() || resp.clicked() {
@@ -151,9 +151,9 @@ impl SettingsUi {
                 let (r, _) = ui.allocate_exact_size(vec2(w, w * out.1 as f32 / out.0 as f32), Sense::hover());
                 ui.painter().rect_filled(r, 2.0, Color32::BLACK);
                 ui.painter().image(pic.tex, r, uv, Color32::WHITE);
-                ui.label(RichText::new(what).size(13.0));
+                ui.label(RichText::new(what).size(TEXT_BODY));
                 if let Some(i) = sel {
-                    ui.label(RichText::new(format!("{:.1}× · Apply to use it", presets[i].zoom)).size(12.0).color(TEXT_DIM));
+                    ui.label(RichText::new(format!("{:.1}× · Apply to use it", presets[i].zoom)).size(TEXT_BODY).color(TEXT_DIM));
                 }
             });
         });
@@ -198,8 +198,8 @@ fn look_picture(ui: &mut egui::Ui, pic: &Picture, look: &SourceLook) {
             let (r, _) = ui.allocate_exact_size(vec2(w, w / aspect.max(0.1)), Sense::hover());
             ui.painter().rect_filled(r, 2.0, Color32::BLACK);
             ui.painter().image(pic.tex, r, uv, Color32::WHITE);
-            ui.label(RichText::new("What it'll look like").size(13.0));
-            ui.label(RichText::new("Colour changes show after Apply").size(12.0).color(TEXT_DIM));
+            ui.label(RichText::new("What it'll look like").size(TEXT_BODY));
+            ui.label(RichText::new("Colour changes show after Apply").size(TEXT_BODY).color(TEXT_DIM));
         });
     });
     ui.add_space(8.0);
@@ -218,7 +218,7 @@ fn draw_picture(ui: &mut egui::Ui, pic: &Picture, width: f32, sense: Sense) -> (
 }
 
 fn caption(ui: &mut egui::Ui, _r: Rect, text: &str) {
-    ui.label(RichText::new(text).size(12.0).color(TEXT_DIM));
+    ui.label(RichText::new(text).size(TEXT_BODY).color(TEXT_DIM));
     ui.add_space(6.0);
 }
 
@@ -228,7 +228,7 @@ fn placeholder(ui: &mut egui::Ui, text: &str) {
     let (r, _) = ui.allocate_exact_size(vec2(w, w * 9.0 / 16.0 * 0.5), Sense::hover());
     ui.painter().rect_filled(r, 4.0, Color32::from_rgb(18, 20, 25));
     dashed_rect(ui.painter(), r.shrink(1.0), Stroke::new(1.0, LINE));
-    ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(13.0), TEXT_DIM);
+    ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(TEXT_BODY), TEXT_DIM);
     ui.add_space(8.0);
 }
 

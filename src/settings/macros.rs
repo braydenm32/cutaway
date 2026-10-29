@@ -17,7 +17,7 @@ impl SettingsUi {
                 ui.set_width(220.0);
                 for i in 0..n {
                     let m = &self.draft.macros[i];
-                    let b = egui::Button::selectable(self.sel_macro == i, RichText::new(format!("{}. {}", i + 1, m.name)).size(14.0)).min_size(vec2(220.0, 30.0));
+                    let b = egui::Button::selectable(self.sel_macro == i, RichText::new(format!("{}. {}", i + 1, m.name)).size(TEXT_STATE)).min_size(vec2(220.0, 30.0));
                     if ui.add(b).clicked() {
                         self.sel_macro = i;
                     }
@@ -44,7 +44,7 @@ impl SettingsUi {
                     hint(ui, "No macros yet. For example: \"Break\" = take the Break scene, wait 1 s, start the music pad, start the \"Back in\" countdown.");
                     return;
                 };
-                egui::Grid::new("macro").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+                egui::Grid::new("macro").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                     label(ui, "Name");
                     ui.add_sized([240.0, 22.0], egui::TextEdit::singleline(&mut m.name));
                     ui.end_row();

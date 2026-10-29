@@ -7,7 +7,7 @@ impl SettingsUi {
     pub(super) fn switching(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
         title(ui, "Switching", "How scenes change, stingers, fade to black, replays, and switching by itself from the mics.");
         let t = &mut self.draft.transition;
-        egui::Grid::new("transitions").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+        egui::Grid::new("transitions").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
             label(ui, "Transition");
             ui.horizontal(|ui| {
                 for m in TransitionMode::ALL {
@@ -49,7 +49,7 @@ impl SettingsUi {
         let st = &mut self.draft.transition.stinger;
         let state = st.file.as_ref().and_then(|f| f.file_name()).map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| "none".into());
         part(ui, "stinger", "Stinger", &state, false, |ui| {
-            egui::Grid::new("stinger").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            egui::Grid::new("stinger").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "Video");
                 ui.horizontal(|ui| {
                     let shown = st.file.as_ref().and_then(|f| f.file_name()).map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| "none".into());
@@ -99,7 +99,7 @@ impl SettingsUi {
         let t = &mut self.draft.transition;
         let state = format!("{:.1} s{}", t.ftb_ms as f32 / 1000.0, if t.ftb_audio { ", sound too" } else { "" });
         part(ui, "ftb", "Fade to black", &state, false, |ui| {
-            egui::Grid::new("ftb").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            egui::Grid::new("ftb").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "Fade length");
                 ui.add(egui::DragValue::new(&mut t.ftb_ms).range(0..=10_000).speed(20).suffix(" ms"));
                 ui.end_row();
@@ -113,7 +113,7 @@ impl SettingsUi {
         let r = &mut self.draft.replay;
         let state = format!("the last {:.0} s", r.seconds);
         part(ui, "replay", "Instant replay", &state, false, |ui| {
-            egui::Grid::new("replay").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            egui::Grid::new("replay").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "Replay the last");
                 ui.add(egui::Slider::new(&mut r.seconds, 2.0..=30.0).step_by(1.0).suffix(" s"));
                 ui.end_row();
@@ -155,7 +155,7 @@ impl SettingsUi {
             if a.enabled { "on at start" } else { "off at start" }
         );
         part(ui, "auto", "Automatic switching", &state, false, |ui| {
-            egui::Grid::new("auto_on").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            egui::Grid::new("auto_on").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "At start");
                 ui.checkbox(&mut a.enabled, "on (AUTO and the A key turn it on and off)");
                 ui.end_row();
@@ -163,7 +163,7 @@ impl SettingsUi {
             ui.add_space(6.0);
             ui.label(RichText::new("When this mic talks, show this scene:").strong());
             let mut remove = None;
-            egui::Grid::new("rules").num_columns(5).spacing([10.0, 6.0]).show(ui, |ui| {
+            egui::Grid::new("rules").num_columns(5).spacing(TABLE_GAP).show(ui, |ui| {
                 for (i, r) in a.rules.iter_mut().enumerate() {
                     egui::ComboBox::from_id_salt(("rule_in", i)).selected_text(if r.input.is_empty() { "input…" } else { &r.input }).width(150.0).show_ui(ui, |ui| {
                         for (n, _) in &inputs {
@@ -194,7 +194,7 @@ impl SettingsUi {
                             let talking = l >= a.threshold_db;
                             ui.label(RichText::new(format!("{:>4.0} dB", l.max(-99.0))).monospace().color(if talking { GREEN } else { TEXT_DIM }));
                         }
-                        if ui.small_button("✕").clicked() {
+                        if row_buttons(ui, i, 0, false) == Some(RowEdit::Remove) {
                             remove = Some(i);
                         }
                     });
@@ -208,7 +208,7 @@ impl SettingsUi {
                 a.rules.push(AutoRule { input: inputs.first().map(|x| x.0.clone()).unwrap_or_default(), channel: 0, scene: scenes.first().cloned().unwrap_or_default() });
             }
             ui.add_space(8.0);
-            egui::Grid::new("auto").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            egui::Grid::new("auto").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "Counts as talking above");
                 ui.add(egui::Slider::new(&mut a.threshold_db, -70.0..=-10.0).suffix(" dB"));
                 ui.end_row();

@@ -63,12 +63,26 @@ pub mod theme {
     pub const GREEN: Color32 = Color32::from_rgb(58, 196, 112);
     pub const GREEN_DIM: Color32 = Color32::from_rgb(28, 96, 58);
     pub const ACCENT: Color32 = Color32::from_rgb(90, 160, 255);
+    /// Text sizes: every label in Cutaway is one of these five.
+    /// Hints, tags and second lines.
+    pub const TEXT_SMALL: f32 = 11.5;
+    /// Buttons, lists and most labels.
+    pub const TEXT_BODY: f32 = 13.0;
+    /// What's going on now: the REC and LIVE pills, ON/OFF, loudness,
+    /// levels, the scene and source names on the monitors.
+    pub const TEXT_STATE: f32 = 14.0;
+    /// A window's or card's heading.
+    pub const TEXT_HEADING: f32 = 16.0;
+    /// Big: clocks, "The engine couldn't start", the clap.
+    pub const TEXT_TITLE: f32 = 22.0;
     /// "On air" for streaming, so it reads differently from recording red.
     pub const LIVE: Color32 = Color32::from_rgb(214, 40, 120);
     /// GOING LIVE pulses between these; the GO LIVE button's edge.
     pub const LIVE_DIM: Color32 = Color32::from_rgb(60, 24, 44);
     pub const LIVE_GLOW: Color32 = Color32::from_rgb(150, 30, 90);
     pub const LIVE_EDGE: Color32 = Color32::from_rgb(110, 30, 70);
+    /// Text about going live ("Connecting to YouTube").
+    pub const LIVE_SOFT: Color32 = Color32::from_rgb(230, 120, 170);
     /// Live, but a destination isn't.
     pub const LIVE_TROUBLE: Color32 = Color32::from_rgb(170, 90, 20);
 }
@@ -561,7 +575,7 @@ impl App {
             ui.horizontal(|ui| {
                 ui.add(egui::Image::new(&self.logo).max_height(64.0));
                 ui.vertical(|ui| {
-                    ui.label(RichText::new("Cutaway").size(22.0).strong().color(Color32::WHITE));
+                    ui.label(RichText::new("Cutaway").size(TEXT_TITLE).strong().color(Color32::WHITE));
                     ui.label(RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).color(TEXT_DIM));
                     ui.label(RichText::new("Record, switch and stream your show.").color(TEXT_DIM));
                 });
@@ -589,7 +603,7 @@ impl App {
         if !r.notes.is_empty() {
             ui.add_space(6.0);
             egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
-                ui.label(RichText::new(&r.notes).size(12.5).color(TEXT_DIM));
+                ui.label(RichText::new(&r.notes).size(TEXT_BODY).color(TEXT_DIM));
             });
         }
         ui.add_space(8.0);
@@ -619,7 +633,7 @@ impl App {
                     }
                 });
                 if let Err(why) = &can {
-                    ui.label(RichText::new(format!("Get it from the download page: {why}.")).size(11.5).color(TEXT_DIM));
+                    ui.label(RichText::new(format!("Get it from the download page: {why}.")).size(TEXT_SMALL).color(TEXT_DIM));
                 }
             }
             Stage::Downloading { got, total } => {
@@ -629,7 +643,7 @@ impl App {
                     if ui.button("Stop").clicked() {
                         su::cancel();
                     }
-                    ui.label(RichText::new("Carry on with the show meanwhile.").size(11.5).color(TEXT_DIM));
+                    ui.label(RichText::new("Carry on with the show meanwhile.").size(TEXT_SMALL).color(TEXT_DIM));
                 });
             }
             Stage::Preparing => {
@@ -653,9 +667,9 @@ impl App {
                     }
                 });
                 if su::finish() == Finish::OnQuit {
-                    ui.label(RichText::new("It goes in when you close Cutaway.").size(11.5).color(TEXT_DIM));
+                    ui.label(RichText::new("It goes in when you close Cutaway.").size(TEXT_SMALL).color(TEXT_DIM));
                 } else if live {
-                    ui.label(RichText::new("Restarting waits until recording and streaming have stopped.").size(11.5).color(TEXT_DIM));
+                    ui.label(RichText::new("Restarting waits until recording and streaming have stopped.").size(TEXT_SMALL).color(TEXT_DIM));
                 }
             }
             Stage::Failed(e) => {
@@ -669,7 +683,7 @@ impl App {
                 });
             }
         }
-        ui.label(RichText::new("Your settings and shows stay as they are when you update.").size(11.5).color(TEXT_DIM));
+        ui.label(RichText::new("Your settings and shows stay as they are when you update.").size(TEXT_SMALL).color(TEXT_DIM));
     }
 
     /// Syrinscape, guests and chat to match the settings (each only
@@ -2321,8 +2335,10 @@ impl App {
     }
 
     fn header_right(&mut self, ui: &mut egui::Ui) {
-        ui.toggle_value(&mut self.guide_open, "?").on_hover_text("Your first show: a step-by-step guide");
-        if ui.button("Settings").on_hover_text(format!("Settings{}", self.key_hint(Builtin::Settings))).clicked() {
+        if header_button(ui, self.guide_open, "?", 0).on_hover_text("Your first show: a step-by-step guide").clicked() {
+            self.guide_open = !self.guide_open;
+        }
+        if header_button(ui, false, "Settings", 0).on_hover_text(format!("Settings{}", self.key_hint(Builtin::Settings))).clicked() {
             self.open_settings();
         }
         let update = self.update.lock_ok().clone().filter(|r| r.version != self.cfg.ui.skip_version);
@@ -2367,25 +2383,27 @@ impl App {
             .unwrap_or((0, 0));
         // A box in the main window has the keyboard: say why scene keys don't work.
         if self.settings.is_none() && ui.ctx().egui_wants_keyboard_input() {
-            ui.label(RichText::new("⌨ Typing: show keys off (Esc)").color(AMBER).size(12.5))
+            ui.label(RichText::new("⌨ Typing: show keys off (Esc)").color(AMBER).size(TEXT_BODY))
                 .on_hover_text("A box here has the keyboard, so number keys, Space and the rest type into it. Press Esc or click elsewhere to use your show keys again.");
         }
         // Only warnings not seen yet: a number that stays up all show means nothing.
-        let log_label = if warn_count > 0 { RichText::new(format!("Log ({warn_count})")).color(AMBER) } else { RichText::new("Log") };
-        ui.toggle_value(&mut self.log_open, log_label).on_hover_text(if warn_count > 0 { "Warnings since you last looked at the log" } else { "Everything Cutaway has noted this session" });
-        let health_text = if problems > 0 { RichText::new(format!("⚠ Health ({problems})")).color(AMBER) } else { RichText::new("Health") };
-        ui.toggle_value(&mut self.health_open, health_text).on_hover_text("Sources, files, inputs and disk at a glance");
-        if ui.button("Check").on_hover_text("Pre-show check: sources, sound, disk, encoder and stream servers").clicked() {
+        if header_button(ui, self.log_open, "Log", warn_count).on_hover_text(if warn_count > 0 { "Warnings since you last looked at the log" } else { "Everything Cutaway has noted this session" }).clicked() {
+            self.log_open = !self.log_open;
+        }
+        if header_button(ui, self.health_open, "Health", problems).on_hover_text(if problems > 0 { "Problems now: sources, files, inputs and disk at a glance" } else { "Sources, files, inputs and disk at a glance" }).clicked() {
+            self.health_open = !self.health_open;
+        }
+        if header_button(ui, false, "Check", 0).on_hover_text("Pre-show check: sources, sound, disk, encoder and stream servers").clicked() {
             self.start_precheck(None);
         }
         let screen_on = self.cfg.display.output != DisplayOutput::Off;
-        if ui.add(egui::Button::selectable(screen_on, "Screen")).on_hover_text("Program, multiview or prompter on another screen (Settings → Screens & webcam). Esc closes it.").clicked() {
+        if header_button(ui, screen_on, "Screen", 0).on_hover_text("Program, multiview or prompter on another screen (Settings → Screens & webcam). Esc closes it.").clicked() {
             self.cfg.display.output = if screen_on { DisplayOutput::Off } else { DisplayOutput::Program };
             self.cfg_dirty = true;
         }
         if crate::platform::vcam::available() {
             let on = self.engine.as_ref().is_some_and(|e| e.virtual_camera_on());
-            if ui.add(egui::Button::selectable(on, "Webcam")).on_hover_text("Send the program to the \"Cutaway\" camera for Zoom, Teams, Meet…").clicked() {
+            if header_button(ui, on, "Webcam", 0).on_hover_text("Send the program to the \"Cutaway\" camera for Zoom, Teams, Meet…").clicked() {
                 if !on && !crate::platform::vcam::installed() {
                     self.settings = Some(self.new_settings().open_at(Section::Outputs));
                 } else {
@@ -2399,6 +2417,7 @@ impl App {
         let pill = |text: RichText, fill: Color32| egui::Button::new(text).fill(fill).min_size(vec2(150.0, 34.0)).corner_radius(17.0);
         let name = egui::Button::image_and_text(
             egui::Image::new(&self.logo).max_height(20.0),
+            // (The wordmark: its own size.)
             RichText::new("CUTAWAY").size(17.0).strong().color(Color32::WHITE).extra_letter_spacing(3.0),
         )
         .frame(false);
@@ -2437,7 +2456,7 @@ impl App {
                 let hint = self.rec_hold.is_some() || self.rec_hint_until.is_some_and(|u| Instant::now() < u);
                 let text = if hint { "      Hold to stop".to_string() } else { format!("      REC  {}", fmt_clock(t)) };
                 // A dark pill with a pulsing red dot (red alone means on air).
-                let btn = pill(RichText::new(text).size(15.0).strong().color(Color32::WHITE), REC_PILL).stroke(Stroke::new(1.5, REC_EDGE));
+                let btn = pill(RichText::new(text).size(TEXT_STATE).strong().color(Color32::WHITE), REC_PILL).stroke(Stroke::new(1.5, REC_EDGE));
                 let r = ui.add(btn);
                 let pulse = 0.55 + 0.45 * ((t.as_secs_f32() * std::f32::consts::PI).cos() * 0.5 + 0.5);
                 ui.painter().circle_filled(r.rect.left_center() + vec2(20.0, 0.0), 6.0, REC_DOT.gamma_multiply(pulse));
@@ -2514,7 +2533,7 @@ impl App {
                     };
                     pick(ui, "Replay the program", control::ReplayAngle::Program);
                     if !angles.is_empty() {
-                        ui.label(RichText::new("From one camera").size(11.0).color(TEXT_DIM));
+                        ui.label(RichText::new("From one camera").size(TEXT_SMALL).color(TEXT_DIM));
                         for a in &angles {
                             pick(ui, &format!("   {a}"), control::ReplayAngle::Source(control::Target::Name(a.clone())));
                         }
@@ -2539,7 +2558,7 @@ impl App {
             }
             RecState::Finalizing { folder, step, done } => {
                 let t = ui.input(|i| i.time) as f32;
-                let r = ui.add_enabled(false, pill(RichText::new(format!("Saving files  {:.0}%", done * 100.0)).size(15.0).color(Color32::WHITE), RAISED));
+                let r = ui.add_enabled(false, pill(RichText::new(format!("Saving files  {:.0}%", done * 100.0)).size(TEXT_STATE).color(Color32::WHITE), RAISED));
                 // A bar along the bottom of the button fills as it goes.
                 let bar = Rect::from_min_size(r.rect.left_bottom() - vec2(0.0, 3.0), vec2(r.rect.width(), 3.0));
                 ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * done.clamp(0.02, 1.0), bar.height())), 1.5, ACCENT);
@@ -2549,14 +2568,14 @@ impl App {
             }
             RecState::Idle => {
                 self.rec_hold_spent = false;
-                let btn = pill(RichText::new("      RECORD").size(15.0).strong().color(Color32::WHITE), RAISED).stroke(Stroke::new(1.5, REC_EDGE));
+                let btn = pill(RichText::new("      RECORD").size(TEXT_STATE).strong().color(Color32::WHITE), RAISED).stroke(Stroke::new(1.5, REC_EDGE));
                 let r = ui.add(btn);
                 ui.painter().circle_filled(r.rect.left_center() + vec2(20.0, 0.0), 6.0, REC_DOT);
                 let r = r.on_hover_text("Record every source, the program and the audio (Ctrl/Cmd+R)");
                 if r.clicked() {
                     self.toggle_record();
                 }
-                let m = ui.menu_button(RichText::new("▾").size(15.0).color(TEXT_DIM), |ui| self.recent_takes_menu(ui)).response.on_hover_text("Recent takes");
+                let m = ui.menu_button(RichText::new("▾").size(TEXT_STATE).color(TEXT_DIM), |ui| self.recent_takes_menu(ui)).response.on_hover_text("Recent takes");
                 if std::mem::take(&mut self.takes.open_menu) {
                     egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(&m));
                 }
@@ -2581,7 +2600,7 @@ impl App {
 
         // ---- stream
         if stream.stopping {
-            ui.add_enabled(false, pill(RichText::new("Ending stream…").size(15.0).color(Color32::WHITE), RAISED));
+            ui.add_enabled(false, pill(RichText::new("Ending stream…").size(TEXT_STATE).color(Color32::WHITE), RAISED));
             ui.ctx().request_repaint_after(Duration::from_millis(250));
         } else if streaming {
             let t = stream.since.map(|s| s.elapsed()).unwrap_or_default();
@@ -2594,15 +2613,15 @@ impl App {
             if going {
                 let pulse = ((ui.input(|i| i.time) as f32 * 3.0).sin() + 1.0) * 0.5;
                 let fill = LIVE_DIM.lerp_to_gamma(LIVE_GLOW, pulse);
-                let btn = pill(RichText::new(format!("◉  GOING LIVE{}", waiting::ellipsis(ui.input(|i| i.time) as f32))).size(15.0).strong().color(Color32::WHITE), fill).min_size(vec2(150.0, 0.0));
+                let btn = pill(RichText::new(format!("◉  GOING LIVE{}", waiting::ellipsis(ui.input(|i| i.time) as f32))).size(TEXT_STATE).strong().color(Color32::WHITE), fill).min_size(vec2(150.0, 0.0));
                 if ui.add(btn).on_hover_text("Connecting. Click to stop.").clicked() {
                     self.toggle_stream();
                 }
-                status_line = Some((format!("Connecting to {}", connecting.join(", ")), Color32::from_rgb(230, 120, 170)));
+                status_line = Some((format!("Connecting to {}", connecting.join(", ")), LIVE_SOFT));
                 ui.ctx().request_repaint_after(Duration::from_millis(50));
             } else {
                 let fill = if healthy { LIVE } else { LIVE_TROUBLE };
-                let btn = pill(RichText::new(format!("◉  LIVE  {}", fmt_clock(t))).size(15.0).strong().color(Color32::WHITE), fill);
+                let btn = pill(RichText::new(format!("◉  LIVE  {}", fmt_clock(t))).size(TEXT_STATE).strong().color(Color32::WHITE), fill);
                 if ui.add(btn).on_hover_text("End the stream").clicked() {
                     self.toggle_stream();
                 }
@@ -2613,14 +2632,14 @@ impl App {
             ui.ctx().request_repaint_after(Duration::from_millis(250));
         } else if !self.cfg.streaming.destinations.iter().any(|d| d.enabled) {
             // Nowhere to stream to: a quiet way in, not a big button that can't work.
-            let b = egui::Button::new(RichText::new("◉ Set up streaming").size(13.0).color(ACCENT)).frame(false);
+            let b = egui::Button::new(RichText::new("◉ Set up streaming").size(TEXT_BODY).color(ACCENT)).frame(false);
             let r = ui.add(b);
             ui.add_space(10.0);
             if r.on_hover_text("Add a place to stream to (YouTube, Twitch, any RTMP server…) in Settings → Streaming. The GO LIVE button appears once there is one.").clicked() {
                 self.settings = Some(self.new_settings().open_at(Section::Streaming));
             }
         } else {
-            let btn = pill(RichText::new("◉  GO LIVE").size(15.0).strong().color(LIVE), RAISED).stroke(Stroke::new(1.5, LIVE_EDGE));
+            let btn = pill(RichText::new("◉  GO LIVE").size(TEXT_STATE).strong().color(LIVE), RAISED).stroke(Stroke::new(1.5, LIVE_EDGE));
             let names: Vec<String> = self.cfg.streaming.destinations.iter().filter(|d| d.enabled).map(|d| d.name.clone()).collect();
             if ui.add(btn).on_hover_text(format!("Stream to {}", names.join(", "))).clicked() {
                 self.toggle_stream();
@@ -2636,11 +2655,11 @@ impl App {
         let clock_w = 80.0;
         ui.scope(|ui| {
             ui.set_max_width((ui.available_width() - clock_w).max(0.0));
-            ui.add(egui::Label::new(RichText::new(text).color(color).size(12.0)).truncate());
+            ui.add(egui::Label::new(RichText::new(text).color(color).size(TEXT_BODY)).truncate());
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(8.0);
-            let b = egui::Button::new(RichText::new(clock).size(14.0).color(TEXT_DIM)).frame(false);
+            let b = egui::Button::new(RichText::new(clock).size(TEXT_STATE).color(TEXT_DIM)).frame(false);
             let tip = if self.cfg.ui.clock_12h { "The time here. Click for 24-hour time" } else { "The time here. Click for 12-hour time" };
             if ui.add(b).on_hover_text(tip).clicked() {
                 self.cfg.ui.clock_12h = !self.cfg.ui.clock_12h;
@@ -2787,7 +2806,7 @@ impl App {
         if let Some(err) = self.engine_error.clone() {
             ui.vertical_centered(|ui| {
                 ui.add_space(80.0);
-                ui.label(RichText::new("The engine couldn't start").size(22.0).color(Color32::WHITE));
+                ui.label(RichText::new("The engine couldn't start").size(TEXT_TITLE).color(Color32::WHITE));
                 ui.add_space(8.0);
                 ui.label(RichText::new(err).color(AMBER));
                 ui.add_space(16.0);
@@ -2882,14 +2901,14 @@ impl App {
                 painter.image(tex, rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
             }
         } else {
-            painter.text(rect.center(), Align2::CENTER_CENTER, "Click a scene to preview it", FontId::proportional(14.0), TEXT_DIM);
+            painter.text(rect.center(), Align2::CENTER_CENTER, "Click a scene to preview it", FontId::proportional(TEXT_STATE), TEXT_DIM);
         }
         painter.rect_stroke(rect, 4.0, Stroke::new(2.0, GREEN), StrokeKind::Outside);
         // (At the bottom while editing, out of the way of the frames' names.)
         let at = if self.edit_mode { pos2(rect.left() + 10.0, rect.bottom() - 32.0) } else { rect.min + vec2(10.0, 10.0) };
-        let badge = Rect::from_min_size(at, vec2(74.0, 22.0));
+        let badge = Rect::from_min_size(at, vec2(86.0, 24.0));
         painter.rect_filled(badge, 3.0, GREEN_DIM);
-        painter.text(badge.center(), Align2::CENTER_CENTER, "PREVIEW", FontId::proportional(11.5), Color32::WHITE);
+        bold_text(&painter, badge.center(), Align2::CENTER_CENTER, "PREVIEW", TEXT_BODY, Color32::WHITE);
         if let Some(p) = pv {
             if self.edit_mode {
                 self.edit_overlay(ui, rect, p);
@@ -2903,9 +2922,9 @@ impl App {
         let rt = ui.interact(take, ui.scope_id().with("take_btn"), Sense::click());
         let rc = ui.interact(cut, ui.scope_id().with("cut_btn"), Sense::click());
         painter.rect_filled(take, 6.0, if rt.hovered() { TAKE_HOVER } else { TAKE });
-        painter.text(take.center(), Align2::CENTER_CENTER, "TAKE", FontId::proportional(14.0), Color32::WHITE);
+        painter.text(take.center(), Align2::CENTER_CENTER, "TAKE", FontId::proportional(TEXT_STATE), Color32::WHITE);
         painter.rect_filled(cut, 6.0, if rc.hovered() { NEUTRAL_HOVER } else { RAISED });
-        painter.text(cut.center(), Align2::CENTER_CENTER, "CUT", FontId::proportional(14.0), Color32::WHITE);
+        painter.text(cut.center(), Align2::CENTER_CENTER, "CUT", FontId::proportional(TEXT_STATE), Color32::WHITE);
         if rt.on_hover_text(format!("{} to program{}", self.cfg.transition.mode.label(), self.key_hint(Builtin::Take))).clicked() {
             self.take_preview(false);
         }
@@ -2928,7 +2947,7 @@ impl App {
         painter.rect_stroke(rect, 4.0, Stroke::new(if recording { 2.0 } else { 1.0 }, if recording { ON_AIR } else { ON_AIR_DIM }), StrokeKind::Outside);
         let badge = Rect::from_min_size(rect.min + vec2(8.0, 8.0), vec2(26.0, 18.0));
         painter.rect_filled(badge, 3.0, Color32::from_black_alpha(170));
-        painter.text(badge.center(), Align2::CENTER_CENTER, "9:16", FontId::proportional(10.0), Color32::WHITE);
+        painter.text(badge.center(), Align2::CENTER_CENTER, "9:16", FontId::proportional(TEXT_SMALL), Color32::WHITE);
         let r = ui.interact(rect, ui.scope_id().with("tall_monitor"), Sense::click());
         if r.on_hover_text("The vertical version (click to set its layouts and framing)").clicked() {
             self.settings = Some(self.new_settings().open_at(Section::Vertical));
@@ -2950,9 +2969,9 @@ impl App {
         if self.edit_mode && !self.preview_mode() {
             return self.edit_overlay(ui, rect, live);
         }
-        let badge = Rect::from_min_size(rect.min + vec2(10.0, 10.0), vec2(74.0, 22.0));
+        let badge = Rect::from_min_size(rect.min + vec2(10.0, 10.0), vec2(86.0, 24.0));
         painter.rect_filled(badge, 3.0, ON_AIR);
-        painter.text(badge.center(), Align2::CENTER_CENTER, "PROGRAM", FontId::proportional(11.5), Color32::WHITE);
+        bold_text(&painter, badge.center(), Align2::CENTER_CENTER, "PROGRAM", TEXT_BODY, Color32::WHITE);
         let name_chip = label_chip(&painter, badge.right_center() + vec2(12.0, 0.0), &live.name);
         // Status chips after the scene name (the top right is where logos usually sit).
         let mut x = name_chip.right() + 8.0;
@@ -2978,10 +2997,10 @@ impl App {
             chips.push(("SCREEN".into(), Color32::from_rgb(100, 140, 160)));
         }
         for (text, color) in chips {
-            let galley = painter.layout_no_wrap(text, FontId::proportional(11.0), Color32::WHITE);
-            let r = Rect::from_min_size(pos2(x, badge.center().y - 10.0), vec2(galley.size().x + 14.0, 20.0));
+            let galley = painter.layout_no_wrap(text, FontId::proportional(TEXT_BODY), Color32::WHITE);
+            let r = Rect::from_min_size(pos2(x, badge.center().y - 12.0), vec2(galley.size().x + 14.0, 24.0));
             painter.rect_filled(r, 3.0, color);
-            painter.galley(r.min + vec2(7.0, 3.0), galley, Color32::WHITE);
+            painter.galley(r.min + vec2(7.0, 4.0), galley, Color32::WHITE);
             x = r.right() + 6.0;
         }
         // Captions that only go to the stream aren't in this picture:
@@ -2996,7 +3015,7 @@ impl App {
                 painter.rect_filled(Rect::from_min_size(at, size).expand(6.0), 4.0, Color32::from_black_alpha(190));
                 painter.galley(at, galley, Color32::WHITE);
                 let tag = Rect::from_min_size(pos2(at.x - 6.0, at.y - 26.0), vec2(88.0, 16.0));
-                painter.text(tag.left_center(), Align2::LEFT_CENTER, "CC · stream only", FontId::proportional(10.5), Color32::from_white_alpha(170));
+                painter.text(tag.left_center(), Align2::LEFT_CENTER, "CC · stream only", FontId::proportional(TEXT_SMALL), Color32::from_white_alpha(170));
             }
             ui.ctx().request_repaint_after(Duration::from_millis(200));
         }
@@ -3109,9 +3128,9 @@ impl App {
             let color = if selected { AMBER } else { ACCENT };
             painter.rect_stroke(r, 0.0, Stroke::new(if selected { 2.5 } else { 1.5 }, color), StrokeKind::Inside);
             let name = names.get(l.source).cloned().unwrap_or_else(|| format!("Source {}", l.source + 1));
-            let tag = painter.text(r.min + vec2(6.0, 5.0), Align2::LEFT_TOP, &name, FontId::proportional(12.0), Color32::WHITE);
+            let tag = painter.text(r.min + vec2(6.0, 5.0), Align2::LEFT_TOP, &name, FontId::proportional(TEXT_BODY), Color32::WHITE);
             painter.rect_filled(tag.expand(3.0), 2.0, Color32::from_black_alpha(150));
-            painter.text(r.min + vec2(6.0, 5.0), Align2::LEFT_TOP, &name, FontId::proportional(12.0), Color32::WHITE);
+            painter.text(r.min + vec2(6.0, 5.0), Align2::LEFT_TOP, &name, FontId::proportional(TEXT_BODY), Color32::WHITE);
             let corner = Rect::from_min_max(r.right_bottom() - vec2(handle, handle), r.right_bottom());
             painter.rect_filled(corner, 2.0, color);
             if l.crops() {
@@ -3121,9 +3140,9 @@ impl App {
                     _ => format!("{:.1}×", l.zoom),
                 };
                 let at = pos2(r.right() - 6.0, r.top() + 5.0);
-                let tag = painter.text(at, Align2::RIGHT_TOP, &text, FontId::proportional(11.0), Color32::WHITE);
+                let tag = painter.text(at, Align2::RIGHT_TOP, &text, FontId::proportional(TEXT_SMALL), Color32::WHITE);
                 painter.rect_filled(tag.expand(3.0), 2.0, Color32::from_black_alpha(150));
-                painter.text(at, Align2::RIGHT_TOP, &text, FontId::proportional(11.0), Color32::WHITE);
+                painter.text(at, Align2::RIGHT_TOP, &text, FontId::proportional(TEXT_SMALL), Color32::WHITE);
             }
         }
         if resp.hovered() {
@@ -3192,7 +3211,7 @@ impl App {
             } else {
                 (format!("{} on air: changes show at once", scene.name), "Turn on Preview to edit a scene without it showing in the recording or stream until you Take it.")
             };
-            ui.label(RichText::new(what).color(if in_preview { GREEN } else { Color32::WHITE }).size(12.5)).on_hover_text(tip);
+            ui.label(RichText::new(what).color(if in_preview { GREEN } else { Color32::WHITE }).size(TEXT_BODY)).on_hover_text(tip);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("Done").clicked() {
                     self.edit_mode = false;
@@ -3202,7 +3221,7 @@ impl App {
                     self.save_config();
                 }
                 if self.scenes_dirty {
-                    let chip = egui::Button::new(RichText::new("Unsaved").size(11.0).color(Color32::BLACK)).fill(AMBER).sense(Sense::hover());
+                    let chip = egui::Button::new(RichText::new("Unsaved").size(TEXT_BODY).color(Color32::BLACK)).fill(AMBER).sense(Sense::hover());
                     ui.add(chip).on_hover_text("Changes to scenes not written to disk yet");
                 }
                 if ui.add_enabled(self.history.can_redo().is_some(), egui::Button::new("↷ Redo")).on_hover_text(match self.history.can_redo() {
@@ -3337,7 +3356,7 @@ impl App {
                             changed = true;
                         }
                     }
-                    ui.label(RichText::new("e.g. a break scene that mutes the mics and brings up the music. Changes land with the picture and fade with mixes.").size(11.5).color(TEXT_DIM));
+                    ui.label(RichText::new("e.g. a break scene that mutes the mics and brings up the music. Changes land with the picture and fade with mixes.").size(TEXT_SMALL).color(TEXT_DIM));
                 })
                 .response
                 .on_hover_text("Scene audio: inputs this scene turns on or off");
@@ -3372,7 +3391,7 @@ impl App {
                             }
                         });
                     });
-                    ui.label(RichText::new("e.g. start a Syrinscape mood, play a pad, show a title. Pick from ＋ Add; ✕ takes one off. Several run in order.").size(11.5).color(TEXT_DIM));
+                    ui.label(RichText::new("e.g. start a Syrinscape mood, play a pad, show a title. Pick from ＋ Add; ✕ takes one off. Several run in order.").size(TEXT_SMALL).color(TEXT_DIM));
                 })
                 .response
                 .on_hover_text("Scene cues: commands run when this scene is taken");
@@ -3390,7 +3409,7 @@ impl App {
             });
         });
         ui.ctx().data_mut(|d| d.insert_temp(widths_id, measured));
-        ui.label(RichText::new(if cfg!(target_os = "macos") { "Drag frames · corner to resize · Shift keeps shape · scroll to zoom · double-click to fill · Option-drag moves the picture" } else { "Drag frames · corner to resize · Shift keeps shape · scroll to zoom · double-click to fill · Alt-drag moves the picture" }).color(TEXT_DIM).size(11.5));
+        ui.label(RichText::new(if cfg!(target_os = "macos") { "Drag frames · corner to resize · Shift keeps shape · scroll to zoom · double-click to fill · Option-drag moves the picture" } else { "Drag frames · corner to resize · Shift keeps shape · scroll to zoom · double-click to fill · Alt-drag moves the picture" }).color(TEXT_DIM).size(TEXT_SMALL));
         if let Some(n) = rename_clash {
             self.toast(format!("There's already a scene called {n}"), true);
         }
@@ -3532,7 +3551,7 @@ impl App {
             let in_preview = preview_sources.contains(&i);
             let bar = Rect::from_min_size(pic.left_bottom(), vec2(tile_w, label_h));
             painter.rect_filled(bar, 0.0, if on_air { ON_AIR } else if in_preview { GREEN_DIM } else { RAISED });
-            painter.text(bar.left_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, format!("{}  {}", i + 1, name), FontId::proportional(13.0), Color32::WHITE);
+            painter.text(bar.left_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, format!("{}  {}", i + 1, name), FontId::proportional(TEXT_BODY), Color32::WHITE);
             // Media player transport.
             if let Some(p) = &players[i] {
                 let st = p.state.lock_ok().clone();
@@ -3547,14 +3566,14 @@ impl App {
                     let br = Rect::from_min_size(pos2(bx - 22.0, bar.top() + 1.0), vec2(22.0, label_h - 2.0));
                     let rr = ui.interact(br, ui.scope_id().with(("media", i, tip)), Sense::click());
                     painter.rect_filled(br, 3.0, if rr.hovered() { LINE } else { Color32::TRANSPARENT });
-                    painter.text(br.center(), Align2::CENTER_CENTER, glyph, FontId::proportional(13.0), Color32::WHITE);
+                    painter.text(br.center(), Align2::CENTER_CENTER, glyph, FontId::proportional(TEXT_BODY), Color32::WHITE);
                     if rr.on_hover_text(tip).clicked() {
                         player_cmd = Some((i, cmd));
                     }
                     bx -= 24.0;
                 }
                 if let Some(item) = st.items.get(st.index) {
-                    painter.text(pic.left_top() + vec2(6.0, 4.0), Align2::LEFT_TOP, item, FontId::proportional(11.0), Color32::from_white_alpha(200));
+                    painter.text(pic.left_top() + vec2(6.0, 4.0), Align2::LEFT_TOP, item, FontId::proportional(TEXT_SMALL), Color32::from_white_alpha(200));
                 }
             }
             // Auto-framing: who it's following.
@@ -3568,7 +3587,7 @@ impl App {
                 } else {
                     format!("AUTO · {} · {}", cfg.shot.label(), cfg.follow.label())
                 };
-                let font = FontId::proportional(10.5);
+                let font = FontId::proportional(TEXT_SMALL);
                 let galley = painter.layout_no_wrap(text, font, Color32::WHITE);
                 let chip = Rect::from_min_size(pic.left_top() + vec2(5.0, 5.0), galley.size() + vec2(10.0, 4.0));
                 painter.rect_filled(chip, 3.0, Color32::from_black_alpha(150));
@@ -3709,12 +3728,12 @@ impl App {
         let no_signal: Vec<Vec<String>> = self.scenes.iter().map(|s| self.scene_offline(s).into_iter().filter_map(|i| source_names.get(i).cloned()).collect()).collect();
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
-                ui.label(RichText::new("TRANSITION").color(TEXT_DIM).size(11.0));
+                ui.label(RichText::new("TRANSITION").color(TEXT_DIM).size(TEXT_SMALL));
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     let mut mode = self.cfg.transition.mode;
                     for m in TransitionMode::ALL {
-                        let b = ui.add(egui::Button::selectable(mode == m, RichText::new(m.label().to_uppercase()).strong().size(12.0)).min_size(vec2(46.0, 26.0)));
+                        let b = ui.add(egui::Button::selectable(mode == m, RichText::new(m.label().to_uppercase()).strong().size(TEXT_BODY)).min_size(vec2(46.0, 26.0)));
                         if b.clicked() {
                             mode = m;
                         }
@@ -3727,7 +3746,7 @@ impl App {
                     // Fade to black: flashes while the program is black.
                     let black = self.engine.as_ref().is_some_and(|e| e.is_black());
                     let lit = black && (ui.input(|i| i.time) * 2.0).fract() < 0.5;
-                    let ftb = egui::Button::new(RichText::new("FTB").strong().size(12.0).color(if lit { Color32::BLACK } else if black { Color32::WHITE } else { TEXT_DIM }))
+                    let ftb = egui::Button::new(RichText::new("FTB").strong().size(TEXT_BODY).color(if lit { Color32::BLACK } else if black { Color32::WHITE } else { TEXT_DIM }))
                         .fill(if lit { AMBER } else if black { AMBER_DIM } else { RAISED })
                         .min_size(vec2(46.0, 26.0));
                     if ui.add(ftb).on_hover_text(if black { "Fade back up from black" } else { "Fade to black (picture and sound; the length is in Settings → Switching)" }).clicked() {
@@ -3827,7 +3846,7 @@ impl App {
                 mesh.add_triangle(0, 2, 3);
                 p.add(mesh);
                 let label = if left { format!("‹ {count}") } else { format!("+{count} ›") };
-                let galley = p.layout_no_wrap(label, FontId::proportional(14.0), Color32::WHITE);
+                let galley = p.layout_no_wrap(label, FontId::proportional(TEXT_STATE), Color32::WHITE);
                 let size = galley.size() + vec2(14.0, 8.0);
                 let chip = if left { Rect::from_min_size(r.left_center() + vec2(2.0, -size.y / 2.0), size) } else { Rect::from_min_size(r.right_center() - vec2(size.x + 2.0, size.y / 2.0), size) };
                 p.rect_filled(chip, size.y / 2.0, if resp.hovered() { ACCENT } else { Color32::from_rgb(58, 64, 78) });
@@ -3878,7 +3897,7 @@ impl App {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                 if let Some(p) = ui.ctx().pointer_interact_pos() {
                     let layer = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, ui.scope_id().with("bank_drag")));
-                    let galley = layer.layout_no_wrap(s.name.clone(), FontId::proportional(13.0), Color32::WHITE);
+                    let galley = layer.layout_no_wrap(s.name.clone(), FontId::proportional(TEXT_BODY), Color32::WHITE);
                     let r = Rect::from_min_size(p + vec2(10.0, -30.0), galley.size() + vec2(16.0, 10.0));
                     layer.rect_filled(r, 5.0, ACCENT);
                     layer.galley(r.min + vec2(8.0, 5.0), galley, Color32::WHITE);
@@ -3914,15 +3933,15 @@ impl App {
         let thumb = Rect::from_min_size(rect.min + vec2(8.0, 8.0), vec2(tw, th));
         self.scene_thumb(&painter, thumb, s, canvas);
         if !s.audio_on.is_empty() || !s.audio_off.is_empty() {
-            painter.text(thumb.right_bottom() + vec2(6.0, 0.0), Align2::LEFT_BOTTOM, "♪", FontId::proportional(13.0), Color32::from_white_alpha(180));
+            painter.text(thumb.right_bottom() + vec2(6.0, 0.0), Align2::LEFT_BOTTOM, "♪", FontId::proportional(TEXT_BODY), Color32::from_white_alpha(180));
         }
-        painter.text(rect.right_top() + vec2(-10.0, 9.0), Align2::RIGHT_TOP, &key, FontId::monospace(13.0), if is_live { Color32::WHITE } else { TEXT_DIM });
+        painter.text(rect.right_top() + vec2(-10.0, 9.0), Align2::RIGHT_TOP, &key, FontId::monospace(TEXT_BODY), if is_live { Color32::WHITE } else { TEXT_DIM });
         let missing = missing.filter(|m| !m.is_empty());
         if missing.is_some() {
-            painter.text(rect.right_top() + vec2(-10.0, 28.0), Align2::RIGHT_TOP, "⚠", FontId::proportional(14.0), if is_live { Color32::WHITE } else { AMBER });
+            painter.text(rect.right_top() + vec2(-10.0, 28.0), Align2::RIGHT_TOP, "⚠", FontId::proportional(TEXT_STATE), if is_live { Color32::WHITE } else { AMBER });
         }
         // The name, cut short with "…" when it's long (the whole of it is in the hover text).
-        let mut job = egui::text::LayoutJob::simple_singleline(s.name.clone(), FontId::proportional(13.5), Color32::WHITE);
+        let mut job = egui::text::LayoutJob::simple_singleline(s.name.clone(), FontId::proportional(TEXT_BODY), Color32::WHITE);
         job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - 18.0);
         let galley = ui.fonts_mut(|f| f.layout_job(job));
         let elided = galley.elided;
@@ -4034,14 +4053,14 @@ impl App {
         if stream.destinations.is_empty() {
             let dests: Vec<_> = self.cfg.streaming.destinations.iter().filter(|d| d.enabled).cloned().collect();
             if dests.is_empty() {
-                ui.label(RichText::new("No destinations yet.").color(TEXT_DIM).size(12.0));
+                ui.label(RichText::new("No destinations yet.").color(TEXT_DIM).size(TEXT_BODY));
             }
             for d in dests {
                 ui.horizontal(|ui| {
                     let problem = d.problem();
                     dot(ui, if problem.is_some() { AMBER } else { LINE });
-                    let r = ui.label(RichText::new(&d.name).size(12.5));
-                    ui.label(RichText::new(if problem.is_some() { "needs setup" } else { "ready" }).size(11.5).color(TEXT_DIM));
+                    let r = ui.label(RichText::new(&d.name).size(TEXT_BODY));
+                    ui.label(RichText::new(if problem.is_some() { "needs setup" } else { "ready" }).size(TEXT_BODY).color(TEXT_DIM));
                     if let Some(p) = problem {
                         r.on_hover_text(p);
                     }
@@ -4050,7 +4069,7 @@ impl App {
             return;
         }
         if let Some(kbps) = stream.lowered_kbps {
-            ui.label(RichText::new(format!("⚠ bitrate lowered to {:.1} Mbps while the connection catches up", kbps as f64 / 1000.0)).size(11.0).color(AMBER))
+            ui.label(RichText::new(format!("⚠ bitrate lowered to {:.1} Mbps while the connection catches up", kbps as f64 / 1000.0)).size(TEXT_BODY).color(AMBER))
                 .on_hover_text(format!("Set: {:.1} Mbps. It comes back by itself once every destination keeps up.", self.cfg.streaming.video_bitrate_kbps as f64 / 1000.0));
         }
         for d in &stream.destinations {
@@ -4066,26 +4085,26 @@ impl App {
             let resp = ui
                 .horizontal(|ui| {
                     dot(ui, color);
-                    ui.label(RichText::new(&d.name).size(12.5).strong());
+                    ui.label(RichText::new(&d.name).size(TEXT_BODY).strong());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if d.state == DestState::Live {
-                            ui.label(RichText::new(format!("{:.1} Mbps", d.kbps / 1000.0)).size(11.5).monospace());
+                            ui.label(RichText::new(format!("{:.1} Mbps", d.kbps / 1000.0)).size(TEXT_BODY).monospace());
                         } else {
                             let mut text = streamer::describe(&d.state);
                             if d.attempts > 1 && matches!(d.state, DestState::Retrying { .. }) {
                                 text = format!("{text} (try {})", d.attempts + 1);
                             }
-                            ui.label(RichText::new(text).size(11.5).color(color));
+                            ui.label(RichText::new(text).size(TEXT_BODY).color(color));
                         }
                     });
                 })
                 .response;
             if d.congested {
-                ui.label(RichText::new("   ⚠ connection too slow — dropping frames").size(11.0).color(AMBER));
+                ui.label(RichText::new("   ⚠ connection too slow — dropping frames").size(TEXT_BODY).color(AMBER));
             }
             if let Some(m) = &d.message {
                 if d.state != DestState::Live {
-                    ui.label(RichText::new(format!("   {m}")).size(11.0).color(TEXT_DIM));
+                    ui.label(RichText::new(format!("   {m}")).size(TEXT_SMALL).color(TEXT_DIM));
                 }
                 resp.on_hover_text(format!("{} — {m}", d.service.label()));
             } else {
@@ -4138,7 +4157,7 @@ impl App {
                     None => name.clone(),
                 };
                 let over = clock.as_ref().is_some_and(|c| c.1);
-                let text = RichText::new(shown).strong().size(12.5).color(if *on { Color32::BLACK } else if over { ERROR } else { Color32::WHITE });
+                let text = RichText::new(shown).strong().size(TEXT_BODY).color(if *on { Color32::BLACK } else if over { ERROR } else { Color32::WHITE });
                 let b = egui::Button::new(text).fill(if *on { AMBER } else { RAISED }).min_size(vec2(64.0, 28.0));
                 let mut r = ui.add(b);
                 let is_timer = self.cfg.graphics.get(i).is_some_and(|g| g.kind == crate::config::GraphicKind::Clock && g.clock.is_timer());
@@ -4171,7 +4190,7 @@ impl App {
             }
             for (i, r) in rotations.iter().enumerate() {
                 let Some(cfg) = self.cfg.rotations.iter().find(|c| c.name == r.name) else { continue };
-                let text = RichText::new(format!("⟳ {}", r.name)).strong().size(12.5).color(if r.running { Color32::BLACK } else { Color32::WHITE });
+                let text = RichText::new(format!("⟳ {}", r.name)).strong().size(TEXT_BODY).color(if r.running { Color32::BLACK } else { Color32::WHITE });
                 let b = egui::Button::new(text).fill(if r.running { AMBER } else { RAISED }).min_size(vec2(64.0, 28.0));
                 let state = match (&r.showing, r.next_in) {
                     _ if !r.running => format!("Stopped. {}", match cfg.start {
@@ -4311,7 +4330,7 @@ impl App {
             ui.label(RichText::new("No markers in this take yet.").color(TEXT_DIM));
             return;
         }
-        ui.label(RichText::new("Names can be changed until the take stops.").size(11.5).color(TEXT_DIM));
+        ui.label(RichText::new("Names can be changed until the take stops.").size(TEXT_SMALL).color(TEXT_DIM));
         let mut rename: Option<(crate::media::Ns, String)> = None;
         let mut delete: Option<crate::media::Ns> = None;
         egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
@@ -4359,7 +4378,7 @@ impl App {
 
     fn audio_panel(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
-        ui.label(RichText::new("AUDIO").color(TEXT_DIM).size(11.0));
+        ui.label(RichText::new("AUDIO").color(TEXT_DIM).size(TEXT_SMALL));
         let Some(engine) = &self.engine else { return };
         let (meters, offline, loud) = {
             let st = engine.status.lock_ok();
@@ -4378,22 +4397,26 @@ impl App {
         let mut on_changes = Vec::new();
         let mut solo: Option<String> = None;
         ui.add_space(4.0);
+        // The meters take the height the column has left (under the name,
+        // fader, level, ON and tags, and the headphone line).
+        let below = 250.0 + if monitoring { 30.0 } else { 0.0 };
+        let meter_h = (ui.available_height() - below).clamp(170.0, 560.0);
         egui::ScrollArea::horizontal().id_salt("strips").show(ui, |ui| {
             ui.horizontal_top(|ui| {
                 for (i, (name, desc, on, reduction)) in strips.iter().enumerate() {
                     let key = format!("a{i}");
                     ui.vertical(|ui| {
                         ui.set_width(64.0);
-                        ui.label(RichText::new(name).strong().size(12.0)).on_hover_text(desc);
+                        ui.label(RichText::new(name).strong().size(TEXT_BODY)).on_hover_text(desc);
                         let m = meters.get(&key).cloned().unwrap_or_default();
                         let hold = self.peak_hold_for(&key, &m.peak_db);
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 2.0;
-                            draw_meter(ui, vec2(36.0, 170.0), &m.peak_db, &m.rms_db, &hold, offline.contains(name), !*on);
+                            draw_meter(ui, vec2(36.0, meter_h), &m.peak_db, &m.rms_db, &hold, offline.contains(name), !*on);
                             // Compressor gain reduction.
                             if let Some(ac) = self.cfg.audio.get(i) {
                                 if ac.processing.enabled && ac.processing.compressor {
-                                    draw_reduction(ui, vec2(5.0, 170.0), *reduction);
+                                    draw_reduction(ui, vec2(5.0, meter_h), *reduction);
                                 }
                             }
                         });
@@ -4406,17 +4429,17 @@ impl App {
                                 ac.gain_db = g as f64;
                                 gain_changes.push((i, ac.gain_db));
                             }
-                            ui.label(RichText::new(format!("{:+.1} dB", ac.gain_db)).size(10.5).color(TEXT_DIM));
-                            let btn = egui::Button::new(RichText::new(if *on { "ON" } else { "OFF" }).strong().size(11.5).color(if *on { Color32::BLACK } else { Color32::WHITE }))
+                            ui.label(RichText::new(format!("{:+.1} dB", ac.gain_db)).size(TEXT_BODY).color(TEXT_DIM));
+                            let btn = egui::Button::new(RichText::new(if *on { "ON" } else { "OFF" }).strong().size(TEXT_BODY).color(if *on { Color32::BLACK } else { Color32::WHITE }))
                                 .fill(if *on { GREEN } else { OFF })
-                                .min_size(vec2(56.0, 22.0));
+                                .min_size(vec2(56.0, 24.0));
                             if ui.add(btn).on_hover_text(if *on { "Heard in the mixes: click to turn it off" } else { "Off: not heard in the mixes. Click to turn it on" }).clicked() {
                                 on_changes.push((i, !*on));
                             }
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 3.0;
                                 let soloed = monitoring && self.cfg.mix.monitor_source.eq_ignore_ascii_case(name);
-                                let h = ui.add(egui::Button::selectable(soloed, RichText::new("🎧").size(11.0)).min_size(vec2(24.0, 18.0)));
+                                let h = ui.add(egui::Button::selectable(soloed, RichText::new("🎧").size(TEXT_SMALL)).min_size(vec2(24.0, 18.0)));
                                 if h.on_hover_text(if monitoring { "Solo in the headphones" } else { "Choose a headphone output in Settings → Mixing & headphones" }).clicked() && monitoring {
                                     solo = Some(name.clone());
                                 }
@@ -4436,13 +4459,13 @@ impl App {
                                     tags.push_str(" A");
                                 }
                                 if !tags.is_empty() {
-                                    ui.label(RichText::new(tags.trim()).size(10.0).color(ACCENT)).on_hover_text("FX: voice processing on · R: recording only · S: stream only · D: ducks under voices · A: in the automatic mic mix");
+                                    ui.label(RichText::new(tags.trim()).size(TEXT_BODY).color(ACCENT)).on_hover_text("FX: voice processing on · R: recording only · S: stream only · D: ducks under voices · A: in the automatic mic mix");
                                 }
                                 if let Some(db) = automix.get(i).copied().flatten().filter(|d| *d < -0.5 && self.cfg.mix.automix && *on) {
-                                    ui.label(RichText::new(format!("↓{:.0}", -db)).size(10.0).color(ACCENT)).on_hover_text("The automatic mic mixer has this mic down right now (dB), because someone else is talking");
+                                    ui.label(RichText::new(format!("↓{:.0}", -db)).size(TEXT_BODY).color(ACCENT)).on_hover_text("The automatic mic mixer has this mic down right now (dB), because someone else is talking");
                                 }
                                 if ac.duck && ducking < -0.5 {
-                                    ui.label(RichText::new(format!("↓{:.0}", -ducking)).size(10.0).color(AMBER)).on_hover_text("Turned down under the voices right now (dB)");
+                                    ui.label(RichText::new(format!("↓{:.0}", -ducking)).size(TEXT_BODY).color(AMBER)).on_hover_text("Turned down under the voices right now (dB)");
                                 }
                             });
                         }
@@ -4452,21 +4475,21 @@ impl App {
                 for (key, label_text, l) in [("mix", "REC MIX", &loud.recording), ("stream", "STREAM", &loud.stream)] {
                     ui.vertical(|ui| {
                         ui.set_width(70.0);
-                        ui.label(RichText::new(label_text).strong().size(12.0));
+                        ui.label(RichText::new(label_text).strong().size(TEXT_BODY));
                         let m = meters.get(key).cloned().unwrap_or_default();
                         let hold = self.peak_hold_for(key, &m.peak_db);
-                        draw_meter(ui, vec2(36.0, 170.0), &m.peak_db, &m.rms_db, &hold, false, false);
+                        draw_meter(ui, vec2(36.0, meter_h), &m.peak_db, &m.rms_db, &hold, false, false);
                         let fmt = |v: f32| if v < -99.0 { "—".to_string() } else { format!("{v:.0}") };
-                        ui.label(RichText::new(format!("{} LUFS", fmt(l.short_term))).monospace().size(11.0))
+                        ui.label(RichText::new(format!("{} LUFS", fmt(l.short_term))).monospace().size(TEXT_BODY))
                             .on_hover_text(format!("Short-term loudness (3 s). Momentary (0.4 s): {} LUFS", fmt(l.momentary)));
-                        ui.label(RichText::new(format!("I {}", fmt(l.integrated))).monospace().size(10.5).color(TEXT_DIM))
+                        ui.label(RichText::new(format!("I {}", fmt(l.integrated))).monospace().size(TEXT_BODY).color(TEXT_DIM))
                             .on_hover_text("Integrated loudness since the take / stream started");
                         if l.limiting > 0.5 {
-                            ui.label(RichText::new(format!("lim −{:.0}", l.limiting)).size(10.5).color(AMBER));
+                            ui.label(RichText::new(format!("lim −{:.0}", l.limiting)).size(TEXT_BODY).color(AMBER));
                         }
                         if key == "stream" {
                             if let Some(g) = loud.stream_gain_db {
-                                ui.label(RichText::new(format!("lev {g:+.1}")).size(10.5).color(ACCENT)).on_hover_text("What stream levelling is adding");
+                                ui.label(RichText::new(format!("lev {g:+.1}")).size(TEXT_BODY).color(ACCENT)).on_hover_text("What stream levelling is adding");
                             }
                         }
                     });
@@ -4475,7 +4498,7 @@ impl App {
         });
         if monitoring {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("🎧").size(12.0));
+                ui.label(RichText::new("🎧").size(TEXT_BODY));
                 let src = if self.cfg.mix.monitor_source == "stream" {
                     "stream mix".to_string()
                 } else if self.cfg.mix.monitor_source == "program" || self.cfg.mix.monitor_source.is_empty() {
@@ -4483,7 +4506,7 @@ impl App {
                 } else {
                     format!("{} solo", self.cfg.mix.monitor_source)
                 };
-                ui.label(RichText::new(src).size(11.5).color(TEXT_DIM));
+                ui.label(RichText::new(src).size(TEXT_SMALL).color(TEXT_DIM));
                 let mut v = self.cfg.mix.monitor_volume_db;
                 if ui.add(egui::Slider::new(&mut v, -40.0..=12.0).show_value(false)).on_hover_text("Headphone volume").changed() {
                     self.cfg.mix.monitor_volume_db = v;
@@ -4547,7 +4570,7 @@ impl App {
                     LogLevel::Warning => AMBER,
                     LogLevel::Error => ERROR,
                 };
-                ui.label(RichText::new(format!("{}  {}", l.time, l.text)).color(color).monospace().size(11.5));
+                ui.label(RichText::new(format!("{}  {}", l.time, l.text)).color(color).monospace().size(TEXT_SMALL));
             }
         });
     }
@@ -4591,7 +4614,7 @@ impl App {
             let ok = |ui: &mut egui::Ui, good: bool, text: String| {
                 ui.label(RichText::new(text).color(if good { Color32::WHITE } else { AMBER }));
             };
-            ui.label(RichText::new("DRIVES").color(TEXT_DIM).size(11.0));
+            ui.label(RichText::new("DRIVES").color(TEXT_DIM).size(TEXT_SMALL));
             match &disk {
                 Some(d) => ok(ui, d.seconds_left().is_none_or(|s| s > 1800.0), format!("Recording: {} of {} ({})", d.describe(), crate::util::human_size(d.total), if d.measured { "rate measured" } else { "rate estimated" })),
                 None => ok(ui, false, "Recording drive: unknown".into()),
@@ -4600,7 +4623,7 @@ impl App {
                 ok(ui, b.free > crate::engine::health::MIN_START_BYTES, format!("Backup: {}", b.describe()));
             }
             ui.add_space(8.0);
-            ui.label(RichText::new("SOURCES").color(TEXT_DIM).size(11.0));
+            ui.label(RichText::new("SOURCES").color(TEXT_DIM).size(TEXT_SMALL));
             egui::Grid::new("h_src").num_columns(4).striped(true).show(ui, |ui| {
                 for (i, s) in h.sources.iter().enumerate() {
                     ui.label(&s.name);
@@ -4613,10 +4636,10 @@ impl App {
             });
             if !h.files.is_empty() {
                 ui.add_space(8.0);
-                ui.label(RichText::new("FILES BEING RECORDED").color(TEXT_DIM).size(11.0));
+                ui.label(RichText::new("FILES BEING RECORDED").color(TEXT_DIM).size(TEXT_SMALL));
                 egui::Grid::new("h_files").num_columns(5).striped(true).show(ui, |ui| {
                     for t in ["File", "Frames", "Repeated", "Dropped", "Waiting"] {
-                        ui.label(RichText::new(t).color(TEXT_DIM).size(11.5));
+                        ui.label(RichText::new(t).color(TEXT_DIM).size(TEXT_SMALL));
                     }
                     ui.end_row();
                     for f in &h.files {
@@ -4631,10 +4654,10 @@ impl App {
                         ui.end_row();
                     }
                 });
-                ui.label(RichText::new("Repeated: the source skipped a frame (filled in). Dropped: extra frames from a fast source. Waiting: frames queued for the encoder (should stay small).").size(11.0).color(TEXT_DIM));
+                ui.label(RichText::new("Repeated: the source skipped a frame (filled in). Dropped: extra frames from a fast source. Waiting: frames queued for the encoder (should stay small).").size(TEXT_SMALL).color(TEXT_DIM));
             }
             ui.add_space(8.0);
-            ui.label(RichText::new("AUDIO").color(TEXT_DIM).size(11.0));
+            ui.label(RichText::new("AUDIO").color(TEXT_DIM).size(TEXT_SMALL));
             egui::Grid::new("h_audio").num_columns(3).striped(true).show(ui, |ui| {
                 for a in &h.audio {
                     ui.label(&a.name);
@@ -4830,7 +4853,7 @@ impl App {
                 (Some(job), None) => {
                     let p = job.progress();
                     ui.add_space(8.0);
-                    ui.label(RichText::new(if p < 0.12 { "Get ready…" } else { "Clap now!" }).size(28.0).strong().color(if p < 0.12 { TEXT_DIM } else { AMBER }));
+                    ui.label(RichText::new(if p < 0.12 { "Get ready…" } else { "Clap now!" }).size(TEXT_TITLE).strong().color(if p < 0.12 { TEXT_DIM } else { AMBER }));
                     ui.add_space(6.0);
                     ui.add(egui::ProgressBar::new(p).desired_width(520.0));
                     ui.ctx().request_repaint_after(Duration::from_millis(50));
@@ -4842,7 +4865,7 @@ impl App {
                     }
                     egui::Grid::new("sync_results").num_columns(5).striped(true).spacing([14.0, 6.0]).show(ui, |ui| {
                         for t in ["", "", "Clap", "Delay now", "Suggested"] {
-                            ui.label(RichText::new(t).color(TEXT_DIM).size(11.5));
+                            ui.label(RichText::new(t).color(TEXT_DIM).size(TEXT_SMALL));
                         }
                         ui.end_row();
                         for (k, (kind, item)) in r.video.iter().map(|i| ("Video", i)).chain(r.audio.iter().map(|i| ("Audio", i))).enumerate() {
@@ -4861,7 +4884,7 @@ impl App {
                         }
                     });
                     ui.add_space(6.0);
-                    ui.label(RichText::new("The latest camera or input sets the time; everything else is held back to match it. Sources and inputs restart for a moment when delays change.").size(11.5).color(TEXT_DIM));
+                    ui.label(RichText::new("The latest camera or input sets the time; everything else is held back to match it. Sources and inputs restart for a moment when delays change.").size(TEXT_SMALL).color(TEXT_DIM));
                     if busy {
                         ui.label(RichText::new("Stop recording and streaming to apply.").color(AMBER));
                     }
@@ -5026,7 +5049,7 @@ impl App {
                         }
                         painter.rect_stroke(rr, 0.0, Stroke::new(3.0, color), StrokeKind::Outside);
                         let label = if i == 1 && recording { format!("● {name}") } else { name };
-                        painter.text(rr.left_bottom() + vec2(8.0, -8.0), Align2::LEFT_BOTTOM, label, FontId::proportional(18.0), Color32::WHITE);
+                        painter.text(rr.left_bottom() + vec2(8.0, -8.0), Align2::LEFT_BOTTOM, label, FontId::proportional(TEXT_HEADING), Color32::WHITE);
                     }
                     let n = tiles.len().max(1);
                     let cols = (n as f32).sqrt().ceil().max(n.min(4) as f32) as usize;
@@ -5043,7 +5066,7 @@ impl App {
                         }
                         let color = if *on_air { ON_AIR } else if *pv { GREEN } else { Color32::from_gray(70) };
                         painter.rect_stroke(rr, 0.0, Stroke::new(if *on_air || *pv { 3.0 } else { 1.0 }, color), StrokeKind::Outside);
-                        painter.text(rr.left_bottom() + vec2(6.0, -6.0), Align2::LEFT_BOTTOM, format!("{} {}", i + 1, name), FontId::proportional(14.0), Color32::WHITE);
+                        painter.text(rr.left_bottom() + vec2(6.0, -6.0), Align2::LEFT_BOTTOM, format!("{} {}", i + 1, name), FontId::proportional(TEXT_STATE), Color32::WHITE);
                     }
                 }
                 if let Some((segment, rec)) = &clocks {
@@ -5587,8 +5610,22 @@ fn quit_text(recording: bool, live: bool, busy: Option<String>) -> (String, Stri
 
 // ---- drawing helpers -------------------------------------------------------------
 
+/// A button in the header: all alike, lit while its window or output is
+/// on, with an amber count when there's something to look at ("Log (3)").
+fn header_button(ui: &mut egui::Ui, on: bool, label: &str, count: usize) -> egui::Response {
+    let text = if count > 0 { RichText::new(format!("{label} ({count})")).color(AMBER) } else { RichText::new(label) };
+    ui.add(egui::Button::new(text.size(TEXT_BODY)).selected(on).min_size(vec2(0.0, 28.0)))
+}
+
+/// Text drawn a second time half a pixel over, for a bold look (the
+/// interface font has no bold of its own).
+fn bold_text(painter: &egui::Painter, at: egui::Pos2, align: Align2, text: &str, size: f32, color: Color32) {
+    painter.text(at, align, text, FontId::proportional(size), color);
+    painter.text(at + vec2(0.6, 0.0), align, text, FontId::proportional(size), color);
+}
+
 fn label_chip(painter: &egui::Painter, left_center: egui::Pos2, text: &str) -> Rect {
-    let galley = painter.layout_no_wrap(text.to_string(), FontId::proportional(14.0), Color32::WHITE);
+    let galley = painter.layout_no_wrap(text.to_string(), FontId::proportional(TEXT_STATE), Color32::WHITE);
     let r = Rect::from_min_size(left_center - vec2(0.0, galley.size().y / 2.0), galley.size());
     let bg = r.expand2(vec2(8.0, 4.0));
     painter.rect_filled(bg, 3.0, Color32::from_black_alpha(170));
@@ -5637,7 +5674,7 @@ fn draw_meter(ui: &mut egui::Ui, size: egui::Vec2, peak: &[f32], rms: &[f32], ho
         painter.line_segment([pos2(rect.left(), y), pos2(rect.left() + 3.0, y)], Stroke::new(1.0, LINE));
     }
     if offline {
-        painter.text(rect.center(), Align2::CENTER_CENTER, "OFF", FontId::proportional(11.0), AMBER);
+        painter.text(rect.center(), Align2::CENTER_CENTER, "OFF", FontId::proportional(TEXT_BODY), AMBER);
     }
 }
 
@@ -5732,7 +5769,7 @@ fn tool_group(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) -
     let r = egui::Frame::new().stroke(Stroke::new(1.0, Color32::from_rgb(52, 58, 70))).corner_radius(CornerRadius::same(5)).inner_margin(egui::Margin::symmetric(8, 4)).show(ui, |ui| {
         ui.set_max_width(ui.available_width() - 18.0);
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new(title).color(TEXT_DIM).size(10.5).strong());
+            ui.label(RichText::new(title).color(TEXT_DIM).size(TEXT_SMALL).strong());
             add(ui);
         });
     });

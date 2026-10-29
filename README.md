@@ -687,7 +687,7 @@ Video Extensions** on some PCs.
   where they appear in the log.
 - **Health:** the **Health** button shows each source's frame rate, each
   file being recorded (frames written, repeated, dropped, queued), each
-  input's re-syncs and the drives. It turns amber when something needs a look.
+  input's re-syncs and the drives. Like **Log (3)**, it turns amber with a count (**Health (2)**) when something needs a look.
 - **A device that misbehaves** doesn't stop the app. It's marked offline, the
   reason is in the Log panel, and it's reopened when it comes back.
 - **A source that drops while it's on air** (a camera unplugged, a network
