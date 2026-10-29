@@ -153,12 +153,15 @@ pub enum Builtin {
     PreviousSegment,
     Clip,
     Talkback,
+    /// Back to the scene on air before this one.
+    Back,
 }
 
 impl Builtin {
-    pub const ALL: [Builtin; 15] = [
+    pub const ALL: [Builtin; 16] = [
         Builtin::Take,
         Builtin::CutPreview,
+        Builtin::Back,
         Builtin::Transition,
         Builtin::Auto,
         Builtin::Captions,
@@ -192,6 +195,7 @@ impl Builtin {
             Builtin::PreviousSegment => "previous",
             Builtin::Clip => "clip",
             Builtin::Talkback => "talkback",
+            Builtin::Back => "back",
         }
     }
 
@@ -212,6 +216,7 @@ impl Builtin {
             Builtin::PreviousSegment => "Previous rundown segment",
             Builtin::Clip => "Save a clip of the last few seconds while recording",
             Builtin::Talkback => "Talkback: your mic in the presenters' ears while held",
+            Builtin::Back => "Back to the last scene (the one on air before this)",
         }
     }
 
@@ -239,6 +244,7 @@ impl Builtin {
             Builtin::PreviousSegment => vec![KeyCombo { key: Key::N, command: false, shift: true, alt: false }],
             Builtin::Clip => vec![KeyCombo::plain(Key::K)],
             Builtin::Talkback => vec![KeyCombo::plain(Key::B)],
+            Builtin::Back => vec![KeyCombo::plain(Key::Backspace)],
         }
     }
 }
