@@ -207,6 +207,8 @@ pub struct App {
     guide_heard: bool,
     /// The pre-show check was run from the guide.
     guide_checked: bool,
+    /// Edit layout was turned on from the guide (its scenes step).
+    guide_scenes: bool,
     health_open: bool,
     peak_hold: HashMap<String, PeakHold>,
     /// Messages at the bottom, newest last. Errors stay until clicked;
@@ -380,6 +382,7 @@ impl App {
             settings_page: None,
             guide_heard: false,
             guide_checked: false,
+            guide_scenes: false,
             health_open: false,
             peak_hold: HashMap::new(),
             toasts: Vec::new(),

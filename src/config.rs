@@ -2203,6 +2203,34 @@ impl Config {
         }
     }
 
+    /// Rename source `i`, and everything that points at it by name (close-ups cut from it, sound taken
+    /// from it). Errors if the name is empty or another source has it.
+    pub fn rename_source(&mut self, i: usize, new: &str) -> Result<(), String> {
+        let new = new.trim();
+        if new.is_empty() {
+            return Err("A source needs a name".into());
+        }
+        if self.sources.iter().enumerate().any(|(j, s)| j != i && s.name.trim().eq_ignore_ascii_case(new)) {
+            return Err(format!("There's already a source called {new}"));
+        }
+        let Some(old) = self.sources.get(i).map(|s| s.name.clone()) else { return Err("No such source".into()) };
+        for s in &mut self.sources {
+            if s.framed_from().is_some_and(|f| f.trim().eq_ignore_ascii_case(old.trim())) {
+                s.device = format!("frame:{new}");
+            }
+            if s.virtual_ptz_of().is_some_and(|f| f.trim().eq_ignore_ascii_case(old.trim())) {
+                s.device = format!("vptz:{new}");
+            }
+        }
+        for a in &mut self.audio {
+            if a.device.trim().strip_prefix("source:").is_some_and(|n| n.trim().eq_ignore_ascii_case(old.trim())) {
+                a.device = format!("source:{new}");
+            }
+        }
+        self.sources[i].name = new.to_string();
+        Ok(())
+    }
+
     pub fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading {}", path.display()))?;
@@ -2428,6 +2456,29 @@ mod tests {
         assert!(!cfg.lineup_changed(&named));
         named.sources[0].delay_ms = 40;
         assert!(cfg.lineup_changed(&named));
+    }
+
+    #[test]
+    fn renaming_a_source_takes_what_points_at_it_along() {
+        let mut cfg = Config::default();
+        cfg.sources = vec![
+            SourceConfig { name: "Wide".into(), ..Default::default() },
+            SourceConfig { name: "Wide left".into(), device: "vptz:Wide".into(), ..Default::default() },
+            SourceConfig { name: "Other".into(), ..Default::default() },
+        ];
+        cfg.audio = vec![AudioConfig { name: "Its sound".into(), device: "source:Wide".into(), ..Default::default() }];
+        assert!(cfg.rename_source(0, "  ").is_err());
+        assert!(cfg.rename_source(0, "other").is_err(), "names stay unique");
+        assert!(cfg.rename_source(0, "WIDE").is_ok(), "its own name in other letters is fine");
+        cfg.rename_source(0, "Stage").unwrap();
+        assert_eq!(cfg.sources[0].name, "Stage");
+        assert_eq!(cfg.sources[1].virtual_ptz_of(), Some("Stage"));
+        assert_eq!(cfg.audio[0].device, "source:Stage");
+        // The name titles aren't part of what reopens a camera; the name is.
+        let mut named = cfg.clone();
+        named.sources[0].person = "Alex".into();
+        assert!(!cfg.lineup_changed(&named));
+        assert!(cfg.lineup_changed(&{ let mut r = cfg.clone(); r.rename_source(2, "Else").unwrap(); r }));
     }
 
     #[test]

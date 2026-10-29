@@ -611,10 +611,17 @@ Video Extensions** on some PCs.
 ## First run
 
 - **Your first show:** the first time Cutaway opens, a short guide walks
-  through cameras, the microphone, where recordings go, going live
-  (optional), the pre-show check and a test recording. Each step has a
-  button to the right page in Settings and ticks itself off when it's done.
-  Open it again any time with **?** at the top.
+  through cameras, **naming your people**, the microphone, **your scenes**,
+  where recordings go, going live (optional), the pre-show check, a test
+  recording and (optional) **editing afterwards**. Each step has a button to
+  the right page in Settings and ticks itself off when it's done. Naming
+  people is done right in the guide: a name for each camera or close-up,
+  who's in it and their role (the same as **Video sources → Name title**,
+  which changes live without reopening anything; a new camera name reopens
+  that camera for a moment). Your scenes turns on **Edit layout**, and Editing
+  afterwards opens **Recording → For editing**, where the DaVinci Resolve,
+  Premiere Pro and Final Cut projects are switched on. Open it again any time
+  with **?** at the top.
 - **Auto-setup:** on first launch Cutaway writes a settings file with every
   camera and capture card it finds, plus the first audio input, to
   `~/Library/Application Support/Cutaway/config.toml` (on Windows,
