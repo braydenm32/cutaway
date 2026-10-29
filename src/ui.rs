@@ -222,6 +222,8 @@ pub struct App {
     guide_heard: bool,
     /// The pre-show check was run from the guide.
     guide_checked: bool,
+    /// Edit layout was turned on from the guide (its scenes step).
+    guide_scenes: bool,
     health_open: bool,
     peak_hold: HashMap<String, PeakHold>,
     /// Messages at the bottom, newest last. Errors stay until clicked;
@@ -421,6 +423,7 @@ impl App {
             settings_page: None,
             guide_heard: false,
             guide_checked: false,
+            guide_scenes: false,
             health_open: false,
             peak_hold: HashMap::new(),
             toasts: Vec::new(),
@@ -1974,6 +1977,11 @@ impl App {
                 2
             }
             2 if t > 4.0 => {
+                if std::env::var_os("CUTAWAY_UI_TEST_SPLIT").is_some() {
+                    // Split the first camera in two and apply, as the Split… button does.
+                    let cfg = self.new_settings().with_split(0, 2).draft_config();
+                    let _ = self.apply_settings(cfg, ctx);
+                }
                 if std::env::var_os("CUTAWAY_UI_TEST_EDIT").is_some() {
                     self.edit_mode = true;
                     self.selected_layer = Some(1);
@@ -2007,8 +2015,21 @@ impl App {
             3 if t > 6.0 && std::env::var_os("CUTAWAY_UI_TEST_SETTINGS").is_some() => {
                 let name = std::env::var("CUTAWAY_UI_TEST_SETTINGS").unwrap_or_default();
                 let section = Section::from_name(&name).unwrap_or(Section::Sources);
+                if std::env::var_os("CUTAWAY_UI_TEST_NAMES").is_some() {
+                    // A who's-on-air title, with no names set on the sources.
+                    self.cfg.graphics.push(crate::config::Graphic::names("Names"));
+                }
+                if std::env::var_os("CUTAWAY_UI_TEST_REMOTE").is_some() {
+                    // Remote control on with a PIN, for a screenshot of its page.
+                    self.cfg.remote.enabled = true;
+                    self.cfg.remote.pin = "4821".into();
+                }
                 let source = std::env::var("CUTAWAY_UI_TEST_SOURCE").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
-                self.settings = Some(self.new_settings().open_at(section).select_source(source));
+                let mut win = self.new_settings().open_at(section).select_source(source);
+                if let Ok(q) = std::env::var("CUTAWAY_UI_TEST_FIND") {
+                    win = win.with_find(&q, std::env::var_os("CUTAWAY_UI_TEST_FINDGO").is_some());
+                }
+                self.settings = Some(win);
                 4
             }
             s => s,
@@ -4957,6 +4978,14 @@ impl App {
             let new_of = |old: usize| old_uids.get(old).and_then(|u| new_uids.iter().position(|n| n == u));
             for sc in &mut new.scenes {
                 sc.remap_sources(&new_of);
+            }
+        }
+        // Close-ups just cut from a camera also get a scene with them side by side.
+        if !own_scenes {
+            let both = crate::scene::split_scenes(&new.sources, &|i| !old_uids.contains(&new.sources[i].uid), &new.effective_scenes());
+            if !both.is_empty() {
+                new.scenes = new.effective_scenes();
+                new.scenes.extend(both);
             }
         }
         let mut notes = Vec::new();

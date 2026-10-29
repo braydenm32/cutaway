@@ -3,10 +3,145 @@
 //! page that's showing and the name as written there.
 
 use super::Section;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::sync::OnceLock;
+use std::time::Instant;
 
 thread_local! {
     static PAGE: Cell<Option<Section>> = const { Cell::new(None) };
+    /// The setting "Find a setting" took us to: page, label, when, and whether it has been scrolled to.
+    static TARGET: RefCell<Option<(Section, String, Instant, bool)>> = const { RefCell::new(None) };
+}
+
+thread_local! {
+    /// A folded part to unfold the next time it's drawn (its id, as `{:?}`).
+    static OPEN_PART: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Unfold the part drawn with this id when its page next shows it.
+pub(super) fn open_part(id: &str) {
+    OPEN_PART.with(|p| *p.borrow_mut() = Some(format!("{id:?}")));
+}
+
+/// Whether this part (`{:?}` of its id) was asked to unfold: once.
+pub(super) fn take_open_part(id_debug: &str) -> bool {
+    OPEN_PART.with(|p| {
+        let mut p = p.borrow_mut();
+        if p.as_deref() == Some(id_debug) {
+            *p = None;
+            true
+        } else {
+            false
+        }
+    })
+}
+
+/// How long a found setting's name stays lit.
+const LIT_SECS: f32 = 2.5;
+
+fn lit_secs() -> f32 {
+    // Long enough for a scripted screenshot to catch.
+    if std::env::var_os("CUTAWAY_UI_TEST_FINDGO").is_some() { 30.0 } else { LIT_SECS }
+}
+
+/// Light up (and scroll to) this setting's name when its page draws it.
+pub(super) fn find_target(page: Section, label: &str) {
+    TARGET.with(|t| *t.borrow_mut() = Some((page, label.to_string(), Instant::now(), false)));
+}
+
+/// Called as each setting's name is drawn on the page being shown: if it's the one that was found,
+/// how lit it is (1 to 0), and whether to scroll to it (once).
+pub(super) fn lit(name: &str) -> Option<(f32, bool)> {
+    let page = PAGE.with(|p| p.get())?;
+    TARGET.with(|t| {
+        let mut t = t.borrow_mut();
+        let (p, l, since, scrolled) = t.as_mut()?;
+        let age = since.elapsed().as_secs_f32();
+        if age > lit_secs() {
+            *t = None;
+            return None;
+        }
+        if *p != page || l != name {
+            return None;
+        }
+        let first = !*scrolled;
+        *scrolled = true;
+        Some((1.0 - age / lit_secs(), first))
+    })
+}
+
+/// A setting that has help: its page and name, and what the help says.
+pub(super) struct Entry {
+    pub page: Section,
+    pub label: String,
+    pub text: String,
+}
+
+/// Every (page, name) in `for_page`, read from this file's own table, so the list can't fall out of step with it.
+pub(super) fn entries() -> &'static [Entry] {
+    static ALL: OnceLock<Vec<Entry>> = OnceLock::new();
+    ALL.get_or_init(|| parse_entries(include_str!("help.rs")))
+}
+
+fn parse_entries(src: &str) -> Vec<Entry> {
+    let unquote = |s: &str| s.replace("\\\"", "\"").replace("\\n", " ");
+    let mut out = Vec::new();
+    // (Up to the tests at the end.)
+    for line in src.rsplit_once("#[cfg(test)]").map_or(src, |(table, _)| table).lines() {
+        let line = line.trim();
+        let Some((left, right)) = line.split_once(" => \"") else { continue };
+        if !left.starts_with('(') {
+            continue;
+        }
+        let text = unquote(right.trim_end_matches(',').trim_end_matches('"'));
+        for part in left.split(" | ") {
+            let inner = part.trim().trim_start_matches('(').trim_end_matches(')');
+            let Some((page, label)) = inner.split_once(", \"") else { continue };
+            let Some(page) = Section::from_ident(page.trim()) else { continue };
+            out.push(Entry { page, label: unquote(label.trim_end_matches('"')), text: text.clone() });
+        }
+    }
+    out
+}
+
+/// One answer to "Find a setting": a page, or a setting on one.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Hit {
+    pub page: Section,
+    pub label: Option<String>,
+}
+
+/// Settings and pages matching what was typed (every word of it), best first: names, then pages, then
+/// what the help says. At most `max`.
+pub(super) fn search(query: &str, max: usize) -> Vec<Hit> {
+    let words: Vec<String> = query.split_whitespace().map(|w| w.to_lowercase()).collect();
+    if words.is_empty() {
+        return Vec::new();
+    }
+    let has = |hay: &str| words.iter().all(|w| hay.to_lowercase().contains(w.as_str()));
+    let mut out: Vec<Hit> = Vec::new();
+    let push = |h: Hit, out: &mut Vec<Hit>| {
+        if !out.contains(&h) {
+            out.push(h);
+        }
+    };
+    for e in entries() {
+        if has(&e.label) {
+            push(Hit { page: e.page, label: Some(e.label.clone()) }, &mut out);
+        }
+    }
+    for page in Section::ALL {
+        if has(page.label()) {
+            push(Hit { page, label: None }, &mut out);
+        }
+    }
+    for e in entries() {
+        if has(&format!("{} {}", e.label, e.text)) {
+            push(Hit { page: e.page, label: Some(e.label.clone()) }, &mut out);
+        }
+    }
+    out.truncate(max);
+    out
 }
 
 /// The page being drawn (None between pages).
@@ -31,7 +166,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
 
         // ---- Video sources
         (Sources, "Name") => "What this source is called on its button, in the multiview and scenes, and in the name of its own file (ISO_01_Name).",
-        (Sources, "Name title") => "Who's in this picture and their role, for a name title that names whoever is on air (Settings → Graphics → Who's on air). For a camera split into close-ups, set each close-up to its own person. A guest spot left empty uses the name the guest types.",
+        (Sources, "Name title") => "Who's in this picture and their role, for a name title that names whoever is on air (Settings → Graphics → Names of whoever's on air). For a camera split into close-ups, set each close-up to its own person. A guest spot left empty uses the name the guest types.",
         (Sources, "Feed") => "How the network feed arrives. SRT (wait for a sender): another computer or app sends to this one. SRT (pull from an address): Cutaway fetches it from an address you type. RTMP: point OBS, a phone app or an encoder at Cutaway's own RTMP server.",
         (Sources, "Type") => "Where the picture comes from, in groups: cameras and screens on this computer (or a phone), close-ups cut from another source, feeds from the network (SRT or RTMP, picked under Network feed, or NDI), and a media player or test picture. Two people on one camera? Use Virtual PTZ (you aim it) or Auto-framed (it follows them).",
         (Sources, "Device") => "Which camera or capture card. If it's unplugged, the source waits and connects by itself when it's back.",
@@ -79,6 +214,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
 
         // ---- Audio inputs
         (Audio, "Name") => "What this input is called on its strip and in the mixes, and in its WAV file's name.",
+        (Audio, "Level") => "How loud this input is now (the loudest channel it captures), as a bar. It shows once the input has been applied and is open; a new input says \"Apply to hear it\". In the list, ↑ and ↓ move the input: the order of the strips in the mixer.",
         (Audio, "Device") => "Where the sound comes from: an audio interface or loopback device, the sound of a media player or network source (\"Sound from …\"), another app's sound, the sound pads, or a test tone.",
         (Audio, "Channels to capture") => "How many of the device's channels to take in. Every one is recorded to the WAV; pick which ones feed the mix below.",
         (Audio, "Program left / right") => "Which captured channels make the left and right of the mix. Pick the same channel for both to put a mono mic in the middle.",
@@ -288,7 +424,6 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Streaming, "Address") => "The SRT receiver's address: srt://host:port.",
         (Streaming, "Stream key") => "The secret key from the service's live dashboard. Anyone with it can stream to your channel. Cutaway keeps it in the Keychain (Mac) or Credential Manager (Windows), not in the settings file.",
         (Streaming, "Stream ID (optional)") => "An SRT stream ID, if the receiver asks for one.",
-        (Streaming, "Go live here") => "Include this destination when you go live. Untick it to keep it set up but skip it.",
         (Streaming, "Sends") => "The program, or the 9:16 vertical version for YouTube Shorts and TikTok (turn it on in Vertical version).",
         (Streaming, "Size") => "The size sent to every destination. Smaller than the program saves upload: 1920×1080 is typical, 1280×720 on a slow connection.",
         (Streaming, "Frame rate") => "Frames per second sent. 30 is typical; 60 for fast motion, if your upload allows.",
@@ -393,5 +528,25 @@ mod tests {
             }
         }
         assert!(missing.is_empty(), "no help for: {missing:?}");
+    }
+
+    #[test]
+    fn find_a_setting_by_name_page_or_help() {
+        // The table is read as it is: a few known entries, the "|" one with both names.
+        let all = entries();
+        assert!(all.len() > 200, "{}", all.len());
+        assert!(all.iter().any(|e| e.page == Section::Sources && e.label == "Name title" && e.text.contains("on air")));
+        assert!(all.iter().any(|e| e.page == Section::Sources && e.label == "Crop top / bottom"));
+        assert!(all.iter().any(|e| e.page == Section::Upload && e.label == "Client secret" && e.text.starts_with("From the OAuth")));
+        // Names first.
+        let hits = search("name title", 8);
+        assert_eq!(hits[0], Hit { page: Section::Sources, label: Some("Name title".into()) });
+        // A page by its name.
+        assert!(search("streaming", 8).contains(&Hit { page: Section::Streaming, label: None }));
+        // By what the help says (not in any name).
+        assert!(search("gate", 8).iter().any(|h| h.page == Section::Audio));
+        assert!(search("zzzqqq", 8).is_empty());
+        assert!(search("  ", 8).is_empty());
+        assert!(search("e", 8).len() <= 8);
     }
 }

@@ -137,7 +137,13 @@ and [Install on Windows](#install-on-windows).
   right"…), with a box on the wide picture to drag onto them and a name
   title to fill in. Each records to its own file, ready for the edit. Each
   close-up is sized to the part of the picture it shows (half a 4K camera
-  is 1080p), so it stays sharp and is cheap to cut out.
+  is 1080p), so it stays sharp and is cheap to cut out. Applying also adds
+  a scene "Cam 1: both" (or "all three") with the close-ups side by side,
+  unless a scene of that name is already there.
+- **Lists work the same everywhere:** video sources, audio inputs, graphics,
+  stream destinations, rundown segments and macros all have the same buttons
+  under the list: **＋ Add**, **Duplicate**, **Remove**, **↑** and **↓**
+  (then any of their own, like **Split…**).
 - **See it before you apply it:** in **Settings → Video sources** each source
   shows its picture above its settings (the multiview's own, so nothing is
   opened twice). Crop and mirror show what they'll look like as you change
@@ -279,7 +285,8 @@ Take_2026-10-16_19-30-02/
   between guests.
 - **Names that follow people:** give each source the name and role of
   whoever is in it (**Settings → Video sources → Name title**; a guest spot
-  uses the name the guest types), and add a **Who's on air** title in
+  uses the name the guest types), and add **Names of whoever's on air** (the
+  recommended button; **Fixed title** is for typed text) in
   Settings → Graphics. It names whoever fills the program, changing at each
   cut, and can come on by itself for a few seconds when someone new is on
   air (not again for the same person for 10 minutes, or as you set). Its
@@ -335,6 +342,14 @@ Take_2026-10-16_19-30-02/
 - **DAW audio.** Each audio input is recorded to WAV (multichannel, or one mono
   file per channel). You pick which two channels feed the mix. Interfaces with
   their own clock are kept locked to the video for hours (drift correction).
+- **Inputs in Settings:** each input in **Settings → Audio inputs** has a live
+  level bar (in the list and beside its name), so you can see a mic is alive
+  without leaving the page; an input you haven't applied yet says "Apply to
+  hear it". **↑ / ↓** move an input (the order of the strips in the mixer;
+  scenes, auto-mix, ducking and talkback follow an input by name, so they
+  carry on; anything that says "input 2" by number, like a remote or MIDI
+  button, now means whichever is second) and **Duplicate** copies one under a
+  new name.
 - **Voice processing** per input: high-pass filter, **noise reduction**
   (RNNoise: fans, hum and room noise turned down, voices kept), noise gate,
   three-band EQ, compressor and de-esser, with a gain-reduction meter on the
@@ -425,7 +440,9 @@ Take_2026-10-16_19-30-02/
   live, markers, clips, replay, fade to black, graphics, macros, PTZ presets
   and moves, the teleprompter, viewer comments, timers, the rundown, sound
   pads, mics and the media player, plus **tally pages** for phones mounted on
-  cameras and a **prompter page** for a tablet.
+  cameras and a **prompter page** for a tablet. **Settings → Remote & MIDI**
+  shows a QR code for the remote's address with the PIN in it: scan it with
+  the phone's camera and the remote opens already signed in.
 - **Stream Deck plugin:** keys with live pictures of every scene and source,
   red and green tally, take/cut, transitions, record and go live (hold to
   confirm), markers, graphics, audio inputs with level meters (and Stream
@@ -594,10 +611,17 @@ Video Extensions** on some PCs.
 ## First run
 
 - **Your first show:** the first time Cutaway opens, a short guide walks
-  through cameras, the microphone, where recordings go, going live
-  (optional), the pre-show check and a test recording. Each step has a
-  button to the right page in Settings and ticks itself off when it's done.
-  Open it again any time with **?** at the top.
+  through cameras, **naming your people**, the microphone, **your scenes**,
+  where recordings go, going live (optional), the pre-show check, a test
+  recording and (optional) **editing afterwards**. Each step has a button to
+  the right page in Settings and ticks itself off when it's done. Naming
+  people is done right in the guide: a name for each camera or close-up,
+  who's in it and their role (the same as **Video sources → Name title**,
+  which changes live without reopening anything; a new camera name reopens
+  that camera for a moment). Your scenes turns on **Edit layout**, and Editing
+  afterwards opens **Recording → For editing**, where the DaVinci Resolve,
+  Premiere Pro and Final Cut projects are switched on. Open it again any time
+  with **?** at the top.
 - **Auto-setup:** on first launch Cutaway writes a settings file with every
   camera and capture card it finds, plus the first audio input, to
   `~/Library/Application Support/Cutaway/config.toml` (on Windows,
@@ -606,7 +630,10 @@ Video Extensions** on some PCs.
   `cutaway.example.toml` explains every option.
 - **Settings** are in six groups (Inputs, Sound, Look, Show, Output and
   General), each with its pages as tabs; less-used parts fold away, showing how
-  they're set. Hover a setting's name, or its ⓘ, for what it does.
+  they're set. Hover a setting's name, or its ⓘ, for what it does. **Find a
+  setting…** at the top of the list matches setting names, their help and page
+  names; click a match to open its page, with the setting's name lit up (Esc
+  clears the box).
 - **The Settings window** can be dragged by its title and resized from its
   corner, so it needn't cover the camera you're adjusting. It opens where you
   left it on this computer; **Centre** puts it back. While it's open, click the
