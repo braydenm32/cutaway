@@ -2282,12 +2282,20 @@ impl Config {
         .with_context(|| format!("writing {}", path.display()))
     }
 
+    /// The checks a settings file must pass to load and run. Settings asks
+    /// for more (`check`) before Apply, so older files that Settings would
+    /// now refuse still open.
     pub fn validate(&self) -> Result<()> {
-        self.check().map_err(Into::into)
+        self.check_with(false).map_err(Into::into)
     }
 
-    /// Like `validate`, but says where the problem is, so Settings can jump to it.
+    /// Like `validate`, plus the checks Settings makes before Apply, and says
+    /// where the problem is, so Settings can jump to it.
     pub fn check(&self) -> std::result::Result<(), Problem> {
+        self.check_with(true)
+    }
+
+    fn check_with(&self, strict: bool) -> std::result::Result<(), Problem> {
         fn ensure(ok: bool, at: ProblemAt, msg: impl FnOnce() -> String) -> std::result::Result<(), Problem> {
             if ok { Ok(()) } else { Err(Problem { message: msg(), at }) }
         }
@@ -2311,7 +2319,7 @@ impl Config {
             )?;
         }
         let mut audio_names = std::collections::HashSet::new();
-        for (i, a) in self.audio.iter().enumerate() {
+        for (i, a) in self.audio.iter().enumerate().filter(|_| strict) {
             ensure(!a.name.trim().is_empty(), ProblemAt::Audio(i), || "every audio input needs a name".into())?;
             ensure(audio_names.insert(a.name.trim().to_lowercase()), ProblemAt::Audio(i), || format!("two audio inputs are called \"{}\"", a.name))?;
         }
@@ -2328,8 +2336,8 @@ impl Config {
         for (i, s) in self.sources.iter().enumerate() {
             let at = ProblemAt::Source(i);
             let d = s.device.trim();
-            ensure(!(crate::util::strip_prefix_ci(d, "vptz:").is_some() && s.virtual_ptz_of().is_none()), at, || format!("source '{}' is a virtual PTZ camera, but no camera is chosen to cut it from", s.name))?;
-            ensure(!(crate::util::strip_prefix_ci(d, "frame:").is_some() && s.framed_from().is_none()), at, || format!("source '{}' is auto-framed, but no camera is chosen to follow people in", s.name))?;
+            ensure(!strict || !(crate::util::strip_prefix_ci(d, "vptz:").is_some() && s.virtual_ptz_of().is_none()), at, || format!("source '{}' is a virtual PTZ camera, but no camera is chosen to cut it from", s.name))?;
+            ensure(!strict || !(crate::util::strip_prefix_ci(d, "frame:").is_some() && s.framed_from().is_none()), at, || format!("source '{}' is auto-framed, but no camera is chosen to follow people in", s.name))?;
             if let Some(from) = s.framed_from() {
                 let parent = self.sources.iter().find(|p| p.name.trim().eq_ignore_ascii_case(from));
                 let parent = parent.ok_or_else(|| Problem { message: format!("source '{}' follows people in \"{from}\", but there's no source called that", s.name), at })?;
@@ -2561,6 +2569,8 @@ mod tests {
         cfg.audio.push(AudioConfig { name: " mic ".into(), ..Default::default() });
         let p = cfg.check().unwrap_err();
         assert_eq!(p.at, ProblemAt::Audio(1));
+        // Only Settings refuses it: a file like this still loads and runs.
+        assert!(cfg.validate().is_ok());
         cfg.audio[1].name = "".into();
         assert!(cfg.check().unwrap_err().message.contains("needs a name"));
         cfg.audio[1].name = "Other".into();
