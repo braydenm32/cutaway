@@ -288,7 +288,6 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Streaming, "Address") => "The SRT receiver's address: srt://host:port.",
         (Streaming, "Stream key") => "The secret key from the service's live dashboard. Anyone with it can stream to your channel. Cutaway keeps it in the Keychain (Mac) or Credential Manager (Windows), not in the settings file.",
         (Streaming, "Stream ID (optional)") => "An SRT stream ID, if the receiver asks for one.",
-        (Streaming, "Go live here") => "Include this destination when you go live. Untick it to keep it set up but skip it.",
         (Streaming, "Sends") => "The program, or the 9:16 vertical version for YouTube Shorts and TikTok (turn it on in Vertical version).",
         (Streaming, "Size") => "The size sent to every destination. Smaller than the program saves upload: 1920×1080 is typical, 1280×720 on a slow connection.",
         (Streaming, "Frame rate") => "Frames per second sent. 30 is typical; 60 for fast motion, if your upload allows.",

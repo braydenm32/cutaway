@@ -1878,6 +1878,10 @@ impl App {
             3 if t > 6.0 && std::env::var_os("CUTAWAY_UI_TEST_SETTINGS").is_some() => {
                 let name = std::env::var("CUTAWAY_UI_TEST_SETTINGS").unwrap_or_default();
                 let section = Section::from_name(&name).unwrap_or(Section::Sources);
+                if std::env::var_os("CUTAWAY_UI_TEST_NAMES").is_some() {
+                    // A who's-on-air title, with no names set on the sources.
+                    self.cfg.graphics.push(crate::config::Graphic::names("Names"));
+                }
                 if std::env::var_os("CUTAWAY_UI_TEST_REMOTE").is_some() {
                     // Remote control on with a PIN, for a screenshot of its page.
                     self.cfg.remote.enabled = true;

@@ -24,21 +24,15 @@ impl SettingsUi {
                 }
                 ui.add_space(6.0);
                 ui.horizontal_wrapped(|ui| {
-                    if ui.button("＋ Macro").clicked() {
-                        let name = unique(self.draft.macros.iter().map(|m| m.name.clone()).collect(), "Macro");
-                        self.draft.macros.push(Macro { name, ..Default::default() });
-                        self.sel_macro = self.draft.macros.len() - 1;
-                    }
-                    if ui.add_enabled(n > 0, egui::Button::new("Remove")).clicked() {
-                        self.draft.macros.remove(self.sel_macro);
-                    }
-                    if ui.add_enabled(n > 0 && self.sel_macro > 0, egui::Button::new("↑")).clicked() {
-                        self.draft.macros.swap(self.sel_macro, self.sel_macro - 1);
-                        self.sel_macro -= 1;
-                    }
-                    if ui.add_enabled(n > 0 && self.sel_macro + 1 < n, egui::Button::new("↓")).clicked() {
-                        self.draft.macros.swap(self.sel_macro, self.sel_macro + 1);
-                        self.sel_macro += 1;
+                    if let Some(edit) = list_buttons(ui, n, self.sel_macro, Some("＋ Macro")) {
+                        apply_list_edit(
+                            &mut self.draft.macros,
+                            &mut self.sel_macro,
+                            edit,
+                            false,
+                            |list| Some(Macro { name: unique(list.iter().map(|m| m.name.clone()).collect(), "Macro"), ..Default::default() }),
+                            |m, list| Macro { name: unique(list.iter().map(|m| m.name.clone()).collect(), &format!("{} copy", m.name)), ..m.clone() },
+                        );
                     }
                 });
             });
