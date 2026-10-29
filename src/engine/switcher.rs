@@ -45,9 +45,21 @@ struct State {
     current: Scene,
     active: Option<Active>,
     preview: Option<Scene>,
+    /// The scene on air before the one now ("back to the last scene").
+    previous: Option<Scene>,
     aspects: Vec<f32>,
     direction: Direction,
     dip: [f32; 3],
+}
+
+impl State {
+    /// About to take `next`: what's on now becomes the last scene (taking
+    /// the same scene again doesn't).
+    fn remember(&mut self, next: &Scene) {
+        if self.current.name != next.name {
+            self.previous = Some(self.current.clone());
+        }
+    }
 }
 
 /// Fade to black: from one level to another over a time.
@@ -87,7 +99,7 @@ impl Switcher {
     pub fn new(canvas: (u32, u32), aspects: Vec<f32>, initial: Scene) -> Self {
         Switcher {
             canvas,
-            state: Mutex::new(State { current: initial, active: None, preview: None, aspects, direction: Direction::Right, dip: [0.0; 3] }),
+            state: Mutex::new(State { current: initial, active: None, preview: None, previous: None, aspects, direction: Direction::Right, dip: [0.0; 3] }),
             uids: Mutex::new(Vec::new()),
             events: Mutex::new(Vec::new()),
             black: Mutex::new(Fade { from: 0.0, to: 0.0, start: Instant::now(), dur: Duration::ZERO }),
@@ -172,6 +184,7 @@ impl Switcher {
         if let Some(a) = st.active.take() {
             st.current = a.to;
         }
+        st.remember(&scene);
         let angle = self.angle_of(&scene);
         self.events.lock_ok().push(SwitchEvent { at: clock::now(), scene: scene.name.clone(), mode, duration_ms, angle });
         if mode == TransitionMode::Cut || duration_ms == 0 || scene == st.current {
@@ -189,6 +202,7 @@ impl Switcher {
         if let Some(a) = st.active.take() {
             st.current = a.to;
         }
+        st.remember(&scene);
         let duration_ms = (duration / 1_000_000).max(1) as u32;
         let angle = self.angle_of(&scene);
         self.events.lock_ok().push(SwitchEvent { at: clock::now() + delay + cut, scene: scene.name.clone(), mode: TransitionMode::Stinger, duration_ms, angle });
@@ -207,6 +221,11 @@ impl Switcher {
     /// Put a scene in preview (None clears it).
     pub fn set_preview(&self, scene: Option<Scene>) {
         self.state.lock_ok().preview = scene;
+    }
+
+    /// The scene on air before this one, if there's been a switch.
+    pub fn previous(&self) -> Option<Scene> {
+        self.state.lock_ok().previous.clone()
     }
 
     pub fn preview(&self) -> Option<Scene> {
@@ -289,6 +308,24 @@ impl Switcher {
 mod tests {
     use super::*;
     use crate::scene::presets;
+
+    #[test]
+    fn remembers_the_last_scene() {
+        let scenes = presets(&["A".to_string(), "B".to_string()]);
+        let (a, b) = (scenes[0].clone(), scenes[1].clone());
+        let sw = Switcher::new((1280, 720), vec![16.0 / 9.0; 2], a.clone());
+        assert!(sw.previous().is_none());
+        sw.take(b.clone(), TransitionMode::Mix, 500);
+        assert_eq!(sw.previous().map(|s| s.name), Some(a.name.clone()));
+        // Taking it again (or mid-transition) keeps the one before.
+        sw.take(b.clone(), TransitionMode::Cut, 0);
+        assert_eq!(sw.previous().map(|s| s.name), Some(a.name.clone()));
+        // Back and forth.
+        sw.take(a.clone(), TransitionMode::Cut, 0);
+        assert_eq!(sw.previous().map(|s| s.name), Some(b.name.clone()));
+        sw.take_stinger(b.clone(), 1_000_000_000, 500_000_000, 0);
+        assert_eq!(sw.previous().map(|s| s.name), Some(a.name));
+    }
 
     #[test]
     fn stinger_changes_scenes_at_its_cut_point() {

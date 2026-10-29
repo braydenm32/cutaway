@@ -100,6 +100,7 @@ impl App {
                 *self.remote_shared.program.lock_ok() = Some(e.program_preview.clone());
                 self.engine = Some(e);
                 self.engine_error = None;
+                self.dropped = None;
                 if self.restart_again {
                     // Settings changed again while it started.
                     self.restart_again = false;

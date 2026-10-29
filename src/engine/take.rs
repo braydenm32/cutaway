@@ -337,17 +337,59 @@ impl Engine {
 
     /// Drop a marker at what the program shows now. Returns its name.
     pub fn add_marker(&self, name: Option<String>) -> Result<String> {
+        self.add_marker_as(name, false).map(|m| m.name)
+    }
+
+    /// The same, returning the marker (its time identifies it for
+    /// `rename_marker` and `delete_marker`).
+    pub fn add_marker_now(&self, name: Option<String>) -> Result<Marker> {
         self.add_marker_as(name, false)
     }
 
-    fn add_marker_as(&self, name: Option<String>, clip: bool) -> Result<String> {
+    /// This take's markers (and clips), in time order; none when not recording.
+    pub fn take_markers(&self) -> Vec<Marker> {
+        self.take.lock_ok().as_ref().map(|t| t.markers.lock_ok().clone()).unwrap_or_default()
+    }
+
+    /// Rename the marker at `at` in the take being recorded (they're
+    /// written when it stops).
+    pub fn rename_marker(&self, at: Ns, name: &str) -> Result<()> {
+        let name = name.trim();
+        if name.is_empty() {
+            bail!("a marker needs a name");
+        }
+        self.edit_markers(|m| rename_marker_in(m, at, name))
+    }
+
+    /// Take the marker at `at` out of the take being recorded.
+    pub fn delete_marker(&self, at: Ns) -> Result<()> {
+        self.edit_markers(|m| remove_marker_in(m, at))
+    }
+
+    fn edit_markers(&self, f: impl FnOnce(&mut Vec<Marker>) -> bool) -> Result<()> {
+        let guard = self.take.lock_ok();
+        let Some(take) = guard.as_ref() else { bail!("the take has stopped, so its markers are saved") };
+        let mut markers = take.markers.lock_ok();
+        if !f(&mut markers) {
+            bail!("that marker isn't in this take any more");
+        }
+        let count = markers.len();
+        drop(markers);
+        drop(guard);
+        self.status.lock_ok().markers = count;
+        (self.waker)();
+        Ok(())
+    }
+
+    fn add_marker_as(&self, name: Option<String>, clip: bool) -> Result<Marker> {
         let guard = self.take.lock_ok();
         let Some(take) = guard.as_ref() else { bail!("markers go into a recording; start recording first") };
         // The program monitor shows frames VIDEO_LATENCY behind real time.
         let at = (clock::now() - VIDEO_LATENCY - take.t0).max(0);
         let mut markers = take.markers.lock_ok();
         let name = name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| format!("Marker {}", markers.len() + 1));
-        markers.push(Marker { at, name: name.clone(), scene: self.switcher.live().name, clip });
+        let marker = Marker { at, name: name.clone(), scene: self.switcher.live().name, clip };
+        markers.push(marker.clone());
         markers.sort_by_key(|m| m.at);
         let count = markers.len();
         drop(markers);
@@ -357,7 +399,7 @@ impl Engine {
         st.push(LogLevel::Info, format!("{name} at {}", fmt_duration(Duration::from_nanos(at as u64))));
         drop(st);
         (self.waker)();
-        Ok(name)
+        Ok(marker)
     }
 
     /// Save the last `seconds` of the recording (the setting when None) as
@@ -796,6 +838,18 @@ fn take_info(setup: &str, report: &recorder::TakeReport, markers: &[Marker], tc_
     s
 }
 
+/// Rename the marker at `at`; false when there's none.
+fn rename_marker_in(markers: &mut [Marker], at: Ns, name: &str) -> bool {
+    markers.iter_mut().find(|m| m.at == at).map(|m| m.name = name.to_string()).is_some()
+}
+
+/// Take out the marker at `at`; false when there's none.
+fn remove_marker_in(markers: &mut Vec<Marker>, at: Ns) -> bool {
+    let before = markers.len();
+    markers.retain(|m| m.at != at);
+    markers.len() != before
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -817,6 +871,18 @@ mod tests {
         let s = take_info("", &report, &[clip], 0.0, at, &cfg, false, false);
         assert!(s.contains("Recorded: 2026-10-20 23:50"), "{s}");
         assert!(!s.contains("Chapters.txt") && s.contains("Clip 1"), "the clip is listed, but there are no chapters");
+    }
+
+    #[test]
+    fn markers_are_renamed_and_removed_by_time() {
+        let m = |at, name: &str| Marker { at, name: name.into(), scene: "Wide".into(), clip: false };
+        let mut v = vec![m(10, "Marker 1"), m(20, "Marker 2")];
+        assert!(rename_marker_in(&mut v, 20, "Guest arrives"));
+        assert_eq!(v[1].name, "Guest arrives");
+        assert!(!rename_marker_in(&mut v, 30, "Nope"));
+        assert!(remove_marker_in(&mut v, 10));
+        assert_eq!(v.len(), 1);
+        assert!(!remove_marker_in(&mut v, 10));
     }
 
     #[test]

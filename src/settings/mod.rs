@@ -63,7 +63,7 @@ pub enum Section {
 }
 
 impl Section {
-    const ALL: [Section; 23] = [
+    pub(super) const ALL: [Section; 23] = [
         Section::General,
         Section::Sources,
         Section::Audio,
@@ -88,12 +88,17 @@ impl Section {
         Section::Shortcuts,
         Section::Diagnostics,
     ];
+    /// The name a page has in the code (as in the help table).
+    fn from_ident(name: &str) -> Option<Section> {
+        Section::ALL.into_iter().find(|s| format!("{s:?}") == name)
+    }
+
     /// For scripted screenshots: "streaming", "sources", ...
     pub fn from_name(name: &str) -> Option<Section> {
         Section::ALL.into_iter().find(|s| s.label().to_lowercase().contains(&name.to_lowercase()))
     }
 
-    fn label(self) -> &'static str {
+    pub(super) fn label(self) -> &'static str {
         match self {
             Section::General => "General & shows",
             Section::Sources => "Video sources",
@@ -249,6 +254,8 @@ pub struct SettingsUi {
     sel_source: usize,
     sel_audio: usize,
     sel_dest: usize,
+    /// What's typed in "Find a setting…".
+    find: String,
     /// Signing in to Google (Settings → Upload).
     google: Option<upload::GoogleSignIn>,
     /// Scheduling on YouTube, while it's under way.
@@ -394,6 +401,7 @@ impl SettingsUi {
             sel_source: 0,
             sel_audio: 0,
             sel_dest: 0,
+            find: String::new(),
             google: None,
             schedule_job: None,
             show_keys: HashSet::new(),
@@ -458,9 +466,30 @@ impl SettingsUi {
         self
     }
 
+    /// Open a page with one of its folded parts (by the id it's drawn with) unfolded.
+    pub fn open_part_at(self, section: Section, part: &str) -> Self {
+        help::open_part(part);
+        self.open_at(section)
+    }
+
     /// Open with source `i` split into `n` close-ups, ready to frame.
     pub fn with_split(mut self, i: usize, n: usize) -> Self {
         self.split_source(i, n);
+        self
+    }
+
+    /// For the UI self-test: "Find a setting…" with this typed, or (`go`) already gone to its first match.
+    pub fn with_find(mut self, query: &str, go: bool) -> Self {
+        if go {
+            if let Some(h) = help::search(query, 1).into_iter().next() {
+                self.section = h.page;
+                if let Some(l) = &h.label {
+                    help::find_target(h.page, l);
+                }
+            }
+        } else {
+            self.find = query.to_string();
+        }
         self
     }
 
@@ -468,6 +497,11 @@ impl SettingsUi {
     pub fn select_source(mut self, i: usize) -> Self {
         self.sel_source = i;
         self
+    }
+
+    /// The settings as they are being edited (for the UI self-test).
+    pub fn draft_config(&self) -> Config {
+        self.draft.clone()
     }
 
     pub fn dirty(&self) -> bool {
@@ -528,6 +562,13 @@ impl SettingsUi {
         let start = self.place.map(|p| p.rect(screen)).unwrap_or(middle);
         // Esc closes Settings unless show keys are being used beside it.
         let esc = esc && !self.keys_beside(ctx);
+        // Esc in the find box clears it first.
+        let esc = if esc && !self.find.is_empty() {
+            self.find.clear();
+            false
+        } else {
+            esc
+        };
         let mut window = egui::Window::new("Settings")
             .open(&mut open)
             .collapsible(false)
@@ -551,7 +592,8 @@ impl SettingsUi {
                             ui.set_width(204.0);
                             ui.set_min_height(body_h);
                             let here = self.section.group();
-                            for g in Group::ALL {
+                            let found = self.find_box(ui);
+                            for g in Group::ALL.into_iter().filter(|_| !found) {
                                 let changed = g.sections().iter().any(|s| self.section_dirty(*s));
                                 let mut text = egui::text::LayoutJob::default();
                                 let name = if changed { format!("{}  •\n", g.label()) } else { format!("{}\n", g.label()) };
@@ -594,7 +636,7 @@ impl SettingsUi {
                                     match self.section {
                                         Section::General => self.general(ui, info),
                                         Section::Sources => self.sources(ui, info),
-                                        Section::Audio => self.audio_inputs(ui),
+                                        Section::Audio => self.audio_inputs(ui, info),
                                         Section::Mixing => self.mixing(ui),
                                         Section::Pads => self.pads(ui),
                                         Section::Syrinscape => self.syrinscape(ui),
@@ -943,11 +985,10 @@ impl SettingsUi {
             label(ui, "Interface size");
             ui.add(egui::Slider::new(&mut self.draft.ui.scale, 0.75..=2.0).step_by(0.05).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
             ui.end_row();
+            // Stopping a recording always takes a hold (the REC button) or a
+            // yes (keys), so only the stream has a choice here.
             label(ui, "Ask before");
-            ui.vertical(|ui| {
-                ui.checkbox(&mut self.draft.ui.confirm_stop_recording, "stopping a recording");
-                ui.checkbox(&mut self.draft.ui.confirm_end_stream, "ending a live stream");
-            });
+            ui.checkbox(&mut self.draft.ui.confirm_end_stream, "ending a live stream");
             ui.end_row();
             label(ui, "Pre-show check");
             ui.checkbox(&mut self.draft.ui.check_before_start, "before recording or going live");
@@ -998,7 +1039,7 @@ impl SettingsUi {
 
     // ---- Audio --------------------------------------------------------------------
 
-    fn audio_inputs(&mut self, ui: &mut egui::Ui) {
+    fn audio_inputs(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
         title(
             ui,
             "Audio inputs",
@@ -1026,26 +1067,43 @@ impl SettingsUi {
                 ui.set_width(220.0);
                 for i in 0..n {
                     let a = &self.draft.audio[i];
+                    let level = input_level(&self.original, &info.input_levels, a.uid);
                     let b = egui::Button::selectable(
                         self.sel_audio == i,
                         RichText::new(format!("{}\n{} · {} ch", a.name, short_audio_device(&a.device), a.channels)).size(14.0),
                     )
-                    .min_size(vec2(220.0, 40.0));
-                    if ui.add(b).clicked() {
+                    .min_size(vec2(220.0, 52.0));
+                    let r = ui.add(b);
+                    // A live level along the bottom of the row.
+                    let strip = egui::Rect::from_min_max(egui::pos2(r.rect.left() + 8.0, r.rect.bottom() - 9.0), egui::pos2(r.rect.right() - 8.0, r.rect.bottom() - 5.0));
+                    match level {
+                        Some(db) => paint_level(ui, strip, db),
+                        None if self.original.audio.iter().all(|o| o.uid != a.uid || a.uid == 0) => {
+                            ui.painter().text(egui::pos2(strip.right(), strip.center().y), egui::Align2::RIGHT_CENTER, "Apply to hear it", egui::FontId::proportional(11.0), TEXT_DIM);
+                        }
+                        None => {}
+                    }
+                    if r.clicked() {
                         self.sel_audio = i;
                     }
                 }
                 ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    if ui.button("＋ Add").clicked() {
-                        let used: Vec<String> = self.draft.audio.iter().map(|a| a.device.clone()).collect();
-                        let device = self.audio.iter().find(|d| !used.contains(&d.name)).or(self.audio.first()).map(|d| d.name.clone()).unwrap_or("default".into());
-                        let name = unique(self.draft.audio.iter().map(|a| a.name.clone()).collect(), &crate::config::audio_input_name(&device));
-                        self.draft.audio.push(AudioConfig { name, device, ..Default::default() });
-                        self.sel_audio = self.draft.audio.len() - 1;
-                    }
-                    if ui.add_enabled(n > 0, egui::Button::new("Remove")).clicked() {
-                        self.draft.audio.remove(self.sel_audio);
+                ui.horizontal_wrapped(|ui| {
+                    if let Some(edit) = list_buttons(ui, n, self.sel_audio, Some("＋ Add")) {
+                        let audio = &self.audio;
+                        apply_list_edit(
+                            &mut self.draft.audio,
+                            &mut self.sel_audio,
+                            edit,
+                            false,
+                            |list| {
+                                let used: Vec<&str> = list.iter().map(|a| a.device.as_str()).collect();
+                                let device = audio.iter().find(|d| !used.contains(&d.name.as_str())).or(audio.first()).map(|d| d.name.clone()).unwrap_or("default".into());
+                                let name = unique(list.iter().map(|a| a.name.clone()).collect(), &crate::config::audio_input_name(&device));
+                                Some(AudioConfig { name, device, ..Default::default() })
+                            },
+                            |a, list| AudioConfig { uid: 0, name: unique(list.iter().map(|a| a.name.clone()).collect(), &format!("{} copy", a.name)), ..a.clone() },
+                        );
                     }
                 });
             });
@@ -1069,9 +1127,24 @@ impl SettingsUi {
                 };
                 let devices = &self.audio;
                 let max = devices.iter().find(|d| d.name == a.device).map(|d| d.max_channels.max(1)).unwrap_or(64).min(64);
+                let level = input_level(&self.original, &info.input_levels, a.uid);
+                let unapplied = self.original.audio.iter().all(|o| o.uid != a.uid || a.uid == 0);
                 egui::Grid::new("audio_detail").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
                     label(ui, "Name");
                     ui.add_sized([240.0, 22.0], egui::TextEdit::singleline(&mut a.name));
+                    ui.end_row();
+                    label(ui, "Level");
+                    match level {
+                        Some(db) => {
+                            ui.horizontal(|ui| {
+                                let (rect, _) = ui.allocate_exact_size(vec2(240.0, 10.0), egui::Sense::hover());
+                                paint_level(ui, rect, db);
+                                ui.label(RichText::new(format!("{:>4.0} dB", db.max(-99.0))).monospace().color(TEXT_DIM));
+                            });
+                        }
+                        None if unapplied => hint(ui, "Apply to hear it"),
+                        None => hint(ui, "no sound yet (the input isn't open)"),
+                    }
                     ui.end_row();
                     label(ui, "Device");
                     ui.vertical(|ui| {
@@ -1503,6 +1576,42 @@ impl SettingsUi {
     /// Whether a page is in the sidebar. Viewer comments reads a live
     /// stream's chat, so it waits until there's somewhere to stream to,
     /// unless it's already set up (or asked for directly).
+    /// "Find a setting…" at the top of the sidebar: matches show in place of the pages (true while they do).
+    fn find_box(&mut self, ui: &mut egui::Ui) -> bool {
+        let r = ui.add(egui::TextEdit::singleline(&mut self.find).hint_text("Find a setting…").desired_width(204.0).margin(vec2(8.0, 6.0)));
+        ui.add_space(4.0);
+        if self.find.trim().is_empty() {
+            return false;
+        }
+        let hits = help::search(&self.find, 8);
+        if hits.is_empty() {
+            ui.label(RichText::new("No setting found").color(TEXT_DIM));
+            return true;
+        }
+        let mut go = None;
+        for h in &hits {
+            let text = match &h.label {
+                Some(l) => format!("{l} — {}", h.page.label()),
+                None => format!("{} (page)", h.page.label()),
+            };
+            if ui.add(egui::Button::new(RichText::new(text).size(13.5)).min_size(vec2(204.0, 28.0)).wrap()).clicked() {
+                go = Some(h.clone());
+            }
+        }
+        // Enter takes the first.
+        if go.is_none() && r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            go = hits.first().cloned();
+        }
+        if let Some(h) = go {
+            self.section = h.page;
+            if let Some(l) = &h.label {
+                help::find_target(h.page, l);
+            }
+            self.find.clear();
+        }
+        true
+    }
+
     fn shown(&self, s: Section) -> bool {
         match s {
             Section::Comments => {
@@ -1529,7 +1638,7 @@ impl SettingsUi {
                 for i in 0..n {
                     let d = &mut self.draft.streaming.destinations[i];
                     ui.horizontal(|ui| {
-                        ui.checkbox(&mut d.enabled, "").on_hover_text("Include when going live");
+                        ui.checkbox(&mut d.enabled, "").on_hover_text("Go live here: include this destination when you go live. Untick it to keep it set up but skip it.");
                         let warn = if d.problem().is_some() { "  ⚠" } else { "" };
                         let b = egui::Button::selectable(
                             self.sel_dest == i,
@@ -1542,7 +1651,7 @@ impl SettingsUi {
                     });
                 }
                 ui.add_space(6.0);
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     egui::ComboBox::from_id_salt("add_dest").selected_text("＋ Add").width(90.0).show_ui(ui, |ui| {
                         for s in Service::ALL {
                             if ui.selectable_label(false, s.label()).clicked() {
@@ -1563,9 +1672,19 @@ impl SettingsUi {
                             }
                         }
                     });
-                    if ui.add_enabled(n > 0, egui::Button::new("Remove")).clicked() {
-                        self.draft.streaming.destinations.remove(self.sel_dest);
-                        self.show_keys.clear();
+                    if let Some(edit) = list_buttons(ui, n, self.sel_dest, None) {
+                        let changed = apply_list_edit(
+                            &mut self.draft.streaming.destinations,
+                            &mut self.sel_dest,
+                            edit,
+                            false,
+                            |_| None,
+                            |d, list| StreamDestination { name: unique(list.iter().map(|d| d.name.clone()).collect(), &format!("{} copy", d.name)), ..d.clone() },
+                        );
+                        if changed {
+                            // Which keys are showing is by place.
+                            self.show_keys.clear();
+                        }
                     }
                 });
             });
@@ -1612,9 +1731,6 @@ impl SettingsUi {
                             }
                         }
                     });
-                    ui.end_row();
-                    label(ui, "Go live here");
-                    ui.checkbox(&mut d.enabled, "");
                     ui.end_row();
                     label(ui, "Sends");
                     ui.horizontal(|ui| {
@@ -1819,7 +1935,11 @@ pub(super) fn part<R>(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::De
     if !state.is_empty() {
         job.append(&format!("   {state}"), 0.0, egui::TextFormat::simple(egui::FontId::proportional(13.5), TEXT_DIM));
     }
-    let r = egui::CollapsingHeader::new(job).id_salt(id).default_open(open).show(ui, |ui| {
+    let mut header = egui::CollapsingHeader::new(job).default_open(open);
+    if help::take_open_part(&format!("{id:?}")) {
+        header = header.open(Some(true));
+    }
+    let r = header.id_salt(id).show(ui, |ui| {
         ui.add_space(4.0);
         let r = body(ui);
         ui.add_space(6.0);
@@ -1848,6 +1968,14 @@ pub(super) fn label(ui: &mut egui::Ui, text: &str) {
         ui.set_min_width(LABEL_W);
         ui.spacing_mut().item_spacing.x = 5.0;
         let r = ui.add(egui::Label::new(RichText::new(text).color(Color32::from_rgb(200, 205, 214))).selectable(false).sense(egui::Sense::hover()));
+        if let Some((glow, first)) = help::lit(text) {
+            // Found with "Find a setting": scrolled to, and lit for a moment.
+            if first {
+                r.scroll_to_me(Some(Align::Center));
+            }
+            ui.painter().rect_filled(r.rect.expand2(vec2(6.0, 3.0)), 4.0, ACCENT.gamma_multiply(0.45 * glow));
+            ui.ctx().request_repaint();
+        }
         if let Some(h) = help {
             // The name explains itself after a moment; the ⓘ straight away.
             r.on_hover_ui(|ui| help_text(ui, h));
@@ -1930,6 +2058,77 @@ pub(super) fn short_device(device: &str) -> String {
         d if d.starts_with("rtmp-in:") => format!("RTMP input :{}", d[8..].split('/').next().unwrap_or("")),
         d => d.chars().take(28).collect(),
     }
+}
+
+/// What the buttons under a list can ask for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum ListEdit {
+    Add,
+    Duplicate,
+    Remove,
+    Up,
+    Down,
+}
+
+/// The same buttons under every list in Settings, in the same order:
+/// ＋ Add (`add`: its label, or None when the list has buttons of its own
+/// for that), Duplicate, Remove, ↑, ↓. Put a list's special buttons after.
+pub(super) fn list_buttons(ui: &mut egui::Ui, n: usize, sel: usize, add: Option<&str>) -> Option<ListEdit> {
+    let mut edit = None;
+    if let Some(label) = add {
+        if ui.button(label).clicked() {
+            edit = Some(ListEdit::Add);
+        }
+    }
+    if ui.add_enabled(n > 0, egui::Button::new("Duplicate")).clicked() {
+        edit = Some(ListEdit::Duplicate);
+    }
+    if ui.add_enabled(n > 0, egui::Button::new("Remove")).clicked() {
+        edit = Some(ListEdit::Remove);
+    }
+    if ui.add_enabled(n > 0 && sel > 0, egui::Button::new("↑")).on_hover_text("Move up").clicked() {
+        edit = Some(ListEdit::Up);
+    }
+    if ui.add_enabled(n > 0 && sel + 1 < n, egui::Button::new("↓")).on_hover_text("Move down").clicked() {
+        edit = Some(ListEdit::Down);
+    }
+    edit
+}
+
+/// Do what a list's buttons asked, keeping `sel` on the same item. `new`
+/// makes the item for ＋ Add (None: nothing), `copy` the copy for Duplicate
+/// (given the item and the list, to name it); an added item goes after the
+/// picked one if `add_after`, otherwise last. True if the list changed.
+pub(super) fn apply_list_edit<T>(list: &mut Vec<T>, sel: &mut usize, edit: ListEdit, add_after: bool, new: impl FnOnce(&[T]) -> Option<T>, copy: impl FnOnce(&T, &[T]) -> T) -> bool {
+    let n = list.len();
+    let at = (*sel).min(n.saturating_sub(1));
+    match edit {
+        ListEdit::Add => {
+            let Some(item) = new(list) else { return false };
+            let to = if add_after && n > 0 { at + 1 } else { n };
+            list.insert(to, item);
+            *sel = to;
+        }
+        ListEdit::Duplicate if n > 0 => {
+            let item = copy(&list[at], list);
+            list.insert(at + 1, item);
+            *sel = at + 1;
+        }
+        ListEdit::Remove if n > 0 => {
+            list.remove(at);
+            *sel = at.min(list.len().saturating_sub(1));
+        }
+        ListEdit::Up if at > 0 => {
+            list.swap(at, at - 1);
+            *sel = at - 1;
+        }
+        ListEdit::Down if at + 1 < n => {
+            list.swap(at, at + 1);
+            *sel = at + 1;
+        }
+        _ => return false,
+    }
+    true
 }
 
 pub(super) fn unique(existing: Vec<String>, base: &str) -> String {
@@ -2285,6 +2484,26 @@ pub fn ndi_credit(ui: &mut egui::Ui) {
     });
 }
 
+/// The live level (dB, loudest channel) of the applied input with this identity, if the show is running.
+fn input_level(applied: &Config, levels: &[Vec<f32>], uid: u64) -> Option<f32> {
+    if uid == 0 {
+        return None;
+    }
+    let i = applied.audio.iter().position(|a| a.uid == uid)?;
+    levels.get(i).map(|ch| ch.iter().copied().fold(-120.0, f32::max))
+}
+
+/// A level meter (dB) filling `rect` as far as the level reaches: green, amber near the top, red at the limit.
+fn paint_level(ui: &egui::Ui, rect: egui::Rect, db: f32) {
+    let p = ui.painter();
+    p.rect_filled(rect, 2.0, Color32::from_black_alpha(90));
+    let frac = ((db + 60.0) / 60.0).clamp(0.0, 1.0);
+    if frac > 0.0 {
+        let colour = if db > -3.0 { RED } else if db > -12.0 { AMBER } else { GREEN };
+        p.rect_filled(egui::Rect::from_min_size(rect.min, vec2(rect.width() * frac, rect.height())), 2.0, colour);
+    }
+}
+
 /// A QR code for `text`, `size` points across, on a white card (phones
 /// scan it from the screen).
 pub fn qr_code(ui: &mut egui::Ui, text: &str, size: f32) -> egui::Response {
@@ -2420,6 +2639,55 @@ mod tests {
         let before = win.draft.sources.len();
         win.split_source(1, 2);
         assert_eq!(win.draft.sources.len(), before);
+    }
+
+    /// The buttons under every list act the same way.
+    #[test]
+    fn list_buttons_add_copy_remove_and_move() {
+        let mut v = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let mut sel = 1;
+        let new = |l: &[String]| Some(format!("new{}", l.len()));
+        let copy = |x: &String, _: &[String]| format!("{x} copy");
+        assert!(apply_list_edit(&mut v, &mut sel, ListEdit::Add, false, new, copy));
+        assert_eq!((v.as_slice(), sel), (&["a".to_string(), "b".into(), "c".into(), "new3".into()][..], 3));
+        sel = 1;
+        assert!(apply_list_edit(&mut v, &mut sel, ListEdit::Add, true, new, copy));
+        assert_eq!((v[2].as_str(), sel), ("new4", 2));
+        sel = 0;
+        apply_list_edit(&mut v, &mut sel, ListEdit::Duplicate, false, new, copy);
+        assert_eq!((v[1].as_str(), sel), ("a copy", 1));
+        apply_list_edit(&mut v, &mut sel, ListEdit::Down, false, new, copy);
+        assert_eq!((v[2].as_str(), sel), ("a copy", 2));
+        apply_list_edit(&mut v, &mut sel, ListEdit::Up, false, new, copy);
+        apply_list_edit(&mut v, &mut sel, ListEdit::Up, false, new, copy);
+        assert_eq!((v[0].as_str(), sel), ("a copy", 0));
+        // Not past the ends.
+        assert!(!apply_list_edit(&mut v, &mut sel, ListEdit::Up, false, new, copy));
+        // Remove keeps a valid pick, also for the last; an empty list stays so.
+        sel = v.len() - 1;
+        apply_list_edit(&mut v, &mut sel, ListEdit::Remove, false, new, copy);
+        assert_eq!(sel, v.len() - 1);
+        let mut none: Vec<String> = Vec::new();
+        let mut s0 = 0;
+        for e in [ListEdit::Remove, ListEdit::Duplicate, ListEdit::Up, ListEdit::Down] {
+            assert!(!apply_list_edit(&mut none, &mut s0, e, false, new, copy));
+        }
+        // A list with its own add buttons: ＋ Add does nothing here.
+        assert!(!apply_list_edit(&mut v, &mut sel, ListEdit::Add, false, |_| None, copy));
+    }
+
+    /// An input's live level is found by its identity in what's running,
+    /// wherever it now sits in the list; new ones have none.
+    #[test]
+    fn input_levels_follow_the_input_not_its_place() {
+        let mut cfg = Config::default();
+        cfg.audio = vec![AudioConfig { name: "A".into(), uid: 11, ..Default::default() }, AudioConfig { name: "B".into(), uid: 12, ..Default::default() }];
+        let levels = vec![vec![-30.0, -20.0], vec![-6.0]];
+        assert_eq!(input_level(&cfg, &levels, 11), Some(-20.0));
+        assert_eq!(input_level(&cfg, &levels, 12), Some(-6.0));
+        assert_eq!(input_level(&cfg, &levels, 99), None);
+        assert_eq!(input_level(&cfg, &levels, 0), None);
+        assert_eq!(input_level(&cfg, &[], 11), None);
     }
 
     /// Where the window was left comes back on another size of screen,
