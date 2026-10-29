@@ -356,15 +356,64 @@ pub const CHUNK: usize = 8 * 1024 * 1024;
 /// Send a file with a resumable upload: start a session at `init_url` with
 /// `metadata`, then send it in pieces, picking up after errors. Returns
 /// Google's answer for the finished file.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub fn resumable(auth: &mut Auth, init_url: &str, metadata: &Value, path: &Path, mime: &str, chunk: usize, progress: &mut dyn FnMut(u64, u64), cancel: &AtomicBool) -> Result<Value> {
+    resumable_from(auth, init_url, metadata, path, mime, chunk, progress, cancel, None, &mut |_| {})
+}
+
+/// The same, carrying on an earlier session (its URL) where Google got to;
+/// a session Google no longer knows starts again. `started` is told each
+/// new session's URL, so it can be carried on after a restart.
+#[allow(clippy::too_many_arguments)]
+pub fn resumable_from(
+    auth: &mut Auth,
+    init_url: &str,
+    metadata: &Value,
+    path: &Path,
+    mime: &str,
+    chunk: usize,
+    progress: &mut dyn FnMut(u64, u64),
+    cancel: &AtomicBool,
+    earlier: Option<&str>,
+    started: &mut dyn FnMut(&str),
+) -> Result<Value> {
     let total = std::fs::metadata(path).with_context(|| format!("reading {}", path.display()))?.len();
     let mut file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let http = agent(Duration::from_secs(300));
     let meta = metadata.to_string();
-    // Start the session.
+    let mut sent: u64 = 0;
+    // An earlier session: how far it got (gone or finished with: start again).
     let mut session = None;
+    if let Some(url) = earlier.filter(|u| u.starts_with("http")) {
+        for attempt in 0..2 {
+            let token = auth.token()?;
+            let mut r = http.put(url).header("Authorization", &format!("Bearer {token}")).header("Content-Range", &format!("bytes */{total}")).send_empty().map_err(|e| anyhow!("couldn't reach Google ({e})"))?;
+            match r.status().as_u16() {
+                308 => {
+                    sent = r.headers().get("range").and_then(|v| v.to_str().ok()).and_then(|v| v.rsplit('-').next()).and_then(|e| e.trim().parse::<u64>().ok()).map(|e| e + 1).unwrap_or(0);
+                    session = Some(url.to_string());
+                }
+                200 | 201 => {
+                    progress(total, total);
+                    return read_json(&mut r);
+                }
+                401 if attempt == 0 => {
+                    auth.expired();
+                    continue;
+                }
+                // Expired (they last about a week): start again.
+                404 | 410 => {}
+                c => bail!("Google answered {c} when carrying on the upload"),
+            }
+            break;
+        }
+    }
+    // Start the session.
     for attempt in 0..4 {
+        if session.is_some() {
+            break;
+        }
         let token = auth.token()?;
         let mut resp = http
             .post(init_url)
@@ -392,8 +441,10 @@ pub fn resumable(auth: &mut Auth, init_url: &str, metadata: &Value, path: &Path,
         std::thread::sleep(Duration::from_secs(1 << attempt));
     }
     let session = session.ok_or_else(|| anyhow!("Google didn't start the upload"))?;
+    if earlier != Some(session.as_str()) {
+        started(&session);
+    }
 
-    let mut sent: u64 = 0;
     let mut buf = vec![0u8; chunk.max(256 * 1024)];
     let mut failures = 0u32;
     loop {
@@ -629,7 +680,11 @@ pub mod tests {
                         let range = header("content-range").unwrap_or_default();
                         let total: usize = range.rsplit('/').next().unwrap().parse().unwrap();
                         let mut files = f2.lock_ok();
-                        let have = files.get_mut(&id).unwrap();
+                        let Some(have) = files.get_mut(&id) else {
+                            drop(files);
+                            send(&mut c, "404 Not Found", "", "{}");
+                            continue;
+                        };
                         if !range.contains('*') {
                             puts += 1;
                             // Now and then: take half the piece, then fail.
@@ -714,6 +769,38 @@ pub mod tests {
         // A revoked sign-in says so.
         let mut a = Auth::new(c, "bad".into());
         assert!(format!("{:#}", a.token().unwrap_err()).contains("sign in again"));
+    }
+
+    /// An upload cut short (Cutaway quit) carries on in the same session;
+    /// one Google has forgotten starts again.
+    #[test]
+    fn uploads_carry_on_after_a_restart() {
+        let g = fake_google(0);
+        let c = client(g.port);
+        let path = std::env::temp_dir().join(format!("cutaway-upload-again-{}.bin", std::process::id()));
+        let data: Vec<u8> = (0..900_000u32).map(|i| (i * 13 % 251) as u8).collect();
+        std::fs::write(&path, &data).unwrap();
+        let mut auth = Auth::new(c.clone(), "r1".into());
+        let meta = youtube_metadata("Show", "", "private");
+        let cancel = AtomicBool::new(false);
+        let mut url = String::new();
+        let first = resumable_from(&mut auth, &c.ep.youtube_upload, &meta, &path, "video/mp4", 256 * 1024, &mut |s, _| if s > 0 { cancel.store(true, Ordering::Relaxed) }, &cancel, None, &mut |u| url = u.to_string());
+        assert!(first.is_err() && url.ends_with("/session/s1"));
+        let part = g.files.lock_ok()["s1"].len();
+        assert!(part > 0 && part < data.len());
+        let mut again = None;
+        let mut seen = Vec::new();
+        let v = resumable_from(&mut auth, &c.ep.youtube_upload, &meta, &path, "video/mp4", 256 * 1024, &mut |s, t| seen.push((s, t)), &AtomicBool::new(false), Some(&url), &mut |u| again = Some(u.to_string())).unwrap();
+        assert_eq!(v["id"], "vid-s1");
+        assert!(again.is_none(), "the same session");
+        assert_eq!(seen.first().map(|s| s.0), Some(part as u64), "from where it got to");
+        assert_eq!(g.files.lock_ok()["s1"], data);
+        // Forgotten: a new one.
+        let gone = format!("http://127.0.0.1:{}/session/s9", g.port);
+        let v = resumable_from(&mut auth, &c.ep.youtube_upload, &meta, &path, "video/mp4", 256 * 1024, &mut |_, _| {}, &AtomicBool::new(false), Some(&gone), &mut |u| again = Some(u.to_string())).unwrap();
+        assert_eq!(v["id"], "vid-s2");
+        assert!(again.is_some_and(|u| u.ends_with("/session/s2")));
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

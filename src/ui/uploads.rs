@@ -1,7 +1,9 @@
 //! Uploading takes to YouTube and Google Drive (Settings → Upload): a queue
 //! worked through in the background, one upload at a time, shown in the
 //! UPLOADS panel. A take is offered once it's saved (or sent straight away
-//! when that's set).
+//! when that's set). The queue is kept in uploads.json beside the settings
+//! (no sign-in tokens in it), so uploads cut short by quitting carry on
+//! where Google got to at the next start, when you say so.
 
 use crate::util::LockExt;
 use super::*;
@@ -10,9 +12,10 @@ use crate::engine::recorder::TakeReport;
 use crate::net::google::{self, Auth, Client, Endpoints};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum JobState {
     Waiting,
     Uploading,
@@ -21,9 +24,9 @@ pub enum JobState {
     Cancelled,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 enum Work {
-    Youtube { file: PathBuf, title: String, description: String, privacy: &'static str },
+    Youtube { file: PathBuf, title: String, description: String, privacy: String },
     /// Files, each with the folders it goes in (inside the take's folder).
     Drive { base: String, take: String, files: Vec<(PathBuf, Vec<String>)> },
 }
@@ -44,11 +47,102 @@ pub struct Job {
     work: Work,
     client: Client,
     refresh: String,
+    /// The file being sent and Google's session for it, to carry on.
+    session: Option<(PathBuf, String)>,
+    /// Files already sent (Drive).
+    done: Vec<PathBuf>,
+}
+
+/// A job as kept in uploads.json: what's needed to start it again, never
+/// the sign-in (that's in the Keychain).
+#[derive(Serialize, Deserialize)]
+struct SavedJob {
+    label: String,
+    take: String,
+    state: JobState,
+    sent: u64,
+    total: u64,
+    work: Work,
+    #[serde(default)]
+    session: Option<(PathBuf, String)>,
+    #[serde(default)]
+    done: Vec<PathBuf>,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+struct SavedQueue {
+    jobs: Vec<SavedJob>,
+}
+
+/// What a running job tells the queue, to be kept.
+enum Note {
+    Session(PathBuf, String),
+    FileDone(PathBuf),
+}
+
+/// Jobs that haven't finished, as kept.
+fn unfinished(jobs: &[Job]) -> Vec<SavedJob> {
+    jobs.iter()
+        .filter(|j| matches!(j.state, JobState::Waiting | JobState::Uploading | JobState::Failed(_)))
+        .map(|j| SavedJob { label: j.label.clone(), take: j.take.clone(), state: j.state.clone(), sent: j.sent, total: j.total, work: j.work.clone(), session: j.session.clone(), done: j.done.clone() })
+        .collect()
+}
+
+/// Keep the unfinished jobs (and those waiting for Carry on) in `file`;
+/// none left, no file.
+fn save_queue(file: &Path, jobs: &[Job], resume: &[Job]) {
+    static WRITING: Mutex<()> = Mutex::new(());
+    let _w = WRITING.lock_ok();
+    let mut q = SavedQueue { jobs: unfinished(resume) };
+    q.jobs.extend(unfinished(jobs));
+    if q.jobs.is_empty() {
+        let _ = std::fs::remove_file(file);
+        return;
+    }
+    let Ok(text) = serde_json::to_string_pretty(&q) else { return };
+    let tmp = file.with_extension("json.tmp");
+    if std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, file).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
+/// The jobs kept in `file` (to offer: they start again only when asked).
+fn load_queue(file: &Path) -> Vec<Job> {
+    let Ok(text) = std::fs::read_to_string(file) else { return Vec::new() };
+    let Ok(q) = serde_json::from_str::<SavedQueue>(&text) else {
+        crate::logging::note(&format!("uploads: couldn't read {}", file.display()));
+        return Vec::new();
+    };
+    q.jobs
+        .into_iter()
+        .map(|j| Job {
+            id: new_id(),
+            label: j.label,
+            take: j.take,
+            state: match j.state {
+                JobState::Failed(e) => JobState::Failed(e),
+                _ => JobState::Waiting,
+            },
+            sent: j.sent,
+            total: j.total,
+            link: None,
+            cancel: Arc::new(AtomicBool::new(false)),
+            work: j.work,
+            client: Client { id: String::new(), secret: String::new(), ep: Endpoints::default() },
+            refresh: String::new(),
+            session: j.session,
+            done: j.done,
+        })
+        .collect()
 }
 
 #[derive(Default)]
 pub struct Uploads {
     pub jobs: Arc<Mutex<Vec<Job>>>,
+    /// Unfinished at the last quit, waiting for Carry on / Forget them.
+    resume: Arc<Mutex<Vec<Job>>>,
+    /// Where the queue is kept (None: not kept, as in the demo).
+    file: Option<PathBuf>,
     running: Arc<AtomicBool>,
     /// The last take seen, so each is offered once.
     seen: Option<PathBuf>,
@@ -105,6 +199,8 @@ fn jobs_for(cfg: &Config, report: &TakeReport) -> (Vec<Job>, Vec<String>) {
         work,
         client: client_of(u),
         refresh: u.refresh_token.clone(),
+        session: None,
+        done: Vec::new(),
     };
     let granted = |g: &str| u.granted.iter().any(|x| x == g);
     if u.youtube {
@@ -129,7 +225,7 @@ fn jobs_for(cfg: &Config, report: &TakeReport) -> (Vec<Job>, Vec<String>) {
                         description.push_str(&ch);
                     }
                 }
-                jobs.push(job("YouTube".into(), Work::Youtube { file, title, description, privacy: u.youtube_privacy.api() }));
+                jobs.push(job("YouTube".into(), Work::Youtube { file, title, description, privacy: u.youtube_privacy.api().to_string() }));
             }
             Some(_) => problems.push("sign in again to allow YouTube (Settings → Upload)".into()),
             None => problems.push("the take has no program file for YouTube".into()),
@@ -159,8 +255,8 @@ fn jobs_for(cfg: &Config, report: &TakeReport) -> (Vec<Job>, Vec<String>) {
     (jobs, problems)
 }
 
-/// One job, start to finish.
-fn run(job: &Job, update: &dyn Fn(u64, u64)) -> Result<String, String> {
+/// One job, start to finish (or from where it got to).
+fn run(job: &Job, update: &dyn Fn(u64, u64), note: &dyn Fn(Note)) -> Result<String, String> {
     let mut auth = Auth::new(job.client.clone(), job.refresh.clone());
     let cancel = &job.cancel;
     let mut last = Instant::now();
@@ -173,7 +269,9 @@ fn run(job: &Job, update: &dyn Fn(u64, u64)) -> Result<String, String> {
                     update(s, t);
                 }
             };
-            let v = google::resumable(&mut auth, &job.client.ep.youtube_upload, &meta, file, google::mime(file), google::CHUNK, &mut progress, cancel).map_err(|e| format!("{e:#}"))?;
+            let earlier = job.session.as_ref().filter(|s| &s.0 == file).map(|s| s.1.as_str());
+            let v = google::resumable_from(&mut auth, &job.client.ep.youtube_upload, &meta, file, google::mime(file), google::CHUNK, &mut progress, cancel, earlier, &mut |url| note(Note::Session(file.clone(), url.to_string())))
+                .map_err(|e| format!("{e:#}"))?;
             let id = v["id"].as_str().ok_or("YouTube didn't say where the video is")?;
             Ok(format!("https://youtu.be/{id}"))
         }
@@ -185,6 +283,11 @@ fn run(job: &Job, update: &dyn Fn(u64, u64)) -> Result<String, String> {
             folders.insert(Vec::new(), take_id.clone());
             let mut done: u64 = 0;
             for (file, path) in files {
+                // Sent before Cutaway last quit.
+                if job.done.contains(file) {
+                    done += std::fs::metadata(file).map(|m| m.len()).unwrap_or(0);
+                    continue;
+                }
                 // Its folder, made as needed.
                 for depth in 1..=path.len() {
                     let key = path[..depth].to_vec();
@@ -203,7 +306,10 @@ fn run(job: &Job, update: &dyn Fn(u64, u64)) -> Result<String, String> {
                         update(done + s, total);
                     }
                 };
-                google::resumable(&mut auth, &job.client.ep.drive_upload, &meta, file, google::mime(file), google::CHUNK, &mut progress, cancel).map_err(|e| format!("{name}: {e:#}"))?;
+                let earlier = job.session.as_ref().filter(|s| &s.0 == file).map(|s| s.1.as_str());
+                google::resumable_from(&mut auth, &job.client.ep.drive_upload, &meta, file, google::mime(file), google::CHUNK, &mut progress, cancel, earlier, &mut |url| note(Note::Session(file.clone(), url.to_string())))
+                    .map_err(|e| format!("{name}: {e:#}"))?;
+                note(Note::FileDone(file.clone()));
                 done += std::fs::metadata(file).map(|m| m.len()).unwrap_or(0);
                 update(done, total);
             }
@@ -213,9 +319,30 @@ fn run(job: &Job, update: &dyn Fn(u64, u64)) -> Result<String, String> {
 }
 
 impl Uploads {
+    /// Keep the queue in `file`, and offer what was left in it.
+    pub fn load(&mut self, file: PathBuf) {
+        *self.resume.lock_ok() = load_queue(&file);
+        self.file = Some(file);
+    }
+
+    /// Write the queue down (after it changes).
+    fn persist(&self) {
+        if let Some(f) = &self.file {
+            let jobs = self.jobs.lock_ok().clone();
+            let resume = self.resume.lock_ok().clone();
+            save_queue(f, &jobs, &resume);
+        }
+    }
+
+    /// How many uploads are waiting for Carry on.
+    pub fn unfinished(&self) -> usize {
+        self.resume.lock_ok().len()
+    }
+
     /// Queue jobs and make sure they're being worked on.
     fn add(&mut self, jobs: Vec<Job>, status: Option<Arc<Mutex<crate::engine::Status>>>, waker: Waker) {
         self.jobs.lock_ok().extend(jobs);
+        self.persist();
         self.work(status, waker);
     }
 
@@ -226,6 +353,13 @@ impl Uploads {
             return;
         }
         let (list, running) = (self.jobs.clone(), self.running.clone());
+        let (resume, file) = (self.resume.clone(), self.file.clone());
+        let persist = move |l: &[Job]| {
+            if let Some(f) = &file {
+                let r = resume.lock_ok().clone();
+                save_queue(f, l, &r);
+            }
+        };
         let spawned = std::thread::Builder::new().name("uploads".into()).spawn(move || {
             loop {
                 let next = {
@@ -238,6 +372,8 @@ impl Uploads {
                         // Done, said under the list's lock: a job added
                         // from now on starts a new worker.
                         running.store(false, Ordering::SeqCst);
+                    } else {
+                        persist(&l);
                     }
                     next
                 };
@@ -249,21 +385,38 @@ impl Uploads {
                     }
                     waker();
                 };
-                let result = run(&job, &update);
+                let note = |n: Note| {
+                    let mut l = list.lock_ok();
+                    if let Some(j) = l.iter_mut().find(|j| j.id == job.id) {
+                        match n {
+                            Note::Session(file, url) => j.session = Some((file, url)),
+                            Note::FileDone(file) => {
+                                j.done.push(file);
+                                j.session = None;
+                            }
+                        }
+                    }
+                    persist(&l);
+                };
+                let result = run(&job, &update, &note);
                 let (level, text) = match &result {
                     Ok(link) => (crate::engine::LogLevel::Info, format!("Uploaded {} to {}: {link}", job.take, job.label)),
                     Err(_) if job.cancel.load(Ordering::Relaxed) => (crate::engine::LogLevel::Info, format!("Upload of {} to {} cancelled", job.take, job.label)),
                     Err(e) => (crate::engine::LogLevel::Warning, format!("Upload of {} to {} failed: {e}", job.take, job.label)),
                 };
-                if let Some(j) = list.lock_ok().iter_mut().find(|j| j.id == job.id) {
-                    j.state = match result {
-                        Ok(link) => {
-                            j.link = Some(link);
-                            JobState::Done
-                        }
-                        Err(_) if job.cancel.load(Ordering::Relaxed) => JobState::Cancelled,
-                        Err(e) => JobState::Failed(e),
-                    };
+                {
+                    let mut l = list.lock_ok();
+                    if let Some(j) = l.iter_mut().find(|j| j.id == job.id) {
+                        j.state = match result {
+                            Ok(link) => {
+                                j.link = Some(link);
+                                JobState::Done
+                            }
+                            Err(_) if job.cancel.load(Ordering::Relaxed) => JobState::Cancelled,
+                            Err(e) => JobState::Failed(e),
+                        };
+                    }
+                    persist(&l);
                 }
                 if let Some(st) = &status {
                     st.lock_ok().push(level, text);
@@ -315,12 +468,48 @@ impl App {
     pub(super) fn uploads_panel(&mut self, ui: &mut egui::Ui) {
         let jobs = self.uploads.jobs.lock_ok().clone();
         let offer = self.uploads.offer.clone();
-        if jobs.is_empty() && offer.is_none() {
+        let left = self.uploads.unfinished();
+        if jobs.is_empty() && offer.is_none() && left == 0 {
             return;
         }
         ui.add_space(4.0);
         if !self.section_heading(ui, "uploads", "UPLOADS", Section::Upload) {
             return;
+        }
+        if left > 0 {
+            let (mut go, mut forget) = (false, false);
+            let text = if left == 1 { "1 upload didn't finish".to_string() } else { format!("{left} uploads didn't finish") };
+            let takes: Vec<String> = self.uploads.resume.lock_ok().iter().map(|j| format!("{} to {}", j.take, j.label)).collect();
+            ui.label(RichText::new(text).size(12.5).color(AMBER)).on_hover_text(takes.join("\n"));
+            let mut names: Vec<String> = self.uploads.resume.lock_ok().iter().map(|j| j.take.clone()).collect();
+            names.dedup();
+            ui.add(egui::Label::new(RichText::new(names.join(", ")).size(11.5).color(TEXT_DIM)).truncate());
+            ui.horizontal(|ui| {
+                if ui.button(RichText::new("Carry on").strong()).on_hover_text("Pick them up where Google got to").clicked() {
+                    go = true;
+                }
+                if ui.small_button("Forget them").clicked() {
+                    forget = true;
+                }
+            });
+            if go {
+                if !self.cfg.upload.ready() {
+                    self.toast("Sign in to Google again in Settings → Upload, then Carry on.".into(), true);
+                } else {
+                    let mut back = std::mem::take(&mut *self.uploads.resume.lock_ok());
+                    for j in &mut back {
+                        j.state = JobState::Waiting;
+                        j.refresh = self.cfg.upload.refresh_token.clone();
+                        j.client = client_of(&self.cfg.upload);
+                    }
+                    let status = self.engine.as_ref().map(|e| e.status.clone());
+                    self.uploads.add(back, status, self.waker.clone());
+                }
+            } else if forget {
+                self.uploads.resume.lock_ok().clear();
+                self.uploads.persist();
+            }
+            ui.add_space(4.0);
         }
         if let Some(r) = &offer {
             let name = r.folder.file_name().unwrap_or_default().to_string_lossy().to_string();
@@ -360,6 +549,7 @@ impl App {
                         if let Some(x) = self.uploads.jobs.lock_ok().iter_mut().find(|x| x.id == j.id && x.state == JobState::Waiting) {
                             x.state = JobState::Cancelled;
                         }
+                        self.uploads.persist();
                     }
                 }
                 JobState::Uploading => {
@@ -394,7 +584,8 @@ impl App {
             ui.ctx().request_repaint_after(Duration::from_millis(500));
         }
         if let Some(id) = retry {
-            // Again, in its place, with the sign-in as it is now.
+            // Again, in its place, with the sign-in as it is now (and
+            // where Google got to, when it can).
             if let Some(j) = self.uploads.jobs.lock_ok().iter_mut().find(|j| j.id == id) {
                 j.state = JobState::Waiting;
                 (j.sent, j.total) = (0, 0);
@@ -402,6 +593,7 @@ impl App {
                 j.refresh = self.cfg.upload.refresh_token.clone();
                 j.client = client_of(&self.cfg.upload);
             }
+            self.uploads.persist();
             let status = self.engine.as_ref().map(|e| e.status.clone());
             self.uploads.work(status, self.waker.clone());
         }
@@ -446,7 +638,7 @@ mod tests {
         assert_eq!(title, "The Show – 20 October 2026");
         assert_eq!(description, "About The Show.\n\n0:00 Welcome\n2:00 News\n5:00 Guest");
         assert!(file.ends_with("Program.mp4"));
-        assert_eq!(*privacy, "private");
+        assert_eq!(privacy, "private");
 
         cfg.upload.granted.push("drive".into());
         for (what, want) in [(DriveFiles::Program, 1), (DriveFiles::ProgramAndMix, 3), (DriveFiles::Everything, 5)] {
@@ -468,6 +660,63 @@ mod tests {
                 assert!(files.iter().any(|(f, path)| f.ends_with("Guest_1_backup.webm") && path == &vec!["Guests".to_string()]));
             }
         }
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    /// The queue outlives a quit, without the sign-in, and only what's left.
+    #[test]
+    fn unfinished_uploads_are_kept() {
+        let dir = std::env::temp_dir().join(format!("cutaway-upkeep-{}", std::process::id())).join("Take_3");
+        let report = take(&dir);
+        let mut cfg = Config::default();
+        cfg.upload = UploadConfig { client_id: "id".into(), client_secret: "shh-secret".into(), refresh_token: "refresh-secret".into(), granted: vec!["youtube".into(), "drive".into()], youtube: true, drive: true, ..Default::default() };
+        let (mut jobs, _) = jobs_for(&cfg, &report);
+        jobs[0].session = Some((dir.join("Program.mp4"), "https://upload.example/session/1".into()));
+        jobs[1].state = JobState::Failed("offline".into());
+        jobs[1].done = vec![dir.join("Program.mp4")];
+        let finished = Job { id: new_id(), state: JobState::Done, ..jobs[0].clone() };
+        jobs.push(finished);
+        let file = dir.parent().unwrap().join("uploads.json");
+        save_queue(&file, &jobs, &[]);
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(!text.contains("secret"), "no sign-in in the file: {text}");
+        let back = load_queue(&file);
+        assert_eq!(back.len(), 2, "not the finished one");
+        assert_eq!(back[0].work, jobs[0].work);
+        assert_eq!(back[0].state, JobState::Waiting);
+        assert_eq!(back[0].session, jobs[0].session);
+        assert_eq!(back[1].state, JobState::Failed("offline".into()));
+        assert_eq!(back[1].done, jobs[1].done);
+        assert!(back[0].refresh.is_empty() && back[0].client.secret.is_empty());
+        // Waiting to be carried on, they're still kept; nothing left, no file.
+        let mut up = Uploads::default();
+        up.load(file.clone());
+        assert_eq!(up.unfinished(), 2);
+        up.persist();
+        assert_eq!(load_queue(&file).len(), 2);
+        up.resume.lock_ok().clear();
+        up.persist();
+        assert!(!file.exists());
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    /// Carried on after a restart: the Drive files already sent aren't sent again.
+    #[test]
+    fn carries_on_without_sending_files_twice() {
+        let g = crate::net::google::tests::fake_google(0);
+        let dir = std::env::temp_dir().join(format!("cutaway-upcarry-{}", std::process::id())).join("Take_4");
+        let report = take(&dir);
+        let mut cfg = Config::default();
+        cfg.upload = UploadConfig { refresh_token: "r1".into(), granted: vec!["drive".into()], drive: true, drive_files: DriveFiles::Everything, ..Default::default() };
+        let (mut jobs, _) = jobs_for(&cfg, &report);
+        let mut job = jobs.remove(0);
+        job.client = crate::net::google::tests::client(g.port);
+        let Work::Drive { files, .. } = &job.work else { panic!() };
+        job.done = files.iter().take(2).map(|f| f.0.clone()).collect();
+        let notes = Mutex::new(0);
+        run(&job, &|_, _| {}, &|n| if let Note::FileDone(_) = n { *notes.lock_ok() += 1 }).unwrap();
+        assert_eq!(g.files.lock_ok().len(), 3, "the other three");
+        assert_eq!(*notes.lock_ok(), 3);
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }
 
@@ -519,7 +768,7 @@ mod tests {
         let mut job = jobs.remove(0);
         job.client = crate::net::google::tests::client(g.port);
         let seen = Mutex::new(Vec::new());
-        let link = run(&job, &|s, t| seen.lock_ok().push((s, t))).unwrap();
+        let link = run(&job, &|s, t| seen.lock_ok().push((s, t)), &|_| {}).unwrap();
         assert_eq!(link, "https://drive.google.com/drive/folders/folder2", "the take's folder, inside Cutaway's");
         // Every file went up whole, into the right folder.
         let files = g.files.lock_ok();

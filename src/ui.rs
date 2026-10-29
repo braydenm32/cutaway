@@ -98,7 +98,12 @@ pub fn run(cfg: Config, save_path: Option<PathBuf>, self_test: bool, made_pin: b
         "Cutaway",
         options,
         Box::new(move |cc| {
+            // Uploads left unfinished last time are kept beside the settings.
+            let queue = save_path.as_ref().and_then(|p| p.parent()).map(|d| d.join("uploads.json")).or_else(|| std::env::var_os("CUTAWAY_UI_TEST_UPLOADS").map(PathBuf::from));
             let mut app = App::new(cc, cfg, save_path);
+            if let Some(q) = queue {
+                app.uploads.load(q);
+            }
             app.guide_open = first_run || std::env::var_os("CUTAWAY_UI_TEST_GUIDE").is_some();
             app.fit_window = !remembered;
             if made_pin {
@@ -4827,7 +4832,7 @@ fn quit_text(recording: bool, live: bool, busy: Option<String>) -> (String, Stri
         (true, false, _) => ("Quit while recording?".into(), "Cutaway will finish and save this take.".into()),
         (false, false, Some(b)) => (
             "Quit before Cutaway has finished?".to_string(),
-            format!("Cutaway is still {b}. Saving finishes before Cutaway closes, but an upload or the podcast copy stops part way and has to be done again."),
+            format!("Cutaway is still {b}. Saving finishes before Cutaway closes; uploads stop part way and carry on when you next open Cutaway, but the podcast copy has to be made again."),
         ),
         (false, false, None) => ("Quit?".into(), String::new()),
     };
