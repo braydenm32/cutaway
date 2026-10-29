@@ -63,7 +63,7 @@ pub enum Section {
 }
 
 impl Section {
-    const ALL: [Section; 23] = [
+    pub(super) const ALL: [Section; 23] = [
         Section::General,
         Section::Sources,
         Section::Audio,
@@ -88,12 +88,17 @@ impl Section {
         Section::Shortcuts,
         Section::Diagnostics,
     ];
+    /// The name a page has in the code (as in the help table).
+    fn from_ident(name: &str) -> Option<Section> {
+        Section::ALL.into_iter().find(|s| format!("{s:?}") == name)
+    }
+
     /// For scripted screenshots: "streaming", "sources", ...
     pub fn from_name(name: &str) -> Option<Section> {
         Section::ALL.into_iter().find(|s| s.label().to_lowercase().contains(&name.to_lowercase()))
     }
 
-    fn label(self) -> &'static str {
+    pub(super) fn label(self) -> &'static str {
         match self {
             Section::General => "General & shows",
             Section::Sources => "Video sources",
@@ -249,6 +254,8 @@ pub struct SettingsUi {
     sel_source: usize,
     sel_audio: usize,
     sel_dest: usize,
+    /// What's typed in "Find a setting…".
+    find: String,
     /// Signing in to Google (Settings → Upload).
     google: Option<upload::GoogleSignIn>,
     /// Scheduling on YouTube, while it's under way.
@@ -394,6 +401,7 @@ impl SettingsUi {
             sel_source: 0,
             sel_audio: 0,
             sel_dest: 0,
+            find: String::new(),
             google: None,
             schedule_job: None,
             show_keys: HashSet::new(),
@@ -461,6 +469,21 @@ impl SettingsUi {
     /// Open with source `i` split into `n` close-ups, ready to frame.
     pub fn with_split(mut self, i: usize, n: usize) -> Self {
         self.split_source(i, n);
+        self
+    }
+
+    /// For the UI self-test: "Find a setting…" with this typed, or (`go`) already gone to its first match.
+    pub fn with_find(mut self, query: &str, go: bool) -> Self {
+        if go {
+            if let Some(h) = help::search(query, 1).into_iter().next() {
+                self.section = h.page;
+                if let Some(l) = &h.label {
+                    help::find_target(h.page, l);
+                }
+            }
+        } else {
+            self.find = query.to_string();
+        }
         self
     }
 
@@ -533,6 +556,13 @@ impl SettingsUi {
         let start = self.place.map(|p| p.rect(screen)).unwrap_or(middle);
         // Esc closes Settings unless show keys are being used beside it.
         let esc = esc && !self.keys_beside(ctx);
+        // Esc in the find box clears it first.
+        let esc = if esc && !self.find.is_empty() {
+            self.find.clear();
+            false
+        } else {
+            esc
+        };
         let mut window = egui::Window::new("Settings")
             .open(&mut open)
             .collapsible(false)
@@ -556,7 +586,8 @@ impl SettingsUi {
                             ui.set_width(204.0);
                             ui.set_min_height(body_h);
                             let here = self.section.group();
-                            for g in Group::ALL {
+                            let found = self.find_box(ui);
+                            for g in Group::ALL.into_iter().filter(|_| !found) {
                                 let changed = g.sections().iter().any(|s| self.section_dirty(*s));
                                 let mut text = egui::text::LayoutJob::default();
                                 let name = if changed { format!("{}  •\n", g.label()) } else { format!("{}\n", g.label()) };
@@ -1533,6 +1564,42 @@ impl SettingsUi {
     /// Whether a page is in the sidebar. Viewer comments reads a live
     /// stream's chat, so it waits until there's somewhere to stream to,
     /// unless it's already set up (or asked for directly).
+    /// "Find a setting…" at the top of the sidebar: matches show in place of the pages (true while they do).
+    fn find_box(&mut self, ui: &mut egui::Ui) -> bool {
+        let r = ui.add(egui::TextEdit::singleline(&mut self.find).hint_text("Find a setting…").desired_width(204.0).margin(vec2(8.0, 6.0)));
+        ui.add_space(4.0);
+        if self.find.trim().is_empty() {
+            return false;
+        }
+        let hits = help::search(&self.find, 8);
+        if hits.is_empty() {
+            ui.label(RichText::new("No setting found").color(TEXT_DIM));
+            return true;
+        }
+        let mut go = None;
+        for h in &hits {
+            let text = match &h.label {
+                Some(l) => format!("{l} — {}", h.page.label()),
+                None => format!("{} (page)", h.page.label()),
+            };
+            if ui.add(egui::Button::new(RichText::new(text).size(13.5)).min_size(vec2(204.0, 28.0)).wrap()).clicked() {
+                go = Some(h.clone());
+            }
+        }
+        // Enter takes the first.
+        if go.is_none() && r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            go = hits.first().cloned();
+        }
+        if let Some(h) = go {
+            self.section = h.page;
+            if let Some(l) = &h.label {
+                help::find_target(h.page, l);
+            }
+            self.find.clear();
+        }
+        true
+    }
+
     fn shown(&self, s: Section) -> bool {
         match s {
             Section::Comments => {
@@ -1885,6 +1952,14 @@ pub(super) fn label(ui: &mut egui::Ui, text: &str) {
         ui.set_min_width(LABEL_W);
         ui.spacing_mut().item_spacing.x = 5.0;
         let r = ui.add(egui::Label::new(RichText::new(text).color(Color32::from_rgb(200, 205, 214))).selectable(false).sense(egui::Sense::hover()));
+        if let Some((glow, first)) = help::lit(text) {
+            // Found with "Find a setting": scrolled to, and lit for a moment.
+            if first {
+                r.scroll_to_me(Some(Align::Center));
+            }
+            ui.painter().rect_filled(r.rect.expand2(vec2(6.0, 3.0)), 4.0, ACCENT.gamma_multiply(0.45 * glow));
+            ui.ctx().request_repaint();
+        }
         if let Some(h) = help {
             // The name explains itself after a moment; the ⓘ straight away.
             r.on_hover_ui(|ui| help_text(ui, h));

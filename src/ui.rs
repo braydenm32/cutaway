@@ -2022,7 +2022,11 @@ impl App {
                     self.cfg.remote.pin = "4821".into();
                 }
                 let source = std::env::var("CUTAWAY_UI_TEST_SOURCE").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
-                self.settings = Some(self.new_settings().open_at(section).select_source(source));
+                let mut win = self.new_settings().open_at(section).select_source(source);
+                if let Ok(q) = std::env::var("CUTAWAY_UI_TEST_FIND") {
+                    win = win.with_find(&q, std::env::var_os("CUTAWAY_UI_TEST_FINDGO").is_some());
+                }
+                self.settings = Some(win);
                 4
             }
             s => s,
