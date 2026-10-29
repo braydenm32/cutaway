@@ -196,6 +196,7 @@ impl SettingsUi {
             .filter(|(i, s)| *i != self.sel_source && s.framed_from().is_none() && s.virtual_ptz_of().is_none())
             .map(|(_, s)| (s.name.clone(), s.fps))
             .collect();
+        let scene_names: Vec<String> = self.draft.effective_scenes().iter().map(|s| s.name.clone()).collect();
         let Some(src) = self.draft.sources.get_mut(self.sel_source) else {
             hint(ui, "No sources yet. Add your cameras, capture cards, the screen, a media player or a network input.");
             return;
@@ -434,6 +435,21 @@ impl SettingsUi {
             }
             label(ui, "Record to its own file");
             ui.checkbox(&mut src.record, "");
+            ui.end_row();
+            label(ui, "If it drops while on air");
+            let shown = if src.on_drop_scene.is_empty() {
+                "Don't switch".to_string()
+            } else if scene_names.contains(&src.on_drop_scene) {
+                format!("Cut to {}", src.on_drop_scene)
+            } else {
+                format!("Cut to {} (no such scene now)", src.on_drop_scene)
+            };
+            egui::ComboBox::from_id_salt("src_on_drop").selected_text(shown).width(240.0).show_ui(ui, |ui| {
+                ui.selectable_value(&mut src.on_drop_scene, String::new(), "Don't switch");
+                for n in &scene_names {
+                    ui.selectable_value(&mut src.on_drop_scene, n.clone(), format!("Cut to {n}"));
+                }
+            });
             ui.end_row();
             if !matches!(kind, SourceKind::Framed | SourceKind::VirtualPtz) {
                 label(ui, "Delay");

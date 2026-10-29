@@ -632,6 +632,10 @@ pub struct SourceConfig {
     pub record: bool,
     /// Delay this video, in milliseconds, to line it up with slower sources.
     pub delay_ms: u32,
+    /// If it drops (no signal) while it's on air, cut to this scene (by
+    /// name; "" = don't switch).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub on_drop_scene: String,
     /// Crop, mirror and colour (program only; the source's own file is untouched).
     pub look: SourceLook,
     /// Media player sources (device "media"): what to play.
@@ -1019,7 +1023,8 @@ impl SourceLook {
 }
 
 /// A source's settings without those that change while it runs (its look,
-/// playlist, framing, PTZ, whether it's recorded and who's in it): if these
+/// playlist, framing, PTZ, whether it's recorded, who's in it and where to
+/// cut if it drops): if these
 /// differ, the source is reopened.
 pub fn source_key(s: &SourceConfig) -> SourceConfig {
     SourceConfig {
@@ -1030,6 +1035,7 @@ pub fn source_key(s: &SourceConfig) -> SourceConfig {
         record: true,
         person: String::new(),
         role: String::new(),
+        on_drop_scene: String::new(),
         ..s.clone()
     }
 }
@@ -1067,6 +1073,7 @@ impl Default for SourceConfig {
             fps: 30,
             record: true,
             delay_ms: 0,
+            on_drop_scene: String::new(),
             look: SourceLook::default(),
             media: MediaConfig::default(),
             network_latency_ms: 300,
