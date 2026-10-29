@@ -201,6 +201,8 @@ pub struct App {
     rec_hint_until: Option<Instant>,
     /// The self-test holds the REC button (for a screenshot).
     test_hold: bool,
+    /// The self-test opens this take's marker list.
+    test_marker_list: bool,
     /// The self-test takes this source's signal away (by number).
     test_drop: Option<usize>,
     /// Closing was confirmed (or nothing was running): let the window go.
@@ -280,6 +282,11 @@ pub struct App {
     precheck: Option<Precheck>,
     /// Title being edited live: (graphic, title, subtitle).
     title_edit: Option<(usize, String, String)>,
+    /// A marker being named (Shift+M): its time (which identifies it), its
+    /// own name until then, and what's typed.
+    marker_name: Option<(crate::media::Ns, String, String)>,
+    /// A marker's name being changed in the list under ◆ Marker ▾.
+    marker_edit: Option<(crate::media::Ns, String)>,
     display_fullscreen: bool,
     /// The output window's corner button shows until then (after the
     /// mouse moves over the window), like a video player's controls.
@@ -395,6 +402,7 @@ impl App {
             rec_hint_until: None,
             test_hold: false,
             test_drop: None,
+            test_marker_list: false,
             quit_ok: false,
             log_open: false,
             guide_open: false,
@@ -417,6 +425,8 @@ impl App {
             last_publish: Instant::now(),
             precheck: None,
             title_edit: None,
+            marker_name: None,
+            marker_edit: None,
             self_test: None,
         };
         app.vcam_wanted = app.cfg.display.virtual_camera;
@@ -1642,7 +1652,7 @@ impl App {
         }
         // (Settings lets them through after a click outside it, while the
         // pointer's away from it.)
-        if ctx.egui_wants_keyboard_input() || self.settings.as_ref().is_some_and(|s| !s.keys_beside(ctx)) || self.title_edit.is_some() || self.confirm.is_some() || self.precheck.is_some() || self.sync.is_some() {
+        if ctx.egui_wants_keyboard_input() || self.settings.as_ref().is_some_and(|s| !s.keys_beside(ctx)) || self.title_edit.is_some() || self.marker_name.is_some() || self.confirm.is_some() || self.precheck.is_some() || self.sync.is_some() {
             return;
         }
         if self.keymap.as_ref().is_none_or(|(c, _)| *c != self.cfg.keys) {
@@ -1709,6 +1719,15 @@ impl App {
         }
     }
 
+    /// The key for a built-in shortcut ("Shift+M"), or `none` when it has none.
+    fn key_label_or(&self, b: Builtin, none: &str) -> String {
+        let label = match &self.keymap {
+            Some((_, m)) => m.label_of(b),
+            None => Keymap::new(&self.cfg.keys).label_of(b),
+        };
+        if label.is_empty() { none.to_string() } else { label }
+    }
+
     /// " (M)": the key for a built-in shortcut, for a button's hover text
     /// ("" when it has none).
     fn key_hint(&self, b: Builtin) -> String {
@@ -1757,6 +1776,12 @@ impl App {
             Builtin::Marker => match self.add_marker(None) {
                 Ok(n) => self.toast(format!("{n} added"), false),
                 Err(err) => self.toast(err, true),
+            },
+            // The time is taken now, so typing the name doesn't move it.
+            Builtin::NamedMarker => match self.engine.as_ref().map(|e| e.add_marker_now(None)) {
+                Some(Ok(m)) => self.marker_name = Some((m.at, m.name, String::new())),
+                Some(Err(err)) => self.toast(format!("{err:#}"), true),
+                None => {}
             },
             Builtin::Auto => {
                 let on = !self.auto_on();
@@ -1859,6 +1884,29 @@ impl App {
         }
         let t = start.elapsed().as_secs_f32();
         ctx.request_repaint_after(Duration::from_millis(100));
+        if step == 3 && t > 7.0 && self.marker_name.is_none() {
+            // CUTAWAY_UI_TEST_MARKERS=list opens the take's markers, =name the Shift+M box.
+            match std::env::var("CUTAWAY_UI_TEST_MARKERS").as_deref() {
+                Ok("list") => {
+                    for name in ["Guest arrives", "Big laugh"] {
+                        let _ = self.add_marker(Some(name.into()));
+                    }
+                    self.test_marker_list = true;
+                    self.self_test = Some((start, 5));
+                }
+                Ok("name") => {
+                    self.run_builtin(ctx, Builtin::NamedMarker, Key::M);
+                    if let Some(m) = &mut self.marker_name {
+                        m.2 = "Cold open ends".into();
+                    }
+                    self.self_test = Some((start, 5));
+                }
+                _ => {}
+            }
+            if self.self_test.is_some_and(|(_, s)| s == 5) {
+                return;
+            }
+        }
         if step == 3 && self.test_drop.is_none() {
             // A source on air losing its signal (CUTAWAY_UI_TEST_DROP=2), and where to cut (…_DROP_TO=scene).
             if let Some(i) = std::env::var("CUTAWAY_UI_TEST_DROP").ok().and_then(|v| v.parse::<usize>().ok()).filter(|i| *i >= 1) {
@@ -2198,9 +2246,20 @@ impl App {
                     }
                 }
                 let mtext = if markers > 0 { format!("◆ Marker ({markers})") } else { "◆ Marker".into() };
-                if ui.add(egui::Button::new(mtext).min_size(vec2(0.0, 30.0))).on_hover_text(format!("Mark this moment{}: becomes a chapter and a timeline marker", self.key_hint(Builtin::Marker))).clicked() {
+                let gap = ui.spacing().item_spacing.x;
+                ui.spacing_mut().item_spacing.x = 2.0;
+                if ui.add(egui::Button::new(mtext).min_size(vec2(0.0, 30.0))).on_hover_text(format!("Mark this moment{}: becomes a chapter and a timeline marker. {} adds one and asks for its name", self.key_hint(Builtin::Marker), self.key_label_or(Builtin::NamedMarker, "A key set in Settings → Shortcuts"))).clicked() {
                     marker_clicked = true;
                 }
+                let list = ui.add(egui::Button::new("▾").min_size(vec2(22.0, 30.0))).on_hover_text("This take's markers: rename or take them out");
+                ui.spacing_mut().item_spacing.x = gap;
+                if std::mem::take(&mut self.test_marker_list) {
+                    egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(&list));
+                }
+                let take_markers = engine.take_markers();
+                egui::Popup::from_toggle_button_response(&list)
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                    .show(|ui| self.marker_list(ui, &take_markers));
                 if ui
                     .add(egui::Button::new("✂ Clip").min_size(vec2(0.0, 30.0)))
                     .on_hover_text(format!("Save the last {} seconds as a clip in the take's Clips folder{}", self.cfg.output.clip_seconds, self.key_hint(Builtin::Clip)))
@@ -3746,6 +3805,98 @@ impl App {
         }
     }
 
+    /// Shift+M: the marker's already in, at the moment the key was pressed;
+    /// this names it. Cancel keeps the name it has ("Marker 3").
+    fn marker_name_dialog(&mut self, ctx: &egui::Context) {
+        let Some((at, own, mut text)) = self.marker_name.clone() else { return };
+        let mut done = false;
+        let mut apply = false;
+        let r = egui::Modal::new(egui::Id::unique("marker_name")).show(ctx, |ui| {
+            ui.set_width(360.0);
+            ui.heading("Name this marker");
+            ui.label(RichText::new(format!("{own} at {}: the time was kept when you pressed the key.", fmt_clock(Duration::from_nanos(at.max(0) as u64)))).color(TEXT_DIM));
+            ui.add_space(4.0);
+            let field = ui.add(egui::TextEdit::singleline(&mut text).hint_text(own.as_str()).desired_width(340.0));
+            if ui.memory(|m| m.focused().is_none()) {
+                field.request_focus();
+            }
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                let enter = ui.input(|i| i.key_pressed(Key::Enter));
+                if ui.add(egui::Button::new(RichText::new("OK").color(Color32::WHITE)).fill(ACCENT)).clicked() || enter {
+                    apply = true;
+                    done = true;
+                }
+                if ui.button("Cancel").on_hover_text(format!("Keep it as \"{own}\"")).clicked() {
+                    done = true;
+                }
+            });
+        });
+        if apply && !text.trim().is_empty() {
+            if let Some(e) = &self.engine {
+                match e.rename_marker(at, &text) {
+                    Ok(()) => self.toast(format!("Marker \"{}\" added", text.trim()), false),
+                    Err(err) => self.toast(format!("Couldn't name the marker: {err:#}"), true),
+                }
+            }
+        }
+        self.marker_name = if done || r.should_close() { None } else { Some((at, own, text)) };
+    }
+
+    /// The list under ◆ Marker ▾: this take's markers, to rename or take out
+    /// until it stops.
+    fn marker_list(&mut self, ui: &mut egui::Ui, markers: &[crate::engine::recorder::Marker]) {
+        ui.set_min_width(380.0);
+        if markers.is_empty() {
+            ui.label(RichText::new("No markers in this take yet.").color(TEXT_DIM));
+            return;
+        }
+        ui.label(RichText::new("Names can be changed until the take stops.").size(11.5).color(TEXT_DIM));
+        let mut rename: Option<(crate::media::Ns, String)> = None;
+        let mut delete: Option<crate::media::Ns> = None;
+        egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+            egui::Grid::new("marker_list").num_columns(4).spacing([10.0, 6.0]).show(ui, |ui| {
+                for m in markers {
+                    ui.label(RichText::new(fmt_clock(Duration::from_nanos(m.at.max(0) as u64))).monospace());
+                    if m.clip {
+                        ui.label(format!("✂ {}", m.name)).on_hover_text("Left by a saved clip (in the take's Clips folder): on the editing timelines, not a chapter");
+                    } else {
+                        let mut text = match &self.marker_edit {
+                            Some((at, t)) if *at == m.at => t.clone(),
+                            _ => m.name.clone(),
+                        };
+                        let r = ui.add_sized([180.0, 20.0], egui::TextEdit::singleline(&mut text));
+                        if r.changed() {
+                            self.marker_edit = Some((m.at, text.clone()));
+                        }
+                        if r.lost_focus() {
+                            if self.marker_edit.as_ref().is_some_and(|(at, _)| *at == m.at) {
+                                if !text.trim().is_empty() && text.trim() != m.name {
+                                    rename = Some((m.at, text.clone()));
+                                }
+                                self.marker_edit = None;
+                            }
+                        }
+                    }
+                    ui.label(RichText::new(&m.scene).color(TEXT_DIM)).on_hover_text("On air at the time");
+                    if !m.clip && ui.small_button("✕").on_hover_text("Take this marker out").clicked() {
+                        delete = Some(m.at);
+                    }
+                    ui.end_row();
+                }
+            });
+        });
+        let Some(e) = &self.engine else { return };
+        let result = match (rename, delete) {
+            (Some((at, name)), _) => e.rename_marker(at, &name),
+            (None, Some(at)) => e.delete_marker(at),
+            _ => Ok(()),
+        };
+        if let Err(err) = result {
+            self.toast(format!("{err:#}"), true);
+        }
+    }
+
     fn audio_panel(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         ui.label(RichText::new("AUDIO").color(TEXT_DIM).size(11.0));
@@ -4904,6 +5055,7 @@ impl eframe::App for App {
         }
         self.confirm_dialog(&ctx);
         self.title_dialog(&ctx);
+        self.marker_name_dialog(&ctx);
         self.precheck_dialog(&ctx);
         self.sync_dialog(&ctx);
         self.rescue_card(&ctx);
