@@ -338,6 +338,14 @@ Take_2026-10-16_19-30-02/
 - **DAW audio.** Each audio input is recorded to WAV (multichannel, or one mono
   file per channel). You pick which two channels feed the mix. Interfaces with
   their own clock are kept locked to the video for hours (drift correction).
+- **Inputs in Settings:** each input in **Settings → Audio inputs** has a live
+  level bar (in the list and beside its name), so you can see a mic is alive
+  without leaving the page; an input you haven't applied yet says "Apply to
+  hear it". **↑ / ↓** move an input (the order of the strips in the mixer;
+  scenes, auto-mix, ducking and talkback follow an input by name, so they
+  carry on; anything that says "input 2" by number, like a remote or MIDI
+  button, now means whichever is second) and **Duplicate** copies one under a
+  new name.
 - **Voice processing** per input: high-pass filter, **noise reduction**
   (RNNoise: fans, hum and room noise turned down, voices kept), noise gate,
   three-band EQ, compressor and de-esser, with a gain-reduction meter on the

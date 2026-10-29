@@ -599,7 +599,7 @@ impl SettingsUi {
                                     match self.section {
                                         Section::General => self.general(ui, info),
                                         Section::Sources => self.sources(ui, info),
-                                        Section::Audio => self.audio_inputs(ui),
+                                        Section::Audio => self.audio_inputs(ui, info),
                                         Section::Mixing => self.mixing(ui),
                                         Section::Pads => self.pads(ui),
                                         Section::Syrinscape => self.syrinscape(ui),
@@ -1003,7 +1003,7 @@ impl SettingsUi {
 
     // ---- Audio --------------------------------------------------------------------
 
-    fn audio_inputs(&mut self, ui: &mut egui::Ui) {
+    fn audio_inputs(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
         title(
             ui,
             "Audio inputs",
@@ -1031,12 +1031,23 @@ impl SettingsUi {
                 ui.set_width(220.0);
                 for i in 0..n {
                     let a = &self.draft.audio[i];
+                    let level = input_level(&self.original, &info.input_levels, a.uid);
                     let b = egui::Button::selectable(
                         self.sel_audio == i,
                         RichText::new(format!("{}\n{} · {} ch", a.name, short_audio_device(&a.device), a.channels)).size(14.0),
                     )
-                    .min_size(vec2(220.0, 40.0));
-                    if ui.add(b).clicked() {
+                    .min_size(vec2(220.0, 52.0));
+                    let r = ui.add(b);
+                    // A live level along the bottom of the row.
+                    let strip = egui::Rect::from_min_max(egui::pos2(r.rect.left() + 8.0, r.rect.bottom() - 9.0), egui::pos2(r.rect.right() - 8.0, r.rect.bottom() - 5.0));
+                    match level {
+                        Some(db) => paint_level(ui, strip, db),
+                        None if self.original.audio.iter().all(|o| o.uid != a.uid || a.uid == 0) => {
+                            ui.painter().text(egui::pos2(strip.right(), strip.center().y), egui::Align2::RIGHT_CENTER, "Apply to hear it", egui::FontId::proportional(11.0), TEXT_DIM);
+                        }
+                        None => {}
+                    }
+                    if r.clicked() {
                         self.sel_audio = i;
                     }
                 }
@@ -1049,8 +1060,23 @@ impl SettingsUi {
                         self.draft.audio.push(AudioConfig { name, device, ..Default::default() });
                         self.sel_audio = self.draft.audio.len() - 1;
                     }
+                    if ui.add_enabled(n > 0, egui::Button::new("Duplicate")).clicked() {
+                        let mut copy = self.draft.audio[self.sel_audio].clone();
+                        copy.uid = 0;
+                        copy.name = unique(self.draft.audio.iter().map(|a| a.name.clone()).collect(), &format!("{} copy", copy.name));
+                        self.draft.audio.insert(self.sel_audio + 1, copy);
+                        self.sel_audio += 1;
+                    }
                     if ui.add_enabled(n > 0, egui::Button::new("Remove")).clicked() {
                         self.draft.audio.remove(self.sel_audio);
+                    }
+                    if ui.add_enabled(n > 0 && self.sel_audio > 0, egui::Button::new("↑")).on_hover_text("Move up: the order of the strips in the mixer").clicked() {
+                        self.draft.audio.swap(self.sel_audio, self.sel_audio - 1);
+                        self.sel_audio -= 1;
+                    }
+                    if ui.add_enabled(n > 0 && self.sel_audio + 1 < n, egui::Button::new("↓")).on_hover_text("Move down: the order of the strips in the mixer").clicked() {
+                        self.draft.audio.swap(self.sel_audio, self.sel_audio + 1);
+                        self.sel_audio += 1;
                     }
                 });
             });
@@ -1074,9 +1100,24 @@ impl SettingsUi {
                 };
                 let devices = &self.audio;
                 let max = devices.iter().find(|d| d.name == a.device).map(|d| d.max_channels.max(1)).unwrap_or(64).min(64);
+                let level = input_level(&self.original, &info.input_levels, a.uid);
+                let unapplied = self.original.audio.iter().all(|o| o.uid != a.uid || a.uid == 0);
                 egui::Grid::new("audio_detail").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
                     label(ui, "Name");
                     ui.add_sized([240.0, 22.0], egui::TextEdit::singleline(&mut a.name));
+                    ui.end_row();
+                    label(ui, "Level");
+                    match level {
+                        Some(db) => {
+                            ui.horizontal(|ui| {
+                                let (rect, _) = ui.allocate_exact_size(vec2(240.0, 10.0), egui::Sense::hover());
+                                paint_level(ui, rect, db);
+                                ui.label(RichText::new(format!("{:>4.0} dB", db.max(-99.0))).monospace().color(TEXT_DIM));
+                            });
+                        }
+                        None if unapplied => hint(ui, "Apply to hear it"),
+                        None => hint(ui, "no sound yet (the input isn't open)"),
+                    }
                     ui.end_row();
                     label(ui, "Device");
                     ui.vertical(|ui| {
@@ -2284,6 +2325,26 @@ pub fn ndi_credit(ui: &mut egui::Ui) {
     });
 }
 
+/// The live level (dB, loudest channel) of the applied input with this identity, if the show is running.
+fn input_level(applied: &Config, levels: &[Vec<f32>], uid: u64) -> Option<f32> {
+    if uid == 0 {
+        return None;
+    }
+    let i = applied.audio.iter().position(|a| a.uid == uid)?;
+    levels.get(i).map(|ch| ch.iter().copied().fold(-120.0, f32::max))
+}
+
+/// A level meter (dB) filling `rect` as far as the level reaches: green, amber near the top, red at the limit.
+fn paint_level(ui: &egui::Ui, rect: egui::Rect, db: f32) {
+    let p = ui.painter();
+    p.rect_filled(rect, 2.0, Color32::from_black_alpha(90));
+    let frac = ((db + 60.0) / 60.0).clamp(0.0, 1.0);
+    if frac > 0.0 {
+        let colour = if db > -3.0 { RED } else if db > -12.0 { AMBER } else { GREEN };
+        p.rect_filled(egui::Rect::from_min_size(rect.min, vec2(rect.width() * frac, rect.height())), 2.0, colour);
+    }
+}
+
 /// A QR code for `text`, `size` points across, on a white card (phones
 /// scan it from the screen).
 pub fn qr_code(ui: &mut egui::Ui, text: &str, size: f32) -> egui::Response {
@@ -2419,6 +2480,20 @@ mod tests {
         let before = win.draft.sources.len();
         win.split_source(1, 2);
         assert_eq!(win.draft.sources.len(), before);
+    }
+
+    /// An input's live level is found by its identity in what's running,
+    /// wherever it now sits in the list; new ones have none.
+    #[test]
+    fn input_levels_follow_the_input_not_its_place() {
+        let mut cfg = Config::default();
+        cfg.audio = vec![AudioConfig { name: "A".into(), uid: 11, ..Default::default() }, AudioConfig { name: "B".into(), uid: 12, ..Default::default() }];
+        let levels = vec![vec![-30.0, -20.0], vec![-6.0]];
+        assert_eq!(input_level(&cfg, &levels, 11), Some(-20.0));
+        assert_eq!(input_level(&cfg, &levels, 12), Some(-6.0));
+        assert_eq!(input_level(&cfg, &levels, 99), None);
+        assert_eq!(input_level(&cfg, &levels, 0), None);
+        assert_eq!(input_level(&cfg, &[], 11), None);
     }
 
     /// Where the window was left comes back on another size of screen,

@@ -78,6 +78,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
 
         // ---- Audio inputs
         (Audio, "Name") => "What this input is called on its strip and in the mixes, and in its WAV file's name.",
+        (Audio, "Level") => "How loud this input is now (the loudest channel it captures), as a bar. It shows once the input has been applied and is open; a new input says \"Apply to hear it\". In the list, ↑ and ↓ move the input: the order of the strips in the mixer.",
         (Audio, "Device") => "Where the sound comes from: an audio interface or loopback device, the sound of a media player or network source (\"Sound from …\"), another app's sound, the sound pads, or a test tone.",
         (Audio, "Channels to capture") => "How many of the device's channels to take in. Every one is recorded to the WAV; pick which ones feed the mix below.",
         (Audio, "Program left / right") => "Which captured channels make the left and right of the mix. Pick the same channel for both to put a mono mic in the middle.",
