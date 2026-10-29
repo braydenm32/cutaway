@@ -384,7 +384,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
 
         // ---- Recording
         (Recording, "Save takes in") => "The folder where each take gets a folder of its own. Use a fast drive with plenty of room.",
-        (Recording, "Take name") => "The start of each take's folder name; the date and time follow.",
+        (Recording, "Take name") => "The start of each take's folder name; the date and time follow. Leave it as \"Take\" (or empty) and, with a show chosen, takes are named after the show instead (e.g. My_Show_2026-10-16_19-30-02); the Resolve project gets the same name.",
         (Recording, "File format") => "MP4 opens everywhere; MOV suits Final Cut Pro. ProRes always records as MOV.",
         (Recording, "Codec") => "H.264 plays anywhere; H.265 makes smaller files (good for 4K); ProRes (on a Mac) is the easiest to edit, but the files are very large.",
         (Recording, "Encoder") => "What encodes the video: the computer's built-in hardware encoder when there is one (fast, and leaves the processor free), or software.",

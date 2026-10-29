@@ -26,6 +26,7 @@ mod guide;
 mod production;
 mod starting;
 mod undo;
+mod takes;
 mod uploads;
 mod waiting;
 
@@ -101,7 +102,12 @@ pub fn run(cfg: Config, save_path: Option<PathBuf>, self_test: bool, made_pin: b
         "Cutaway",
         options,
         Box::new(move |cc| {
+            // Uploads left unfinished last time are kept beside the settings.
+            let queue = save_path.as_ref().and_then(|p| p.parent()).map(|d| d.join("uploads.json")).or_else(|| std::env::var_os("CUTAWAY_UI_TEST_UPLOADS").map(PathBuf::from));
             let mut app = App::new(cc, cfg, save_path);
+            if let Some(q) = queue {
+                app.uploads.load(q);
+            }
             app.guide_open = first_run || std::env::var_os("CUTAWAY_UI_TEST_GUIDE").is_some();
             app.fit_window = !remembered;
             if made_pin {
@@ -274,6 +280,8 @@ pub struct App {
     settle_at: Option<Instant>,
     /// Uploads to YouTube and Google Drive.
     uploads: uploads::Uploads,
+    /// The "Take saved" card.
+    takes: takes::Takes,
     /// The live chat, the comment on screen, and the newest one shown.
     chat: Option<crate::net::chat::Chat>,
     comment_on: Option<u64>,
@@ -367,6 +375,7 @@ impl App {
             about_open: false,
             settle_at: None,
             uploads: Default::default(),
+            takes: Default::default(),
             chat: None,
             comment_on: None,
             comment_at: None,
@@ -1956,6 +1965,13 @@ impl App {
         let pip = self.scenes.iter().position(|s| s.name == "Picture in picture").unwrap_or(0);
         let next = match step {
             0 if t > 2.0 => {
+                // A show chosen (takes are named after it).
+                if let Ok(show) = std::env::var("CUTAWAY_UI_TEST_SHOW") {
+                    self.cfg.ui.profile = show;
+                    if let Some(e) = &self.engine {
+                        let _ = e.update_config(&self.cfg);
+                    }
+                }
                 self.press_scene(pip, false);
                 if std::env::var_os("CUTAWAY_UI_TEST_PREVIEW").is_some() {
                     // Picture in picture on air, the third scene waiting in preview.
@@ -2031,6 +2047,24 @@ impl App {
                 }
                 self.settings = Some(win);
                 4
+            }
+            // Stop, to show the "Take saved" card.
+            3 if t > 7.0 && std::env::var_os("CUTAWAY_UI_TEST_STOP").is_some() => {
+                self.toggle_record();
+                5
+            }
+            // STOP=takes: then the Recent takes menu.
+            5 if t > 11.0 && std::env::var("CUTAWAY_UI_TEST_STOP").is_ok_and(|v| v == "takes") => {
+                self.takes.open_menu = true;
+                6
+            }
+            // STOP=resolve: then its Open in Resolve.
+            5 if t > 11.0 && std::env::var("CUTAWAY_UI_TEST_STOP").is_ok_and(|v| v == "resolve") => {
+                let folder = self.engine.as_ref().and_then(|e| e.status.lock_ok().last_take.as_ref().map(|r| r.folder.clone()));
+                if let Some(f) = folder {
+                    self.take_action(takes::TakeAction::Resolve(f), ctx);
+                }
+                6
             }
             s => s,
         };
@@ -2244,6 +2278,13 @@ impl App {
         }
         self.show_menu(ui);
         ui.add_space(10.0);
+        let card = self.engine.as_ref().map(|e| {
+            let st = e.status.lock_ok();
+            (matches!(st.rec, RecState::Recording { .. }), st.last_take.clone())
+        });
+        if let Some((recording, last)) = card {
+            self.tick_take_card(recording, last.as_ref());
+        }
         let Some(engine) = &self.engine else { return };
         let (rec, last, stream, markers, disk, background) = {
             let st = engine.status.lock_ok();
@@ -2373,12 +2414,23 @@ impl App {
             RecState::Idle => {
                 self.rec_hold_spent = false;
                 let btn = pill(RichText::new("●  RECORD").size(15.0).strong().color(RED), RAISED).stroke(Stroke::new(1.5, RED_DIM));
-                if ui.add(btn).on_hover_text("Record every source, the program and the audio (Ctrl/Cmd+R)").clicked() {
+                let r = ui.add(btn).on_hover_text("Record every source, the program and the audio (Ctrl/Cmd+R)");
+                if r.clicked() {
                     self.toggle_record();
+                }
+                let m = ui.menu_button(RichText::new("▾").size(15.0).color(TEXT_DIM), |ui| self.recent_takes_menu(ui)).response.on_hover_text("Recent takes");
+                if std::mem::take(&mut self.takes.open_menu) {
+                    egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(&m));
+                }
+                if self.settings.is_none() {
+                    self.take_card(ui.ctx(), r.rect, last.as_ref());
                 }
                 if let Some(t) = &last {
                     let total: u64 = t.files.iter().map(|f| f.1).sum();
-                    status_line = Some((format!("Last take: {} files, {} — {}", t.files.len(), crate::util::human_size(total), t.folder.display()), TEXT_DIM));
+                    // The space left stays in view once there's a take.
+                    let free = disk.as_ref().map(|d| format!(" · {} free", crate::util::human_size(d.free))).unwrap_or_default();
+                    let color = if disk.as_ref().and_then(|d| d.seconds_left()).is_some_and(|s| s < 1800.0) { AMBER } else { TEXT_DIM };
+                    status_line = Some((format!("Last take: {} files, {}{free} — {}", t.files.len(), crate::util::human_size(total), t.folder.display()), color));
                 } else if let Some(d) = &disk {
                     status_line = Some((d.describe(), TEXT_DIM));
                 }
@@ -5248,7 +5300,7 @@ fn quit_text(recording: bool, live: bool, busy: Option<String>) -> (String, Stri
         (true, false, _) => ("Quit while recording?".into(), "Cutaway will finish and save this take.".into()),
         (false, false, Some(b)) => (
             "Quit before Cutaway has finished?".to_string(),
-            format!("Cutaway is still {b}. Saving finishes before Cutaway closes, but an upload or the podcast copy stops part way and has to be done again."),
+            format!("Cutaway is still {b}. Saving finishes before Cutaway closes; uploads stop part way and carry on when you next open Cutaway, but the podcast copy has to be made again."),
         ),
         (false, false, None) => ("Quit?".into(), String::new()),
     };

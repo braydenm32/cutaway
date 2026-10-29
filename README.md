@@ -223,6 +223,16 @@ and [Install on Windows](#install-on-windows).
   with a button to show the folder.
 - **Saving files** after you stop shows what it's finishing (each video, the
   sound, the timeline) and how far along it is, on the Record button.
+- **Take saved:** once it's done, a card under the Record button says how
+  long the take is, how big, and either ✓ All files saved or ⚠ what went
+  wrong (dropped or repeated frames, a file that failed, a backup copy that
+  didn't finish). Its buttons: **Show in Finder** (Explorer on Windows),
+  **Open in Resolve** (see [Editing your takes](#editing-your-takes)) and
+  **Upload** (when uploads are set up). ✕ puts it away; the next recording
+  does too. The header keeps the last take and the free space in view.
+- **Recent takes:** the ▾ beside Record lists the last ten takes in the
+  recording folder (date, length, size, ⚠ if Take.txt notes a problem), each
+  with the same buttons: Finder/Explorer, Resolve and Upload….
 
 A take looks like this:
 
@@ -251,6 +261,10 @@ Take_2026-10-16_19-30-02/
   Graphics on air.csv                each graphic shown: how often, how long, when
   Take.txt                           devices, encoders, settings, markers, files
 ```
+
+Takes start with the **Take name** from Settings → Recording. Leave it as
+"Take" and, once you've chosen a show, takes are named after the show instead
+(`My_Show_2026-10-16_19-30-02`), and so is the Resolve project the script makes.
 
 ### Switching and graphics
 
@@ -460,7 +474,8 @@ Take_2026-10-16_19-30-02/
   streaming) per production and switch between them from the header. If
   the setup you're on isn't a show yet, switching saves it as "My setup"
   first, so nothing is lost. Rename a show in place, and deleting or
-  replacing one asks first.
+  replacing one asks first. Takes are named after the show you're on (unless
+  you've given them a Take name of your own).
 - **Pre-show check:** one button checks every source for a picture, every
   input for sound, the disk, the encoder, and that every stream server
   answers. It can run automatically before recording or going live.
@@ -1203,10 +1218,19 @@ it: a project, the YouTube Data API and/or Google Drive API turned on, and a
 - **Google Drive** gets the program, the program with the vertical version
   and the mix (and the podcast, when one's made), or the whole take, in a
   folder per take (inside a "Cutaway" folder).
-- An **Upload** button appears in the main window's Uploads panel when a take
-  is saved (and its podcast made), or uploads start straight away if you choose. They go on in the
+- An **Upload** button appears in the main window's Uploads panel (and on
+  the Take saved card) when a take is saved (and its podcast made); send an
+  older take from **Recent takes** (▾ beside Record), or uploads start straight away if you choose. They go on in the
   background, one at a time, with their progress, and pick up again if the
   connection drops.
+- **Quitting doesn't lose them.** The queue is kept in `uploads.json` beside
+  the settings (what to send and where, and Google's upload session; never
+  your sign-in, which stays in the Keychain / Credential Manager). Next time
+  Cutaway opens, the Uploads panel says "2 uploads didn't finish": **Carry
+  on** picks each up where Google got to (Drive files already sent aren't
+  sent again; a session Google has expired, after about a week, starts that
+  file again), or **Forget them**. It asks rather than starting by itself so
+  an upload never takes your connection during a show.
 
 Two things Google decides: while your Google Cloud app is in **Testing**,
 Google signs Cutaway out after 7 days (publishing the app, which needs no
@@ -1230,6 +1254,9 @@ Cutaway only sees the Drive files it made.
   rate and picture size, with bins for the cameras and the audio, proxies
   linked and the live edit as a timeline with the markers. A take moved or
   copied to another drive still works: pick it where it is now.
+  **Open in Resolve** on the Take saved card copies the take's folder and
+  starts the script there; without the script it opens the settings to
+  install it.
 - **REAPER:** open the take's `.rpp`: every WAV is on its own track, lined
   up, with the markers.
 - **Fender Studio Pro (Studio One), Bitwig, Cubase:** open (or import) the
