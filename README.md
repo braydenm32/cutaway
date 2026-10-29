@@ -670,6 +670,8 @@ Video Extensions** on some PCs.
 | Captions on screen | **CC** or `C` |
 | Who an auto-framed source follows | Right-click its tile: follow and shot size |
 | Marker | `M`, or **◆ Marker** while recording |
+| Named marker | `Shift+M` while recording: the marker goes in at that moment and a box asks for its name (typing doesn't move it; Cancel keeps "Marker 3") |
+| This take's markers | **▾** beside **◆ Marker**: each marker's time, name and the scene on air. Change a name there, or ✕ to take one out, until the take stops (clips show with ✂ and stay as they are) |
 | Save a clip | `K`, or **✂ Clip** while recording (the last 30 seconds, or as set) |
 | Instant replay | **⟲ Replay** while recording (right-click it for slow motion or another camera) |
 | Fade to black | **FTB** under the transitions; again to come back |
