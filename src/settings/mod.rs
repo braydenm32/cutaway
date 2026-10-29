@@ -262,7 +262,10 @@ pub struct SettingsUi {
     outputs: Vec<DeviceInfo>,
     sel_graphic: usize,
     profile_name: String,
-    rename_to: String,
+    /// The show being renamed, and its new name so far.
+    renaming: Option<(String, String)>,
+    /// The show waiting for "Delete for good".
+    deleting: Option<String>,
     ndi_found: Arc<Mutex<Option<Result<Vec<String>, String>>>>,
     capture: capture_picker::CapturePicker,
     vcam_job: Arc<Mutex<Option<Result<String, String>>>>,
@@ -404,7 +407,8 @@ impl SettingsUi {
             outputs: crate::platform::list_output_devices(),
             sel_graphic: 0,
             profile_name: String::new(),
-            rename_to: String::new(),
+            renaming: None,
+            deleting: None,
             ndi_found: Arc::new(Mutex::new(None)),
             capture: capture_picker::CapturePicker::new(),
             vcam_job: Arc::new(Mutex::new(None)),

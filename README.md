@@ -165,8 +165,13 @@ and [Install on Windows](#install-on-windows).
   each audio input as its own (disabled) track after the mix, so an editor
   can re-balance the show without the WAVs.
 - **No accidental quits:** closing the window (or Cmd+Q, Alt+F4) while
-  recording or live asks first. Quitting anyway finishes and saves the take
-  and ends the broadcast.
+  recording or live, or while a take is still saving, the podcast copy is
+  being made or an upload is running, asks first. Quitting anyway finishes
+  and saves the take and ends the broadcast. **Restart to update** waits
+  for all of these too.
+- **Desk changes are kept:** fader levels, inputs on or off, the
+  transition, the right-hand column and your scene edits are saved a few
+  seconds after you make them, so a crash doesn't lose them.
 - **Instant clips:** press **✂ Clip** (or `K`, a Stream Deck key, the
   remote) to save the last 30 seconds (your choice) of the program as its
   own file in the take's `Clips` folder, while the recording carries on —
@@ -435,7 +440,10 @@ Take_2026-10-16_19-30-02/
 - **MIDI controllers:** map pads, keys and faders with Learn; pads light up to
   show what's on air.
 - **Show profiles:** save complete setups (sources, scenes, audio, graphics,
-  streaming) per production and switch between them from the header.
+  streaming) per production and switch between them from the header. If
+  the setup you're on isn't a show yet, switching saves it as "My setup"
+  first, so nothing is lost. Rename a show in place, and deleting or
+  replacing one asks first.
 - **Pre-show check:** one button checks every source for a picture, every
   input for sound, the disk, the encoder, and that every stream server
   answers. It can run automatically before recording or going live.
@@ -775,6 +783,12 @@ shows (e.g. `http://192.168.1.20:8790`) on a phone or tablet on the same
 network and type the PIN. The remote always has one (Cutaway makes a
 four-digit PIN if you don't set your own), and a device that gets it wrong
 five times in a row waits a minute before it can try again.
+
+To stop a recording or end the stream from the phone, tap the red button
+twice within three seconds (the first tap says **Tap again to stop**), so a
+stray tap can't split the show. When the pre-show check is turned on
+(Settings → General → **Pre-show check**), starting from the phone, the Stream Deck, MIDI or OSC runs
+the check on the desk first, the same as the Record button.
 
 <img src="docs/remote.png" alt="The phone remote" width="300">
 

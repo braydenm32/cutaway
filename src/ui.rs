@@ -164,6 +164,8 @@ pub struct App {
     scenes: Vec<Scene>,
     scenes_dirty: bool,
     cfg_dirty: bool,
+    /// When the desk first changed something not yet written to disk.
+    dirty_since: Option<Instant>,
     textures: HashMap<String, (u64, egui::TextureHandle)>,
     /// The right-hand column's edge is being dragged.
     column_dragged: bool,
@@ -336,6 +338,7 @@ impl App {
             starts_count: 0,
             scenes_dirty: false,
             cfg_dirty: false,
+            dirty_since: None,
             textures: HashMap::new(),
             column_dragged: false,
             waker,
@@ -528,7 +531,7 @@ impl App {
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     let b = ui.add_enabled(!live, egui::Button::new(RichText::new("Restart to update").strong()));
-                    let b = if live { b.on_disabled_hover_text("Stop recording and streaming first (or choose When I quit)") } else { b.on_hover_text("Cutaway closes, updates and opens again") };
+                    let b = if live { b.on_disabled_hover_text("Wait until recording, streaming, saving and uploads have finished (or choose When I quit)") } else { b.on_hover_text("Cutaway closes, updates and opens again") };
                     if b.clicked() {
                         *restart = true;
                     }
@@ -637,6 +640,40 @@ impl App {
         if let Some(p) = &self.save_path {
             if self.cfg.save(p).is_ok() && !self.cfg.ui.profile.trim().is_empty() {
                 let _ = profiles::save(&crate::config::profiles_dir(p), &self.cfg.ui.profile, &self.cfg);
+            }
+        }
+    }
+
+    /// Changes made at the desk (levels, inputs on or off, the transition,
+    /// layout) are written a few seconds after the last one, so a crash
+    /// doesn't lose them. Scene edits wait until Edit layout is done.
+    fn autosave(&mut self) {
+        let pending = self.cfg_dirty || (self.scenes_dirty && !self.edit_mode);
+        if !pending {
+            self.dirty_since = None;
+            return;
+        }
+        let since = *self.dirty_since.get_or_insert_with(Instant::now);
+        if since.elapsed() < Duration::from_secs(3) {
+            return;
+        }
+        self.dirty_since = None;
+        if self.scenes_dirty && !self.edit_mode {
+            self.cfg.scenes = self.scenes.clone();
+            self.scenes_dirty = false;
+            if let Some(e) = &self.engine {
+                e.set_scenes(&self.cfg.scenes);
+            }
+        }
+        self.cfg_dirty = false;
+        if let Some(p) = &self.save_path {
+            match self.cfg.save(p) {
+                Ok(()) => {
+                    if !self.cfg.ui.profile.trim().is_empty() {
+                        let _ = profiles::save(&crate::config::profiles_dir(p), &self.cfg.ui.profile, &self.cfg);
+                    }
+                }
+                Err(e) => self.log(LogLevel::Warning, format!("Couldn't save settings: {e:#}")),
             }
         }
     }
@@ -814,6 +851,26 @@ impl App {
         }
     }
 
+    /// Work that quitting would cut short, after recording and streaming
+    /// have stopped: saving the last take, the podcast copy, uploads.
+    fn busy(&self) -> Option<String> {
+        let mut what = Vec::new();
+        if let Some(e) = &self.engine {
+            let st = e.status.lock_ok();
+            if let RecState::Finalizing { done, .. } = &st.rec {
+                what.push(format!("saving the last take ({:.0}%)", done * 100.0));
+            }
+            if let Some((step, _)) = &st.background {
+                what.push(step.to_lowercase());
+            }
+        }
+        let uploading = self.uploads.jobs.lock_ok().iter().filter(|j| matches!(j.state, uploads::JobState::Waiting | uploads::JobState::Uploading)).count();
+        if uploading > 0 {
+            what.push(format!("uploading {uploading} file{}", if uploading == 1 { "" } else { "s" }));
+        }
+        (!what.is_empty()).then(|| what.join(" and "))
+    }
+
     fn start_recording_now(&mut self) {
         let Some(e) = &self.engine else { return };
         if let Err(err) = e.start_recording() {
@@ -945,6 +1002,13 @@ impl App {
             Action::Record(t) => {
                 let now = self.engine.as_ref().is_some_and(|e| e.is_recording());
                 let want = toggle(&t, now);
+                if want && !now && self.cfg.ui.check_before_start {
+                    // Controllers get the same pre-show check as the button.
+                    if self.precheck.is_none() {
+                        self.start_precheck(Some(Then::Record));
+                    }
+                    return Ok("Running the pre-show check on the desk".into());
+                }
                 if want != now {
                     let e = self.engine.as_ref().ok_or("the engine isn't running")?;
                     if want {
@@ -958,6 +1022,12 @@ impl App {
             Action::Live(t) => {
                 let now = self.engine.as_ref().is_some_and(|e| e.is_streaming());
                 let want = toggle(&t, now);
+                if want && !now && self.cfg.ui.check_before_start && self.cfg.streaming.destinations.iter().any(|d| d.enabled) {
+                    if self.precheck.is_none() {
+                        self.start_precheck(Some(Then::Live));
+                    }
+                    return Ok("Running the pre-show check on the desk".into());
+                }
                 if want != now {
                     let e = self.engine.as_ref().ok_or("the engine isn't running")?;
                     if want {
@@ -1830,7 +1900,7 @@ impl App {
         if let (true, Some(r)) = (self.update_open, update) {
             let mut open = true;
             let mut skip = false;
-            let live = self.engine.as_ref().is_some_and(|e| e.is_recording() || e.is_streaming());
+            let live = self.engine.as_ref().is_some_and(|e| e.is_recording() || e.is_streaming()) || self.busy().is_some();
             let mut restart = false;
             egui::Window::new(format!("Cutaway {}", r.version)).open(&mut open).collapsible(false).resizable(false).default_width(440.0).show(ui.ctx(), |ui| {
                 self.update_window(ui, &r, live, &mut skip, &mut restart);
@@ -2100,6 +2170,17 @@ impl App {
         });
     }
 
+    /// The name this setup is saved under before switching shows, when it
+    /// isn't a show yet: "My setup", or "My setup 2" and so on if taken.
+    fn unnamed_setup_name(&self) -> Option<String> {
+        if !self.cfg.ui.profile.trim().is_empty() {
+            return None;
+        }
+        let dir = crate::config::profiles_dir(self.save_path.as_ref()?);
+        let taken = profiles::list(&dir);
+        (1..).map(|i| if i == 1 { "My setup".to_string() } else { format!("My setup {i}") }).find(|n| !taken.iter().any(|t| t.eq_ignore_ascii_case(n)))
+    }
+
     fn switch_show(&mut self, name: &str, ctx: &egui::Context) {
         let Some(path) = &self.save_path else { return };
         let dir = crate::config::profiles_dir(path);
@@ -2107,10 +2188,21 @@ impl App {
             self.toast("Stop recording and streaming before switching shows".into(), true);
             return;
         }
-        // Keep the current show's latest changes first.
+        // Keep the current show's latest changes first; a setup that isn't
+        // a show yet is saved as one, so switching never loses it.
+        let unnamed = self.unnamed_setup_name();
+        if let Some(n) = &unnamed {
+            self.cfg.ui.profile = n.clone();
+        }
         if !self.cfg.ui.profile.trim().is_empty() {
             self.cfg.scenes = self.scenes.clone();
-            let _ = profiles::save(&dir, &self.cfg.ui.profile, &self.cfg);
+            if let Err(e) = profiles::save(&dir, &self.cfg.ui.profile, &self.cfg) {
+                if unnamed.is_some() {
+                    self.cfg.ui.profile.clear();
+                    self.toast(format!("Couldn't save this setup before switching: {e:#}"), true);
+                    return;
+                }
+            }
         }
         match profiles::load(&dir, name) {
             Ok(mut cfg) => {
@@ -3083,10 +3175,16 @@ impl App {
         let (title, body, button) = match &which {
             Confirm::EndStream => ("End the live stream?".to_string(), "Viewers on every destination will see the broadcast end.".to_string(), "End stream"),
             Confirm::StopRecording => ("Stop recording?".to_string(), "The files for this take will be finished and saved.".to_string(), "Stop recording"),
-            Confirm::SwitchShow(n) => (format!("Switch to \"{n}\"?"), "Sources, scenes, audio and everything else change to that show's setup. The current show keeps its changes.".to_string(), "Switch"),
+            Confirm::SwitchShow(n) => {
+                let keep = match self.unnamed_setup_name() {
+                    Some(m) => format!("This setup isn't a show yet, so Cutaway first saves it as \"{m}\" (rename it in Settings → General)."),
+                    None => "The current show keeps its changes.".to_string(),
+                };
+                (format!("Switch to \"{n}\"?"), format!("Sources, scenes, audio and everything else change to that show's setup. {keep}"), "Switch")
+            }
             Confirm::Quit => {
                 let (rec, live) = self.engine.as_ref().map_or((false, false), |e| (e.is_recording(), e.is_streaming()));
-                quit_text(rec, live)
+                quit_text(rec, live, self.busy())
             }
         };
         let mut close = false;
@@ -4393,11 +4491,12 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         // Closing the window (or Cmd+Q / Alt+F4) mid-show asks first.
-        if ctx.input(|i| i.viewport().close_requested()) && !self.quit_ok && self.engine.as_ref().is_some_and(|e| e.is_recording() || e.is_streaming()) {
+        if ctx.input(|i| i.viewport().close_requested()) && !self.quit_ok && (self.engine.as_ref().is_some_and(|e| e.is_recording() || e.is_streaming()) || self.busy().is_some()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.confirm = Some(Confirm::Quit);
         }
         self.tick_starting(&ctx);
+        self.autosave();
         self.handle_requests();
         self.run_queued();
         if let Some(d) = self.next_queued() {
@@ -4518,13 +4617,18 @@ impl eframe::App for App {
 }
 
 /// What the quit confirmation says, for what's running.
-fn quit_text(recording: bool, live: bool) -> (String, String, &'static str) {
-    let (title, body) = match (recording, live) {
-        (true, true) => ("Quit while recording and live?", "Cutaway will finish and save this take, and the broadcast ends on every destination."),
-        (false, true) => ("Quit while live?", "The broadcast ends on every destination."),
-        _ => ("Quit while recording?", "Cutaway will finish and save this take."),
+fn quit_text(recording: bool, live: bool, busy: Option<String>) -> (String, String, &'static str) {
+    let (title, body) = match (recording, live, busy) {
+        (true, true, _) => ("Quit while recording and live?".into(), "Cutaway will finish and save this take, and the broadcast ends on every destination.".into()),
+        (false, true, _) => ("Quit while live?".into(), "The broadcast ends on every destination.".into()),
+        (true, false, _) => ("Quit while recording?".into(), "Cutaway will finish and save this take.".into()),
+        (false, false, Some(b)) => (
+            "Quit before Cutaway has finished?".to_string(),
+            format!("Cutaway is still {b}. Saving finishes before Cutaway closes, but an upload or the podcast copy stops part way and has to be done again."),
+        ),
+        (false, false, None) => ("Quit?".into(), String::new()),
     };
-    (title.to_string(), body.to_string(), "Quit")
+    (title, body, "Quit")
 }
 
 // ---- drawing helpers -------------------------------------------------------------
@@ -4691,9 +4795,12 @@ fn style(ctx: &egui::Context) {
 mod small_tests {
     #[test]
     fn quit_says_what_stops() {
-        assert_eq!(super::quit_text(true, false).0, "Quit while recording?");
-        assert_eq!(super::quit_text(false, true).0, "Quit while live?");
-        assert!(super::quit_text(true, true).1.contains("broadcast ends"));
+        assert_eq!(super::quit_text(true, false, None).0, "Quit while recording?");
+        assert_eq!(super::quit_text(false, true, None).0, "Quit while live?");
+        assert!(super::quit_text(true, true, None).1.contains("broadcast ends"));
+        let busy = super::quit_text(false, false, Some("uploading 2 files".into()));
+        assert_eq!(busy.0, "Quit before Cutaway has finished?");
+        assert!(busy.1.contains("still uploading 2 files"));
     }
 
     #[test]
