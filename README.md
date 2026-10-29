@@ -286,6 +286,8 @@ Takes start with the **Take name** from Settings → Recording. Leave it as
   see-through, or a solid one.
 - **Preview/program:** optionally pick the next scene in a preview monitor
   first, then **Take** (Space) or **Cut** (Enter), like a hardware switcher.
+  **Edit layout** then changes the scene in preview, never the one on air,
+  so moving a picture-in-picture doesn't show in the recording.
 - **Automatic switching:** follows whoever is talking, from each person's mic
   channel, with a minimum shot length, a wide shot for crosstalk or long
   shots, and a pause after you switch by hand.
@@ -375,7 +377,7 @@ Takes start with the **Take name** from Settings → Recording. Leave it as
   brings the stream to −14 LUFS without pumping.
 - **Scene audio:** scenes can turn inputs on or off when they're taken (a
   break scene that mutes the mics and brings up the music), in sync with the
-  picture.
+  picture (Edit layout → Audio).
 - **Headphones:** listen to either mix, or solo any input, on any output
   device, in sync with the program picture.
 - **More outputs and mix-minus:** feed presenters' headphones, or a caller
@@ -727,7 +729,7 @@ Video Extensions** on some PCs.
 | Media player | ⟲ ⏯ ⏭ on its tile; right-click the tile for the playlist |
 | Record / stop | ⌘R, or the record button. To stop, hold the **■ REC** button for a second (a fill grows across it; a quick click only says **Hold to stop**); ⌘R asks "Stop recording?" first, so a stray click or key can't split the take |
 | Go live / end stream | The **GO LIVE** button (until there's somewhere to stream to, the header has a small **Set up streaming** in its place). It has no key unless you give it one in Settings → Shortcuts, so a stray key can't start or end a broadcast (a key gets the same checks and "are you sure?" as the button) |
-| Edit layout | `E`, or **Edit layout**: drag frames, drag the corner to resize (Shift keeps shape), **Fit/Fill** and **Zoom** for the selected frame (or double-click a frame to fill it, scroll to zoom, Option/Alt-drag to move the picture), add/remove sources, scene audio, duplicate, rename, **Save scenes** |
+| Edit layout | `E`, or **Edit layout**. With **Preview** on you edit the scene in preview (click a scene to pick it; the one on air goes there if preview is empty): the program, and so the recording and stream, stays exactly as it is until you **Take** or **Cut** it. With Preview off you edit the scene on air, and changes show at once. The bar has two groups. **Frame**: **Add source**, **Remove**, **To front**, **Full frame**, **Fit/Fill** and **Zoom** for the selected frame. **Scene**: its name, **Audio** (inputs it turns on or off), **Cues**, **Duplicate**, **Delete**. Drag frames, drag the corner to resize (Shift keeps shape), double-click a frame to fill it, scroll to zoom, Option/Alt-drag to move the picture. **Unsaved** shows until the scenes are written to disk: **Save scenes**, or a few seconds after **Done** |
 | Audio strip | Fader = level (double-click resets), **ON** = in the mixes, 🎧 = solo in the headphones |
 | Fold or move a panel on the right | Click its heading (▾) to fold it down to one line, again to open it. Drag a heading onto another panel's heading to move it above that one. Each show remembers its own |
 | Widen the column on the right | Drag its left edge (the three dots), up to about 60% of the window. Each show remembers its width |
@@ -941,7 +943,7 @@ A number picks by position, unless something is named that number (a scene
 called "2"). A macro that runs itself is stopped there, with a message.
 
 Scenes and rundown segments can run commands as **cues** when they start
-(Edit layout → Scene cues; Settings → Rundown), e.g. a break scene that
+(Edit layout → Cues; Settings → Rundown), e.g. a break scene that
 starts a Syrinscape mood and a "Back in" countdown.
 
 **MIDI** (macOS and Windows): pick the controller, then **＋ Add a mapping**, press

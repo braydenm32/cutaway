@@ -903,17 +903,35 @@ impl App {
             }
             _ => {}
         }
-        let live = self.engine.as_ref().map(|e| e.switcher.live().name);
-        self.scenes = s.scenes.clone();
+        let before = std::mem::replace(&mut self.scenes, s.scenes.clone());
         // (Sources taken away since can't come back with a scene.)
         let n = self.cfg.sources.len();
         for sc in &mut self.scenes {
             sc.retain_sources(n);
         }
         self.scenes_dirty = true;
-        let on_air = live.and_then(|n| self.scenes.iter().find(|x| x.name == n)).or_else(|| self.scenes.iter().find(|x| x.name == s.live)).cloned();
-        if let (Some(e), Some(sc)) = (&self.engine, on_air) {
-            e.switcher.set_live(sc);
+        // A rename undone or redone: what's on air, in preview and last on
+        // air go by the names they have now.
+        if let Some(e) = &self.engine {
+            let renamed = renames(&before, &self.scenes);
+            if !renamed.is_empty() {
+                e.switcher.rename_scenes(&|n| renamed.iter().find(|(a, _)| a == n).map(|(_, b)| b.clone()));
+            }
+        }
+        if let Some(e) = &self.engine {
+            if self.preview_mode() {
+                // With Preview on, the program never changes but by Take:
+                // the scene in preview shows the change.
+                if let Some(sc) = e.switcher.preview().and_then(|p| self.scenes.iter().find(|x| x.name == p.name)).cloned() {
+                    e.switcher.set_preview(Some(sc));
+                }
+            } else {
+                let live = e.switcher.live().name;
+                let on_air = self.scenes.iter().find(|x| x.name == live).or_else(|| self.scenes.iter().find(|x| x.name == s.live)).cloned();
+                if let Some(sc) = on_air {
+                    e.switcher.set_live(sc);
+                }
+            }
         }
         if let Some(e) = &self.engine {
             e.set_scenes(&self.scenes);
@@ -939,6 +957,10 @@ impl App {
                 s.retain_sources(e.sources.len());
                 e.switcher.set_preview(Some(s));
                 (self.waker)();
+            }
+            if self.edit_mode {
+                // Another scene to edit: nothing in it is picked yet.
+                self.selected_layer = None;
             }
         } else {
             self.take_scene(&scene, force_cut);
@@ -1975,6 +1997,8 @@ impl App {
                 self.press_scene(pip, false);
                 if std::env::var_os("CUTAWAY_UI_TEST_PREVIEW").is_some() {
                     // Picture in picture on air, the third scene waiting in preview.
+                    self.cfg.transition.preview_mode = true;
+                    self.press_scene(pip, false);
                     self.take_preview(true);
                     self.press_scene(2, false);
                 }
@@ -2001,6 +2025,17 @@ impl App {
                 if std::env::var_os("CUTAWAY_UI_TEST_EDIT").is_some() {
                     self.edit_mode = true;
                     self.selected_layer = Some(1);
+                    // EDIT=move: picture in picture's inset moved, not saved yet (in preview, with Preview on).
+                    if std::env::var("CUTAWAY_UI_TEST_EDIT").is_ok_and(|v| v == "move") {
+                        if self.preview_mode() {
+                            self.press_scene(pip, false);
+                        }
+                        if let Some(mut sc) = self.edit_target().filter(|s| s.layers.len() > 1) {
+                            (sc.layers[1].x, sc.layers[1].y) = (0.04, 0.06);
+                            self.remember(undo::Kind::Scenes, "Move Cam 2");
+                            self.apply_edit(sc);
+                        }
+                    }
                 }
                 if std::env::var_os("CUTAWAY_UI_TEST_CHECK").is_some() {
                     self.start_precheck(None);
@@ -2670,12 +2705,20 @@ impl App {
         let canvas_aspect = cw as f32 / ch as f32;
         let n = engine.sources.len();
         if self.edit_mode {
+            // With Preview on, Edit layout works on the scene in preview:
+            // the one on air (as saved) goes there if nothing is.
+            if self.preview_mode() && engine.switcher.preview().is_none() {
+                let live = engine.switcher.live();
+                let mut s = self.scenes.iter().find(|s| s.name == live.name).cloned().unwrap_or(live);
+                s.retain_sources(n);
+                engine.switcher.set_preview(Some(s));
+            }
             self.edit_toolbar(ui);
             ui.add_space(6.0);
         }
         let avail = ui.available_rect_before_wrap();
         ui.allocate_rect(avail, Sense::hover());
-        let preview_mode = self.preview_mode() && !self.edit_mode;
+        let preview_mode = self.preview_mode();
         let top_h = (avail.height() * if preview_mode { 0.5 } else { 0.62 }).max(120.0);
         // The vertical version's monitor sits to the right of the program.
         let tall_aspect = self.cfg.vertical.enabled.then(|| {
@@ -2715,7 +2758,7 @@ impl App {
             tall_rect = Rect::from_min_size(pos2(prog_rect.right() + tall_gap, avail.top()), vec2(prog_h * ta, prog_h));
             mv_top = prog_rect.bottom() + 12.0;
         }
-        if tall_aspect.is_some() && !self.edit_mode {
+        if tall_aspect.is_some() && !(self.edit_mode && !preview_mode) {
             self.tall_monitor(ui, tall_rect);
         }
         let mv = Rect::from_min_max(pos2(avail.left(), mv_top), pos2(avail.right(), avail.bottom()));
@@ -2739,13 +2782,19 @@ impl App {
             painter.text(rect.center(), Align2::CENTER_CENTER, "Click a scene to preview it", FontId::proportional(14.0), TEXT_DIM);
         }
         painter.rect_stroke(rect, 4.0, Stroke::new(2.0, GREEN), StrokeKind::Outside);
-        let badge = Rect::from_min_size(rect.min + vec2(10.0, 10.0), vec2(74.0, 22.0));
+        // (At the bottom while editing, out of the way of the frames' names.)
+        let at = if self.edit_mode { pos2(rect.left() + 10.0, rect.bottom() - 32.0) } else { rect.min + vec2(10.0, 10.0) };
+        let badge = Rect::from_min_size(at, vec2(74.0, 22.0));
         painter.rect_filled(badge, 3.0, GREEN_DIM);
         painter.text(badge.center(), Align2::CENTER_CENTER, "PREVIEW", FontId::proportional(11.5), Color32::WHITE);
         if let Some(p) = pv {
-            label_chip(&painter, badge.right_center() + vec2(12.0, 0.0), &p.name);
+            if self.edit_mode {
+                self.edit_overlay(ui, rect, p);
+            } else {
+                label_chip(&painter, badge.right_center() + vec2(12.0, 0.0), &p.name);
+            }
         }
-        // Take / cut under the preview.
+        // Take / cut under the preview (over the frames being edited).
         let take = Rect::from_min_size(pos2(rect.right() - 170.0, rect.bottom() - 46.0), vec2(80.0, 36.0));
         let cut = Rect::from_min_size(pos2(rect.right() - 86.0, rect.bottom() - 46.0), vec2(76.0, 36.0));
         let rt = ui.interact(take, ui.scope_id().with("take_btn"), Sense::click());
@@ -2795,7 +2844,7 @@ impl App {
         let recording = engine.is_recording();
         painter.rect_stroke(rect, 4.0, Stroke::new(if recording { 3.0 } else { 1.5 }, if recording { RED } else { RED_DIM }), StrokeKind::Outside);
         let live = engine.switcher.live();
-        if self.edit_mode {
+        if self.edit_mode && !self.preview_mode() {
             return self.edit_overlay(ui, rect, live);
         }
         let badge = Rect::from_min_size(rect.min + vec2(10.0, 10.0), vec2(74.0, 22.0));
@@ -2879,7 +2928,7 @@ impl App {
                 let l = &mut scene.layers[i];
                 l.zoom = (l.zoom * (scroll * 0.004).exp()).clamp(1.0, crate::scene::MAX_ZOOM);
                 self.selected_layer = Some(i);
-                self.apply_live_edit(scene.clone());
+                self.apply_edit(scene.clone());
             }
         }
         if resp.double_clicked() {
@@ -2888,7 +2937,7 @@ impl App {
                 self.remember(undo::Kind::Scenes, if scene.layers[i].fill { format!("Fit {name}") } else { format!("Fill with {name}") });
                 scene.layers[i].fill = !scene.layers[i].fill;
                 self.selected_layer = Some(i);
-                self.apply_live_edit(scene.clone());
+                self.apply_edit(scene.clone());
             }
         }
 
@@ -2945,7 +2994,7 @@ impl App {
                         l.y = snap(l.y + dy, l.h);
                     }
                 }
-                self.apply_live_edit(scene.clone());
+                self.apply_edit(scene.clone());
             }
             if resp.drag_stopped() {
                 self.drag = None;
@@ -2986,10 +3035,30 @@ impl App {
         }
     }
 
-    fn apply_live_edit(&mut self, scene: Scene) {
-        if let Some(e) = &self.engine {
-            e.switcher.set_live(scene.clone());
+    /// The scene Edit layout works on: the one in preview with Preview on
+    /// (the program stays as it is until Take), else the one on air.
+    fn edit_target(&self) -> Option<Scene> {
+        let e = self.engine.as_ref()?;
+        if self.preview_mode() {
+            e.switcher.preview()
+        } else {
+            Some(e.switcher.live())
         }
+    }
+
+    /// Show an edit where it's being made: in preview, or on air.
+    fn show_edit(&self, scene: Scene) {
+        if let Some(e) = &self.engine {
+            if self.preview_mode() {
+                e.switcher.set_preview(Some(scene));
+            } else {
+                e.switcher.set_live(scene);
+            }
+        }
+    }
+
+    fn apply_edit(&mut self, scene: Scene) {
+        self.show_edit(scene.clone());
         if let Some(s) = self.scenes.iter_mut().find(|s| s.name == scene.name) {
             *s = scene;
             self.scenes_dirty = true;
@@ -2998,7 +3067,8 @@ impl App {
 
     fn edit_toolbar(&mut self, ui: &mut egui::Ui) {
         let Some(engine) = &self.engine else { return };
-        let mut scene = engine.switcher.live();
+        let Some(mut scene) = self.edit_target() else { return };
+        let in_preview = self.preview_mode();
         let names: Vec<String> = engine.sources.iter().map(|s| s.name.clone()).collect();
         let inputs: Vec<String> = engine.audio.iter().map(|a| a.name.clone()).collect();
         let cue_suggestions = control::suggestions(&self.cfg);
@@ -3008,175 +3078,210 @@ impl App {
         let (mut undo_clicked, mut redo_clicked) = (false, false);
         let old_name = scene.name.clone();
         let mut rename_clash = None;
-        ui.horizontal_wrapped(|ui| {
+        let cmd = if cfg!(target_os = "macos") { "⌘" } else { "Ctrl+" };
+        // A heading, what's being edited, and Undo / Save / Done.
+        ui.horizontal(|ui| {
             ui.label(RichText::new("EDIT LAYOUT").color(AMBER).strong());
-            ui.label(RichText::new(if cfg!(target_os = "macos") { "drag frames · corner to resize · Shift keeps shape · scroll to zoom · Option-drag moves the picture" } else { "drag frames · corner to resize · Shift keeps shape · scroll to zoom · Alt-drag moves the picture" }).color(TEXT_DIM).size(11.5));
-            ui.separator();
-            ui.label("Name");
-            let mut name = match &self.scene_name_edit {
-                Some((of, text)) if *of == old_name => text.clone(),
-                _ => scene.name.clone(),
+            let (what, tip) = if in_preview {
+                (format!("{} in preview: the program stays as it is until you Take", scene.name), "With Preview on you edit the next shot. Take (or Cut) puts it on air.")
+            } else {
+                (format!("{} on air: changes show at once", scene.name), "Turn on Preview to edit a scene without it showing in the recording or stream until you Take it.")
             };
-            let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(130.0));
-            if r.changed() {
-                self.scene_name_edit = Some((old_name.clone(), name.clone()));
-            }
-            if r.lost_focus() {
-                if let Some((_, text)) = self.scene_name_edit.take().filter(|(of, _)| *of == old_name) {
-                    let text = text.trim();
-                    if text.is_empty() || text == old_name {
-                        // Nothing to do: the old name stays.
-                    } else if self.scenes.iter().any(|s| s.name != old_name && s.name.eq_ignore_ascii_case(text)) {
-                        rename_clash = Some(text.to_string());
-                    } else {
-                        scene.name = text.to_string();
-                        changed = true;
-                    }
+            ui.label(RichText::new(what).color(if in_preview { GREEN } else { Color32::WHITE }).size(12.5)).on_hover_text(tip);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Done").clicked() {
+                    self.edit_mode = false;
                 }
-            }
-            egui::ComboBox::from_id_salt("add_layer").selected_text("Add source").show_ui(ui, |ui| {
-                for (i, n) in names.iter().enumerate() {
-                    // A source shows once per scene (the program has one
-                    // picture of each).
-                    let there = scene.layers.iter().any(|l| l.source == i);
-                    if ui.add_enabled(!there, egui::Button::selectable(false, n)).on_disabled_hover_text("Already in this scene").clicked() {
-                        scene.layers.push(Layer::at(i, 0.3, 0.3, 0.4, 0.4));
-                        changed = true;
-                    }
+                if ui.add_enabled(self.scenes_dirty, egui::Button::new("Save scenes")).on_hover_text("Write the scenes to the settings file now (they're also saved a few seconds after Done)").clicked() {
+                    self.save_config();
+                }
+                if self.scenes_dirty {
+                    let chip = egui::Button::new(RichText::new("Unsaved").size(11.0).color(Color32::BLACK)).fill(AMBER).sense(Sense::hover());
+                    ui.add(chip).on_hover_text("Changes to scenes not written to disk yet");
+                }
+                if ui.add_enabled(self.history.can_redo().is_some(), egui::Button::new("↷ Redo")).on_hover_text(match self.history.can_redo() {
+                    Some(l) => format!("Redo: {l} ({cmd}Shift+Z)"),
+                    None => format!("Nothing to redo ({cmd}Shift+Z)"),
+                }).clicked() {
+                    redo_clicked = true;
+                }
+                if ui.add_enabled(self.history.can_undo().is_some(), egui::Button::new("↶ Undo")).on_hover_text(match self.history.can_undo() {
+                    Some(l) => format!("Undo: {l} ({cmd}Z)"),
+                    None => format!("Nothing to undo ({cmd}Z)"),
+                }).clicked() {
+                    undo_clicked = true;
                 }
             });
-            let sel = self.selected_layer.filter(|&i| i < scene.layers.len());
-            if ui.add_enabled(sel.is_some(), egui::Button::new("Remove")).clicked() {
-                scene.layers.remove(sel.unwrap());
-                self.selected_layer = None;
-                changed = true;
-            }
-            if ui.add_enabled(sel.is_some(), egui::Button::new("To front")).clicked() {
-                let l = scene.layers.remove(sel.unwrap());
-                scene.layers.push(l);
-                self.selected_layer = Some(scene.layers.len() - 1);
-                changed = true;
-            }
-            if ui.add_enabled(sel.is_some(), egui::Button::new("Full frame")).clicked() {
-                let l = &mut scene.layers[sel.unwrap()];
-                (l.x, l.y, l.w, l.h) = (0.0, 0.0, 1.0, 1.0);
-                changed = true;
-            }
-            // The picture in the selected frame: fitted or filling, and zoom.
-            if let Some(i) = sel {
-                ui.separator();
-                let l = &mut scene.layers[i];
-                if ui.selectable_label(!l.fill, "Fit").on_hover_text("Show the whole picture (bars where the frame is another shape)").clicked() {
-                    l.fill = false;
-                    changed = true;
-                }
-                if ui.selectable_label(l.fill, "Fill").on_hover_text("Fill the frame, cropping the picture to its shape (or double-click the frame)").clicked() {
-                    l.fill = true;
-                    changed = true;
-                }
-                ui.label("Zoom");
-                if ui.add(egui::Slider::new(&mut l.zoom, 1.0..=crate::scene::MAX_ZOOM).step_by(0.05).fixed_decimals(1).suffix("×")).on_hover_text("Or scroll over the frame").changed() {
-                    changed = true;
-                }
-                if ui.add_enabled(l.crops() || l.focus != [0.5, 0.5], egui::Button::new("Reset picture")).on_hover_text("Fit, no zoom, centred").clicked() {
-                    (l.fill, l.zoom, l.focus) = (false, 1.0, [0.5, 0.5]);
-                    changed = true;
-                }
-            }
-            // Scene audio: inputs this scene turns on or off.
-            let n_audio = scene.audio_on.len() + scene.audio_off.len();
-            ui.menu_button(if n_audio > 0 { format!("Scene audio ({n_audio})") } else { "Scene audio".into() }, |ui| {
-                ui.label(RichText::new("When this scene is taken:").strong());
-                for input in &inputs {
-                    let state = if scene.audio_on.iter().any(|a| a.eq_ignore_ascii_case(input)) {
-                        1
-                    } else if scene.audio_off.iter().any(|a| a.eq_ignore_ascii_case(input)) {
-                        2
-                    } else {
-                        0
-                    };
-                    let mut new_state = state;
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(input).strong());
-                        ui.selectable_value(&mut new_state, 0, "leave");
-                        ui.selectable_value(&mut new_state, 1, "turn on");
-                        ui.selectable_value(&mut new_state, 2, "turn off");
-                    });
-                    if new_state != state {
-                        scene.audio_on.retain(|a| !a.eq_ignore_ascii_case(input));
-                        scene.audio_off.retain(|a| !a.eq_ignore_ascii_case(input));
-                        match new_state {
-                            1 => scene.audio_on.push(input.clone()),
-                            2 => scene.audio_off.push(input.clone()),
-                            _ => {}
-                        }
-                        changed = true;
-                    }
-                }
-                ui.label(RichText::new("e.g. a break scene that mutes the mics and brings up the music. Changes land with the picture and fade with mixes.").size(11.5).color(TEXT_DIM));
-            });
-            // Scene cues: commands run when the scene is taken.
-            let n_cues = scene.cues.len();
-            ui.menu_button(if n_cues > 0 { format!("Scene cues ({n_cues})") } else { "Scene cues".into() }, |ui| {
-                ui.set_min_width(300.0);
-                ui.label(RichText::new("When this scene is taken, also:").strong());
-                let label_of = |c: &str| cue_suggestions.iter().find(|(cmd, _)| cmd.eq_ignore_ascii_case(c)).map(|(_, l)| l.clone()).or_else(|| Action::parse(c).ok().map(|a| a.describe())).unwrap_or_else(|| c.to_string());
-                let mut remove = None;
-                for (i, c) in scene.cues.iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.label(label_of(c));
-                        if ui.small_button("✕").clicked() {
-                            remove = Some(i);
-                        }
-                    });
-                }
-                if let Some(i) = remove {
-                    scene.cues.remove(i);
-                    changed = true;
-                }
-                ui.menu_button("＋ Add", |ui| {
-                    egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-                        let skip = |c: &str| ["scene:", "cut:", "preview:", "source:", "rundown:"].iter().any(|p| c.starts_with(p)) || c == "take" || c == "cut";
-                        for (cmd, l) in cue_suggestions.iter().filter(|(c, _)| !skip(c)) {
-                            if ui.button(l).clicked() {
-                                scene.cues.push(cmd.clone());
-                                changed = true;
-                                ui.close();
-                            }
-                        }
-                    });
-                });
-                ui.label(RichText::new("e.g. start a Syrinscape mood, play a pad, show a title. Pick from ＋ Add; ✕ takes one off. Several run in order.").size(11.5).color(TEXT_DIM));
-            });
-            ui.separator();
-            if ui.button("Duplicate scene").clicked() {
-                let mut s = scene.clone();
-                s.name = unique_name(&self.scenes, &format!("{} copy", scene.name));
-                new_scene = Some(s);
-            }
-            if ui.button("Delete scene").clicked() {
-                delete = true;
-            }
-            let cmd = if cfg!(target_os = "macos") { "⌘" } else { "Ctrl+" };
-            if ui.add_enabled(self.history.can_undo().is_some(), egui::Button::new("↶ Undo")).on_hover_text(match self.history.can_undo() {
-                Some(l) => format!("Undo: {l} ({cmd}Z)"),
-                None => format!("Nothing to undo ({cmd}Z)"),
-            }).clicked() {
-                undo_clicked = true;
-            }
-            if ui.add_enabled(self.history.can_redo().is_some(), egui::Button::new("↷ Redo")).on_hover_text(match self.history.can_redo() {
-                Some(l) => format!("Redo: {l} ({cmd}Shift+Z)"),
-                None => format!("Nothing to redo ({cmd}Shift+Z)"),
-            }).clicked() {
-                redo_clicked = true;
-            }
-            if ui.add_enabled(self.scenes_dirty, egui::Button::new("Save scenes")).clicked() {
-                self.save_config();
-            }
-            if ui.button("Done").clicked() {
-                self.edit_mode = false;
-            }
         });
+        // The two groups side by side when they fit (as measured last time), else one under the other.
+        let widths_id = egui::Id::unique("edit_group_widths");
+        let widths: [f32; 2] = ui.ctx().data(|d| d.get_temp(widths_id)).unwrap_or([f32::INFINITY; 2]);
+        let one_row = widths[0] + widths[1] + ui.spacing().item_spacing.x <= ui.available_width();
+        let mut measured = [0.0; 2];
+        ui.horizontal_wrapped(|ui| {
+            // Frame: the selected frame and the picture in it.
+            let sel = self.selected_layer.filter(|&i| i < scene.layers.len());
+            measured[0] = tool_group(ui, "FRAME", |ui| {
+                egui::ComboBox::from_id_salt("add_layer").selected_text("Add source").show_ui(ui, |ui| {
+                    for (i, n) in names.iter().enumerate() {
+                        // A source shows once per scene (the program has one
+                        // picture of each).
+                        let there = scene.layers.iter().any(|l| l.source == i);
+                        if ui.add_enabled(!there, egui::Button::selectable(false, n)).on_disabled_hover_text("Already in this scene").clicked() {
+                            scene.layers.push(Layer::at(i, 0.3, 0.3, 0.4, 0.4));
+                            changed = true;
+                        }
+                    }
+                });
+                if ui.add_enabled(sel.is_some(), egui::Button::new("Remove")).on_disabled_hover_text("Click a frame first").clicked() {
+                    scene.layers.remove(sel.unwrap());
+                    self.selected_layer = None;
+                    changed = true;
+                }
+                if ui.add_enabled(sel.is_some(), egui::Button::new("To front")).on_disabled_hover_text("Click a frame first").clicked() {
+                    let l = scene.layers.remove(sel.unwrap());
+                    scene.layers.push(l);
+                    self.selected_layer = Some(scene.layers.len() - 1);
+                    changed = true;
+                }
+                if ui.add_enabled(sel.is_some(), egui::Button::new("Full frame")).on_disabled_hover_text("Click a frame first").clicked() {
+                    let l = &mut scene.layers[sel.unwrap()];
+                    (l.x, l.y, l.w, l.h) = (0.0, 0.0, 1.0, 1.0);
+                    changed = true;
+                }
+                // The picture in the selected frame: fitted or filling, and zoom
+                // (always there, so the bar doesn't change size on a click).
+                let mut none = Layer::at(0, 0.0, 0.0, 1.0, 1.0);
+                ui.add_enabled_ui(sel.is_some(), |ui| {
+                    let l = match sel {
+                        Some(i) => &mut scene.layers[i],
+                        None => &mut none,
+                    };
+                    if ui.selectable_label(!l.fill && sel.is_some(), "Fit").on_hover_text("Show the whole picture (bars where the frame is another shape)").clicked() {
+                        l.fill = false;
+                        changed = true;
+                    }
+                    if ui.selectable_label(l.fill, "Fill").on_hover_text("Fill the frame, cropping the picture to its shape (or double-click the frame)").clicked() {
+                        l.fill = true;
+                        changed = true;
+                    }
+                    ui.label("Zoom");
+                    if ui.add(egui::Slider::new(&mut l.zoom, 1.0..=crate::scene::MAX_ZOOM).step_by(0.05).fixed_decimals(1).suffix("×")).on_hover_text("Or scroll over the frame").changed() {
+                        changed = true;
+                    }
+                    if ui.add_enabled(l.crops() || l.focus != [0.5, 0.5], egui::Button::new("Reset picture")).on_hover_text("Fit, no zoom, centred").clicked() {
+                        (l.fill, l.zoom, l.focus) = (false, 1.0, [0.5, 0.5]);
+                        changed = true;
+                    }
+                });
+            });
+            if !one_row {
+                ui.end_row();
+            }
+            // Scene: its name, sound and cues, and the scene itself.
+            measured[1] = tool_group(ui, "SCENE", |ui| {
+                let mut name = match &self.scene_name_edit {
+                    Some((of, text)) if *of == old_name => text.clone(),
+                    _ => scene.name.clone(),
+                };
+                let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(130.0)).on_hover_text("The scene's name");
+                if r.changed() {
+                    self.scene_name_edit = Some((old_name.clone(), name.clone()));
+                }
+                if r.lost_focus() {
+                    if let Some((_, text)) = self.scene_name_edit.take().filter(|(of, _)| *of == old_name) {
+                        let text = text.trim();
+                        if text.is_empty() || text == old_name {
+                            // Nothing to do: the old name stays.
+                        } else if self.scenes.iter().any(|s| s.name != old_name && s.name.eq_ignore_ascii_case(text)) {
+                            rename_clash = Some(text.to_string());
+                        } else {
+                            scene.name = text.to_string();
+                            changed = true;
+                        }
+                    }
+                }
+                // Scene audio: inputs this scene turns on or off.
+                let n_audio = scene.audio_on.len() + scene.audio_off.len();
+                ui.menu_button(if n_audio > 0 { format!("Audio ({n_audio})") } else { "Audio".into() }, |ui| {
+                    ui.label(RichText::new("When this scene is taken:").strong());
+                    for input in &inputs {
+                        let state = if scene.audio_on.iter().any(|a| a.eq_ignore_ascii_case(input)) {
+                            1
+                        } else if scene.audio_off.iter().any(|a| a.eq_ignore_ascii_case(input)) {
+                            2
+                        } else {
+                            0
+                        };
+                        let mut new_state = state;
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(input).strong());
+                            ui.selectable_value(&mut new_state, 0, "leave");
+                            ui.selectable_value(&mut new_state, 1, "turn on");
+                            ui.selectable_value(&mut new_state, 2, "turn off");
+                        });
+                        if new_state != state {
+                            scene.audio_on.retain(|a| !a.eq_ignore_ascii_case(input));
+                            scene.audio_off.retain(|a| !a.eq_ignore_ascii_case(input));
+                            match new_state {
+                                1 => scene.audio_on.push(input.clone()),
+                                2 => scene.audio_off.push(input.clone()),
+                                _ => {}
+                            }
+                            changed = true;
+                        }
+                    }
+                    ui.label(RichText::new("e.g. a break scene that mutes the mics and brings up the music. Changes land with the picture and fade with mixes.").size(11.5).color(TEXT_DIM));
+                })
+                .response
+                .on_hover_text("Scene audio: inputs this scene turns on or off");
+                // Scene cues: commands run when the scene is taken.
+                let n_cues = scene.cues.len();
+                ui.menu_button(if n_cues > 0 { format!("Cues ({n_cues})") } else { "Cues".into() }, |ui| {
+                    ui.set_min_width(300.0);
+                    ui.label(RichText::new("When this scene is taken, also:").strong());
+                    let label_of = |c: &str| cue_suggestions.iter().find(|(cmd, _)| cmd.eq_ignore_ascii_case(c)).map(|(_, l)| l.clone()).or_else(|| Action::parse(c).ok().map(|a| a.describe())).unwrap_or_else(|| c.to_string());
+                    let mut remove = None;
+                    for (i, c) in scene.cues.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            ui.label(label_of(c));
+                            if ui.small_button("✕").clicked() {
+                                remove = Some(i);
+                            }
+                        });
+                    }
+                    if let Some(i) = remove {
+                        scene.cues.remove(i);
+                        changed = true;
+                    }
+                    ui.menu_button("＋ Add", |ui| {
+                        egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                            let skip = |c: &str| ["scene:", "cut:", "preview:", "source:", "rundown:"].iter().any(|p| c.starts_with(p)) || c == "take" || c == "cut";
+                            for (cmd, l) in cue_suggestions.iter().filter(|(c, _)| !skip(c)) {
+                                if ui.button(l).clicked() {
+                                    scene.cues.push(cmd.clone());
+                                    changed = true;
+                                    ui.close();
+                                }
+                            }
+                        });
+                    });
+                    ui.label(RichText::new("e.g. start a Syrinscape mood, play a pad, show a title. Pick from ＋ Add; ✕ takes one off. Several run in order.").size(11.5).color(TEXT_DIM));
+                })
+                .response
+                .on_hover_text("Scene cues: commands run when this scene is taken");
+                if ui.button("Duplicate").on_hover_text("A copy of this scene, to change").clicked() {
+                    let mut s = scene.clone();
+                    s.name = unique_name(&self.scenes, &format!("{} copy", scene.name));
+                    new_scene = Some(s);
+                }
+                if ui.add_enabled(self.scenes.len() > 1, egui::Button::new("Delete")).on_hover_text("Delete this scene (Undo brings it back)").on_disabled_hover_text("The last scene can't go").clicked() {
+                    delete = true;
+                }
+            });
+        });
+        ui.ctx().data_mut(|d| d.insert_temp(widths_id, measured));
+        ui.label(RichText::new(if cfg!(target_os = "macos") { "Drag frames · corner to resize · Shift keeps shape · scroll to zoom · double-click to fill · Option-drag moves the picture" } else { "Drag frames · corner to resize · Shift keeps shape · scroll to zoom · double-click to fill · Alt-drag moves the picture" }).color(TEXT_DIM).size(11.5));
         if let Some(n) = rename_clash {
             self.toast(format!("There's already a scene called {n}"), true);
         }
@@ -3193,9 +3298,14 @@ impl App {
             self.remember(undo::Kind::Scenes, label);
         }
         if changed {
-            if let Some(e) = &self.engine {
-                e.switcher.set_live(scene.clone());
+            if scene.name != old_name {
+                // The scene on air (or last on air) by its old name keeps its picture, under the new name.
+                if let Some(e) = &self.engine {
+                    let (old, new) = (old_name.clone(), scene.name.clone());
+                    e.switcher.rename_scenes(&|n| (n == old).then(|| new.clone()));
+                }
             }
+            self.show_edit(scene.clone());
             if let Some(s) = self.scenes.iter_mut().find(|s| s.name == old_name) {
                 *s = scene;
             }
@@ -3204,14 +3314,19 @@ impl App {
         if let Some(s) = new_scene {
             self.scenes.push(s.clone());
             self.scenes_dirty = true;
-            if let Some(e) = &self.engine {
-                e.switcher.set_live(s);
-            }
+            self.show_edit(s);
         }
         if delete && self.scenes.len() > 1 {
             self.scenes.retain(|s| s.name != old_name);
             self.scenes_dirty = true;
-            if let Some(s) = self.scenes.first().cloned() {
+            if in_preview {
+                // The next scene to edit goes in preview; the program carries on.
+                if let (Some(e), Some(mut s)) = (&self.engine, self.scenes.first().cloned()) {
+                    s.retain_sources(e.sources.len());
+                    e.switcher.set_preview(Some(s));
+                }
+                self.selected_layer = None;
+            } else if let Some(s) = self.scenes.first().cloned() {
                 self.take_scene(&s, true);
             }
         }
@@ -5435,6 +5550,31 @@ fn full_screen_icon(p: &egui::Painter, r: Rect, enter: bool, color: Color32) {
     }
 }
 
+/// Scenes renamed between two lists of the same scenes (old name, new
+/// name): the same place, a name the other list doesn't have. Lists of
+/// another length (a scene added or deleted) aren't renames, nor scenes
+/// that only moved.
+fn renames(before: &[Scene], after: &[Scene]) -> Vec<(String, String)> {
+    if before.len() != after.len() {
+        return Vec::new();
+    }
+    let has = |list: &[Scene], n: &str| list.iter().any(|s| s.name == n);
+    before.iter().zip(after).filter(|(a, b)| a.name != b.name && !has(after, &a.name) && !has(before, &b.name)).map(|(a, b)| (a.name.clone(), b.name.clone())).collect()
+}
+
+/// A labelled group of tools on the edit bar ("FRAME", "SCENE").
+/// Wraps inside when the window is too narrow for it; its width.
+fn tool_group(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) -> f32 {
+    let r = egui::Frame::new().stroke(Stroke::new(1.0, Color32::from_rgb(52, 58, 70))).corner_radius(CornerRadius::same(5)).inner_margin(egui::Margin::symmetric(8, 4)).show(ui, |ui| {
+        ui.set_max_width(ui.available_width() - 18.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(title).color(TEXT_DIM).size(10.5).strong());
+            add(ui);
+        });
+    });
+    r.response.rect.width()
+}
+
 fn unique_name(scenes: &[Scene], base: &str) -> String {
     if !scenes.iter().any(|s| s.name == base) {
         return base.to_string();
@@ -5523,6 +5663,16 @@ mod small_tests {
         assert_eq!(super::precheck_verdict(&[it(Level::Ok), it(Level::Warn)], true).0, "1 warning: you can still start");
         assert_eq!(super::precheck_verdict(&[it(Level::Warn), it(Level::Warn), it(Level::Ok)], true).0, "2 warnings: you can still start");
         assert_eq!(super::precheck_verdict(&[it(Level::Warn), it(Level::Fail)], true).0, "Fix before going live");
+    }
+
+    #[test]
+    fn renames_are_told_from_moves() {
+        use super::{renames, Scene};
+        let list = |names: &[&str]| names.iter().map(|n| Scene { name: n.to_string(), ..Default::default() }).collect::<Vec<_>>();
+        assert_eq!(renames(&list(&["A", "B"]), &list(&["A", "Wide"])), vec![("B".to_string(), "Wide".to_string())]);
+        assert!(renames(&list(&["A", "B"]), &list(&["B", "A"])).is_empty(), "only moved");
+        assert!(renames(&list(&["A", "B"]), &list(&["A"])).is_empty(), "deleted");
+        assert!(renames(&list(&["A", "B"]), &list(&["A", "B"])).is_empty());
     }
 
     #[test]

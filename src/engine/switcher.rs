@@ -218,6 +218,20 @@ impl Switcher {
         st.current = scene;
     }
 
+    /// Scenes were renamed in the bank (`new_name(old)`): what's live, mid
+    /// transition, in preview and the last scene take the new names. Only
+    /// the names change, never the picture.
+    pub fn rename_scenes(&self, new_name: &dyn Fn(&str) -> Option<String>) {
+        let mut st = self.state.lock_ok();
+        let st = &mut *st;
+        let a = st.active.as_mut().map(|a| [&mut a.from, &mut a.to]);
+        for s in [Some(&mut st.current), st.preview.as_mut(), st.previous.as_mut()].into_iter().flatten().chain(a.into_iter().flatten()) {
+            if let Some(n) = new_name(&s.name) {
+                s.name = n;
+            }
+        }
+    }
+
     /// Put a scene in preview (None clears it).
     pub fn set_preview(&self, scene: Option<Scene>) {
         self.state.lock_ok().preview = scene;
@@ -390,6 +404,27 @@ mod tests {
         sw.remap_sources(&[Some(0), Some(2)], vec![16.0 / 9.0; 2], vec![20, 40]);
         assert!(sw.live().layers.is_empty());
         assert_eq!(sw.source_count(), 2);
+    }
+
+    #[test]
+    fn renaming_keeps_the_picture() {
+        let scenes = presets(&["A".to_string(), "B".to_string()]);
+        let (a, b) = (scenes[0].clone(), scenes[1].clone());
+        let sw = Switcher::new((1280, 720), vec![16.0 / 9.0; 2], a.clone());
+        sw.take(b.clone(), TransitionMode::Cut, 0);
+        sw.set_preview(Some(b.clone()));
+        let layers = sw.live().layers;
+        // A and B swap names in one go.
+        sw.rename_scenes(&|n| match n {
+            "A" => Some("B".into()),
+            "B" => Some("A".into()),
+            _ => None,
+        });
+        assert_eq!(sw.live().name, "A");
+        assert_eq!(sw.live().layers, layers);
+        assert_eq!(sw.preview().unwrap().name, "A");
+        assert_eq!(sw.previous().unwrap().name, "B");
+        assert!(!sw.in_transition());
     }
 
     #[test]
