@@ -39,7 +39,7 @@ pub(super) fn link_bars(painter: &egui::Painter, rect: Rect, q: crate::engine::g
 /// A guest's struggling connection, on their tile: bars and a word.
 pub(super) fn draw_link_warning(painter: &egui::Painter, pic: Rect, q: crate::engine::guests::LinkQuality) {
     let word = if q == crate::engine::guests::LinkQuality::Poor { "Poor connection" } else { "Weak connection" };
-    let font = FontId::proportional(11.0);
+    let font = FontId::proportional(TEXT_SMALL);
     let galley = painter.layout_no_wrap(word.to_string(), font, Color32::WHITE);
     let wide = pic.width() > galley.size().x + 60.0;
     let size = if wide { vec2(galley.size().x + 32.0, 20.0) } else { vec2(24.0, 20.0) };
@@ -110,13 +110,13 @@ pub(super) fn draw_tile_wait(painter: &egui::Painter, pic: Rect, wait: TileWait,
     };
     let mid = pic.center();
     if wait == TileWait::NoSignal {
-        painter.text(mid - vec2(0.0, 8.0), Align2::CENTER_CENTER, title, FontId::proportional(16.0), AMBER);
+        painter.text(mid - vec2(0.0, 8.0), Align2::CENTER_CENTER, title, FontId::proportional(TEXT_HEADING), AMBER);
     } else {
         if !small {
             dots(painter, mid - vec2(0.0, 26.0), 4.5, color, t);
         }
         // The dots after it grow without the word moving.
-        let font = FontId::proportional(15.0);
+        let font = FontId::proportional(TEXT_STATE);
         let g = painter.layout_no_wrap(title.to_string(), font.clone(), color);
         let left = mid.x - g.size().x / 2.0;
         painter.galley(pos2(left, mid.y - 8.0 - g.size().y / 2.0), g.clone(), color);
@@ -131,7 +131,7 @@ pub(super) fn draw_tile_wait(painter: &egui::Painter, pic: Rect, wait: TileWait,
         // (Network sources say "waiting for the sender".)
         let mut c = d.chars();
         let d = c.next().map(|f| f.to_uppercase().chain(c).collect::<String>()).unwrap_or_default();
-        painter.text(mid + vec2(0.0, 12.0), Align2::CENTER_CENTER, d, FontId::proportional(11.0), TEXT_DIM);
+        painter.text(mid + vec2(0.0, 12.0), Align2::CENTER_CENTER, d, FontId::proportional(TEXT_SMALL), TEXT_DIM);
     }
 }
 
@@ -181,7 +181,7 @@ impl App {
                     film_strip(ui.painter(), strip, if st.finished { 0.0 } else { t }, st.finished);
                     ui.add_space(12.0);
                     if !st.finished {
-                        ui.label(RichText::new(format!("{line}{}", ellipsis(t))).size(20.0).color(Color32::WHITE));
+                        ui.label(RichText::new(format!("{line}{}", ellipsis(t))).size(TEXT_TITLE).color(Color32::WHITE));
                         ui.add_space(2.0);
                         let what = if takes == 1 { "Your last take" } else { "Some takes" };
                         ui.label(RichText::new(format!("{what} didn't finish properly (Cutaway stopped while recording). Everything up to about the last second is on disk, and Cutaway is turning it back into files that play.")).color(TEXT_DIM));
@@ -192,9 +192,9 @@ impl App {
                         if takes > 1 {
                             now = format!("Take {} of {takes} · {now}", st.take + 1);
                         }
-                        ui.label(RichText::new(now).monospace().size(11.5).color(TEXT_DIM));
+                        ui.label(RichText::new(now).monospace().size(TEXT_SMALL).color(TEXT_DIM));
                         ui.add_space(6.0);
-                        ui.label(RichText::new("You can carry on setting up while this finishes.").size(11.5).color(TEXT_DIM));
+                        ui.label(RichText::new("You can carry on setting up while this finishes.").size(TEXT_SMALL).color(TEXT_DIM));
                     } else {
                         let saved = st.rescued.len();
                         let title = match (saved, takes) {
@@ -203,7 +203,7 @@ impl App {
                             (n, m) if n == m => format!("All {n} takes are safe"),
                             (n, m) => format!("{n} of {m} takes are safe"),
                         };
-                        ui.label(RichText::new(title).size(20.0).color(Color32::WHITE));
+                        ui.label(RichText::new(title).size(TEXT_TITLE).color(Color32::WHITE));
                         ui.add_space(2.0);
                         let body = if saved == 0 {
                             "Cutaway couldn't write to its folder. The files are still there as they were left."
@@ -213,7 +213,7 @@ impl App {
                         ui.label(RichText::new(body).color(TEXT_DIM));
                         if let Some(dir) = st.rescued.first().or(st.takes.first()) {
                             ui.add_space(4.0);
-                            ui.add(egui::Label::new(RichText::new(dir.display().to_string()).monospace().size(11.0).color(TEXT_DIM)).truncate());
+                            ui.add(egui::Label::new(RichText::new(dir.display().to_string()).monospace().size(TEXT_SMALL).color(TEXT_DIM)).truncate());
                         }
                         ui.add_space(12.0);
                         ui.horizontal(|ui| {

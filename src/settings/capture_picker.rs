@@ -128,12 +128,12 @@ impl CapturePicker {
                 // A remembered window that isn't open right now still shows.
                 if let ScreenTarget::Window { app, title } = &current {
                     if kind == TargetKind::Window && !items.iter().any(|t| t.device == device) {
-                        ui.label(RichText::new(format!("Capturing \"{title}\" ({}) — not open right now, or its title changed: the app's closest window is used.", crate::platform::capture::short_app(app))).color(AMBER).size(12.0));
+                        ui.label(RichText::new(format!("Capturing \"{title}\" ({}) — not open right now, or its title changed: the app's closest window is used.", crate::platform::capture::short_app(app))).color(AMBER).size(TEXT_BODY));
                     }
                 }
                 if let ScreenTarget::App(app) = &current {
                     if kind == TargetKind::App && !items.iter().any(|t| t.device == device) {
-                        ui.label(RichText::new(format!("Capturing {} — not open right now.", crate::platform::capture::short_app(app))).color(AMBER).size(12.0));
+                        ui.label(RichText::new(format!("Capturing {} — not open right now.", crate::platform::capture::short_app(app))).color(AMBER).size(TEXT_BODY));
                     }
                 }
                 if let Some(d) = self.cards(ui, &items, device) {
@@ -165,12 +165,12 @@ impl CapturePicker {
                             p.image(tex, Rect::from_center_size(pic.center(), vec2(w, h)), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
                         }
                         _ => {
-                            p.text(pic.center(), Align2::CENTER_CENTER, if t.kind == TargetKind::App { "▣" } else { "▢" }, FontId::proportional(28.0), TEXT_DIM);
+                            p.text(pic.center(), Align2::CENTER_CENTER, if t.kind == TargetKind::App { "▣" } else { "▢" }, FontId::proportional(TEXT_TITLE), TEXT_DIM);
                         }
                     }
                     let clip = |s: &str, n: usize| if s.chars().count() > n { s.chars().take(n - 1).collect::<String>() + "…" } else { s.to_string() };
-                    p.text(pos2(rect.left() + 8.0, rect.bottom() - 26.0), Align2::LEFT_CENTER, clip(&t.name, 26), FontId::proportional(12.5), Color32::from_gray(230));
-                    p.text(pos2(rect.left() + 8.0, rect.bottom() - 11.0), Align2::LEFT_CENTER, clip(&t.detail, 30), FontId::proportional(11.0), TEXT_DIM);
+                    p.text(pos2(rect.left() + 8.0, rect.bottom() - 26.0), Align2::LEFT_CENTER, clip(&t.name, 26), FontId::proportional(TEXT_BODY), Color32::from_gray(230));
+                    p.text(pos2(rect.left() + 8.0, rect.bottom() - 11.0), Align2::LEFT_CENTER, clip(&t.detail, 30), FontId::proportional(TEXT_SMALL), TEXT_DIM);
                     p.rect_stroke(rect, 6.0, Stroke::new(if selected { 2.5 } else { 1.0 }, if selected { ACCENT } else { LINE }), StrokeKind::Inside);
                     if resp.on_hover_text(format!("{}\n{}", t.name, t.detail)).clicked() {
                         chosen = Some(t.device.clone());

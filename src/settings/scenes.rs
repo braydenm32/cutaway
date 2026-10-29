@@ -15,7 +15,7 @@ pub(crate) fn new_scene_menu(ui: &mut egui::Ui, sources: &[String], existing: &[
             ui.close();
         }
         ui.separator();
-        ui.label(RichText::new("From a layout").size(11.5).color(TEXT_DIM));
+        ui.label(RichText::new("From a layout").size(TEXT_SMALL).color(TEXT_DIM));
         for l in crate::scene::presets(sources) {
             let label = if l.layers.len() == 1 { format!("{} full screen", l.name) } else { l.name.clone() };
             if ui.button(label).clicked() {
@@ -62,10 +62,10 @@ fn sketch(ui: &mut egui::Ui, scene: &Scene, sources: &[String], size: egui::Vec2
         p.rect_filled(r, 2.0, Color32::from_rgb(44, 52, 66));
         p.rect_stroke(r, 2.0, egui::Stroke::new(1.0, ACCENT), egui::StrokeKind::Inside);
         let name = sources.get(l.source).cloned().unwrap_or_else(|| format!("Source {}", l.source + 1));
-        p.text(r.min + vec2(5.0, 4.0), egui::Align2::LEFT_TOP, name, egui::FontId::proportional(11.5), Color32::WHITE);
+        p.text(r.min + vec2(5.0, 4.0), egui::Align2::LEFT_TOP, name, egui::FontId::proportional(TEXT_SMALL), Color32::WHITE);
     }
     if scene.layers.is_empty() {
-        p.text(rect.center(), egui::Align2::CENTER_CENTER, "Blank: add sources with Edit layout", egui::FontId::proportional(12.0), TEXT_DIM);
+        p.text(rect.center(), egui::Align2::CENTER_CENTER, "Blank: add sources with Edit layout", egui::FontId::proportional(TEXT_BODY), TEXT_DIM);
     }
 }
 
@@ -102,7 +102,7 @@ impl SettingsUi {
                 for i in 0..n {
                     let s = &self.draft.scenes[i];
                     let key = if i < 9 { format!("{}", i + 1) } else { "  ".into() };
-                    let b = egui::Button::selectable(self.sel_scene == i, RichText::new(format!("{key}   {}", s.name)).size(14.0)).min_size(vec2(250.0, 30.0));
+                    let b = egui::Button::selectable(self.sel_scene == i, RichText::new(format!("{key}   {}", s.name)).size(TEXT_STATE)).min_size(vec2(250.0, 30.0));
                     if ui.add(b).on_hover_text(if i < 9 { format!("Key {}", i + 1) } else { "No number key (keys 1–9 take the first nine)".into() }).clicked() {
                         self.commit_scene_rename();
                         self.sel_scene = i;
@@ -163,7 +163,7 @@ impl SettingsUi {
                     hint(ui, "No scenes yet: start one with ＋ New scene.");
                     return;
                 };
-                egui::Grid::new("scene").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+                egui::Grid::new("scene").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                     label(ui, "Name");
                     ui.vertical(|ui| {
                         let mut text = match &self.scene_rename {
@@ -176,7 +176,7 @@ impl SettingsUi {
                         }
                         if let Some((_, t)) = self.scene_rename.as_ref().filter(|(i, _)| *i == sel) {
                             if let Err(e) = rename_scene(&mut self.draft.clone(), sel, t) {
-                                ui.label(RichText::new(e).color(AMBER).size(12.5));
+                                ui.label(RichText::new(e).color(AMBER).size(TEXT_BODY));
                             }
                         }
                         // Renamed when the box is left (or on Apply / OK), so a half-typed name never clashes.

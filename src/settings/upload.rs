@@ -40,7 +40,7 @@ impl SettingsUi {
             {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new(format!("{}.", i + 1)).strong());
-                    ui.label(RichText::new(*step).size(14.0));
+                    ui.label(RichText::new(*step).size(TEXT_STATE));
                 });
             }
             hint(ui, "YouTube keeps videos uploaded through a project Google hasn't audited private; make them public yourself in YouTube Studio (or apply for Google's audit). Drive uploads have no such limit. Cutaway only sees the Drive files it makes.");
@@ -50,7 +50,7 @@ impl SettingsUi {
         let u = &mut self.draft.upload;
         let mut sign_in = false;
         let mut cancel = false;
-        egui::Grid::new("upload").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+        egui::Grid::new("upload").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
             label(ui, "Client ID");
             ui.add(egui::TextEdit::singleline(&mut u.client_id).desired_width(420.0).hint_text("….apps.googleusercontent.com"));
             ui.end_row();
@@ -85,7 +85,7 @@ impl SettingsUi {
         let granted = |g: &str| u.granted.iter().any(|x| x == g);
 
         ui.add_space(12.0);
-        egui::Grid::new("upload_yt").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+        egui::Grid::new("upload_yt").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
             label(ui, "YouTube");
             ui.checkbox(&mut u.youtube, "upload the program");
             ui.end_row();
@@ -113,7 +113,7 @@ impl SettingsUi {
         }
 
         ui.add_space(12.0);
-        egui::Grid::new("upload_drive").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+        egui::Grid::new("upload_drive").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
             label(ui, "Google Drive");
             ui.checkbox(&mut u.drive, "upload files from the take");
             ui.end_row();
@@ -135,7 +135,7 @@ impl SettingsUi {
         }
 
         ui.add_space(12.0);
-        egui::Grid::new("upload_when").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+        egui::Grid::new("upload_when").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
             label(ui, "When");
             ui.vertical(|ui| {
                 ui.radio_value(&mut u.automatic, false, "when I press Upload (it appears as a take is saved)");

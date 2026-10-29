@@ -61,7 +61,7 @@ impl SettingsUi {
 
         subtitle(ui, "Built in");
         let mut capture = None;
-        egui::Grid::new("builtin_keys").num_columns(3).spacing([14.0, 6.0]).striped(true).show(ui, |ui| {
+        egui::Grid::new("builtin_keys").num_columns(3).spacing(TABLE_GAP).striped(true).show(ui, |ui| {
             for b in Builtin::ALL {
                 ui.label(b.describe());
                 let keys = builtin_keys(&self.draft.keys, b);
@@ -95,7 +95,7 @@ impl SettingsUi {
         if self.draft.keys.custom.is_empty() {
             hint(ui, "None yet. Add one to put any command on a key: a scene, a graphic, a sound pad, a macro, a camera move, a lower third…");
         }
-        egui::Grid::new("custom_keys").num_columns(3).spacing([10.0, 6.0]).show(ui, |ui| {
+        egui::Grid::new("custom_keys").num_columns(3).spacing(TABLE_GAP).show(ui, |ui| {
             for (i, k) in self.draft.keys.custom.iter_mut().enumerate() {
                 let waiting = self.key_capture == Some(KeyCapture::Custom(i));
                 let shown = if waiting {
@@ -114,7 +114,7 @@ impl SettingsUi {
                         ui.selectable_value(&mut k.command, code.clone(), text);
                     }
                 });
-                if ui.small_button("✕").clicked() {
+                if row_buttons(ui, i, 0, false) == Some(RowEdit::Remove) {
                     remove = Some(i);
                 }
                 ui.end_row();
@@ -156,7 +156,7 @@ impl SettingsUi {
             ("Esc", "Close Settings"),
             ("F / Esc", "On the second-screen window: full screen / leave full screen"),
         ];
-        egui::Grid::new("fixed_keys").num_columns(2).spacing([24.0, 8.0]).striped(true).show(ui, |ui| {
+        egui::Grid::new("fixed_keys").num_columns(2).spacing(FORM_GAP).striped(true).show(ui, |ui| {
             for (k, what) in rows {
                 ui.label(RichText::new(k).monospace().strong());
                 ui.label(what);

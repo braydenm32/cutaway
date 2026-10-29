@@ -6,7 +6,7 @@ impl SettingsUi {
     pub(super) fn comments(&mut self, ui: &mut egui::Ui) {
         title(ui, "Viewer comments", "Read your stream's chat in the main window, and put a comment on screen with a click (or comment:next). Comments are only read, never posted.");
         let c = &mut self.draft.comments;
-        egui::Grid::new("comments").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+        egui::Grid::new("comments").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
             label(ui, "Twitch channel");
             ui.add(egui::TextEdit::singleline(&mut c.twitch_channel).desired_width(200.0).hint_text("yourchannel"));
             ui.end_row();
@@ -22,7 +22,7 @@ impl SettingsUi {
         }
         ui.add_space(12.0);
         subtitle(ui, "On screen");
-        egui::Grid::new("comment_style").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+        egui::Grid::new("comment_style").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
             label(ui, "Position");
             ui.horizontal(|ui| {
                 ui.add(egui::Slider::new(&mut c.x, 0.0..=1.0).text("across"));

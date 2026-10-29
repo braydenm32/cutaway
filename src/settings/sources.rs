@@ -128,7 +128,7 @@ impl SettingsUi {
                     let s = &self.draft.sources[i];
                     let text = format!("{}  {}", i + 1, s.name);
                     let sub = short_device(&s.device);
-                    let b = egui::Button::selectable(self.sel_source == i, RichText::new(format!("{text}\n{sub}")).size(14.0)).min_size(vec2(220.0, 40.0));
+                    let b = egui::Button::selectable(self.sel_source == i, RichText::new(format!("{text}\n{sub}")).size(TEXT_STATE)).min_size(vec2(220.0, 40.0));
                     if ui.add(b).clicked() {
                         self.sel_source = i;
                     }
@@ -155,7 +155,7 @@ impl SettingsUi {
                     ui.add_enabled_ui(can_split, |ui| {
                         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                         ui.menu_button("Split…", |ui| {
-                            ui.label(RichText::new("Close-ups of the people in it, each its own source").color(TEXT_DIM).size(12.5));
+                            ui.label(RichText::new("Close-ups of the people in it, each its own source").color(TEXT_DIM).size(TEXT_BODY));
                             for n in [2, 3] {
                                 if ui.button(format!("Into {n} close-ups")).clicked() {
                                     self.split_source(self.sel_source, n);
@@ -196,7 +196,7 @@ impl SettingsUi {
         let mut scan_ndi = false;
         let kind = SourceKind::of(&src.device);
         let old_name = src.name.clone();
-        egui::Grid::new("source_detail").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+        egui::Grid::new("source_detail").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
             label(ui, "Name");
             ui.add_sized([240.0, 22.0], egui::TextEdit::singleline(&mut src.name));
             ui.end_row();
@@ -217,7 +217,7 @@ impl SettingsUi {
                     if g > 0 {
                         ui.add_space(4.0);
                     }
-                    ui.label(RichText::new(*group).size(12.0).color(TEXT_DIM));
+                    ui.label(RichText::new(*group).size(TEXT_BODY).color(TEXT_DIM));
                     for &k in kinds.iter() {
                         let (on, text) = if k.is_network_feed() { (kind.is_network_feed(), "Network feed (SRT or RTMP)") } else { (k == kind, k.label()) };
                         if ui.selectable_label(on, text).clicked() && !on {
@@ -502,7 +502,7 @@ impl SettingsUi {
                                 qr_code(ui, link, 150.0);
                                 ui.vertical(|ui| {
                                     ui.label(RichText::new("Scan with the phone's camera app").strong());
-                                    ui.add(egui::Label::new(RichText::new(link).monospace().size(13.0)).truncate());
+                                    ui.add(egui::Label::new(RichText::new(link).monospace().size(TEXT_BODY)).truncate());
                                     if ui.small_button("Copy link").clicked() {
                                         ui.ctx().copy_text(link.clone());
                                     }
@@ -518,7 +518,7 @@ impl SettingsUi {
                 } else {
                     if let Some(link) = &link {
                         ui.horizontal(|ui| {
-                            ui.add(egui::Label::new(RichText::new(link).monospace().size(13.0)).truncate());
+                            ui.add(egui::Label::new(RichText::new(link).monospace().size(TEXT_BODY)).truncate());
                             if ui.small_button("Copy link").clicked() {
                                 ui.ctx().copy_text(link.clone());
                             }
@@ -633,7 +633,7 @@ impl SettingsUi {
 /// A PTZ camera's controls and presets.
 fn ptz_editor(ui: &mut egui::Ui, p: &mut crate::config::PtzConfig, is_virtual: bool, is_ndi: bool) {
     use crate::config::{PtzControl, PtzPreset};
-    egui::Grid::new("ptz").num_columns(2).spacing([16.0, 8.0]).show(ui, |ui| {
+    egui::Grid::new("ptz").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
         if !is_virtual {
             label(ui, "Controlled by");
             egui::ComboBox::from_id_salt("ptz_control").selected_text(p.control.label()).width(380.0).show_ui(ui, |ui| {
@@ -681,7 +681,7 @@ fn ptz_editor(ui: &mut egui::Ui, p: &mut crate::config::PtzConfig, is_virtual: b
             if is_virtual {
                 hint(ui, &format!("{:.0}% across, {:.0}% down, {:.1}×", pr.x * 100.0, pr.y * 100.0, pr.zoom));
             }
-            if ui.small_button("✕").clicked() {
+            if row_buttons(ui, i, 0, false) == Some(RowEdit::Remove) {
                 remove = Some(i);
             }
         });
@@ -747,18 +747,13 @@ fn media_editor(ui: &mut egui::Ui, m: &mut MediaConfig) {
                 let missing = !f.exists();
                 ui.label(RichText::new(&name).color(if missing { AMBER } else { Color32::WHITE })).on_hover_text(f.display().to_string());
                 if missing {
-                    ui.label(RichText::new("missing").color(AMBER).size(12.0));
+                    ui.label(RichText::new("missing").color(AMBER).size(TEXT_BODY));
                 }
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.small_button("✕").clicked() {
-                        remove = Some(i);
-                    }
-                    if i + 1 < n && ui.small_button("↓").clicked() {
-                        swap = Some((i, i + 1));
-                    }
-                    if i > 0 && ui.small_button("↑").clicked() {
-                        swap = Some((i, i - 1));
-                    }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| match row_buttons(ui, i, n, true) {
+                    Some(RowEdit::Up) => swap = Some((i, i - 1)),
+                    Some(RowEdit::Down) => swap = Some((i, i + 1)),
+                    Some(RowEdit::Remove) => remove = Some(i),
+                    None => {}
                 });
             });
         }
@@ -782,7 +777,7 @@ fn media_editor(ui: &mut egui::Ui, m: &mut MediaConfig) {
         }
     });
     ui.add_space(4.0);
-    egui::Grid::new("media").num_columns(2).spacing([16.0, 8.0]).show(ui, |ui| {
+    egui::Grid::new("media").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
         label(ui, "Loop");
         ui.checkbox(&mut m.loop_playlist, "the playlist");
         ui.end_row();
@@ -828,7 +823,7 @@ fn look_summary(l: &SourceLook) -> String {
 }
 
 fn look_editor(ui: &mut egui::Ui, l: &mut SourceLook, lut_check: &mut Option<(std::path::PathBuf, Result<String, String>)>) {
-    egui::Grid::new("look").num_columns(2).spacing([16.0, 8.0]).show(ui, |ui| {
+    egui::Grid::new("look").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
         label(ui, "Crop left / right");
         ui.horizontal(|ui| {
             ui.add(egui::Slider::new(&mut l.crop_left, 0.0..=45.0).suffix("%").step_by(0.5));

@@ -16,7 +16,7 @@ impl SettingsUi {
             DisplayOutput::Prompter => "the teleprompter".to_string(),
         };
         part(ui, "screen2", "Second screen", &state, true, |ui| {
-            egui::Grid::new("display").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            egui::Grid::new("display").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "Show");
                 ui.horizontal(|ui| {
                     ui.selectable_value(&mut d.output, DisplayOutput::Off, "Nothing");
@@ -45,7 +45,7 @@ impl SettingsUi {
                         d.screen.clear();
                     }
                     if !d.screen.is_empty() && chosen.is_none() {
-                        ui.label(RichText::new(format!("{} isn't connected: using another screen for now", d.screen)).color(AMBER).size(11.5));
+                        ui.label(RichText::new(format!("{} isn't connected: using another screen for now", d.screen)).color(AMBER).size(TEXT_SMALL));
                     }
                 });
                 if let Some(i) = display_map(ui, &displays, shown, ours, 150.0) {
@@ -72,7 +72,7 @@ impl SettingsUi {
             ),
         };
         part(ui, "ndi_out", "NDI output", &state, n.program || n.sources, |ui| {
-            egui::Grid::new("ndi_out_grid").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            egui::Grid::new("ndi_out_grid").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "Program");
                 ui.checkbox(&mut n.program, "send it, with the recording mix");
                 ui.end_row();
@@ -141,7 +141,7 @@ impl SettingsUi {
                     hint(ui, if cfg!(windows) { "waiting for Windows (allow it when asked)…" } else { "waiting for macOS (approve it in System Settings if asked)…" });
                 }
             });
-            egui::Grid::new("vcam_grid").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            egui::Grid::new("vcam_grid").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "At start");
                 ui.checkbox(&mut self.draft.display.virtual_camera, "turn it on when Cutaway starts");
                 ui.end_row();

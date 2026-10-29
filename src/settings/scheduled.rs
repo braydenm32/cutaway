@@ -75,7 +75,7 @@ impl SettingsUi {
         part(ui, "scheduled", "Scheduled stream", &state, open, |ui| {
             hint(ui, "Set the next show up ahead: its YouTube page (to share before you go live) with the title, description and picture, and Cutaway can go live by itself when it's time.");
             let s = &mut self.draft.schedule;
-            egui::Grid::new("schedule_grid").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            egui::Grid::new("schedule_grid").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "Title");
                 ui.add(egui::TextEdit::singleline(&mut s.title).desired_width(380.0).hint_text("what the stream is called"));
                 ui.end_row();

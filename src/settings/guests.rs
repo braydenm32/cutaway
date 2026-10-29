@@ -33,7 +33,7 @@ impl SettingsUi {
                     ui.horizontal(|ui| {
                         qr_code(ui, &link, 132.0);
                         ui.vertical(|ui| {
-                            ui.add(egui::Label::new(RichText::new(&link).monospace().size(13.0)).truncate());
+                            ui.add(egui::Label::new(RichText::new(&link).monospace().size(TEXT_BODY)).truncate());
                             if ui.small_button("Copy link").clicked() {
                                 ui.ctx().copy_text(link.clone());
                                 self.message = Some((format!("Copied {}'s link", s.name), false));
@@ -61,7 +61,7 @@ impl SettingsUi {
     pub(super) fn guests(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
         title(ui, "Remote guests", "Guests join from a browser with a link (no app, no account), arriving as a source and an audio input. A phone can be a camera too.");
         let g = &mut self.draft.guests;
-        egui::Grid::new("guests").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+        egui::Grid::new("guests").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
             label(ui, "Guests");
             ui.checkbox(&mut g.enabled, "let guests join by link");
             ui.end_row();
@@ -71,9 +71,9 @@ impl SettingsUi {
                 ui.radio_value(&mut g.access, GuestAccess::Tailscale, "Tailscale Funnel (free, and the links stay the same)");
                 if g.access == GuestAccess::Tailscale && crate::net::tunnel::tailscale_exe().is_none() {
                     ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new("Tailscale isn't on this computer yet:").color(AMBER).size(12.0));
-                        ui.hyperlink_to(RichText::new("get it from tailscale.com").size(12.0), "https://tailscale.com/download");
-                        ui.label(RichText::new("and sign in (a free account).").color(TEXT_DIM).size(12.0));
+                        ui.label(RichText::new("Tailscale isn't on this computer yet:").color(AMBER).size(TEXT_BODY));
+                        ui.hyperlink_to(RichText::new("get it from tailscale.com").size(TEXT_BODY), "https://tailscale.com/download");
+                        ui.label(RichText::new("and sign in (a free account).").color(TEXT_DIM).size(TEXT_BODY));
                     });
                 }
                 ui.radio_value(&mut g.access, GuestAccess::Custom, "my own https:// address");
@@ -123,7 +123,7 @@ impl SettingsUi {
         // (link id, guest's name, share their screen)
         let mut screen: Option<(String, String, bool)> = None;
         let screens: Vec<String> = self.draft.sources.iter().filter_map(|s| s.guest_screen_id().map(str::to_string)).collect();
-        egui::Grid::new("guest_spots").num_columns(5).spacing([12.0, 8.0]).striped(true).show(ui, |ui| {
+        egui::Grid::new("guest_spots").num_columns(5).spacing(TABLE_GAP).striped(true).show(ui, |ui| {
             for &i in &guests {
                 let s = &mut self.draft.sources[i];
                 let id = s.guest_id().unwrap_or("").to_string();
@@ -144,7 +144,7 @@ impl SettingsUi {
                     Some(base) if self.original.sources.iter().any(|o| o.guest_id() == Some(id.as_str())) => {
                         let link = format!("{base}/g/{id}");
                         ui.horizontal(|ui| {
-                            ui.add(egui::Label::new(RichText::new(&link).monospace().size(13.0)).truncate());
+                            ui.add(egui::Label::new(RichText::new(&link).monospace().size(TEXT_BODY)).truncate());
                             if ui.small_button("Copy").clicked() {
                                 ui.ctx().copy_text(link.clone());
                                 self.message = Some((format!("Copied {}'s link", s.name), false));
@@ -152,7 +152,7 @@ impl SettingsUi {
                         });
                     }
                     _ => {
-                        ui.label(RichText::new("the link appears once guests are on and this is applied").color(TEXT_DIM).size(13.0));
+                        ui.label(RichText::new("the link appears once guests are on and this is applied").color(TEXT_DIM).size(TEXT_BODY));
                     }
                 }
                 let mut on = screens.contains(&id);
@@ -228,7 +228,7 @@ impl SettingsUi {
         let state = if self.draft.guests.turn_url.trim().is_empty() { "not needed by most".to_string() } else { "set".to_string() };
         part(ui, "turn", "Strict networks (TURN)", &state, false, |ui| {
             let g = &mut self.draft.guests;
-            egui::Grid::new("turn").num_columns(2).spacing([16.0, 8.0]).show(ui, |ui| {
+            egui::Grid::new("turn").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "TURN server");
                 ui.add(egui::TextEdit::singleline(&mut g.turn_url).hint_text("turn:turn.example.com:3478").desired_width(320.0));
                 ui.end_row();

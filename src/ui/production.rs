@@ -135,7 +135,7 @@ impl App {
             for (i, m) in self.cfg.macros.iter().enumerate() {
                 let busy = running.contains(&m.name);
                 let fill = color_of(&m.color, 0x6a4fc9);
-                let text = RichText::new(if busy { format!("{} …", m.name) } else { m.name.clone() }).strong().size(12.5).color(Color32::WHITE);
+                let text = RichText::new(if busy { format!("{} …", m.name) } else { m.name.clone() }).strong().size(TEXT_BODY).color(Color32::WHITE);
                 let tip = if m.commands.is_empty() { "No steps yet (Settings → Macros)".to_string() } else { m.commands.join("\n") };
                 if ui.add(egui::Button::new(text).fill(if busy { fill } else { fill.gamma_multiply(0.75) }).min_size(vec2(64.0, 28.0))).on_hover_text(tip).clicked() {
                     run = Some(i);
@@ -232,7 +232,7 @@ impl App {
         ui.horizontal_wrapped(|ui| {
             for (i, name) in &cams {
                 let on_air = live.contains(i);
-                let text = RichText::new(name).size(12.5).color(if on_air { ON_AIR } else { Color32::WHITE });
+                let text = RichText::new(name).size(TEXT_BODY).color(if on_air { ON_AIR } else { Color32::WHITE });
                 if ui.add(egui::Button::selectable(self.ptz_cam == *i, text)).on_hover_text(if on_air { "On air" } else { "" }).clicked() {
                     self.ptz_cam = *i;
                 }
@@ -294,7 +294,7 @@ impl App {
         let presets: Vec<String> = self.cfg.sources.get(cam).map(|s| s.ptz.presets.iter().map(|p| p.name.clone()).collect()).unwrap_or_default();
         ui.horizontal_wrapped(|ui| {
             for (k, name) in presets.iter().enumerate() {
-                let r = ui.add(egui::Button::new(RichText::new(name).size(12.5)).min_size(vec2(56.0, 26.0))).on_hover_text("Go there. Right-click to save the current shot here.");
+                let r = ui.add(egui::Button::new(RichText::new(name).size(TEXT_BODY)).min_size(vec2(56.0, 26.0))).on_hover_text("Go there. Right-click to save the current shot here.");
                 if r.clicked() {
                     send.push(PtzCmd::Recall(Target::Index(k)));
                 }
@@ -310,7 +310,7 @@ impl App {
             }
         });
         if !status.is_empty() && status != "virtual" {
-            ui.label(RichText::new(&status).color(TEXT_DIM).size(11.0));
+            ui.label(RichText::new(&status).color(TEXT_DIM).size(TEXT_SMALL));
         }
         if self.ptz_drive.is_some() || self.ptz_zoom.is_some() {
             ui.ctx().request_repaint_after(Duration::from_millis(50));
@@ -420,21 +420,21 @@ impl App {
         for (p, st) in [("Twitch", tw), ("YouTube", yt)] {
             if !st.is_empty() {
                 let ok = st.starts_with("reading");
-                ui.label(RichText::new(format!("{p}: {st}")).color(if ok { TEXT_DIM } else { AMBER }).size(11.0));
+                ui.label(RichText::new(format!("{p}: {st}")).color(if ok { TEXT_DIM } else { AMBER }).size(TEXT_SMALL));
             }
         }
         let mut pick = None;
         egui::ScrollArea::vertical().id_salt("comments").max_height(170.0).stick_to_bottom(true).show(ui, |ui| {
             ui.set_width(ui.available_width());
             if messages.is_empty() {
-                ui.label(RichText::new("No comments yet").color(TEXT_DIM).size(12.0));
+                ui.label(RichText::new("No comments yet").color(TEXT_DIM).size(TEXT_BODY));
             }
             for m in messages.iter().rev().take(40).rev() {
                 let showing = self.comment_on == Some(m.id);
                 let color = color_of(m.color.as_deref().unwrap_or(m.platform.color()), 0x9b6bff);
                 let mut job = egui::text::LayoutJob::default();
-                job.append(&m.author, 0.0, egui::TextFormat { color, font_id: egui::FontId::proportional(12.5), ..Default::default() });
-                job.append(&format!("  {}", m.text), 0.0, egui::TextFormat { color: if showing { Color32::BLACK } else { Color32::from_gray(225) }, font_id: egui::FontId::proportional(12.5), ..Default::default() });
+                job.append(&m.author, 0.0, egui::TextFormat { color, font_id: egui::FontId::proportional(TEXT_BODY), ..Default::default() });
+                job.append(&format!("  {}", m.text), 0.0, egui::TextFormat { color: if showing { Color32::BLACK } else { Color32::from_gray(225) }, font_id: egui::FontId::proportional(TEXT_BODY), ..Default::default() });
                 job.wrap.max_width = ui.available_width() - 8.0;
                 let fill = if showing { AMBER } else if m.id > self.comment_cursor { RAISED } else { Color32::TRANSPARENT };
                 let r = egui::Frame::new().fill(fill).corner_radius(4.0).inner_margin(egui::Margin::symmetric(6, 3)).show(ui, |ui| {
@@ -630,7 +630,7 @@ impl App {
         let mut cmd = None;
         ui.horizontal(|ui| {
             let playing = self.prompter.playing;
-            if ui.add(egui::Button::new(RichText::new(if playing { "⏸" } else { "▶" }).size(15.0)).min_size(vec2(36.0, 28.0))).on_hover_text("Roll / pause").clicked() {
+            if ui.add(egui::Button::new(RichText::new(if playing { "⏸" } else { "▶" }).size(TEXT_STATE)).min_size(vec2(36.0, 28.0))).on_hover_text("Roll / pause").clicked() {
                 cmd = Some(PrompterCmd::Toggle);
             }
             if ui.button("⏮").on_hover_text("Back to the top").clicked() {
@@ -674,7 +674,7 @@ pub(super) fn draw_prompter(ui: &egui::Ui, area: egui::Rect, cfg: &crate::config
     let fg = color_of(&cfg.text_color, 0xffffff);
     painter.rect_filled(area, 0.0, bg);
     if text.trim().is_empty() {
-        painter.text(area.center(), egui::Align2::CENTER_CENTER, "No script (Settings → Teleprompter)", egui::FontId::proportional(24.0), Color32::from_gray(120));
+        painter.text(area.center(), egui::Align2::CENTER_CENTER, "No script (Settings → Teleprompter)", egui::FontId::proportional(TEXT_TITLE), Color32::from_gray(120));
         return;
     }
     let size = (area.height() * cfg.text_size.clamp(0.02, 0.2)).max(10.0);

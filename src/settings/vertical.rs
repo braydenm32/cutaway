@@ -13,7 +13,7 @@ impl SettingsUi {
             "A 9:16 version of the show for Shorts, Reels and TikTok, made alongside the program: a tall layout for each scene, and a framing for each source.",
         );
         let v = &mut self.draft.vertical;
-        egui::Grid::new("vertical").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+        egui::Grid::new("vertical").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
             label(ui, "Make it");
             ui.checkbox(&mut v.enabled, "shown beside the program monitor");
             ui.end_row();
@@ -47,7 +47,7 @@ impl SettingsUi {
         ui.add_space(14.0);
         subtitle(ui, "Scenes");
         hint(ui, "Automatic: a full-screen source fills it, picture in picture keeps its inset (top right), and anything else is stacked, top to bottom.");
-        egui::Grid::new("vertical_scenes").num_columns(3).spacing([12.0, 8.0]).striped(true).show(ui, |ui| {
+        egui::Grid::new("vertical_scenes").num_columns(3).spacing(TABLE_GAP).striped(true).show(ui, |ui| {
             for scene in &scenes {
                 let mut l = self.draft.vertical.layout_of(&scene.name);
                 let before = l.clone();
@@ -68,7 +68,7 @@ impl SettingsUi {
                     }
                 });
                 let one = names.iter().position(|n| n.eq_ignore_ascii_case(&l.source));
-                ui.label(RichText::new(describe(&vertical::arrange(scene, l.mode, one, aspect), &names)).color(TEXT_DIM).size(13.0));
+                ui.label(RichText::new(describe(&vertical::arrange(scene, l.mode, one, aspect), &names)).color(TEXT_DIM).size(TEXT_BODY));
                 ui.end_row();
                 if l != before {
                     set_layout(&mut self.draft.vertical.layouts, l);
@@ -79,20 +79,20 @@ impl SettingsUi {
         ui.add_space(14.0);
         subtitle(ui, "Framing");
         hint(ui, "Which part of each source's picture fills a tall frame: slide it to where the person sits, and zoom in for a closer shot. Apply to see it on the vertical monitor.");
-        egui::Grid::new("vertical_framing").num_columns(4).spacing([12.0, 8.0]).striped(true).show(ui, |ui| {
+        egui::Grid::new("vertical_framing").num_columns(4).spacing(TABLE_GAP).striped(true).show(ui, |ui| {
             for n in &names {
                 let mut f = self.draft.vertical.framing_of(n);
                 let before = f.clone();
                 ui.label(RichText::new(n).strong());
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("left").color(TEXT_DIM).size(13.0));
+                    ui.label(RichText::new("left").color(TEXT_DIM).size(TEXT_BODY));
                     ui.add(egui::Slider::new(&mut f.x, 0.0..=1.0).show_value(false));
-                    ui.label(RichText::new("right").color(TEXT_DIM).size(13.0));
+                    ui.label(RichText::new("right").color(TEXT_DIM).size(TEXT_BODY));
                 });
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("up").color(TEXT_DIM).size(13.0));
+                    ui.label(RichText::new("up").color(TEXT_DIM).size(TEXT_BODY));
                     ui.add(egui::Slider::new(&mut f.y, 0.0..=1.0).show_value(false));
-                    ui.label(RichText::new("down").color(TEXT_DIM).size(13.0));
+                    ui.label(RichText::new("down").color(TEXT_DIM).size(TEXT_BODY));
                 });
                 ui.horizontal(|ui| {
                     ui.add(egui::Slider::new(&mut f.zoom, 1.0..=3.0).step_by(0.05).suffix("×").text("zoom"));

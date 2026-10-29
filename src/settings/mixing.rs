@@ -51,7 +51,7 @@ pub(super) fn processing_editor(ui: &mut egui::Ui, p: &mut VoiceProcessing) {
         }
     });
     ui.add_enabled_ui(p.enabled, |ui| {
-        egui::Grid::new("fx").num_columns(2).spacing([16.0, 8.0]).show(ui, |ui| {
+        egui::Grid::new("fx").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
             label(ui, "Low cut (rumble)");
             ui.horizontal(|ui| {
                 let mut on = p.high_pass_hz >= 20.0;
@@ -113,7 +113,7 @@ impl SettingsUi {
     pub(super) fn mixing(&mut self, ui: &mut egui::Ui) {
         title(ui, "Mixing & headphones", "Protecting the mixes, stream loudness, and what you and the presenters hear.");
         let m = &mut self.draft.mix;
-        egui::Grid::new("master").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+        egui::Grid::new("master").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
             label(ui, "Limiter");
             ui.horizontal(|ui| {
                 ui.checkbox(&mut m.limiter, "stop the mixes clipping, at");
@@ -138,7 +138,7 @@ impl SettingsUi {
             other => format!("{other} solo"),
         }) };
         part(ui, "mix_phones", "Headphones", &state, true, |ui| {
-            egui::Grid::new("monitor").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            egui::Grid::new("monitor").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "Output");
                 let shown = if m.monitor_device.is_empty() { "Off".to_string() } else { m.monitor_device.clone() };
                 egui::ComboBox::from_id_salt("monitor_device").selected_text(shown).width(300.0).show_ui(ui, |ui| {
@@ -176,7 +176,7 @@ impl SettingsUi {
         let state = if !self.draft.mix.automix { "off".to_string() } else if mixed.len() < 2 { "on, tick at least two mics".to_string() } else { mixed.join(", ") };
         part(ui, "mix_automix", "Automatic mic mixing", &state, self.draft.mix.automix, |ui| {
             hint(ui, "For panels and round tables: whoever is talking is up and the other mics go down, so their room noise, echo and breathing don't pile up. Two people talking at once share it. Nothing is cut off: a quiet mic is only ever turned down, never off.");
-            egui::Grid::new("automix").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            egui::Grid::new("automix").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "Automatic mixing");
                 ui.checkbox(&mut self.draft.mix.automix, "share the level between the mics below");
                 ui.end_row();
@@ -201,7 +201,7 @@ impl SettingsUi {
         let state = if !self.draft.mix.ducking { "off".to_string() } else if ducked.is_empty() { "on, nothing ticked".to_string() } else { format!("{} under voices", ducked.join(", ")) };
         part(ui, "mix_duck", "Ducking", &state, false, |ui| {
             let ducking = self.draft.mix.ducking;
-            egui::Grid::new("ducking").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            egui::Grid::new("ducking").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "Ducking");
                 ui.checkbox(&mut self.draft.mix.ducking, "turn music, pads and ambience down while people talk");
                 ui.end_row();
@@ -233,7 +233,7 @@ impl SettingsUi {
         let m = &mut self.draft.mix;
         let state = if m.talkback_input.is_empty() { "no mic chosen".to_string() } else { format!("on {}", m.talkback_input) };
         part(ui, "mix_talk", "Talkback", &state, false, |ui| {
-            egui::Grid::new("talkback").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+            egui::Grid::new("talkback").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "Your mic");
                 let shown = if m.talkback_input.is_empty() { "none".to_string() } else { m.talkback_input.clone() };
                 egui::ComboBox::from_id_salt("tb_input").selected_text(shown).width(240.0).show_ui(ui, |ui| {
@@ -264,7 +264,7 @@ impl SettingsUi {
             for i in 0..n_out {
                 let o = &mut self.draft.mix.outputs[i];
                 egui::Frame::new().fill(RAISED).corner_radius(4.0).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
-                    egui::Grid::new(("out", i)).num_columns(2).spacing([16.0, 8.0]).show(ui, |ui| {
+                    egui::Grid::new(("out", i)).num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                         label(ui, "Name");
                         ui.horizontal(|ui| {
                             ui.add(egui::TextEdit::singleline(&mut o.name).desired_width(200.0));

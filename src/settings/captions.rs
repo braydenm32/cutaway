@@ -18,7 +18,7 @@ impl SettingsUi {
         let languages = self.languages.clone().unwrap_or_default();
         let inputs: Vec<String> = self.draft.audio.iter().map(|a| a.name.clone()).collect();
         let c = &mut self.draft.captions;
-        egui::Grid::new("captions").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+        egui::Grid::new("captions").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
             label(ui, "Live captions");
             ui.checkbox(&mut c.enabled, "listen and caption, on this computer");
             ui.end_row();
@@ -83,7 +83,7 @@ impl SettingsUi {
                                     whisper::download(&c.language, c.model);
                                 }
                                 if let Some(e) = d.and_then(|d| d.error) {
-                                    ui.label(RichText::new(e).color(AMBER).size(12.5));
+                                    ui.label(RichText::new(e).color(AMBER).size(TEXT_BODY));
                                 }
                             });
                         }

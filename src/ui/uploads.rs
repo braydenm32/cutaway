@@ -480,10 +480,10 @@ impl App {
             let (mut go, mut forget) = (false, false);
             let text = if left == 1 { "1 upload didn't finish".to_string() } else { format!("{left} uploads didn't finish") };
             let takes: Vec<String> = self.uploads.resume.lock_ok().iter().map(|j| format!("{} to {}", j.take, j.label)).collect();
-            ui.label(RichText::new(text).size(12.5).color(AMBER)).on_hover_text(takes.join("\n"));
+            ui.label(RichText::new(text).size(TEXT_BODY).color(AMBER)).on_hover_text(takes.join("\n"));
             let mut names: Vec<String> = self.uploads.resume.lock_ok().iter().map(|j| j.take.clone()).collect();
             names.dedup();
-            ui.add(egui::Label::new(RichText::new(names.join(", ")).size(11.5).color(TEXT_DIM)).truncate());
+            ui.add(egui::Label::new(RichText::new(names.join(", ")).size(TEXT_SMALL).color(TEXT_DIM)).truncate());
             ui.horizontal(|ui| {
                 if ui.button(RichText::new("Carry on").strong()).on_hover_text("Pick them up where Google got to").clicked() {
                     go = true;
@@ -516,7 +516,7 @@ impl App {
             let mut go = false;
             let mut skip = false;
             ui.horizontal(|ui| {
-                ui.add(egui::Label::new(RichText::new(&name).size(12.0)).truncate());
+                ui.add(egui::Label::new(RichText::new(&name).size(TEXT_BODY)).truncate());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.small_button("Not this one").clicked() {
                         skip = true;
@@ -538,12 +538,12 @@ impl App {
         let mut retry = None;
         for j in &jobs {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(&j.label).size(12.0).strong());
-                ui.add(egui::Label::new(RichText::new(&j.take).size(11.5).color(TEXT_DIM)).truncate());
+                ui.label(RichText::new(&j.label).size(TEXT_BODY).strong());
+                ui.add(egui::Label::new(RichText::new(&j.take).size(TEXT_SMALL).color(TEXT_DIM)).truncate());
             });
             ui.horizontal(|ui| match &j.state {
                 JobState::Waiting => {
-                    ui.label(RichText::new("waiting").size(11.5).color(TEXT_DIM));
+                    ui.label(RichText::new("waiting").size(TEXT_SMALL).color(TEXT_DIM));
                     if ui.small_button("✕").on_hover_text("Don't upload it").clicked() {
                         j.cancel.store(true, Ordering::Relaxed);
                         if let Some(x) = self.uploads.jobs.lock_ok().iter_mut().find(|x| x.id == j.id && x.state == JobState::Waiting) {
@@ -560,7 +560,7 @@ impl App {
                     }
                 }
                 JobState::Done => {
-                    ui.label(RichText::new("✓ uploaded").size(11.5).color(GREEN));
+                    ui.label(RichText::new("✓ uploaded").size(TEXT_SMALL).color(GREEN));
                     if let Some(link) = &j.link {
                         if ui.small_button("Open").on_hover_text(link).clicked() {
                             ui.ctx().open_url(egui::OpenUrl::new_tab(link));
@@ -569,13 +569,13 @@ impl App {
                     clear_done = true;
                 }
                 JobState::Failed(e) => {
-                    ui.add(egui::Label::new(RichText::new(format!("⚠ {e}")).size(11.5).color(AMBER)).wrap());
+                    ui.add(egui::Label::new(RichText::new(format!("⚠ {e}")).size(TEXT_SMALL).color(AMBER)).wrap());
                     if ui.small_button("Retry").clicked() {
                         retry = Some(j.id);
                     }
                 }
                 JobState::Cancelled => {
-                    ui.label(RichText::new("cancelled").size(11.5).color(TEXT_DIM));
+                    ui.label(RichText::new("cancelled").size(TEXT_SMALL).color(TEXT_DIM));
                     clear_done = true;
                 }
             });

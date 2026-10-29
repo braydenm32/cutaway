@@ -29,7 +29,7 @@ impl SettingsUi {
                         GraphicKind::Ticker => "ticker",
                         GraphicKind::Web => "web page",
                     };
-                    let b = egui::Button::selectable(self.sel_graphic == i, RichText::new(format!("{}\n{kind}{}", g.name, if i < 9 { format!(" · Alt+{}", i + 1) } else { String::new() })).size(14.0))
+                    let b = egui::Button::selectable(self.sel_graphic == i, RichText::new(format!("{}\n{kind}{}", g.name, if i < 9 { format!(" · Alt+{}", i + 1) } else { String::new() })).size(TEXT_STATE))
                         .min_size(vec2(220.0, 40.0));
                     if ui.add(b).clicked() {
                         self.sel_graphic = i;
@@ -94,7 +94,7 @@ impl SettingsUi {
             hint(ui, "No graphics yet. Add a logo (a PNG with a transparent background works best) or a name title.");
             return;
         };
-        egui::Grid::new("graphic").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+        egui::Grid::new("graphic").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
             label(ui, "Name");
             ui.add_sized([240.0, 22.0], egui::TextEdit::singleline(&mut g.name));
             ui.end_row();
@@ -346,7 +346,7 @@ impl SettingsUi {
             let w = g.width * rect.width();
             let r = egui::Rect::from_min_size(rect.min + vec2(g.x * rect.width(), g.y * rect.height()), vec2(w, w * g.page_size[1] as f32 / g.page_size[0].max(1) as f32));
             ui.painter().with_clip_rect(rect).rect_stroke(r, 2.0, egui::Stroke::new(1.5, ACCENT), egui::StrokeKind::Inside);
-            ui.painter().with_clip_rect(rect).text(r.center(), egui::Align2::CENTER_CENTER, "web page", egui::FontId::proportional(13.0), ACCENT);
+            ui.painter().with_clip_rect(rect).text(r.center(), egui::Align2::CENTER_CENTER, "web page", egui::FontId::proportional(TEXT_BODY), ACCENT);
         }
         if g.kind == GraphicKind::Web {
             hint(ui, "The page runs all the time, so it's ready the moment it goes on; ⟳ beside its button loads it again. It's see-through wherever the page has no background. Its sound isn't heard.");
