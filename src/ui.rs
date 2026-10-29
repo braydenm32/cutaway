@@ -2012,6 +2012,11 @@ impl App {
             3 if t > 6.0 && std::env::var_os("CUTAWAY_UI_TEST_SETTINGS").is_some() => {
                 let name = std::env::var("CUTAWAY_UI_TEST_SETTINGS").unwrap_or_default();
                 let section = Section::from_name(&name).unwrap_or(Section::Sources);
+                if std::env::var_os("CUTAWAY_UI_TEST_REMOTE").is_some() {
+                    // Remote control on with a PIN, for a screenshot of its page.
+                    self.cfg.remote.enabled = true;
+                    self.cfg.remote.pin = "4821".into();
+                }
                 let source = std::env::var("CUTAWAY_UI_TEST_SOURCE").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
                 self.settings = Some(self.new_settings().open_at(section).select_source(source));
                 4

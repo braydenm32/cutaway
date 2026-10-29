@@ -428,7 +428,9 @@ Take_2026-10-16_19-30-02/
   live, markers, clips, replay, fade to black, graphics, macros, PTZ presets
   and moves, the teleprompter, viewer comments, timers, the rundown, sound
   pads, mics and the media player, plus **tally pages** for phones mounted on
-  cameras and a **prompter page** for a tablet.
+  cameras and a **prompter page** for a tablet. **Settings → Remote & MIDI**
+  shows a QR code for the remote's address with the PIN in it: scan it with
+  the phone's camera and the remote opens already signed in.
 - **Stream Deck plugin:** keys with live pictures of every scene and source,
   red and green tally, take/cut, transitions, record and go live (hold to
   confirm), markers, graphics, audio inputs with level meters (and Stream
