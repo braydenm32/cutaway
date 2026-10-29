@@ -673,7 +673,7 @@ Video Extensions** on some PCs.
 | Graphics 1–9 | Alt/Option + number, or the graphic buttons; ✎ edits a title's text live |
 | Media player | ⟲ ⏯ ⏭ on its tile; right-click the tile for the playlist |
 | Record / stop | ⌘R, or the record button. To stop, hold the **■ REC** button for a second (a fill grows across it; a quick click only says **Hold to stop**); ⌘R asks "Stop recording?" first, so a stray click or key can't split the take |
-| Go live / end stream | The **GO LIVE** button. It has no key unless you give it one in Settings → Shortcuts, so a stray key can't start or end a broadcast (a key gets the same checks and "are you sure?" as the button) |
+| Go live / end stream | The **GO LIVE** button (until there's somewhere to stream to, the header has a small **Set up streaming** in its place). It has no key unless you give it one in Settings → Shortcuts, so a stray key can't start or end a broadcast (a key gets the same checks and "are you sure?" as the button) |
 | Edit layout | `E`, or **Edit layout**: drag frames, drag the corner to resize (Shift keeps shape), **Fit/Fill** and **Zoom** for the selected frame (or double-click a frame to fill it, scroll to zoom, Option/Alt-drag to move the picture), add/remove sources, scene audio, duplicate, rename, **Save scenes** |
 | Audio strip | Fader = level (double-click resets), **ON** = in the mixes, 🎧 = solo in the headphones |
 | Fold or move a panel on the right | Click its heading (▾) to fold it down to one line, again to open it. Drag a heading onto another panel's heading to move it above that one. Each show remembers its own |
@@ -689,8 +689,8 @@ General → Shortcuts**, where you can also add your own.
 
 ## Going live
 
-1. **Add destinations:** open **Settings → Streaming** (or **Set up** in the
-   Stream panel), click **＋ Add** and pick a service. Paste the stream key
+1. **Add destinations:** open **Settings → Streaming** (or **Set up
+   streaming** in the header, or **Set up** in the Stream panel), click **＋ Add** and pick a service. Paste the stream key
    from that platform's dashboard. Add as many destinations as you like and
    tick the ones to use.
 2. **Set the quality:** set the stream size, frame rate and bitrate. The

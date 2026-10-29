@@ -2260,13 +2260,18 @@ impl App {
                 status_line = Some((format!("{live} of {total} destinations live — see Stream panel"), AMBER));
             }
             ui.ctx().request_repaint_after(Duration::from_millis(250));
+        } else if !self.cfg.streaming.destinations.iter().any(|d| d.enabled) {
+            // Nowhere to stream to: a quiet way in, not a big button that can't work.
+            let b = egui::Button::new(RichText::new("◉ Set up streaming").size(13.0).color(ACCENT)).frame(false);
+            let r = ui.add(b);
+            ui.add_space(10.0);
+            if r.on_hover_text("Add a place to stream to (YouTube, Twitch, any RTMP server…) in Settings → Streaming. The GO LIVE button appears once there is one.").clicked() {
+                self.settings = Some(self.new_settings().open_at(Section::Streaming));
+            }
         } else {
-            let has_dest = self.cfg.streaming.destinations.iter().any(|d| d.enabled);
-            let btn = pill(RichText::new("◉  GO LIVE").size(15.0).strong().color(if has_dest { LIVE } else { TEXT_DIM }), RAISED)
-                .stroke(Stroke::new(1.5, if has_dest { Color32::from_rgb(110, 30, 70) } else { LINE }));
+            let btn = pill(RichText::new("◉  GO LIVE").size(15.0).strong().color(LIVE), RAISED).stroke(Stroke::new(1.5, Color32::from_rgb(110, 30, 70)));
             let names: Vec<String> = self.cfg.streaming.destinations.iter().filter(|d| d.enabled).map(|d| d.name.clone()).collect();
-            let tip = if names.is_empty() { "Set up streaming destinations".to_string() } else { format!("Stream to {}", names.join(", ")) };
-            if ui.add(btn).on_hover_text(tip).clicked() {
+            if ui.add(btn).on_hover_text(format!("Stream to {}", names.join(", "))).clicked() {
                 self.toggle_stream();
             }
         }
