@@ -345,7 +345,8 @@ impl HealthMonitor {
         st.disk = disk;
         st.backup_disk = backup;
         for w in warnings {
-            st.push(LogLevel::Warning, w);
+            st.push(LogLevel::Warning, w.clone());
+            st.alerts.push(w);
         }
         if let Some(r) = stop_reason {
             if st.rec_failed.is_none() {

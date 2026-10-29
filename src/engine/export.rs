@@ -424,24 +424,41 @@ pub fn premiere_xml(t: &TakeExport) -> String {
     x
 }
 
-/// YouTube chapter list ("0:00 Start" first, as YouTube requires).
-pub fn youtube_chapters(markers: &[(Ns, String)]) -> String {
-    let fmt = |ns: Ns| {
-        let s = (ns.max(0) / NS_PER_SEC) as u64;
-        if s >= 3600 {
-            format!("{}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60)
-        } else {
-            format!("{}:{:02}", s / 60, s % 60)
+/// "1:02:03" or "2:03".
+fn timestamp(secs: u64) -> String {
+    let (h, m, s) = (secs / 3600, (secs / 60) % 60, secs % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
+/// YouTube chapters from markers (seconds, name): the list YouTube reads
+/// from a description (Chapters.txt and the upload's description). It needs
+/// the first at 0:00, at least three, each at least ten seconds long; None
+/// when the markers don't make that.
+pub fn youtube_chapters(markers: &[(f64, String)], duration_s: f64) -> Option<String> {
+    let mut list: Vec<(f64, String)> = Vec::new();
+    for (at, name) in markers.iter().filter(|(at, _)| *at >= 0.0 && *at < duration_s - 10.0) {
+        match list.last() {
+            Some((prev, _)) if at - prev < 10.0 => {
+                // Too close: the later name wins the earlier spot.
+                let p = *prev;
+                list.pop();
+                list.push((p, name.clone()));
+            }
+            _ => list.push((*at, name.clone())),
         }
-    };
-    let mut out = String::new();
-    if markers.first().is_none_or(|m| m.0 >= NS_PER_SEC) {
-        out += "0:00 Start\n";
     }
-    for (t, title) in markers {
-        let _ = writeln!(out, "{} {}", fmt(*t), title);
+    match list.first_mut() {
+        Some(first) if first.0 < 10.0 => first.0 = 0.0,
+        _ => list.insert(0, (0.0, "Start".into())),
     }
-    out
+    if list.len() < 3 {
+        return None;
+    }
+    Some(list.iter().map(|(at, name)| format!("{} {}", timestamp(*at as u64), name.trim())).collect::<Vec<_>>().join("\n"))
 }
 
 #[cfg(test)]
@@ -566,9 +583,17 @@ mod tests {
     }
 
     #[test]
-    fn chapters_list() {
-        let c = youtube_chapters(&[(65 * NS_PER_SEC, "Guest".into()), (3725 * NS_PER_SEC, "Outro".into())]);
-        assert_eq!(c, "0:00 Start\n1:05 Guest\n1:02:05 Outro\n");
+    fn chapters_follow_youtubes_rules() {
+        let m = |v: &[(f64, &str)]| v.iter().map(|(a, n)| (*a, n.to_string())).collect::<Vec<_>>();
+        assert_eq!(youtube_chapters(&m(&[(0.0, "Welcome"), (65.0, "News"), (600.0, "Guest")]), 1200.0).unwrap(), "0:00 Welcome\n1:05 News\n10:00 Guest");
+        // A first marker after the start gets a "Start" chapter before it.
+        assert_eq!(youtube_chapters(&m(&[(30.0, "A"), (90.0, "B")]), 300.0).unwrap(), "0:00 Start\n0:30 A\n1:30 B");
+        // Just past the start counts as the start.
+        assert!(youtube_chapters(&m(&[(3.0, "A"), (90.0, "B"), (200.0, "C")]), 300.0).unwrap().starts_with("0:00 A"));
+        // Too close together: merged; too few: none.
+        assert_eq!(youtube_chapters(&m(&[(0.0, "A"), (5.0, "B"), (100.0, "C")]), 300.0), None);
+        assert_eq!(youtube_chapters(&m(&[(0.0, "A"), (4000.0, "B"), (5000.0, "C")]), 6000.0).unwrap(), "0:00 A\n1:06:40 B\n1:23:20 C");
+        assert_eq!(youtube_chapters(&[], 100.0), None);
     }
 
     /// Minimal check that tags open and close in order.

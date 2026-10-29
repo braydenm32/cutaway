@@ -222,27 +222,52 @@ impl SettingsUi {
             for name in &list {
                 ui.horizontal(|ui| {
                     let is_current = *name == current;
+                    // Renaming this one: its name becomes a box.
+                    if let Some((old, to)) = self.renaming.as_mut().filter(|(old, _)| old == name) {
+                        let r = ui.add(egui::TextEdit::singleline(to).desired_width(200.0));
+                        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        let to = to.trim().to_string();
+                        let old = old.clone();
+                        if ui.add_enabled(!to.is_empty() && to != old, egui::Button::new("Rename")).clicked() || (enter && !to.is_empty() && to != old) {
+                            self.message = Some(match profiles::rename(&dir, &old, &to) {
+                                Ok(()) => {
+                                    if is_current {
+                                        self.draft.ui.profile = to.clone();
+                                    }
+                                    (format!("Renamed to \"{to}\""), false)
+                                }
+                                Err(e) => (format!("{e:#}"), true),
+                            });
+                            self.renaming = None;
+                        } else if ui.button("Cancel").clicked() {
+                            self.renaming = None;
+                        }
+                        return;
+                    }
                     ui.label(RichText::new(name).strong().color(if is_current { GREEN } else { Color32::WHITE }));
                     if is_current {
                         ui.label(RichText::new("(these settings)").size(12.5).color(TEXT_DIM));
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.small_button("Delete").clicked() {
-                            self.message = Some(match profiles::delete(&dir, name) {
-                                Ok(()) => (format!("Deleted \"{name}\""), false),
-                                Err(e) => (format!("{e:#}"), true),
-                            });
+                        if self.deleting.as_deref() == Some(name.as_str()) {
+                            if ui.small_button("Keep it").clicked() {
+                                self.deleting = None;
+                            }
+                            if ui.add(egui::Button::new(RichText::new("Delete for good").color(Color32::WHITE)).fill(RED).small()).clicked() {
+                                self.message = Some(match profiles::delete(&dir, name) {
+                                    Ok(()) => (format!("Deleted \"{name}\""), false),
+                                    Err(e) => (format!("{e:#}"), true),
+                                });
+                                self.deleting = None;
+                            }
+                            ui.label(RichText::new("Delete this show?").color(AMBER));
+                            return;
                         }
-                        if ui.small_button("Rename").on_hover_text("to the name typed below").clicked() && !self.rename_to.trim().is_empty() {
-                            self.message = Some(match profiles::rename(&dir, name, self.rename_to.trim()) {
-                                Ok(()) => {
-                                    if is_current {
-                                        self.draft.ui.profile = self.rename_to.trim().to_string();
-                                    }
-                                    (format!("Renamed to \"{}\"", self.rename_to.trim()), false)
-                                }
-                                Err(e) => (format!("{e:#}"), true),
-                            });
+                        if ui.small_button("Delete").clicked() {
+                            self.deleting = Some(name.clone());
+                        }
+                        if ui.small_button("Rename").clicked() {
+                            self.renaming = Some((name.clone(), name.clone()));
                         }
                         if ui.small_button("Load").on_hover_text("Loads into this window; Apply to switch").clicked() {
                             self.message = Some(match profiles::load(&dir, name) {
@@ -259,8 +284,13 @@ impl SettingsUi {
         });
         ui.horizontal(|ui| {
             ui.add(egui::TextEdit::singleline(&mut self.profile_name).hint_text("show name").desired_width(200.0));
-            if ui.add_enabled(!self.profile_name.trim().is_empty(), egui::Button::new("Save these settings as a show")).clicked() {
-                let name = self.profile_name.trim().to_string();
+            let name = self.profile_name.trim().to_string();
+            // Saving over a show that's already there asks first.
+            let exists = list.iter().any(|n| n.eq_ignore_ascii_case(&name)) && name != current;
+            let label = if exists { "Replace that show with these settings" } else { "Save these settings as a show" };
+            let b = ui.add_enabled(!name.is_empty(), egui::Button::new(label));
+            let b = if exists { b.on_hover_text(format!("There's already a show called \"{name}\": this replaces it")) } else { b };
+            if b.clicked() {
                 self.draft.ui.profile = name.clone();
                 self.message = Some(match profiles::save(&dir, &name, &self.draft) {
                     Ok(()) => (format!("Saved \"{name}\""), false),
@@ -268,9 +298,6 @@ impl SettingsUi {
                 });
                 self.profile_name.clear();
             }
-        });
-        ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut self.rename_to).hint_text("new name (for Rename)").desired_width(200.0));
         });
     }
 }

@@ -264,7 +264,10 @@ pub struct SettingsUi {
     outputs: Vec<DeviceInfo>,
     sel_graphic: usize,
     profile_name: String,
-    rename_to: String,
+    /// The show being renamed, and its new name so far.
+    renaming: Option<(String, String)>,
+    /// The show waiting for "Delete for good".
+    deleting: Option<String>,
     ndi_found: Arc<Mutex<Option<Result<Vec<String>, String>>>>,
     capture: capture_picker::CapturePicker,
     vcam_job: Arc<Mutex<Option<Result<String, String>>>>,
@@ -406,7 +409,8 @@ impl SettingsUi {
             outputs: crate::platform::list_output_devices(),
             sel_graphic: 0,
             profile_name: String::new(),
-            rename_to: String::new(),
+            renaming: None,
+            deleting: None,
             ndi_found: Arc::new(Mutex::new(None)),
             capture: capture_picker::CapturePicker::new(),
             vcam_job: Arc::new(Mutex::new(None)),
@@ -1404,7 +1408,11 @@ impl SettingsUi {
                         ui.checkbox(&mut o.resolve_project, "a project from each take");
                         if ui.button("Install the Resolve script").on_hover_text("Adds \"Cutaway - Build project from a take\" to Resolve's Workspace → Scripts menu").clicked() {
                             self.resolve_note = Some(match crate::engine::sessions::install_resolve_script() {
-                                Ok(p) => (format!("Installed in {}. In Resolve: Workspace → Scripts → Cutaway - Build project from a take.", p.display()), false),
+                                Ok(p) => {
+                                    // The script builds from what each take saves.
+                                    o.resolve_project = true;
+                                    (format!("Installed in {}. Takes from now on can be built in Resolve: Workspace → Scripts → Cutaway - Build project from a take.", p.display()), false)
+                                }
                                 Err(e) => (format!("Couldn't install it: {e:#}"), true),
                             });
                         }
