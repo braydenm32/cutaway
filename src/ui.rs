@@ -2048,6 +2048,11 @@ impl App {
                 self.toggle_record();
                 5
             }
+            // STOP=takes: then the Recent takes menu.
+            5 if t > 11.0 && std::env::var("CUTAWAY_UI_TEST_STOP").is_ok_and(|v| v == "takes") => {
+                self.takes.open_menu = true;
+                6
+            }
             // STOP=resolve: then its Open in Resolve.
             5 if t > 11.0 && std::env::var("CUTAWAY_UI_TEST_STOP").is_ok_and(|v| v == "resolve") => {
                 let folder = self.engine.as_ref().and_then(|e| e.status.lock_ok().last_take.as_ref().map(|r| r.folder.clone()));
@@ -2407,6 +2412,10 @@ impl App {
                 let r = ui.add(btn).on_hover_text("Record every source, the program and the audio (Ctrl/Cmd+R)");
                 if r.clicked() {
                     self.toggle_record();
+                }
+                let m = ui.menu_button(RichText::new("▾").size(15.0).color(TEXT_DIM), |ui| self.recent_takes_menu(ui)).response.on_hover_text("Recent takes");
+                if std::mem::take(&mut self.takes.open_menu) {
+                    egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(&m));
                 }
                 if self.settings.is_none() {
                     self.take_card(ui.ctx(), r.rect, last.as_ref());

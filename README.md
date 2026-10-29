@@ -230,6 +230,9 @@ and [Install on Windows](#install-on-windows).
   **Open in Resolve** (see [Editing your takes](#editing-your-takes)) and
   **Upload** (when uploads are set up). ✕ puts it away; the next recording
   does too. The header keeps the last take and the free space in view.
+- **Recent takes:** the ▾ beside Record lists the last ten takes in the
+  recording folder (date, length, size, ⚠ if Take.txt notes a problem), each
+  with the same buttons: Finder/Explorer, Resolve and Upload….
 
 A take looks like this:
 
@@ -1216,7 +1219,8 @@ it: a project, the YouTube Data API and/or Google Drive API turned on, and a
   and the mix (and the podcast, when one's made), or the whole take, in a
   folder per take (inside a "Cutaway" folder).
 - An **Upload** button appears in the main window's Uploads panel (and on
-  the Take saved card) when a take is saved (and its podcast made), or uploads start straight away if you choose. They go on in the
+  the Take saved card) when a take is saved (and its podcast made); send an
+  older take from **Recent takes** (▾ beside Record), or uploads start straight away if you choose. They go on in the
   background, one at a time, with their progress, and pick up again if the
   connection drops.
 
