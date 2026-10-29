@@ -29,6 +29,29 @@ pub(crate) fn new_scene_menu(ui: &mut egui::Ui, sources: &[String], existing: &[
     out
 }
 
+/// Rename the scene at `i` to `text` (trimmed), and what picks it by name
+/// with it. Ok(false) if that's its name already; Err if it's empty or
+/// another scene has it.
+pub(super) fn rename_scene(cfg: &mut Config, i: usize, text: &str) -> Result<bool, String> {
+    let text = text.trim();
+    let Some(now) = cfg.scenes.get(i).map(|s| s.name.clone()) else { return Ok(false) };
+    if text.is_empty() {
+        return Err("A scene needs a name".into());
+    }
+    if cfg.scenes.iter().enumerate().any(|(j, s)| j != i && s.name.eq_ignore_ascii_case(text)) {
+        return Err("Another scene has that name".into());
+    }
+    if text == now {
+        return Ok(false);
+    }
+    let names = |list: &[Scene]| list.iter().map(|s| s.name.clone()).collect::<Vec<_>>();
+    let before = names(&cfg.scenes);
+    cfg.scenes[i].name = text.to_string();
+    let after = names(&cfg.scenes);
+    crate::control::follow_scenes(cfg, &before, &after);
+    Ok(true)
+}
+
 /// A scene's frames as boxes with their sources' names.
 fn sketch(ui: &mut egui::Ui, scene: &Scene, sources: &[String], size: egui::Vec2) {
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
@@ -47,6 +70,21 @@ fn sketch(ui: &mut egui::Ui, scene: &Scene, sources: &[String], size: egui::Vec2
 }
 
 impl SettingsUi {
+    /// A new name typed for a scene that would rename it (the box not left yet).
+    pub(super) fn scene_rename_pending(&self) -> bool {
+        self.scene_rename.as_ref().is_some_and(|(i, t)| {
+            let mut c = self.draft.clone();
+            rename_scene(&mut c, *i, t) == Ok(true)
+        })
+    }
+
+    /// Rename the scene whose new name is being typed, if it can be.
+    pub(super) fn commit_scene_rename(&mut self) {
+        if let Some((i, t)) = self.scene_rename.take() {
+            let _ = rename_scene(&mut self.draft, i, &t);
+        }
+    }
+
     pub(super) fn scenes(&mut self, ui: &mut egui::Ui) {
         title(ui, "Scenes", "The buttons along the bottom of the main window, in order: keys 1–9 take the first nine. Put them in order, rename, copy or delete them, or start a new one. Move and resize frames with Edit layout in the main window.");
         if self.draft.scenes.is_empty() {
@@ -66,6 +104,7 @@ impl SettingsUi {
                     let key = if i < 9 { format!("{}", i + 1) } else { "  ".into() };
                     let b = egui::Button::selectable(self.sel_scene == i, RichText::new(format!("{key}   {}", s.name)).size(14.0)).min_size(vec2(250.0, 30.0));
                     if ui.add(b).on_hover_text(if i < 9 { format!("Key {}", i + 1) } else { "No number key (keys 1–9 take the first nine)".into() }).clicked() {
+                        self.commit_scene_rename();
                         self.sel_scene = i;
                         self.confirm_scene_delete = None;
                     }
@@ -135,20 +174,14 @@ impl SettingsUi {
                         if r.changed() {
                             self.scene_rename = Some((sel, text.clone()));
                         }
-                        let typed = self.scene_rename.as_ref().filter(|(i, _)| *i == sel).map(|(_, t)| t.trim().to_string());
-                        let clash = typed.as_ref().is_some_and(|t| self.draft.scenes.iter().enumerate().any(|(j, s)| j != sel && s.name.eq_ignore_ascii_case(t)));
-                        if clash {
-                            ui.label(RichText::new("Another scene has that name").color(AMBER).size(12.5));
-                        }
-                        // Renamed when the box is left, so a half-typed name never clashes.
-                        if r.lost_focus() {
-                            if let Some(t) = typed.filter(|t| !t.is_empty() && !clash && *t != scene.name) {
-                                let before = names(&self.draft.scenes);
-                                self.draft.scenes[sel].name = t;
-                                let after = names(&self.draft.scenes);
-                                crate::control::follow_scenes(&mut self.draft, &before, &after);
+                        if let Some((_, t)) = self.scene_rename.as_ref().filter(|(i, _)| *i == sel) {
+                            if let Err(e) = rename_scene(&mut self.draft.clone(), sel, t) {
+                                ui.label(RichText::new(e).color(AMBER).size(12.5));
                             }
-                            self.scene_rename = None;
+                        }
+                        // Renamed when the box is left (or on Apply / OK), so a half-typed name never clashes.
+                        if r.lost_focus() {
+                            self.commit_scene_rename();
                         }
                     });
                     ui.end_row();
@@ -172,5 +205,41 @@ impl SettingsUi {
                 hint(ui, "Moving a scene keeps what's set up for it: macros, MIDI, your own keys and cues that take it by number get its new number, and the rundown and \"if it drops, cut to\" go by its name. Number keys, Stream Deck keys and the remote's buttons go by place: key 3 takes whatever is third.");
             });
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn renaming_checks_the_name_and_takes_references_along() {
+        let mut cfg = Config::default();
+        cfg.scenes = ["Wide", "Host"].iter().map(|n| Scene { name: n.to_string(), ..Default::default() }).collect();
+        cfg.rundown.segments.push(crate::config::Segment { scene: "Host".into(), ..Default::default() });
+        assert_eq!(rename_scene(&mut cfg, 1, "  "), Err("A scene needs a name".into()));
+        assert!(rename_scene(&mut cfg, 1, "wide").is_err(), "another scene's name");
+        assert_eq!(rename_scene(&mut cfg, 1, "Host"), Ok(false));
+        assert_eq!(rename_scene(&mut cfg, 1, " Presenter "), Ok(true));
+        assert_eq!(cfg.scenes[1].name, "Presenter");
+        assert_eq!(cfg.rundown.segments[0].scene, "Presenter");
+    }
+
+    #[test]
+    fn a_name_still_being_typed_is_applied() {
+        let mut cfg = Config::default();
+        cfg.scenes = vec![Scene { name: "Wide".into(), ..Default::default() }];
+        let mut win = SettingsUi::new(cfg);
+        assert!(!win.dirty());
+        win.scene_rename = Some((0, "Wide shot".into()));
+        assert!(win.dirty(), "OK and Apply are on");
+        win.commit_scene_rename();
+        assert_eq!(win.draft.scenes[0].name, "Wide shot");
+        assert!(win.scene_rename.is_none());
+        // A name that can't be used isn't a change.
+        win.scene_rename = Some((0, "".into()));
+        assert!(win.dirty(), "the rename above");
+        win.original = win.draft.clone();
+        assert!(!win.dirty());
     }
 }

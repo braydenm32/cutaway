@@ -525,7 +525,7 @@ impl SettingsUi {
     }
 
     pub fn dirty(&self) -> bool {
-        self.draft != self.original
+        self.draft != self.original || self.scene_rename_pending()
     }
 
     /// Called by the app after it tried to apply (`now`: the settings in
@@ -752,6 +752,7 @@ impl SettingsUi {
                         }
                         if ui.add_enabled(self.dirty(), egui::Button::new("Revert")).on_hover_text("Undo every change since the last save").clicked() {
                             self.draft = self.original.clone();
+                            self.scene_rename = None;
                         }
                         if ui.small_button("Centre").on_hover_text("Put this window back in the middle, at its usual size").clicked() {
                             self.centre = true;
@@ -855,6 +856,8 @@ impl SettingsUi {
     /// Apply the draft, unless that takes sources or inputs out of a show
     /// that's recording or live, or restarts one: then ask first.
     fn apply(&mut self, close: bool, info: &SettingsContext) -> SettingsAction {
+        // A scene's name still being typed counts.
+        self.commit_scene_rename();
         if info.recording || info.streaming {
             let (names, on_air) = self.leaving(&info.on_air);
             let restarting = self.restarting();

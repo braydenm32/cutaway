@@ -691,6 +691,27 @@ impl App {
         }
     }
 
+    /// Rename the scene whose new name is being typed in the edit bar,
+    /// before its box was left (Done or Save pressed straight away).
+    fn commit_scene_name(&mut self) {
+        let Some((of, text)) = self.scene_name_edit.take() else { return };
+        let text = text.trim().to_string();
+        let Some(i) = self.scenes.iter().position(|s| s.name == of) else { return };
+        if text.is_empty() || text == of {
+            return;
+        }
+        if self.scenes.iter().any(|s| s.name != of && s.name.eq_ignore_ascii_case(&text)) {
+            self.toast(format!("There's already a scene called {text}"), true);
+            return;
+        }
+        self.remember(undo::Kind::Scenes, format!("Rename scene {of}"));
+        let before = self.scene_names();
+        self.scenes[i].name = text;
+        self.scenes_dirty = true;
+        // (The scene on air, in preview or last on air takes the name too.)
+        self.scenes_moved(&before);
+    }
+
     fn scene_names(&self) -> Vec<String> {
         self.scenes.iter().map(|s| s.name.clone()).collect()
     }
@@ -773,6 +794,10 @@ impl App {
     /// layout) are written a few seconds after the last one, so a crash
     /// doesn't lose them. Scene edits wait until Edit layout is done.
     fn autosave(&mut self) {
+        // A scene name typed in the edit bar when Edit layout was left (Done, E).
+        if !self.edit_mode && self.scene_name_edit.is_some() {
+            self.commit_scene_name();
+        }
         let pending = self.cfg_dirty || (self.scenes_dirty && !self.edit_mode);
         if !pending {
             self.dirty_since = None;
@@ -3140,7 +3165,8 @@ impl App {
                 if ui.button("Done").clicked() {
                     self.edit_mode = false;
                 }
-                if ui.add_enabled(self.scenes_dirty, egui::Button::new("Save scenes")).on_hover_text("Write the scenes to the settings file now (they're also saved a few seconds after Done)").clicked() {
+                if ui.add_enabled(self.scenes_dirty || self.scene_name_edit.is_some(), egui::Button::new("Save scenes")).on_hover_text("Write the scenes to the settings file now (they're also saved a few seconds after Done)").clicked() {
+                    self.commit_scene_name();
                     self.save_config();
                 }
                 if self.scenes_dirty {
