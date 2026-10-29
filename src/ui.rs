@@ -2275,7 +2275,24 @@ impl App {
         let everyday = status_line.as_ref().is_none_or(|(_, c)| *c == TEXT_DIM);
         let scheduled = if streaming || !everyday { None } else { self.scheduled_line() };
         let (text, color) = scheduled.or(status_line).unwrap_or_else(|| (self.cfg.output.folder.display().to_string(), TEXT_DIM));
-        ui.add(egui::Label::new(RichText::new(text).color(color).size(12.0)).truncate());
+        // The time of day at the right, the line taking what's left before it.
+        let clock = clock_text(chrono::Local::now().naive_local().time(), self.cfg.ui.clock_12h);
+        let clock_w = 80.0;
+        ui.scope(|ui| {
+            ui.set_max_width((ui.available_width() - clock_w).max(0.0));
+            ui.add(egui::Label::new(RichText::new(text).color(color).size(12.0)).truncate());
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_space(8.0);
+            let b = egui::Button::new(RichText::new(clock).size(14.0).color(TEXT_DIM)).frame(false);
+            let tip = if self.cfg.ui.clock_12h { "The time here. Click for 24-hour time" } else { "The time here. Click for 12-hour time" };
+            if ui.add(b).on_hover_text(tip).clicked() {
+                self.cfg.ui.clock_12h = !self.cfg.ui.clock_12h;
+                self.cfg_dirty = true;
+            }
+        });
+        let secs_left = 60 - chrono::Timelike::second(&chrono::Local::now()) as u64;
+        ui.ctx().request_repaint_after(Duration::from_secs(secs_left.clamp(1, 60)));
         if marker_clicked {
             match self.add_marker(None) {
                 Ok(n) => self.toast(format!("{n} added"), false),
@@ -4997,6 +5014,11 @@ fn unique_name(scenes: &[Scene], base: &str) -> String {
     (2..).map(|i| format!("{base} {i}")).find(|n| !scenes.iter().any(|s| &s.name == n)).unwrap()
 }
 
+/// The time of day for the header: "15:05", or "3:05 PM".
+fn clock_text(t: chrono::NaiveTime, twelve: bool) -> String {
+    if twelve { t.format("%-I:%M %p").to_string() } else { t.format("%H:%M").to_string() }
+}
+
 fn fmt_clock(d: Duration) -> String {
     let s = d.as_secs();
     format!("{:02}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60)
@@ -5085,5 +5107,20 @@ fn precheck_verdict(items: &[CheckItem], done: bool) -> (String, Color32) {
         Level::Warn => (format!("{warnings} {}: you can still start", if warnings == 1 { "warning" } else { "warnings" }), AMBER),
         Level::Ok if done => ("Ready to record".into(), GREEN),
         Level::Ok => ("Checking…".into(), TEXT_DIM),
+    }
+}
+
+#[cfg(test)]
+mod clock_tests {
+    use super::clock_text;
+    use chrono::NaiveTime;
+
+    #[test]
+    fn header_clock_in_12_and_24_hours() {
+        let t = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap();
+        assert_eq!(clock_text(t(15, 5), false), "15:05");
+        assert_eq!(clock_text(t(15, 5), true), "3:05 PM");
+        assert_eq!(clock_text(t(0, 30), true), "12:30 AM");
+        assert_eq!(clock_text(t(9, 0), false), "09:00");
     }
 }
