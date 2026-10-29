@@ -8,6 +8,7 @@
 //! scene:3  scene:Host        take a scene (with the current transition)
 //! cut:3                      take a scene with a cut
 //! preview:3                  put a scene in preview      take / cut   preview to program
+//! back                       back to the scene on air before this one
 //! transition:mix             cut, mix, wipe, push or dip
 //! record  record:on  record:off       live  live:on  live:off
 //! marker  marker:Big moment
@@ -196,6 +197,8 @@ pub enum Action {
     Take,
     /// Preview to program, instantly.
     Cut,
+    /// Back to the scene on air before this one.
+    Back,
     Transition(TransitionMode),
     Record(Toggle),
     Live(Toggle),
@@ -267,6 +270,7 @@ impl Action {
         Ok(match verb.as_str() {
             "scene" | "take" if rest.is_some() => Action::Scene(Target::parse(need(rest, &verb)?)),
             "take" => Action::Take,
+            "back" | "last" => Action::Back,
             "cut" if rest.is_some() => Action::CutTo(Target::parse(need(rest, &verb)?)),
             "cut" => Action::Cut,
             "preview" | "pvw" => Action::Preview(Target::parse(need(rest, &verb)?)),
@@ -457,6 +461,7 @@ impl Action {
             Action::Preview(x) => format!("Preview scene {x}"),
             Action::Take => "Take".into(),
             Action::Cut => "Cut".into(),
+            Action::Back => "Back to the last scene".into(),
             Action::Transition(m) => format!("Transition: {}", m.label()),
             Action::Record(x) => t(x, "Start recording", "Stop recording", "Record on/off"),
             Action::Live(x) => t(x, "Go live", "End the stream", "Live on/off"),
@@ -557,6 +562,7 @@ pub fn suggestions(cfg: &Config) -> Vec<(String, String)> {
         [
             ("take", "Take (preview to program)"),
             ("cut", "Cut (preview to program)"),
+            ("back", "Back to the last scene"),
             ("record", "Record on/off"),
             ("live", "Go live / end stream"),
             ("marker", "Add a marker"),
@@ -638,6 +644,8 @@ mod tests {
         assert_eq!(Action::parse("cut:2"), Ok(Action::CutTo(Target::Index(1))));
         assert_eq!(Action::parse("record:off"), Ok(Action::Record(Toggle::Off)));
         assert_eq!(Action::parse("live"), Ok(Action::Live(Toggle::Toggle)));
+        assert_eq!(Action::parse("back"), Ok(Action::Back));
+        assert_eq!(Action::parse(" Back "), Ok(Action::Back));
         assert_eq!(Action::parse("marker:Big moment"), Ok(Action::Marker(Some("Big moment".into()))));
         assert_eq!(Action::parse("graphic:Lower third:on"), Ok(Action::Graphic(Target::Name("Lower third".into()), Toggle::On)));
         assert_eq!(Action::parse("graphic:2"), Ok(Action::Graphic(Target::Index(1), Toggle::Toggle)));

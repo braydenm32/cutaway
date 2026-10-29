@@ -192,7 +192,7 @@ impl App {
                     }
                 }
                 (installed, _) => {
-                    self.settings = Some(self.new_settings().unfold(Section::Recording, "rec_editing"));
+                    self.settings = Some(self.new_settings().open_part_at(Section::Recording, "rec_editing"));
                     let msg = if !installed {
                         "To open takes in Resolve: under For editing, press \"Install the Resolve script\" (and keep \"a project from each take\" on)."
                     } else {

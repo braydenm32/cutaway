@@ -16,7 +16,7 @@ use crate::scene::{Layer, Scene};
 use crate::settings::{Section, SettingsAction, SettingsContext, SettingsUi};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, CornerRadius, FontId, Key, Rect, RichText, Sense, Stroke, StrokeKind};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -50,6 +50,10 @@ use theme::*;
 
 /// The right-hand column's usual width.
 const COLUMN_WIDTH: f32 = 400.0;
+/// How long the REC button is held to stop the take.
+const REC_HOLD_SECS: f32 = 1.0;
+/// A scene button's size.
+const BANK_BUTTON: egui::Vec2 = vec2(132.0, 84.0);
 
 /// Cutaway's icon for its windows and, while it runs, the Dock or taskbar
 /// (drawn by assets/logo/make_logo.py). Without it they'd show egui's.
@@ -193,6 +197,17 @@ pub struct App {
     drag: Option<Drag>,
     settings: Option<SettingsUi>,
     confirm: Option<Confirm>,
+    /// The REC button: when the hold to stop began, whether this press
+    /// already stopped the take, and until when "Hold to stop" shows.
+    rec_hold: Option<Instant>,
+    rec_hold_spent: bool,
+    rec_hint_until: Option<Instant>,
+    /// The self-test holds the REC button (for a screenshot).
+    test_hold: bool,
+    /// The self-test opens this take's marker list.
+    test_marker_list: bool,
+    /// The self-test takes this source's signal away (by number).
+    test_drop: Option<usize>,
     /// Closing was confirmed (or nothing was running): let the window go.
     quit_ok: bool,
     log_open: bool,
@@ -208,6 +223,8 @@ pub struct App {
     guide_heard: bool,
     /// The pre-show check was run from the guide.
     guide_checked: bool,
+    /// Edit layout was turned on from the guide (its scenes step).
+    guide_scenes: bool,
     health_open: bool,
     peak_hold: HashMap<String, PeakHold>,
     /// Messages at the bottom, newest last. Errors stay until clicked;
@@ -232,6 +249,16 @@ pub struct App {
     ptz_zoom: Option<f32>,
     /// The last replay problem shown.
     replay_problem: Option<String>,
+    /// The scene bank: scenes that don't fit in one row (last frame), how
+    /// many rows it has, and a scroll asked for by its edge arrows.
+    bank_overflows: bool,
+    bank_rows: usize,
+    bank_scroll_to: Option<f32>,
+    /// Sources known to have no signal (None: not looked yet with this
+    /// engine, so the ones missing from the start don't count as drops).
+    dropped: Option<HashSet<String>>,
+    /// Each source (by number): no signal now.
+    offline_sources: Vec<bool>,
     /// The scheduled start this session already went live for.
     scheduled_done: Option<String>,
     /// Slow motion ticked in the Replay button's menu.
@@ -267,6 +294,11 @@ pub struct App {
     precheck: Option<Precheck>,
     /// Title being edited live: (graphic, title, subtitle).
     title_edit: Option<(usize, String, String)>,
+    /// A marker being named (Shift+M): its time (which identifies it), its
+    /// own name until then, and what's typed.
+    marker_name: Option<(crate::media::Ns, String, String)>,
+    /// A marker's name being changed in the list under ◆ Marker ▾.
+    marker_edit: Option<(crate::media::Ns, String)>,
     display_fullscreen: bool,
     /// The output window's corner button shows until then (after the
     /// mouse moves over the window), like a video player's controls.
@@ -324,6 +356,11 @@ impl App {
             ptz_drive: None,
             ptz_zoom: None,
             replay_problem: None,
+            bank_overflows: false,
+            bank_rows: 1,
+            bank_scroll_to: None,
+            dropped: None,
+            offline_sources: Vec::new(),
             scheduled_done: None,
             replay_slow: false,
             qr_for: None,
@@ -376,6 +413,12 @@ impl App {
             drag: None,
             settings: None,
             confirm: None,
+            rec_hold: None,
+            rec_hold_spent: false,
+            rec_hint_until: None,
+            test_hold: false,
+            test_drop: None,
+            test_marker_list: false,
             quit_ok: false,
             log_open: false,
             guide_open: false,
@@ -384,6 +427,7 @@ impl App {
             settings_page: None,
             guide_heard: false,
             guide_checked: false,
+            guide_scenes: false,
             health_open: false,
             peak_hold: HashMap::new(),
             toasts: Vec::new(),
@@ -398,6 +442,8 @@ impl App {
             last_publish: Instant::now(),
             precheck: None,
             title_edit: None,
+            marker_name: None,
+            marker_edit: None,
             self_test: None,
         };
         app.vcam_wanted = app.cfg.display.virtual_camera;
@@ -909,6 +955,17 @@ impl App {
         self.run_sequence("Cue", cues, true);
     }
 
+    /// The scene on air before this one, back on air as if its button were
+    /// pressed to take it (with the transition and its cues). A scene since
+    /// changed in the bank goes back as it is now.
+    fn back_to_last_scene(&mut self) -> Result<String, String> {
+        let e = self.engine.as_ref().ok_or("the engine isn't running")?;
+        let last = e.switcher.previous().ok_or("nothing else has been on air yet")?;
+        let scene = self.scenes.iter().find(|s| s.name == last.name).cloned().unwrap_or(last);
+        self.take_scene(&scene, false);
+        Ok(scene.name)
+    }
+
     /// Preview to program; the old program goes to preview.
     fn take_preview(&mut self, cut: bool) {
         let Some(e) = &self.engine else { return };
@@ -923,10 +980,10 @@ impl App {
     fn toggle_record(&mut self) {
         let Some(e) = &self.engine else { return };
         if e.is_recording() {
-            if self.cfg.ui.confirm_stop_recording && self.confirm.is_none() {
+            // Keys always ask (the REC button is held instead), so a stray
+            // Cmd+R can't split the take.
+            if self.confirm.is_none() {
                 self.confirm = Some(Confirm::StopRecording);
-            } else {
-                e.stop_recording();
             }
         } else if self.cfg.ui.check_before_start && self.precheck.is_none() {
             self.start_precheck(Some(Then::Record));
@@ -1070,6 +1127,10 @@ impl App {
                     (self.waker)();
                 }
                 Ok(format!("{} in preview", s.name))
+            }
+            Action::Back => {
+                let name = self.back_to_last_scene()?;
+                Ok(format!("Back to {name}"))
             }
             Action::Take | Action::Cut => {
                 if self.engine.as_ref().is_none_or(|e| e.switcher.preview().is_none()) {
@@ -1608,7 +1669,7 @@ impl App {
         }
         // (Settings lets them through after a click outside it, while the
         // pointer's away from it.)
-        if ctx.egui_wants_keyboard_input() || self.settings.as_ref().is_some_and(|s| !s.keys_beside(ctx)) || self.title_edit.is_some() || self.confirm.is_some() || self.precheck.is_some() || self.sync.is_some() {
+        if ctx.egui_wants_keyboard_input() || self.settings.as_ref().is_some_and(|s| !s.keys_beside(ctx)) || self.title_edit.is_some() || self.marker_name.is_some() || self.confirm.is_some() || self.precheck.is_some() || self.sync.is_some() {
             return;
         }
         if self.keymap.as_ref().is_none_or(|(c, _)| *c != self.cfg.keys) {
@@ -1675,6 +1736,15 @@ impl App {
         }
     }
 
+    /// The key for a built-in shortcut ("Shift+M"), or `none` when it has none.
+    fn key_label_or(&self, b: Builtin, none: &str) -> String {
+        let label = match &self.keymap {
+            Some((_, m)) => m.label_of(b),
+            None => Keymap::new(&self.cfg.keys).label_of(b),
+        };
+        if label.is_empty() { none.to_string() } else { label }
+    }
+
     /// " (M)": the key for a built-in shortcut, for a button's hover text
     /// ("" when it has none).
     fn key_hint(&self, b: Builtin) -> String {
@@ -1724,9 +1794,20 @@ impl App {
                 Ok(n) => self.toast(format!("{n} added"), false),
                 Err(err) => self.toast(err, true),
             },
+            // The time is taken now, so typing the name doesn't move it.
+            Builtin::NamedMarker => match self.engine.as_ref().map(|e| e.add_marker_now(None)) {
+                Some(Ok(m)) => self.marker_name = Some((m.at, m.name, String::new())),
+                Some(Err(err)) => self.toast(format!("{err:#}"), true),
+                None => {}
+            },
             Builtin::Auto => {
                 let on = !self.auto_on();
                 self.set_auto(on);
+            }
+            Builtin::Back => {
+                if let Err(e) = self.back_to_last_scene() {
+                    self.toast(format!("Can't go back: {e}"), false);
+                }
             }
             Builtin::Take | Builtin::CutPreview => {
                 if self.preview_mode() {
@@ -1820,6 +1901,62 @@ impl App {
         }
         let t = start.elapsed().as_secs_f32();
         ctx.request_repaint_after(Duration::from_millis(100));
+        if step == 3 && t > 7.0 && self.marker_name.is_none() {
+            // CUTAWAY_UI_TEST_MARKERS=list opens the take's markers, =name the Shift+M box.
+            match std::env::var("CUTAWAY_UI_TEST_MARKERS").as_deref() {
+                Ok("list") => {
+                    for name in ["Guest arrives", "Big laugh"] {
+                        let _ = self.add_marker(Some(name.into()));
+                    }
+                    self.test_marker_list = true;
+                    self.self_test = Some((start, 5));
+                }
+                Ok("name") => {
+                    self.run_builtin(ctx, Builtin::NamedMarker, Key::M);
+                    if let Some(m) = &mut self.marker_name {
+                        m.2 = "Cold open ends".into();
+                    }
+                    self.self_test = Some((start, 5));
+                }
+                _ => {}
+            }
+            if self.self_test.is_some_and(|(_, s)| s == 5) {
+                return;
+            }
+        }
+        if step == 0 {
+            // A window this size (CUTAWAY_UI_TEST_WINDOW=1500x1200).
+            if let Some((w, h)) = std::env::var("CUTAWAY_UI_TEST_WINDOW").ok().and_then(|v| v.split_once('x').and_then(|(w, h)| Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?)))) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(vec2(w, h)));
+            }
+        }
+        if step == 0 && self.scenes.len() < 12 {
+            // More scenes than fit, some with long names (CUTAWAY_UI_TEST_SCENES=16).
+            if let Some(n) = std::env::var("CUTAWAY_UI_TEST_SCENES").ok().and_then(|v| v.parse::<usize>().ok()) {
+                let base = self.scenes.clone();
+                for k in 0..n.saturating_sub(self.scenes.len()) {
+                    let mut sc = base[k % base.len()].clone();
+                    sc.name = if k % 3 == 0 { format!("{} with the whole panel, take {}", sc.name, k + 2) } else { format!("{} {}", sc.name, k + 2) };
+                    self.scenes.push(sc);
+                }
+            }
+        }
+        if step == 3 && self.test_drop.is_none() {
+            // A source on air losing its signal (CUTAWAY_UI_TEST_DROP=2), and where to cut (…_DROP_TO=scene).
+            if let Some(i) = std::env::var("CUTAWAY_UI_TEST_DROP").ok().and_then(|v| v.parse::<usize>().ok()).filter(|i| *i >= 1) {
+                if let (Ok(to), Some(src)) = (std::env::var("CUTAWAY_UI_TEST_DROP_TO"), self.cfg.sources.get_mut(i - 1)) {
+                    src.on_drop_scene = to;
+                }
+                self.test_drop = Some(i - 1);
+            }
+        }
+        if step >= 3 && std::env::var_os("CUTAWAY_UI_TEST_HOLD").is_some() {
+            // Held part way: the fill shows, but it never gets to stop the take.
+            self.test_hold = true;
+            if self.rec_hold.is_some_and(|h| h.elapsed() > Duration::from_millis(600)) {
+                self.rec_hold = Some(Instant::now() - Duration::from_millis(600));
+            }
+        }
         let pip = self.scenes.iter().position(|s| s.name == "Picture in picture").unwrap_or(0);
         let next = match step {
             0 if t > 2.0 => {
@@ -1851,6 +1988,11 @@ impl App {
                 2
             }
             2 if t > 4.0 => {
+                if std::env::var_os("CUTAWAY_UI_TEST_SPLIT").is_some() {
+                    // Split the first camera in two and apply, as the Split… button does.
+                    let cfg = self.new_settings().with_split(0, 2).draft_config();
+                    let _ = self.apply_settings(cfg, ctx);
+                }
                 if std::env::var_os("CUTAWAY_UI_TEST_EDIT").is_some() {
                     self.edit_mode = true;
                     self.selected_layer = Some(1);
@@ -1884,8 +2026,21 @@ impl App {
             3 if t > 6.0 && std::env::var_os("CUTAWAY_UI_TEST_SETTINGS").is_some() => {
                 let name = std::env::var("CUTAWAY_UI_TEST_SETTINGS").unwrap_or_default();
                 let section = Section::from_name(&name).unwrap_or(Section::Sources);
+                if std::env::var_os("CUTAWAY_UI_TEST_NAMES").is_some() {
+                    // A who's-on-air title, with no names set on the sources.
+                    self.cfg.graphics.push(crate::config::Graphic::names("Names"));
+                }
+                if std::env::var_os("CUTAWAY_UI_TEST_REMOTE").is_some() {
+                    // Remote control on with a PIN, for a screenshot of its page.
+                    self.cfg.remote.enabled = true;
+                    self.cfg.remote.pin = "4821".into();
+                }
                 let source = std::env::var("CUTAWAY_UI_TEST_SOURCE").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
-                self.settings = Some(self.new_settings().open_at(section).select_source(source));
+                let mut win = self.new_settings().open_at(section).select_source(source);
+                if let Ok(q) = std::env::var("CUTAWAY_UI_TEST_FIND") {
+                    win = win.with_find(&q, std::env::var_os("CUTAWAY_UI_TEST_FINDGO").is_some());
+                }
+                self.settings = Some(win);
                 4
             }
             // Stop, to show the "Take saved" card.
@@ -1934,9 +2089,44 @@ impl App {
                 }
             }
         }
+        self.watch_dropped_sources();
+        let Some(e) = &self.engine else { return };
         // A sharper monitor picture while a second screen shows it.
         let want = if self.cfg.display.output != DisplayOutput::Off { e.info.canvas.0.min(1920) } else { self.cfg.program.preview_width };
         e.preview_width.store(want, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// A source on air that loses its signal: one error message, and (if
+    /// its settings say so) a cut to a scene that doesn't need it, once.
+    fn watch_dropped_sources(&mut self) {
+        let Some(e) = &self.engine else { return };
+        let offline = e.status.lock_ok().offline.clone();
+        let names: Vec<String> = e.sources.iter().map(|s| s.name.clone()).collect();
+        // By name in the status (audio inputs are listed there too), and not delivering.
+        self.offline_sources = e.sources.iter().map(|s| offline.contains(&s.name) && !s.input.alive()).collect();
+        if let Some(o) = self.test_drop.and_then(|i| self.offline_sources.get_mut(i)) {
+            *o = true;
+        }
+        let now: HashSet<String> = names.iter().zip(&self.offline_sources).filter(|(_, off)| **off).map(|(n, _)| n.clone()).collect();
+        let Some(before) = self.dropped.replace(now.clone()) else { return };
+        let live = e.switcher.live();
+        let on_air = live.sources();
+        let mut dropped = Vec::new();
+        for (i, name) in names.iter().enumerate() {
+            if now.contains(name) && !before.contains(name) && on_air.contains(&i) {
+                self.toast(format!("{name} dropped while on air: no signal"), true);
+                dropped.push(name.clone());
+            }
+        }
+        if let Some(scene) = cut_after_drop(&dropped, &self.cfg.sources, &self.scenes, &self.offline_sources, &live.name) {
+            self.take_scene(&scene, true);
+            self.toast(format!("Cut to {}", scene.name), false);
+        }
+    }
+
+    /// Each source a scene shows that has no signal now.
+    fn scene_offline(&self, scene: &Scene) -> Vec<usize> {
+        scene.sources().into_iter().filter(|i| self.offline_sources.get(*i).copied().unwrap_or(false)).collect()
     }
 
     /// The right-hand column's edge: a grip to show it can be dragged, and
@@ -2083,13 +2273,19 @@ impl App {
         }
         self.show_menu(ui);
         ui.add_space(10.0);
+        let card = self.engine.as_ref().map(|e| {
+            let st = e.status.lock_ok();
+            (matches!(st.rec, RecState::Recording { .. }), st.last_take.clone())
+        });
+        if let Some((recording, last)) = card {
+            self.tick_take_card(recording, last.as_ref());
+        }
         let Some(engine) = &self.engine else { return };
         let (rec, last, stream, markers, disk, background) = {
             let st = engine.status.lock_ok();
             (st.rec.clone(), st.last_take.clone(), st.stream.clone(), st.markers, st.disk.clone(), st.background.clone())
         };
         let streaming = engine.is_streaming();
-        self.tick_take_card(matches!(rec, RecState::Recording { .. }), last.as_ref());
         let mut status_line: Option<(String, Color32)> = None;
         let mut marker_clicked = false;
         let mut clip_clicked = false;
@@ -2101,14 +2297,53 @@ impl App {
             RecState::Recording { since, folder } => {
                 let t = since.elapsed();
                 let blink = (t.as_millis() / 600) % 2 == 0;
-                let btn = pill(RichText::new(format!("■  REC  {}", fmt_clock(t))).size(15.0).strong().color(Color32::WHITE), if blink { RED } else { Color32::from_rgb(200, 40, 52) });
-                if ui.add(btn).on_hover_text(format!("Stop recording (Ctrl/Cmd+R)\nRecording to {}", folder.display())).clicked() {
-                    self.toggle_record();
+                // Held for a second to stop, so a stray click can't split the take.
+                let hint = self.rec_hold.is_some() || self.rec_hint_until.is_some_and(|u| Instant::now() < u);
+                let text = if hint { "■  Hold to stop".to_string() } else { format!("■  REC  {}", fmt_clock(t)) };
+                let btn = pill(RichText::new(text).size(15.0).strong().color(Color32::WHITE), if blink { RED } else { Color32::from_rgb(200, 40, 52) });
+                let r = ui.add(btn).on_hover_text(format!("Hold for a second to stop recording (the key{} asks first)\nRecording to {}", self.key_hint(Builtin::Record), folder.display()));
+                let down = r.is_pointer_button_down_on() || self.test_hold;
+                match (down, self.rec_hold) {
+                    (true, _) if self.rec_hold_spent => {}
+                    (true, None) => self.rec_hold = Some(Instant::now()),
+                    (true, Some(since)) => {
+                        let f = (since.elapsed().as_secs_f32() / REC_HOLD_SECS).min(1.0);
+                        // A white fill grows across the pill while it's held.
+                        let fill = Rect::from_min_size(r.rect.min, vec2(r.rect.width() * f, r.rect.height()));
+                        ui.painter().with_clip_rect(fill).rect_filled(r.rect, 17.0, Color32::from_white_alpha(70));
+                        if f >= 1.0 {
+                            self.rec_hold = None;
+                            self.rec_hold_spent = true;
+                            if let Some(e) = &self.engine {
+                                e.stop_recording();
+                            }
+                        }
+                        ui.ctx().request_repaint();
+                    }
+                    (false, held) => {
+                        if held.is_some() {
+                            // Let go too soon: nothing happens, but say how.
+                            self.rec_hint_until = Some(Instant::now() + Duration::from_millis(1500));
+                        }
+                        self.rec_hold = None;
+                        self.rec_hold_spent = false;
+                    }
                 }
                 let mtext = if markers > 0 { format!("◆ Marker ({markers})") } else { "◆ Marker".into() };
-                if ui.add(egui::Button::new(mtext).min_size(vec2(0.0, 30.0))).on_hover_text(format!("Mark this moment{}: becomes a chapter and a timeline marker", self.key_hint(Builtin::Marker))).clicked() {
+                let gap = ui.spacing().item_spacing.x;
+                ui.spacing_mut().item_spacing.x = 2.0;
+                if ui.add(egui::Button::new(mtext).min_size(vec2(0.0, 30.0))).on_hover_text(format!("Mark this moment{}: becomes a chapter and a timeline marker. {} adds one and asks for its name", self.key_hint(Builtin::Marker), self.key_label_or(Builtin::NamedMarker, "A key set in Settings → Shortcuts"))).clicked() {
                     marker_clicked = true;
                 }
+                let list = ui.add(egui::Button::new("▾").min_size(vec2(22.0, 30.0))).on_hover_text("This take's markers: rename or take them out");
+                ui.spacing_mut().item_spacing.x = gap;
+                if std::mem::take(&mut self.test_marker_list) {
+                    egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(&list));
+                }
+                let take_markers = engine.take_markers();
+                egui::Popup::from_toggle_button_response(&list)
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                    .show(|ui| self.marker_list(ui, &take_markers));
                 if ui
                     .add(egui::Button::new("✂ Clip").min_size(vec2(0.0, 30.0)))
                     .on_hover_text(format!("Save the last {} seconds as a clip in the take's Clips folder{}", self.cfg.output.clip_seconds, self.key_hint(Builtin::Clip)))
@@ -2172,6 +2407,7 @@ impl App {
                 ui.ctx().request_repaint_after(Duration::from_millis(100));
             }
             RecState::Idle => {
+                self.rec_hold_spent = false;
                 let btn = pill(RichText::new("●  RECORD").size(15.0).strong().color(RED), RAISED).stroke(Stroke::new(1.5, RED_DIM));
                 let r = ui.add(btn).on_hover_text("Record every source, the program and the audio (Ctrl/Cmd+R)");
                 if r.clicked() {
@@ -2232,13 +2468,18 @@ impl App {
                 status_line = Some((format!("{live} of {total} destinations live — see Stream panel"), AMBER));
             }
             ui.ctx().request_repaint_after(Duration::from_millis(250));
+        } else if !self.cfg.streaming.destinations.iter().any(|d| d.enabled) {
+            // Nowhere to stream to: a quiet way in, not a big button that can't work.
+            let b = egui::Button::new(RichText::new("◉ Set up streaming").size(13.0).color(ACCENT)).frame(false);
+            let r = ui.add(b);
+            ui.add_space(10.0);
+            if r.on_hover_text("Add a place to stream to (YouTube, Twitch, any RTMP server…) in Settings → Streaming. The GO LIVE button appears once there is one.").clicked() {
+                self.settings = Some(self.new_settings().open_at(Section::Streaming));
+            }
         } else {
-            let has_dest = self.cfg.streaming.destinations.iter().any(|d| d.enabled);
-            let btn = pill(RichText::new("◉  GO LIVE").size(15.0).strong().color(if has_dest { LIVE } else { TEXT_DIM }), RAISED)
-                .stroke(Stroke::new(1.5, if has_dest { Color32::from_rgb(110, 30, 70) } else { LINE }));
+            let btn = pill(RichText::new("◉  GO LIVE").size(15.0).strong().color(LIVE), RAISED).stroke(Stroke::new(1.5, Color32::from_rgb(110, 30, 70)));
             let names: Vec<String> = self.cfg.streaming.destinations.iter().filter(|d| d.enabled).map(|d| d.name.clone()).collect();
-            let tip = if names.is_empty() { "Set up streaming destinations".to_string() } else { format!("Stream to {}", names.join(", ")) };
-            if ui.add(btn).on_hover_text(tip).clicked() {
+            if ui.add(btn).on_hover_text(format!("Stream to {}", names.join(", "))).clicked() {
                 self.toggle_stream();
             }
         }
@@ -2247,7 +2488,24 @@ impl App {
         let everyday = status_line.as_ref().is_none_or(|(_, c)| *c == TEXT_DIM);
         let scheduled = if streaming || !everyday { None } else { self.scheduled_line() };
         let (text, color) = scheduled.or(status_line).unwrap_or_else(|| (self.cfg.output.folder.display().to_string(), TEXT_DIM));
-        ui.add(egui::Label::new(RichText::new(text).color(color).size(12.0)).truncate());
+        // The time of day at the right, the line taking what's left before it.
+        let clock = clock_text(chrono::Local::now().naive_local().time(), self.cfg.ui.clock_12h);
+        let clock_w = 80.0;
+        ui.scope(|ui| {
+            ui.set_max_width((ui.available_width() - clock_w).max(0.0));
+            ui.add(egui::Label::new(RichText::new(text).color(color).size(12.0)).truncate());
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_space(8.0);
+            let b = egui::Button::new(RichText::new(clock).size(14.0).color(TEXT_DIM)).frame(false);
+            let tip = if self.cfg.ui.clock_12h { "The time here. Click for 24-hour time" } else { "The time here. Click for 12-hour time" };
+            if ui.add(b).on_hover_text(tip).clicked() {
+                self.cfg.ui.clock_12h = !self.cfg.ui.clock_12h;
+                self.cfg_dirty = true;
+            }
+        });
+        let secs_left = 60 - chrono::Timelike::second(&chrono::Local::now()) as u64;
+        ui.ctx().request_repaint_after(Duration::from_secs(secs_left.clamp(1, 60)));
         if marker_clicked {
             match self.add_marker(None) {
                 Ok(n) => self.toast(format!("{n} added"), false),
@@ -2544,6 +2802,13 @@ impl App {
         let auto = engine.auto_switch_enabled();
         let auto_st = engine.status.lock_ok().auto_switch.clone();
         let mut chips: Vec<(String, Color32)> = Vec::new();
+        // A source on air with no signal, first.
+        for i in self.scene_offline(&live) {
+            if let Some(src) = engine.sources.get(i) {
+                let how = if src.input.self_managed() { "no signal" } else { "no signal, reconnecting…" };
+                chips.push((format!("⚠ {}: {how}", src.name), RED));
+            }
+        }
         if auto {
             let talking = auto_st.talking.iter().filter(|t| **t).count();
             let text = if auto_st.paused_for > 0.0 { format!("AUTO (paused {:.0}s)", auto_st.paused_for.ceil()) } else if talking > 0 { format!("AUTO · {talking} talking") } else { "AUTO".into() };
@@ -3202,6 +3467,9 @@ impl App {
         let live_name = self.engine.as_ref().map(|e| e.switcher.live().name);
         let preview_name = self.engine.as_ref().and_then(|e| e.switcher.preview()).map(|p| p.name);
         let mut press: Option<(usize, bool)> = None;
+        // Scenes that show a source with no signal: its names.
+        let source_names: Vec<String> = self.engine.as_ref().map(|e| e.sources.iter().map(|s| s.name.clone()).collect()).unwrap_or_default();
+        let no_signal: Vec<Vec<String>> = self.scenes.iter().map(|s| self.scene_offline(s).into_iter().filter_map(|i| source_names.get(i).cloned()).collect()).collect();
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
                 ui.label(RichText::new("TRANSITION").color(TEXT_DIM).size(11.0));
@@ -3272,55 +3540,151 @@ impl App {
                 });
             });
             ui.separator();
-            egui::ScrollArea::horizontal().id_salt("bank").show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    for (i, s) in self.scenes.iter().enumerate() {
-                        let is_live = live_name.as_deref() == Some(s.name.as_str());
-                        let is_preview = preview_name.as_deref() == Some(s.name.as_str());
-                        let key = if i < 9 { format!("{}", i + 1) } else { String::new() };
-                        let (rect, resp) = ui.allocate_exact_size(vec2(132.0, 84.0), Sense::click());
-                        let painter = ui.painter_at(rect);
-                        let fill = if is_live {
-                            RED
-                        } else if is_preview {
-                            GREEN_DIM
-                        } else if resp.hovered() {
-                            Color32::from_rgb(44, 49, 59)
-                        } else {
-                            RAISED
-                        };
-                        painter.rect_filled(rect, 6.0, fill);
-                        if is_preview {
-                            painter.rect_stroke(rect, 6.0, Stroke::new(2.0, GREEN), StrokeKind::Inside);
-                        }
-                        let thumb = Rect::from_min_size(rect.min + vec2(10.0, 10.0), vec2(48.0, 27.0));
-                        painter.rect_filled(thumb, 2.0, Color32::from_black_alpha(120));
-                        for l in &s.layers {
-                            let r = Rect::from_min_size(thumb.min + vec2(l.x * thumb.width(), l.y * thumb.height()), vec2(l.w * thumb.width(), l.h * thumb.height())).intersect(thumb);
-                            painter.rect_filled(r, 1.0, Color32::from_white_alpha(70));
-                            painter.rect_stroke(r, 1.0, Stroke::new(1.0, Color32::from_white_alpha(160)), StrokeKind::Inside);
-                        }
-                        if !s.audio_on.is_empty() || !s.audio_off.is_empty() {
-                            painter.text(thumb.right_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, "♪", FontId::proportional(13.0), Color32::from_white_alpha(180));
-                        }
-                        painter.text(rect.right_top() + vec2(-10.0, 9.0), Align2::RIGHT_TOP, &key, FontId::monospace(13.0), if is_live { Color32::WHITE } else { TEXT_DIM });
-                        let name: String = s.name.chars().take(18).collect();
-                        painter.text(rect.left_bottom() + vec2(10.0, -10.0), Align2::LEFT_BOTTOM, name, FontId::proportional(13.5), Color32::WHITE);
-                        if resp.clicked() {
-                            press = Some((i, ui.input(|inp| inp.modifiers.shift)));
-                        }
-                        let tip = match (i < 9, self.cfg.transition.preview_mode) {
-                            (true, true) => format!("Press {} to preview (Shift+{} cuts to program)", i + 1, i + 1),
-                            (true, false) => format!("Press {} (Shift+{} to cut)", i + 1, i + 1),
-                            _ => "Click to take".into(),
-                        };
-                        resp.on_hover_text(tip);
+            // One row that scrolls, or two when the window is tall enough
+            // and they don't fit in one (the panel grows: see `bank_height`).
+            let gap = ui.spacing().item_spacing.x;
+            let n = self.scenes.len();
+            let one_row = n as f32 * (BANK_BUTTON.x + gap) - gap;
+            self.bank_overflows = one_row > ui.available_width() + 0.5;
+            let rows = self.bank_rows.max(1);
+            let per_row = n.div_ceil(rows).max(1);
+            let mut area = egui::ScrollArea::horizontal().id_salt("bank");
+            if let Some(x) = self.bank_scroll_to.take() {
+                area = area.horizontal_scroll_offset(x);
+            }
+            let scenes = self.scenes.clone();
+            let out = area.show(ui, |ui| {
+                ui.vertical(|ui| {
+                    for row in scenes.chunks(per_row).enumerate() {
+                        ui.horizontal(|ui| {
+                            for (j, s) in row.1.iter().enumerate() {
+                                let i = row.0 * per_row + j;
+                                let tags = (live_name.as_deref() == Some(s.name.as_str()), preview_name.as_deref() == Some(s.name.as_str()));
+                                if let Some(p) = self.scene_button(ui, i, s, tags, no_signal.get(i)) {
+                                    press = Some(p);
+                                }
+                            }
+                        });
                     }
                 });
             });
+            // Scenes out of sight: a fade and an arrow at that edge (with how many), to scroll a page.
+            let view = out.inner_rect;
+            let (x, content) = (out.state.clamped_offset().x, out.content_size.x);
+            let step = BANK_BUTTON.x + gap;
+            let hidden_left = ((x / step).floor().max(0.0) as usize * rows).min(n);
+            let hidden_right = (((content - x - view.width()) / step).ceil().max(0.0) as usize * rows).min(n);
+            let mut edge = |ui: &mut egui::Ui, left: bool, count: usize| {
+                let w = 70.0;
+                let r = if left { Rect::from_min_size(view.min, vec2(w, view.height())) } else { Rect::from_min_size(pos2(view.right() - w, view.top()), vec2(w, view.height())) };
+                let resp = ui.interact(r, ui.scope_id().with(("bank_edge", left)), Sense::click());
+                let p = ui.painter_at(r);
+                let (solid, clear) = (PANEL, PANEL.gamma_multiply(0.0));
+                let mut mesh = egui::Mesh::default();
+                let (a, b) = if left { (solid, clear) } else { (clear, solid) };
+                mesh.colored_vertex(r.left_top(), a);
+                mesh.colored_vertex(r.right_top(), b);
+                mesh.colored_vertex(r.right_bottom(), b);
+                mesh.colored_vertex(r.left_bottom(), a);
+                mesh.add_triangle(0, 1, 2);
+                mesh.add_triangle(0, 2, 3);
+                p.add(mesh);
+                let label = if left { format!("‹ {count}") } else { format!("+{count} ›") };
+                let galley = p.layout_no_wrap(label, FontId::proportional(14.0), Color32::WHITE);
+                let size = galley.size() + vec2(14.0, 8.0);
+                let chip = if left { Rect::from_min_size(r.left_center() + vec2(2.0, -size.y / 2.0), size) } else { Rect::from_min_size(r.right_center() - vec2(size.x + 2.0, size.y / 2.0), size) };
+                p.rect_filled(chip, size.y / 2.0, if resp.hovered() { ACCENT } else { Color32::from_rgb(58, 64, 78) });
+                p.galley(chip.min + vec2(7.0, 4.0), galley, Color32::WHITE);
+                let more = if count == 1 { "1 more scene".to_string() } else { format!("{count} more scenes") };
+                if resp.on_hover_text(more).clicked() {
+                    self.bank_scroll_to = Some(if left { (x - view.width() + step).max(0.0) } else { x + view.width() - step });
+                }
+            };
+            if x > 1.0 {
+                edge(ui, true, hidden_left.max(1));
+            }
+            if x + view.width() < content - 1.0 {
+                edge(ui, false, hidden_right.max(1));
+            }
         });
         if let Some((i, cut)) = press {
             self.press_scene(i, cut);
+        }
+    }
+
+    /// One scene button: its number, a live picture of the scene (its
+    /// sources' multiview pictures where its frames are), its name, ♪ for
+    /// scene sound and ⚠ when a source in it has no signal. Some((i, cut)) when pressed.
+    fn scene_button(&mut self, ui: &mut egui::Ui, i: usize, s: &Scene, (is_live, is_preview): (bool, bool), missing: Option<&Vec<String>>) -> Option<(usize, bool)> {
+        let key = if i < 9 { format!("{}", i + 1) } else { String::new() };
+        let (rect, resp) = ui.allocate_exact_size(BANK_BUTTON, Sense::click());
+        let painter = ui.painter_at(rect);
+        let fill = if is_live {
+            RED
+        } else if is_preview {
+            GREEN_DIM
+        } else if resp.hovered() {
+            Color32::from_rgb(44, 49, 59)
+        } else {
+            RAISED
+        };
+        painter.rect_filled(rect, 6.0, fill);
+        if is_preview {
+            painter.rect_stroke(rect, 6.0, Stroke::new(2.0, GREEN), StrokeKind::Inside);
+        }
+        let canvas = self.engine.as_ref().map(|e| e.info.canvas).unwrap_or((1920, 1080));
+        let tw = 76.0;
+        let th = (tw * canvas.1 as f32 / canvas.0.max(1) as f32).clamp(20.0, 46.0);
+        let thumb = Rect::from_min_size(rect.min + vec2(8.0, 8.0), vec2(tw, th));
+        self.scene_thumb(&painter, thumb, s, canvas);
+        if !s.audio_on.is_empty() || !s.audio_off.is_empty() {
+            painter.text(thumb.right_bottom() + vec2(6.0, 0.0), Align2::LEFT_BOTTOM, "♪", FontId::proportional(13.0), Color32::from_white_alpha(180));
+        }
+        painter.text(rect.right_top() + vec2(-10.0, 9.0), Align2::RIGHT_TOP, &key, FontId::monospace(13.0), if is_live { Color32::WHITE } else { TEXT_DIM });
+        let missing = missing.filter(|m| !m.is_empty());
+        if missing.is_some() {
+            painter.text(rect.right_top() + vec2(-10.0, 28.0), Align2::RIGHT_TOP, "⚠", FontId::proportional(14.0), if is_live { Color32::WHITE } else { AMBER });
+        }
+        // The name, cut short with "…" when it's long (the whole of it is in the hover text).
+        let mut job = egui::text::LayoutJob::simple_singleline(s.name.clone(), FontId::proportional(13.5), Color32::WHITE);
+        job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - 18.0);
+        let galley = ui.fonts_mut(|f| f.layout_job(job));
+        let elided = galley.elided;
+        painter.galley(pos2(rect.left() + 9.0, rect.bottom() - 9.0 - galley.size().y), galley, Color32::WHITE);
+        let press = resp.clicked().then(|| (i, ui.input(|inp| inp.modifiers.shift)));
+        let tip = match (i < 9, self.cfg.transition.preview_mode) {
+            (true, true) => format!("Press {} to preview (Shift+{} cuts to program)", i + 1, i + 1),
+            (true, false) => format!("Press {} (Shift+{} to cut)", i + 1, i + 1),
+            _ => "Click to take".into(),
+        };
+        let tip = if elided { format!("{}\n{tip}", s.name) } else { tip };
+        let tip = match missing {
+            Some(m) => format!("{tip}\n⚠ No signal from {}", m.join(", ")),
+            None => tip,
+        };
+        resp.on_hover_text(tip);
+        press
+    }
+
+    /// A small live picture of a scene: each frame's source as the
+    /// multiview last showed it (no extra GPU work), placed, cropped and
+    /// filled as on air; a grey box for a source with no picture yet.
+    fn scene_thumb(&self, painter: &egui::Painter, thumb: Rect, scene: &Scene, canvas: (u32, u32)) {
+        painter.rect_filled(thumb, 2.0, Color32::from_black_alpha(140));
+        let p = painter.with_clip_rect(thumb.intersect(painter.clip_rect()));
+        let k = thumb.width() / canvas.0.max(1) as f32;
+        for l in &scene.layers {
+            let Some((_, tex)) = self.textures.get(&format!("src{}", l.source)) else {
+                let r = Rect::from_min_size(thumb.min + vec2(l.x * thumb.width(), l.y * thumb.height()), vec2(l.w * thumb.width(), l.h * thumb.height())).intersect(thumb);
+                p.rect_filled(r, 1.0, Color32::from_white_alpha(70));
+                p.rect_stroke(r, 1.0, Stroke::new(1.0, Color32::from_white_alpha(160)), StrokeKind::Inside);
+                continue;
+            };
+            let [w, h] = tex.size();
+            let look = self.cfg.sources.get(l.source).map(|c| c.look.clone()).unwrap_or_default();
+            let (uv, (x, y, fw, fh)) = thumb_view(look.crop_rect(), look.cropped_aspect(w as f32 / h.max(1) as f32), l, canvas);
+            let r = Rect::from_min_size(thumb.min + vec2(x * k, y * k), vec2(fw * k, fh * k));
+            p.image(tex.id(), r, uv, Color32::WHITE);
         }
     }
 
@@ -3621,6 +3985,98 @@ impl App {
             self.title_edit = None;
         } else {
             self.title_edit = Some((i, title, subtitle));
+        }
+    }
+
+    /// Shift+M: the marker's already in, at the moment the key was pressed;
+    /// this names it. Cancel keeps the name it has ("Marker 3").
+    fn marker_name_dialog(&mut self, ctx: &egui::Context) {
+        let Some((at, own, mut text)) = self.marker_name.clone() else { return };
+        let mut done = false;
+        let mut apply = false;
+        let r = egui::Modal::new(egui::Id::unique("marker_name")).show(ctx, |ui| {
+            ui.set_width(360.0);
+            ui.heading("Name this marker");
+            ui.label(RichText::new(format!("{own} at {}: the time was kept when you pressed the key.", fmt_clock(Duration::from_nanos(at.max(0) as u64)))).color(TEXT_DIM));
+            ui.add_space(4.0);
+            let field = ui.add(egui::TextEdit::singleline(&mut text).hint_text(own.as_str()).desired_width(340.0));
+            if ui.memory(|m| m.focused().is_none()) {
+                field.request_focus();
+            }
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                let enter = ui.input(|i| i.key_pressed(Key::Enter));
+                if ui.add(egui::Button::new(RichText::new("OK").color(Color32::WHITE)).fill(ACCENT)).clicked() || enter {
+                    apply = true;
+                    done = true;
+                }
+                if ui.button("Cancel").on_hover_text(format!("Keep it as \"{own}\"")).clicked() {
+                    done = true;
+                }
+            });
+        });
+        if apply && !text.trim().is_empty() {
+            if let Some(e) = &self.engine {
+                match e.rename_marker(at, &text) {
+                    Ok(()) => self.toast(format!("Marker \"{}\" added", text.trim()), false),
+                    Err(err) => self.toast(format!("Couldn't name the marker: {err:#}"), true),
+                }
+            }
+        }
+        self.marker_name = if done || r.should_close() { None } else { Some((at, own, text)) };
+    }
+
+    /// The list under ◆ Marker ▾: this take's markers, to rename or take out
+    /// until it stops.
+    fn marker_list(&mut self, ui: &mut egui::Ui, markers: &[crate::engine::recorder::Marker]) {
+        ui.set_min_width(380.0);
+        if markers.is_empty() {
+            ui.label(RichText::new("No markers in this take yet.").color(TEXT_DIM));
+            return;
+        }
+        ui.label(RichText::new("Names can be changed until the take stops.").size(11.5).color(TEXT_DIM));
+        let mut rename: Option<(crate::media::Ns, String)> = None;
+        let mut delete: Option<crate::media::Ns> = None;
+        egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+            egui::Grid::new("marker_list").num_columns(4).spacing([10.0, 6.0]).show(ui, |ui| {
+                for m in markers {
+                    ui.label(RichText::new(fmt_clock(Duration::from_nanos(m.at.max(0) as u64))).monospace());
+                    if m.clip {
+                        ui.label(format!("✂ {}", m.name)).on_hover_text("Left by a saved clip (in the take's Clips folder): on the editing timelines, not a chapter");
+                    } else {
+                        let mut text = match &self.marker_edit {
+                            Some((at, t)) if *at == m.at => t.clone(),
+                            _ => m.name.clone(),
+                        };
+                        let r = ui.add_sized([180.0, 20.0], egui::TextEdit::singleline(&mut text));
+                        if r.changed() {
+                            self.marker_edit = Some((m.at, text.clone()));
+                        }
+                        if r.lost_focus() {
+                            if self.marker_edit.as_ref().is_some_and(|(at, _)| *at == m.at) {
+                                if !text.trim().is_empty() && text.trim() != m.name {
+                                    rename = Some((m.at, text.clone()));
+                                }
+                                self.marker_edit = None;
+                            }
+                        }
+                    }
+                    ui.label(RichText::new(&m.scene).color(TEXT_DIM)).on_hover_text("On air at the time");
+                    if !m.clip && ui.small_button("✕").on_hover_text("Take this marker out").clicked() {
+                        delete = Some(m.at);
+                    }
+                    ui.end_row();
+                }
+            });
+        });
+        let Some(e) = &self.engine else { return };
+        let result = match (rename, delete) {
+            (Some((at, name)), _) => e.rename_marker(at, &name),
+            (None, Some(at)) => e.delete_marker(at),
+            _ => Ok(()),
+        };
+        if let Err(err) = result {
+            self.toast(format!("{err:#}"), true);
         }
     }
 
@@ -4571,6 +5027,14 @@ impl App {
                 sc.remap_sources(&new_of);
             }
         }
+        // Close-ups just cut from a camera also get a scene with them side by side.
+        if !own_scenes {
+            let both = crate::scene::split_scenes(&new.sources, &|i| !old_uids.contains(&new.sources[i].uid), &new.effective_scenes());
+            if !both.is_empty() {
+                new.scenes = new.effective_scenes();
+                new.scenes.extend(both);
+            }
+        }
         let mut notes = Vec::new();
         if !restart {
             if let Some(e) = self.engine.as_mut() {
@@ -4730,7 +5194,10 @@ impl eframe::App for App {
         }
 
         egui::Panel::top("header").exact_size(54.0).frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(14, 6))).show(ui, |ui| self.header(ui));
-        egui::Panel::bottom("bank").exact_size(104.0).frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(14, 6))).show(ui, |ui| self.scene_bank(ui));
+        // A second row of scenes when they don't fit in one and the window is tall.
+        self.bank_rows = if self.bank_overflows && ctx.content_rect().height() >= 1000.0 { 2 } else { 1 };
+        let bank_height = 104.0 + (self.bank_rows - 1) as f32 * (BANK_BUTTON.y + 6.0);
+        egui::Panel::bottom("bank").exact_size(bank_height).frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(14, 6))).show(ui, |ui| self.scene_bank(ui));
         if self.log_open {
             egui::Panel::bottom("log").resizable(true).default_size(150.0).frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin::same(8))).show(ui, |ui| self.log_panel(ui));
         }
@@ -4782,6 +5249,7 @@ impl eframe::App for App {
         }
         self.confirm_dialog(&ctx);
         self.title_dialog(&ctx);
+        self.marker_name_dialog(&ctx);
         self.precheck_dialog(&ctx);
         self.sync_dialog(&ctx);
         self.rescue_card(&ctx);
@@ -4969,6 +5437,30 @@ fn unique_name(scenes: &[Scene], base: &str) -> String {
     (2..).map(|i| format!("{base} {i}")).find(|n| !scenes.iter().any(|s| &s.name == n)).unwrap()
 }
 
+/// Where a layer's picture goes on a scene thumbnail (x, y, w, h in canvas
+/// pixels) and the part of the source texture shown there: the frame's
+/// placement (fit, fill, zoom) of the picture after the source's own crop.
+fn thumb_view(crop: [f32; 4], cropped_aspect: f32, layer: &Layer, canvas: (u32, u32)) -> (Rect, (f32, f32, f32, f32)) {
+    let (rect, part) = crate::scene::place(layer, canvas, cropped_aspect);
+    let u = |f: f32| crop[0] + f * (crop[2] - crop[0]);
+    let v = |f: f32| crop[1] + f * (crop[3] - crop[1]);
+    (Rect::from_min_max(pos2(u(part[0]), v(part[1])), pos2(u(part[2]), v(part[3]))), rect)
+}
+
+/// Where to cut when sources on air have just dropped: the first one's
+/// chosen scene, unless it's on already or needs a source with no signal too.
+fn cut_after_drop(dropped: &[String], sources: &[crate::config::SourceConfig], scenes: &[Scene], offline: &[bool], live: &str) -> Option<Scene> {
+    let target = dropped.iter().filter_map(|n| sources.iter().find(|s| &s.name == n)).map(|s| s.on_drop_scene.as_str()).find(|t| !t.is_empty())?;
+    let scene = scenes.iter().find(|s| s.name == target)?;
+    let blind = scene.sources().iter().any(|i| offline.get(*i).copied().unwrap_or(false));
+    (scene.name != live && !blind).then(|| scene.clone())
+}
+
+/// The time of day for the header: "15:05", or "3:05 PM".
+fn clock_text(t: chrono::NaiveTime, twelve: bool) -> String {
+    if twelve { t.format("%-I:%M %p").to_string() } else { t.format("%H:%M").to_string() }
+}
+
 fn fmt_clock(d: Duration) -> String {
     let s = d.as_secs();
     format!("{:02}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60)
@@ -5057,5 +5549,60 @@ fn precheck_verdict(items: &[CheckItem], done: bool) -> (String, Color32) {
         Level::Warn => (format!("{warnings} {}: you can still start", if warnings == 1 { "warning" } else { "warnings" }), AMBER),
         Level::Ok if done => ("Ready to record".into(), GREEN),
         Level::Ok => ("Checking…".into(), TEXT_DIM),
+    }
+}
+
+#[cfg(test)]
+mod desk_tests {
+    use super::clock_text;
+    use chrono::NaiveTime;
+
+    #[test]
+    fn cuts_away_from_a_dropped_source_once_and_safely() {
+        use super::{cut_after_drop, Scene};
+        use crate::config::SourceConfig;
+        let names: Vec<String> = ["Cam 1", "Cam 2", "Cam 3"].iter().map(|s| s.to_string()).collect();
+        let scenes: Vec<Scene> = crate::scene::presets(&names);
+        let wide = scenes[0].name.clone();
+        let mut sources: Vec<SourceConfig> = names.iter().map(|n| SourceConfig { name: n.clone(), ..Default::default() }).collect();
+        let none = [false, true, false];
+        // Not set: stays.
+        assert!(cut_after_drop(&["Cam 2".into()], &sources, &scenes, &none, &scenes[1].name).is_none());
+        sources[1].on_drop_scene = wide.clone();
+        assert_eq!(cut_after_drop(&["Cam 2".into()], &sources, &scenes, &none, &scenes[1].name).map(|s| s.name), Some(wide.clone()));
+        // Already on: nothing to do.
+        assert!(cut_after_drop(&["Cam 2".into()], &sources, &scenes, &none, &wide).is_none());
+        // The chosen scene has no signal either.
+        assert!(cut_after_drop(&["Cam 2".into()], &sources, &scenes, &[true, true, false], &scenes[1].name).is_none());
+        // A scene that's gone.
+        sources[1].on_drop_scene = "Nowhere".into();
+        assert!(cut_after_drop(&["Cam 2".into()], &sources, &scenes, &none, &scenes[1].name).is_none());
+    }
+
+    #[test]
+    fn scene_thumbnails_crop_and_fill_as_on_air() {
+        use super::{thumb_view, Layer};
+        // Full frame, no crop: the whole texture over the whole canvas.
+        let full = Layer::at(0, 0.0, 0.0, 1.0, 1.0);
+        let (uv, r) = thumb_view([0.0, 0.0, 1.0, 1.0], 16.0 / 9.0, &full, (1920, 1080));
+        assert_eq!((uv.min.x, uv.min.y, uv.max.x, uv.max.y), (0.0, 0.0, 1.0, 1.0));
+        assert_eq!(r, (0.0, 0.0, 1920.0, 1080.0));
+        // Cropped to its left half (taller than square), filling a square frame: all of that half's width, its middle rows.
+        let mut sq = Layer::at(0, 0.0, 0.0, 0.5, 1.0);
+        sq.w = 1080.0 / 1920.0;
+        sq.fill = true;
+        let (uv, r) = thumb_view([0.0, 0.0, 0.5, 1.0], 8.0 / 9.0, &sq, (1920, 1080));
+        assert!((r.2 - 1080.0).abs() < 0.5 && (r.3 - 1080.0).abs() < 0.5);
+        assert_eq!((uv.min.x, uv.max.x), (0.0, 0.5));
+        assert!((uv.min.y - 1.0 / 18.0).abs() < 1e-4 && (uv.max.y - 17.0 / 18.0).abs() < 1e-4, "{uv:?}");
+    }
+
+    #[test]
+    fn header_clock_in_12_and_24_hours() {
+        let t = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap();
+        assert_eq!(clock_text(t(15, 5), false), "15:05");
+        assert_eq!(clock_text(t(15, 5), true), "3:05 PM");
+        assert_eq!(clock_text(t(0, 30), true), "12:30 AM");
+        assert_eq!(clock_text(t(9, 0), false), "09:00");
     }
 }
