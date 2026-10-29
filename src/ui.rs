@@ -1956,6 +1956,13 @@ impl App {
         let pip = self.scenes.iter().position(|s| s.name == "Picture in picture").unwrap_or(0);
         let next = match step {
             0 if t > 2.0 => {
+                // A show chosen (takes are named after it).
+                if let Ok(show) = std::env::var("CUTAWAY_UI_TEST_SHOW") {
+                    self.cfg.ui.profile = show;
+                    if let Some(e) = &self.engine {
+                        let _ = e.update_config(&self.cfg);
+                    }
+                }
                 self.press_scene(pip, false);
                 if std::env::var_os("CUTAWAY_UI_TEST_PREVIEW").is_some() {
                     // Picture in picture on air, the third scene waiting in preview.

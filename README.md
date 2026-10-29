@@ -252,6 +252,10 @@ Take_2026-10-16_19-30-02/
   Take.txt                           devices, encoders, settings, markers, files
 ```
 
+Takes start with the **Take name** from Settings → Recording. Leave it as
+"Take" and, once you've chosen a show, takes are named after the show instead
+(`My_Show_2026-10-16_19-30-02`), and so is the Resolve project the script makes.
+
 ### Switching and graphics
 
 - **Scenes.** Preset scenes (each source full screen, side by side,
@@ -460,7 +464,8 @@ Take_2026-10-16_19-30-02/
   streaming) per production and switch between them from the header. If
   the setup you're on isn't a show yet, switching saves it as "My setup"
   first, so nothing is lost. Rename a show in place, and deleting or
-  replacing one asks first.
+  replacing one asks first. Takes are named after the show you're on (unless
+  you've given them a Take name of your own).
 - **Pre-show check:** one button checks every source for a picture, every
   input for sound, the disk, the encoder, and that every stream server
   answers. It can run automatically before recording or going live.

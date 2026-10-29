@@ -1305,6 +1305,7 @@ impl SettingsUi {
     fn recording(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
         title(ui, "Recording", "Where takes go, how they're encoded, and what's saved with them for editing.");
         let scan = self.encoders.lock_ok().clone();
+        let show = self.draft.ui.profile.clone();
         let o = &mut self.draft.output;
         let (pw, ph, pfps) = (self.draft.program.width, self.draft.program.height, self.draft.program.fps);
         egui::Grid::new("recording").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
@@ -1324,7 +1325,12 @@ impl SettingsUi {
             label(ui, "Take name");
             ui.horizontal(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut o.take_prefix).desired_width(160.0));
-                hint(ui, &format!("→ {}_{}", crate::util::safe_file_name(if o.take_prefix.trim().is_empty() { "Take" } else { &o.take_prefix }), chrono::Local::now().format("%Y-%m-%d_%H-%M-%S")));
+                let named = crate::config::take_prefix_for(&o.take_prefix, &show);
+                let mut h = format!("→ {named}_{}", chrono::Local::now().format("%Y-%m-%d_%H-%M-%S"));
+                if o.take_prefix.trim().is_empty() || o.take_prefix.trim().eq_ignore_ascii_case("take") {
+                    h.push_str(if show.trim().is_empty() { "  (choose a show and takes are named after it)" } else { "  (named after the show)" });
+                }
+                hint(ui, &h);
             });
             ui.end_row();
             label(ui, "Backup copy");

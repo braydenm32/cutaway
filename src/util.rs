@@ -50,6 +50,29 @@ pub fn safe_file_name(s: &str) -> String {
     if t.is_empty() { "untitled".into() } else { t }
 }
 
+/// A name that's safe as a file or folder name on Mac and Windows: no
+/// reserved characters or Windows device names (CON, COM1…), not too long.
+pub fn safe_folder_name(s: &str, fallback: &str) -> String {
+    let mut t = String::new();
+    // "Friday Night: Live!" → Friday_Night_Live, not Friday_Night__Live_.
+    for c in safe_file_name(if s.chars().any(|c| c.is_alphanumeric()) { s } else { fallback }).chars() {
+        if !(c == '_' && t.ends_with('_')) {
+            t.push(c);
+        }
+    }
+    let mut t = t.trim_matches('_').to_string();
+    if t.chars().count() > 60 {
+        t = t.chars().take(60).collect::<String>().trim_end_matches(['_', '-']).to_string();
+    }
+    let stem = t.to_ascii_uppercase();
+    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && stem.as_bytes()[3].is_ascii_digit());
+    if reserved {
+        t.push('_');
+    }
+    t
+}
+
 /// CRC-32 (as zip files use it).
 pub fn crc32(data: &[u8]) -> u32 {
     let mut crc = !0u32;
@@ -158,6 +181,16 @@ pub fn guard<T>(what: &str, f: impl FnOnce() -> anyhow::Result<T>) -> anyhow::Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn folder_names_are_safe_everywhere() {
+        assert_eq!(safe_folder_name("Friday Night: Live?", "Take"), "Friday_Night_Live");
+        assert_eq!(safe_folder_name("con", "Take"), "con_");
+        assert_eq!(safe_folder_name("COM3", "Take"), "COM3_");
+        assert_eq!(safe_folder_name("Comedy", "Take"), "Comedy");
+        assert_eq!(safe_folder_name("///", "Take"), "Take");
+        assert_eq!(safe_folder_name(&"a".repeat(100), "Take").len(), 60);
+    }
 
     #[test]
     fn percent_decoding() {
