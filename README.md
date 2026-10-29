@@ -659,7 +659,10 @@ Video Extensions** on some PCs.
   clears the box).
 - **The Settings window** can be dragged by its title and resized from its
   corner, so it needn't cover the camera you're adjusting. It opens where you
-  left it on this computer; **Centre** puts it back. While it's open, click the
+  left it on this computer; **Centre** at the top (or double-clicking the
+  title) puts it back. **Revert** sits on its own at the bottom left; **OK**
+  and **Apply** are only on when something has changed (Cancel, ✕ or Esc
+  closes). While it's open, click the
   main window and your show's keys work again (it says **Show keys active**)
   as long as the pointer's away from Settings; click in Settings to type there.
 - **Starting up:** the window opens straight away; while the cameras come up,

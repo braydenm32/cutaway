@@ -589,8 +589,9 @@ impl SettingsUi {
         } else {
             esc
         };
+        // Its own title bar (below): the title, Centre and ✕.
         let mut window = egui::Window::new("Settings")
-            .open(&mut open)
+            .title_bar(false)
             .collapsible(false)
             .resizable(true)
             .min_size(MIN_SIZE)
@@ -600,7 +601,25 @@ impl SettingsUi {
             window = window.current_pos(middle.min);
         }
         let bar_h = self.bar_h;
+        let mut centre = false;
         let shown = window.show(ctx, |ui| {
+                // The title bar: double-click the title (or Centre) to put the
+                // window back in the middle; ✕ closes, as Cancel does.
+                let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), egui::Sense::hover());
+                let title = ui.interact(row.shrink2(vec2(120.0, 0.0)), ui.scope_id().with("settings_title"), egui::Sense::click());
+                ui.painter().text(row.center(), egui::Align2::CENTER_CENTER, "Settings", egui::FontId::proportional(TEXT_HEADING), Color32::from_gray(200));
+                if title.on_hover_text("Double-click to put this window back in the middle").double_clicked() {
+                    centre = true;
+                }
+                let close = egui::Rect::from_min_size(egui::pos2(row.right() - 28.0, row.top() + 2.0), vec2(26.0, 26.0));
+                if ui.put(close, egui::Button::new(RichText::new("✕").size(TEXT_STATE)).frame(false)).on_hover_text("Close (Esc)").clicked() {
+                    open = false;
+                }
+                let c = egui::Rect::from_min_size(egui::pos2(close.left() - 74.0, row.top() + 4.0), vec2(66.0, 22.0));
+                if ui.put(c, egui::Button::new(RichText::new("Centre").size(TEXT_SMALL))).on_hover_text("Put this window back in the middle, at its usual size (or double-click the title)").clicked() {
+                    centre = true;
+                }
+                ui.separator();
                 // The window's size, as the person has dragged it: the pages
                 // take what the bottom bar leaves (exactly, or it would grow).
                 let size = ui.available_size();
@@ -699,6 +718,11 @@ impl SettingsUi {
                     _ => None,
                 };
                 ui.horizontal(|ui| {
+                    // Revert on its own at the left, away from OK.
+                    if ui.add_enabled(self.dirty(), egui::Button::new("Revert")).on_hover_text("Undo every change since the last save").clicked() {
+                        self.draft = self.original.clone();
+                        self.scene_rename = None;
+                    }
                     if let Err(e) = &valid {
                         let r = ui.add(egui::Label::new(RichText::new(format!("⚠ {}", e.message)).color(AMBER)).sense(egui::Sense::click()));
                         let r = r.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Click to go there");
@@ -737,8 +761,9 @@ impl SettingsUi {
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let can_apply = self.dirty() && valid.is_ok() && !blocked;
-                        if ui.add_enabled(can_apply || (!self.dirty() && valid.is_ok()), egui::Button::new("OK").min_size(vec2(72.0, 28.0))).clicked() {
-                            action = if self.dirty() { self.apply(true, info) } else { SettingsAction::Close };
+                        // Nothing changed: nothing to apply (Cancel or ✕ closes).
+                        if ui.add_enabled(can_apply, egui::Button::new("OK").min_size(vec2(72.0, 28.0))).on_disabled_hover_text(if self.dirty() { "Fix what's marked first" } else { "Nothing has changed" }).clicked() {
+                            action = self.apply(true, info);
                         }
                         if ui.add_enabled(can_apply, egui::Button::new("Apply").min_size(vec2(72.0, 28.0))).clicked() {
                             action = self.apply(false, info);
@@ -750,17 +775,6 @@ impl SettingsUi {
                                 action = SettingsAction::Close;
                             }
                         }
-                        if ui.add_enabled(self.dirty(), egui::Button::new("Revert")).on_hover_text("Undo every change since the last save").clicked() {
-                            self.draft = self.original.clone();
-                            self.scene_rename = None;
-                        }
-                        if ui.small_button("Centre").on_hover_text("Put this window back in the middle, at its usual size").clicked() {
-                            self.centre = true;
-                            self.place = None;
-                            if let Some(f) = Place::file() {
-                                let _ = std::fs::remove_file(f);
-                            }
-                        }
                         if self.keys_beside(ui.ctx()) {
                             ui.label(RichText::new("⌨ Show keys active").color(TEXT_DIM))
                                 .on_hover_text("Your show's keys work while the pointer's over the main window. Click in Settings to type here again.");
@@ -769,6 +783,13 @@ impl SettingsUi {
                 });
                 self.bar_h = ui.min_rect().bottom() - top + ui.spacing().item_spacing.y;
             });
+        if centre {
+            self.centre = true;
+            self.place = None;
+            if let Some(f) = Place::file() {
+                let _ = std::fs::remove_file(f);
+            }
+        }
         self.track_window(ctx, shown.map(|r| r.response.rect), screen);
         if let Some(a) = self.pending.take() {
             action = a;
