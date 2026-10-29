@@ -418,12 +418,7 @@ impl SettingsUi {
                 SourceKind::Framed | SourceKind::VirtualPtz => "Output size",
                 _ => "Picture size",
             });
-            ui.horizontal(|ui| {
-                size_combo(ui, "src_size", &mut src.width, &mut src.height);
-                ui.add(egui::DragValue::new(&mut src.width).range(160..=7680).speed(2));
-                ui.label("×");
-                ui.add(egui::DragValue::new(&mut src.height).range(90..=4320).speed(2));
-            });
+            size_combo(ui, "src_size", &mut src.width, &mut src.height, (7680, 4320));
             ui.end_row();
             if !matches!(kind, SourceKind::Framed | SourceKind::VirtualPtz) {
                 label(ui, "Frame rate");

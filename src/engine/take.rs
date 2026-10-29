@@ -51,8 +51,11 @@ impl Engine {
     pub fn disk_status(&self) -> Option<DiskStatus> {
         let cfg = self.config();
         let channels: Vec<(u32, bool)> = self.audio.iter().map(|a| (a.input.channels(), a.record)).collect();
-        let rate = health::estimate_rate(&cfg, &channels);
-        health::disk_space(&cfg.output.folder).map(|(free, total)| DiskStatus { path: cfg.output.folder.clone(), free, total, rate, measured: false })
+        let estimate = health::estimate_rate(&cfg, &channels);
+        // While recording, the settled measured rate (the header's figure), else the estimate.
+        let live = self.status.lock_ok().disk.clone().filter(|d| d.measured);
+        let (rate, measured) = live.map(|d| (d.rate, true)).unwrap_or((estimate, false));
+        health::disk_space(&cfg.output.folder).map(|(free, total)| DiskStatus { path: cfg.output.folder.clone(), free, total, rate, measured })
     }
 
     pub fn start_recording(&self) -> Result<PathBuf> {

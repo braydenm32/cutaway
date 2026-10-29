@@ -51,7 +51,20 @@ impl SettingsUi {
             ui.end_row();
         });
         ui.add_space(8.0);
-        let addr = if self.draft.remote.enabled { format!("http://<this computer's address>:{}/prompter", self.draft.remote.port) } else { "turn on Remote control (Settings → Remote & MIDI) first".into() };
-        hint(ui, &format!("On a tablet or phone: {addr} (tap to roll or pause). On the second screen: choose \"The teleprompter\" in Screens & webcam."));
+        if self.draft.remote.enabled {
+            let ip = crate::engine::netsrc::local_ip().unwrap_or_else(|| "this-computer".into());
+            let url = format!("http://{ip}:{}/prompter", self.draft.remote.port);
+            ui.horizontal_wrapped(|ui| {
+                ui.label("On a tablet or phone on the same Wi-Fi, open");
+                ui.label(RichText::new(&url).monospace().color(ACCENT));
+                if ui.small_button("Copy").clicked() {
+                    ui.ctx().copy_text(url.clone());
+                }
+                ui.label("(tap to roll or pause).");
+            });
+            hint(ui, "On the second screen: choose \"The teleprompter\" in Screens & webcam.");
+        } else {
+            hint(ui, "To use it on a tablet or phone, turn on Remote control (Settings → Remote & MIDI) first. On the second screen: choose \"The teleprompter\" in Screens & webcam.");
+        }
     }
 }

@@ -189,6 +189,8 @@ pub enum SettingsAction {
 pub struct SettingsContext {
     pub recording: bool,
     pub streaming: bool,
+    /// Bytes per second the take in progress writes, once settled (None: not recording or too early).
+    pub disk_rate: Option<f64>,
     pub engine_facts: Vec<(String, String)>,
     pub log: Vec<LogLine>,
     pub config_path: Option<PathBuf>,
@@ -447,6 +449,10 @@ impl SettingsUi {
         self.outside && !busy && !over
     }
 
+    pub fn section(&self) -> Section {
+        self.section
+    }
+
     pub fn open_at(mut self, section: Section) -> Self {
         self.section = section;
         self
@@ -601,7 +607,7 @@ impl SettingsUi {
                                         Section::Comments => self.comments(ui),
                                         Section::Guests => self.guests(ui, info),
                                         Section::Captions => self.captions(ui, info),
-                                        Section::Recording => self.recording(ui),
+                                        Section::Recording => self.recording(ui, info),
                                         Section::Streaming => self.streaming(ui),
                                         Section::Vertical => self.vertical(ui),
                                         Section::Upload => self.upload(ui),
@@ -620,7 +626,7 @@ impl SettingsUi {
                 // ---- bottom bar
                 let top = ui.cursor().top();
                 ui.separator();
-                let valid = self.draft.validate();
+                let valid = self.draft.check();
                 let restart = self.original.needs_restart(&self.draft);
                 let live = info.recording || info.streaming;
                 let blocked = restart && live;
@@ -631,7 +637,25 @@ impl SettingsUi {
                 };
                 ui.horizontal(|ui| {
                     if let Err(e) = &valid {
-                        ui.label(RichText::new(format!("⚠ {e}")).color(AMBER));
+                        let r = ui.add(egui::Label::new(RichText::new(format!("⚠ {}", e.message)).color(AMBER)).sense(egui::Sense::click()));
+                        let r = r.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Click to go there");
+                        if r.clicked() {
+                            use crate::config::ProblemAt;
+                            match e.at {
+                                ProblemAt::Program => self.section = Section::Program,
+                                ProblemAt::Source(i) => {
+                                    self.section = Section::Sources;
+                                    self.sel_source = i;
+                                }
+                                ProblemAt::Audio(i) => {
+                                    self.section = Section::Audio;
+                                    self.sel_audio = i;
+                                }
+                                ProblemAt::Recording => self.section = Section::Recording,
+                                ProblemAt::Streaming => self.section = Section::Streaming,
+                                ProblemAt::Control => self.section = Section::Control,
+                            }
+                        }
                     } else if blocked {
                         ui.label(RichText::new("Stop recording and streaming to change the program's size or frame rate.").color(AMBER));
                     } else if let Some(m) = &failed {
@@ -1014,9 +1038,9 @@ impl SettingsUi {
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     if ui.button("＋ Add").clicked() {
-                        let device = self.audio.first().map(|d| d.name.clone()).unwrap_or("default".into());
-                        let base = if self.draft.audio.is_empty() { "DAW" } else { "Input" };
-                        let name = unique(self.draft.audio.iter().map(|a| a.name.clone()).collect(), base);
+                        let used: Vec<String> = self.draft.audio.iter().map(|a| a.device.clone()).collect();
+                        let device = self.audio.iter().find(|d| !used.contains(&d.name)).or(self.audio.first()).map(|d| d.name.clone()).unwrap_or("default".into());
+                        let name = unique(self.draft.audio.iter().map(|a| a.name.clone()).collect(), &crate::config::audio_input_name(&device));
                         self.draft.audio.push(AudioConfig { name, device, ..Default::default() });
                         self.sel_audio = self.draft.audio.len() - 1;
                     }
@@ -1040,7 +1064,7 @@ impl SettingsUi {
             let automix_on = self.draft.mix.automix;
             ui.vertical(|ui| {
                 let Some(a) = self.draft.audio.get_mut(self.sel_audio) else {
-                    hint(ui, "No audio inputs. Add your interface to record your DAW.");
+                    hint(ui, "No audio inputs. Add your microphone or audio interface.");
                     return;
                 };
                 let devices = &self.audio;
@@ -1138,12 +1162,7 @@ impl SettingsUi {
         let p = &mut self.draft.program;
         egui::Grid::new("program").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
             label(ui, "Size");
-            ui.horizontal(|ui| {
-                size_combo(ui, "prog_size", &mut p.width, &mut p.height);
-                ui.add(egui::DragValue::new(&mut p.width).range(160..=7680).speed(2));
-                ui.label("×");
-                ui.add(egui::DragValue::new(&mut p.height).range(90..=4320).speed(2));
-            });
+            size_combo(ui, "prog_size", &mut p.width, &mut p.height, (7680, 4320));
             ui.end_row();
             label(ui, "Frame rate");
             fps_picker(ui, "prog_fps", &mut p.fps, None);
@@ -1210,7 +1229,7 @@ impl SettingsUi {
 
     // ---- Recording ----------------------------------------------------------------
 
-    fn recording(&mut self, ui: &mut egui::Ui) {
+    fn recording(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
         title(ui, "Recording", "Where takes go, how they're encoded, and what's saved with them for editing.");
         let scan = self.encoders.lock_ok().clone();
         let o = &mut self.draft.output;
@@ -1232,7 +1251,7 @@ impl SettingsUi {
             label(ui, "Take name");
             ui.horizontal(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut o.take_prefix).desired_width(160.0));
-                hint(ui, &format!("→ {}_2026-10-16_19-30-00", crate::util::safe_file_name(if o.take_prefix.trim().is_empty() { "Take" } else { &o.take_prefix })));
+                hint(ui, &format!("→ {}_{}", crate::util::safe_file_name(if o.take_prefix.trim().is_empty() { "Take" } else { &o.take_prefix }), chrono::Local::now().format("%Y-%m-%d_%H-%M-%S")));
             });
             ui.end_row();
             label(ui, "Backup copy");
@@ -1257,13 +1276,10 @@ impl SettingsUi {
                 ui.add(egui::DragValue::new(&mut o.clip_seconds).range(5..=600).suffix(" s"));
             });
             ui.end_row();
-            label(ui, "Crash protection");
-            hint(ui, "always on");
-            ui.end_row();
         });
         {
             let cfg = &self.draft;
-            let rate = crate::engine::health::estimate_rate(cfg, &cfg.audio.iter().map(|a| (a.channels, a.record)).collect::<Vec<_>>());
+            let rate = info.disk_rate.unwrap_or_else(|| crate::engine::health::estimate_rate(cfg, &cfg.audio.iter().map(|a| (a.channels, a.record)).collect::<Vec<_>>()));
             let free = crate::engine::health::disk_space(&cfg.output.folder).map(|(f, _)| f);
             ui.add_space(4.0);
             hint(ui, &format!(
@@ -1271,6 +1287,7 @@ impl SettingsUi {
                 crate::util::human_size((rate * 3600.0) as u64),
                 free.map(|f| format!(" — the drive has room for about {}", crate::engine::health::fmt_left(f as f64 / rate.max(1.0)))).unwrap_or_default()
             ));
+            hint(ui, "Takes are written so that after a crash or a power cut they keep everything up to the last second; Cutaway mends them next time it opens.");
             if let Some(b) = cfg.output.backup_folder.as_ref() {
                 if b == &cfg.output.folder {
                     ui.label(RichText::new("⚠ The backup folder is the recording folder; pick a folder on another drive.").color(AMBER));
@@ -1619,12 +1636,7 @@ impl SettingsUi {
         part(ui, "stream_quality", "Quality", &state, false, |ui| {
             egui::Grid::new("stream_quality_grid").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
                 label(ui, "Size");
-                ui.horizontal(|ui| {
-                    size_combo(ui, "stream_size", &mut s.width, &mut s.height);
-                    ui.add(egui::DragValue::new(&mut s.width).range(160..=3840).speed(2));
-                    ui.label("×");
-                    ui.add(egui::DragValue::new(&mut s.height).range(90..=2160).speed(2));
-                });
+                size_combo(ui, "stream_size", &mut s.width, &mut s.height, (3840, 2160));
                 ui.end_row();
                 label(ui, "Frame rate");
                 fps_picker(ui, "stream_fps", &mut s.fps, None);
@@ -1994,17 +2006,34 @@ pub(super) fn mode_combo(ui: &mut egui::Ui, modes: &[Mode], src: &mut SourceConf
     });
 }
 
-pub(super) fn size_combo(ui: &mut egui::Ui, id: &str, w: &mut u32, h: &mut u32) {
-    let text = RESOLUTIONS
-        .iter()
-        .find(|r| r.0 == *w && r.1 == *h)
-        .map(|r| r.2.to_string())
-        .unwrap_or_else(|| "Custom".into());
-    egui::ComboBox::from_id_salt(id).selected_text(text).width(190.0).show_ui(ui, |ui| {
-        for &(rw, rh, label) in RESOLUTIONS {
-            if ui.selectable_label(*w == rw && *h == rh, label).clicked() {
-                *w = rw;
-                *h = rh;
+/// Picture size: a list of common sizes, and "Custom…" for typing width and height.
+/// The number boxes only show for a custom size (or after picking Custom…).
+pub(super) fn size_combo(ui: &mut egui::Ui, id: &str, w: &mut u32, h: &mut u32, max: (u32, u32)) {
+    let key = ui.make_persistent_id(("custom_size", id));
+    let asked: Option<(u32, u32)> = ui.data(|d| d.get_temp(key));
+    let preset = RESOLUTIONS.iter().find(|r| r.0 == *w && r.1 == *h);
+    let custom = preset.is_none() || asked == Some((*w, *h));
+    let text = preset.filter(|_| !custom).map(|r| r.2.to_string()).unwrap_or_else(|| "Custom…".into());
+    ui.horizontal(|ui| {
+        egui::ComboBox::from_id_salt(id).selected_text(text).width(190.0).show_ui(ui, |ui| {
+            for &(rw, rh, label) in RESOLUTIONS {
+                if ui.selectable_label(!custom && *w == rw && *h == rh, label).clicked() {
+                    *w = rw;
+                    *h = rh;
+                    ui.data_mut(|d| d.remove_temp::<(u32, u32)>(key));
+                }
+            }
+            if ui.selectable_label(custom, "Custom…").clicked() {
+                ui.data_mut(|d| d.insert_temp(key, (*w, *h)));
+            }
+        });
+        if custom {
+            let before = (*w, *h);
+            ui.add(egui::DragValue::new(w).range(160..=max.0).speed(2));
+            ui.label("×");
+            ui.add(egui::DragValue::new(h).range(90..=max.1).speed(2));
+            if (*w, *h) != before && asked.is_some() {
+                ui.data_mut(|d| d.insert_temp(key, (*w, *h)));
             }
         }
     });
@@ -2013,12 +2042,28 @@ pub(super) fn size_combo(ui: &mut egui::Ui, id: &str, w: &mut u32, h: &mut u32) 
 pub(super) fn fps_picker(ui: &mut egui::Ui, id: &str, fps: &mut u32, allowed: Option<&[u32]>) {
     ui.horizontal(|ui| {
         let options: Vec<u32> = allowed.map(|a| a.to_vec()).unwrap_or_else(|| RATES.to_vec());
-        egui::ComboBox::from_id_salt(id).selected_text(format!("{fps} fps")).width(90.0).show_ui(ui, |ui| {
+        let key = ui.make_persistent_id(("custom_fps", id));
+        let asked: Option<u32> = ui.data(|d| d.get_temp(key));
+        let custom = !options.contains(fps) || asked == Some(*fps);
+        let text = if custom && allowed.is_none() { "Custom…".to_string() } else { format!("{fps} fps") };
+        egui::ComboBox::from_id_salt(id).selected_text(text).width(90.0).show_ui(ui, |ui| {
             for r in &options {
-                ui.selectable_value(fps, *r, format!("{r} fps"));
+                if ui.selectable_label(!custom && fps == r, format!("{r} fps")).clicked() {
+                    *fps = *r;
+                    ui.data_mut(|d| d.remove_temp::<u32>(key));
+                }
+            }
+            if ui.selectable_label(custom, "Custom…").clicked() {
+                ui.data_mut(|d| d.insert_temp(key, *fps));
             }
         });
-        ui.add(egui::DragValue::new(fps).range(1..=120).suffix(" fps"));
+        if custom {
+            let before = *fps;
+            ui.add(egui::DragValue::new(fps).range(1..=120).suffix(" fps"));
+            if *fps != before && asked.is_some() {
+                ui.data_mut(|d| d.insert_temp(key, *fps));
+            }
+        }
         if let Some(a) = allowed {
             if !a.contains(fps) {
                 ui.label(RichText::new("(converted from the device's rate)").size(12.5).color(TEXT_DIM));
@@ -2275,6 +2320,7 @@ mod tests {
         SettingsContext {
             recording,
             streaming: false,
+            disk_rate: None,
             engine_facts: Vec::new(),
             log: Vec::new(),
             config_path: None,

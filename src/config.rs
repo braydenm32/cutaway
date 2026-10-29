@@ -1172,6 +1172,45 @@ impl Default for VoiceProcessing {
     }
 }
 
+/// Where in Settings a validation problem lives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProblemAt {
+    Program,
+    Source(usize),
+    Audio(usize),
+    Recording,
+    Streaming,
+    Control,
+}
+
+/// A settings problem, with where to fix it.
+#[derive(Debug, Clone)]
+pub struct Problem {
+    pub message: String,
+    pub at: ProblemAt,
+}
+
+impl std::fmt::Display for Problem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for Problem {}
+
+/// A fresh audio input's name, from its device: the start of the device name, or "Mic" when there isn't one.
+pub fn audio_input_name(device: &str) -> String {
+    match device.trim() {
+        "" | "default" => "Mic".into(),
+        "test" => "Test tone".into(),
+        d => {
+            let n: String = d.chars().take(18).collect();
+            let n = n.trim();
+            if n.is_empty() { "Mic".into() } else { n.to_string() }
+        }
+    }
+}
+
 impl Default for AudioConfig {
     fn default() -> Self {
         Self {
@@ -2243,44 +2282,70 @@ impl Config {
         .with_context(|| format!("writing {}", path.display()))
     }
 
+    /// The checks a settings file must pass to load and run. Settings asks
+    /// for more (`check`) before Apply, so older files that Settings would
+    /// now refuse still open.
     pub fn validate(&self) -> Result<()> {
+        self.check_with(false).map_err(Into::into)
+    }
+
+    /// Like `validate`, plus the checks Settings makes before Apply, and says
+    /// where the problem is, so Settings can jump to it.
+    pub fn check(&self) -> std::result::Result<(), Problem> {
+        self.check_with(true)
+    }
+
+    fn check_with(&self, strict: bool) -> std::result::Result<(), Problem> {
+        fn ensure(ok: bool, at: ProblemAt, msg: impl FnOnce() -> String) -> std::result::Result<(), Problem> {
+            if ok { Ok(()) } else { Err(Problem { message: msg(), at }) }
+        }
         let p = &self.program;
-        anyhow::ensure!(p.width >= 160 && p.height >= 90, "program size is too small");
-        anyhow::ensure!(p.width.is_multiple_of(2) && p.height.is_multiple_of(2), "program width and height must be even");
-        anyhow::ensure!((1..=120).contains(&p.fps), "program fps must be between 1 and 120");
-        for s in &self.sources {
-            anyhow::ensure!(s.width >= 16 && s.height >= 16, "source '{}': width and height must be at least 16", s.name);
-            anyhow::ensure!(s.width % 2 == 0 && s.height % 2 == 0, "source '{}': width and height must be even", s.name);
-            anyhow::ensure!((1..=120).contains(&s.fps), "source '{}': fps must be between 1 and 120", s.name);
+        ensure(p.width >= 160 && p.height >= 90, ProblemAt::Program, || "program size is too small".into())?;
+        ensure(p.width.is_multiple_of(2) && p.height.is_multiple_of(2), ProblemAt::Program, || "program width and height must be even".into())?;
+        ensure((1..=120).contains(&p.fps), ProblemAt::Program, || "program fps must be between 1 and 120".into())?;
+        for (i, s) in self.sources.iter().enumerate() {
+            let at = ProblemAt::Source(i);
+            ensure(s.width >= 16 && s.height >= 16, at, || format!("source '{}': width and height must be at least 16", s.name))?;
+            ensure(s.width % 2 == 0 && s.height % 2 == 0, at, || format!("source '{}': width and height must be even", s.name))?;
+            ensure((1..=120).contains(&s.fps), at, || format!("source '{}': fps must be between 1 and 120", s.name))?;
         }
-        for a in &self.audio {
-            anyhow::ensure!((1..=64).contains(&a.channels), "audio '{}': channels must be 1-64", a.name);
-            anyhow::ensure!(
+        for (i, a) in self.audio.iter().enumerate() {
+            let at = ProblemAt::Audio(i);
+            ensure((1..=64).contains(&a.channels), at, || format!("audio '{}': channels must be 1-64", a.name))?;
+            ensure(
                 (1..=a.channels).contains(&a.program_left) && (1..=a.channels).contains(&a.program_right),
-                "audio '{}': program_left/right must be between 1 and {}",
-                a.name,
-                a.channels
-            );
+                at,
+                || format!("audio '{}': program_left/right must be between 1 and {}", a.name, a.channels),
+            )?;
         }
-        anyhow::ensure!(matches!(self.output.wav_bit_depth, 16 | 24 | 32), "wav_bit_depth must be 16, 24 or 32");
+        let mut audio_names = std::collections::HashSet::new();
+        for (i, a) in self.audio.iter().enumerate().filter(|_| strict) {
+            ensure(!a.name.trim().is_empty(), ProblemAt::Audio(i), || "every audio input needs a name".into())?;
+            ensure(audio_names.insert(a.name.trim().to_lowercase()), ProblemAt::Audio(i), || format!("two audio inputs are called \"{}\"", a.name))?;
+        }
+        ensure(matches!(self.output.wav_bit_depth, 16 | 24 | 32), ProblemAt::Recording, || "wav_bit_depth must be 16, 24 or 32".into())?;
         let st = &self.streaming;
-        anyhow::ensure!(st.width.is_multiple_of(2) && st.height.is_multiple_of(2) && st.width >= 160, "stream width and height must be even");
-        anyhow::ensure!((1..=120).contains(&st.fps), "stream fps must be between 1 and 120");
-        anyhow::ensure!((200..=100_000).contains(&st.video_bitrate_kbps), "stream video bitrate must be 200-100000 kbps");
+        ensure(st.width.is_multiple_of(2) && st.height.is_multiple_of(2) && st.width >= 160, ProblemAt::Streaming, || "stream width and height must be even".into())?;
+        ensure((1..=120).contains(&st.fps), ProblemAt::Streaming, || "stream fps must be between 1 and 120".into())?;
+        ensure((200..=100_000).contains(&st.video_bitrate_kbps), ProblemAt::Streaming, || "stream video bitrate must be 200-100000 kbps".into())?;
         let mut names = std::collections::HashSet::new();
-        for s in &self.sources {
-            anyhow::ensure!(!s.name.trim().is_empty(), "every source needs a name");
-            anyhow::ensure!(names.insert(s.name.trim().to_lowercase()), "two sources are called \"{}\"", s.name);
+        for (i, s) in self.sources.iter().enumerate() {
+            ensure(!s.name.trim().is_empty(), ProblemAt::Source(i), || "every source needs a name".into())?;
+            ensure(names.insert(s.name.trim().to_lowercase()), ProblemAt::Source(i), || format!("two sources are called \"{}\"", s.name))?;
         }
-        for s in &self.sources {
+        for (i, s) in self.sources.iter().enumerate() {
+            let at = ProblemAt::Source(i);
+            let d = s.device.trim();
+            ensure(!strict || !(crate::util::strip_prefix_ci(d, "vptz:").is_some() && s.virtual_ptz_of().is_none()), at, || format!("source '{}' is a virtual PTZ camera, but no camera is chosen to cut it from", s.name))?;
+            ensure(!strict || !(crate::util::strip_prefix_ci(d, "frame:").is_some() && s.framed_from().is_none()), at, || format!("source '{}' is auto-framed, but no camera is chosen to follow people in", s.name))?;
             if let Some(from) = s.framed_from() {
                 let parent = self.sources.iter().find(|p| p.name.trim().eq_ignore_ascii_case(from));
-                let parent = parent.ok_or_else(|| anyhow::anyhow!("source '{}' follows people in \"{from}\", but there's no source called that", s.name))?;
-                anyhow::ensure!(!std::ptr::eq(parent, s), "source '{}' can't be cut from itself", s.name);
-                anyhow::ensure!(parent.framed_from().is_none(), "source '{}' is cut from \"{from}\", which is auto-framed itself; pick the wide camera", s.name);
+                let parent = parent.ok_or_else(|| Problem { message: format!("source '{}' follows people in \"{from}\", but there's no source called that", s.name), at })?;
+                ensure(!std::ptr::eq(parent, s), at, || format!("source '{}' can't be cut from itself", s.name))?;
+                ensure(parent.framed_from().is_none(), at, || format!("source '{}' is cut from \"{from}\", which is auto-framed itself; pick the wide camera", s.name))?;
             }
         }
-        anyhow::ensure!(self.remote.port >= 1024, "the remote control port must be 1024 or higher");
+        ensure(self.remote.port >= 1024, ProblemAt::Control, || "the remote control port must be 1024 or higher".into())?;
         Ok(())
     }
 
@@ -2495,6 +2560,36 @@ mod tests {
         let mut cfg = Config::default();
         cfg.audio.push(AudioConfig { channels: 2, program_left: 3, ..Default::default() });
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn problems_say_where_they_are() {
+        let mut cfg = Config::default();
+        cfg.audio.push(AudioConfig { name: "Mic".into(), ..Default::default() });
+        cfg.audio.push(AudioConfig { name: " mic ".into(), ..Default::default() });
+        let p = cfg.check().unwrap_err();
+        assert_eq!(p.at, ProblemAt::Audio(1));
+        // Only Settings refuses it: a file like this still loads and runs.
+        assert!(cfg.validate().is_ok());
+        cfg.audio[1].name = "".into();
+        assert!(cfg.check().unwrap_err().message.contains("needs a name"));
+        cfg.audio[1].name = "Other".into();
+        assert!(cfg.check().is_ok());
+        cfg.sources.push(SourceConfig { name: "A".into(), device: "test".into(), ..Default::default() });
+        cfg.sources.push(SourceConfig { name: "B".into(), device: "vptz:".into(), ..Default::default() });
+        assert_eq!(cfg.check().unwrap_err().at, ProblemAt::Source(1));
+        cfg.sources[1].device = "frame: ".into();
+        assert_eq!(cfg.check().unwrap_err().at, ProblemAt::Source(1));
+        cfg.sources[1].device = "vptz:A".into();
+        assert!(cfg.check().is_ok());
+    }
+
+    #[test]
+    fn audio_input_names_come_from_the_device() {
+        assert_eq!(audio_input_name("Scarlett 2i2 USB"), "Scarlett 2i2 USB");
+        assert_eq!(audio_input_name("Focusrite USB Audio Interface 18i20"), "Focusrite USB Audi");
+        assert_eq!(audio_input_name("default"), "Mic");
+        assert_eq!(audio_input_name("  "), "Mic");
     }
 
     #[test]

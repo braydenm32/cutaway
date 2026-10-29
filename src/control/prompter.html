@@ -147,6 +147,13 @@ addEventListener("keydown", (e) => {
   if (k) { e.preventDefault(); send("prompter:" + k); }
 });
 addEventListener("resize", () => st && style());
+// Keep the screen on while the script is up.
+let lock = null;
+async function keepAwake() {
+  try { if ('wakeLock' in navigator && !lock && document.visibilityState === 'visible') { lock = await navigator.wakeLock.request('screen'); lock.addEventListener('release', () => { lock = null; }); } } catch (e) {}
+}
+keepAwake();
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") keepAwake(); });
 showBar();
 loadScript().then(connect);
 requestAnimationFrame(frame);

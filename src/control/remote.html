@@ -129,7 +129,19 @@ function guarded(cmd) {
   armTimer = setTimeout(() => { armed = null; if (state) render(); }, 3000);
   if (state) render();
 }
-function flash(text, bad) { const s = document.getElementById('status'); s.textContent = text; s.className = 'status' + (bad ? ' warn' : ''); }
+// An error stays up for at least 4 s, so the next state push doesn't wipe it before it's read.
+let errUntil = 0;
+function setStatus(text, bad) { const s = document.getElementById('status'); s.textContent = text; s.className = 'status' + (bad ? ' warn' : ''); }
+function flash(text, bad) { if (bad) errUntil = Date.now() + 4000; setStatus(text, bad); }
+// Keep the screen on (tally phones sit on a camera for hours).
+let lock = null;
+async function keepAwake() {
+  try { if ('wakeLock' in navigator && !lock && document.visibilityState === 'visible') { lock = await navigator.wakeLock.request('screen'); lock.addEventListener('release', () => { lock = null; }); } } catch (e) {}
+}
+if (tallySource !== null) {
+  keepAwake();
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') keepAwake(); });
+}
 function el(tag, cls, text, onclick) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; if (onclick) e.onclick = onclick; return e; }
 function clock(s) { s = Math.floor(s); return [s / 3600, s / 60 % 60, s % 60].map(v => String(Math.floor(v)).padStart(2, '0')).join(':'); }
 
@@ -138,7 +150,8 @@ function render() {
   if (tallySource !== null) return renderTally();
   const rec = document.getElementById('rec'), live = document.getElementById('live');
   rec.className = 'pill rec' + (s.recording ? ' on' : '');
-  rec.textContent = s.recording ? (armed === 'record' ? 'Tap again to stop' : '■ REC ' + clock(s.rec_seconds)) : '● RECORD';
+  rec.textContent = s.saving ? 'Saving ' + Math.round(s.saving.percent) + '%' : s.recording ? (armed === 'record' ? 'Tap again to stop' : '■ REC ' + clock(s.rec_seconds)) : '● RECORD';
+  rec.title = s.saving ? s.saving.step : '';
   live.className = 'pill live' + (s.live ? ' on' : '');
   live.textContent = s.live ? (armed === 'live' ? 'Tap again to end' : '◉ LIVE ' + clock(s.live_seconds)) : '◉ GO LIVE';
   document.getElementById('marker').style.display = s.recording ? '' : 'none';
@@ -153,7 +166,7 @@ function render() {
   const notes = [];
   if (s.disk) notes.push(s.disk);
   if (s.problems && s.problems.length) notes.push('⚠ ' + s.problems.join(' · '));
-  flash(notes.join('   '), s.problems && s.problems.length);
+  if (Date.now() >= errUntil) setStatus(s.saving ? s.saving.step + '…' : notes.join('   '), s.problems && s.problems.length);
 
   const scenes = document.getElementById('scenes'); scenes.innerHTML = '';
   s.scenes.forEach((sc, i) => {
