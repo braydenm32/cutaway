@@ -2155,7 +2155,20 @@ pub struct MidiMapping {
     pub action: String,
 }
 
+/// See `Config::take_prefix`.
+pub fn take_prefix_for(take_name: &str, show: &str) -> String {
+    let (p, show) = (take_name.trim(), show.trim());
+    let name = if (p.is_empty() || p.eq_ignore_ascii_case("take")) && !show.is_empty() { show } else if p.is_empty() { "Take" } else { p };
+    crate::util::safe_folder_name(name, "Take")
+}
+
 impl Config {
+    /// The start of a take's folder name: the Take name setting, or the show's
+    /// name when that's left as "Take" (or empty) and a show is chosen.
+    pub fn take_prefix(&self) -> String {
+        take_prefix_for(&self.output.take_prefix, &self.ui.profile)
+    }
+
     /// Settings that need the engine restarted when they change.
     /// Auto-framed and virtual PTZ sources run at their camera's rate,
     /// whatever they say.
@@ -2410,6 +2423,22 @@ pub fn parse_color(s: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Takes are named after the show unless you've named them yourself.
+    #[test]
+    fn takes_named_after_the_show() {
+        let mut c = Config::default();
+        assert_eq!(c.take_prefix(), "Take");
+        c.ui.profile = "Late Show/Ep 3".into();
+        assert_eq!(c.take_prefix(), "Late_Show_Ep_3");
+        c.output.take_prefix = "  ".into();
+        assert_eq!(c.take_prefix(), "Late_Show_Ep_3");
+        c.output.take_prefix = "Rehearsal".into();
+        assert_eq!(c.take_prefix(), "Rehearsal");
+        c.ui.profile.clear();
+        c.output.take_prefix = String::new();
+        assert_eq!(c.take_prefix(), "Take");
+    }
 
     /// A virtual PTZ close-up keeps its wide camera's timing; a new name
     /// title doesn't reopen a source.

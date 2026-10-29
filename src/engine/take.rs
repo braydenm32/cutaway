@@ -92,7 +92,7 @@ impl Engine {
         let track_cfgs: Vec<(String, crate::media::AudioConfig)> = track_encoders.iter().map(|t| (t.1.clone(), t.3.config())).collect();
 
         let stamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
-        let prefix = safe_file_name(if out.take_prefix.trim().is_empty() { "Take" } else { &out.take_prefix });
+        let prefix = cfg.take_prefix();
         let mut name = format!("{prefix}_{stamp}");
         let mut n = 2;
         while out.folder.join(&name).exists() {
