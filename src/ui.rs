@@ -37,14 +37,40 @@ pub mod theme {
     pub const RAISED: Color32 = Color32::from_rgb(34, 38, 46);
     pub const LINE: Color32 = Color32::from_rgb(52, 57, 68);
     pub const TEXT_DIM: Color32 = Color32::from_rgb(140, 147, 160);
-    pub const RED: Color32 = Color32::from_rgb(232, 52, 64);
-    pub const RED_DIM: Color32 = Color32::from_rgb(120, 30, 38);
+    /// On air: the program, the scene and sources on it, tally. Red means
+    /// this and nothing else that sits beside it (REC is a dark pill with a
+    /// red dot, LIVE has its own pink, buttons like TAKE and FTB aren't red).
+    pub const ON_AIR: Color32 = Color32::from_rgb(232, 52, 64);
+    pub const ON_AIR_DIM: Color32 = Color32::from_rgb(120, 30, 38);
+    /// Errors, failures, clipping and things that can't be undone (the
+    /// same red: never next to the on-air ones in a way that mixes them up).
+    pub const ERROR: Color32 = ON_AIR;
+    pub const ERROR_DIM: Color32 = ON_AIR_DIM;
+    /// The recording light: the dot on the dark REC pill.
+    pub const REC_DOT: Color32 = Color32::from_rgb(255, 64, 64);
+    pub const REC_PILL: Color32 = Color32::from_rgb(40, 30, 34);
+    pub const REC_EDGE: Color32 = Color32::from_rgb(120, 44, 50);
+    /// Pressed-and-held across the REC pill (to stop): a see-through red.
+    pub const REC_HOLD: Color32 = Color32::from_rgba_premultiplied(110, 26, 30, 110);
+    /// TAKE: the main switching action (CUT is a plain button).
+    pub const TAKE: Color32 = Color32::from_rgb(52, 112, 204);
+    pub const TAKE_HOVER: Color32 = Color32::from_rgb(76, 136, 228);
+    pub const NEUTRAL_HOVER: Color32 = Color32::from_rgb(60, 66, 80);
+    /// An input that's off (not heard in the mixes).
+    pub const OFF: Color32 = Color32::from_rgb(58, 62, 74);
     pub const AMBER: Color32 = Color32::from_rgb(245, 166, 35);
+    pub const AMBER_DIM: Color32 = Color32::from_rgb(110, 72, 16);
     pub const GREEN: Color32 = Color32::from_rgb(58, 196, 112);
     pub const GREEN_DIM: Color32 = Color32::from_rgb(28, 96, 58);
     pub const ACCENT: Color32 = Color32::from_rgb(90, 160, 255);
     /// "On air" for streaming, so it reads differently from recording red.
     pub const LIVE: Color32 = Color32::from_rgb(214, 40, 120);
+    /// GOING LIVE pulses between these; the GO LIVE button's edge.
+    pub const LIVE_DIM: Color32 = Color32::from_rgb(60, 24, 44);
+    pub const LIVE_GLOW: Color32 = Color32::from_rgb(150, 30, 90);
+    pub const LIVE_EDGE: Color32 = Color32::from_rgb(110, 30, 70);
+    /// Live, but a destination isn't.
+    pub const LIVE_TROUBLE: Color32 = Color32::from_rgb(170, 90, 20);
 }
 use theme::*;
 
@@ -860,7 +886,7 @@ impl App {
             ui.spacing_mut().item_spacing.y = 6.0;
             for (i, t) in self.toasts.iter().enumerate() {
                 let r = egui::Frame::new()
-                    .fill(if t.error { RED_DIM } else { RAISED })
+                    .fill(if t.error { ERROR_DIM } else { RAISED })
                     .corner_radius(CornerRadius::same(6))
                     .inner_margin(egui::Margin::symmetric(14, 10))
                     .show(ui, |ui| {
@@ -2407,21 +2433,25 @@ impl App {
         match &rec {
             RecState::Recording { since, folder } => {
                 let t = since.elapsed();
-                let blink = (t.as_millis() / 600) % 2 == 0;
                 // Held for a second to stop, so a stray click can't split the take.
                 let hint = self.rec_hold.is_some() || self.rec_hint_until.is_some_and(|u| Instant::now() < u);
-                let text = if hint { "■  Hold to stop".to_string() } else { format!("■  REC  {}", fmt_clock(t)) };
-                let btn = pill(RichText::new(text).size(15.0).strong().color(Color32::WHITE), if blink { RED } else { Color32::from_rgb(200, 40, 52) });
-                let r = ui.add(btn).on_hover_text(format!("Hold for a second to stop recording (the key{} asks first)\nRecording to {}", self.key_hint(Builtin::Record), folder.display()));
+                let text = if hint { "      Hold to stop".to_string() } else { format!("      REC  {}", fmt_clock(t)) };
+                // A dark pill with a pulsing red dot (red alone means on air).
+                let btn = pill(RichText::new(text).size(15.0).strong().color(Color32::WHITE), REC_PILL).stroke(Stroke::new(1.5, REC_EDGE));
+                let r = ui.add(btn);
+                let pulse = 0.55 + 0.45 * ((t.as_secs_f32() * std::f32::consts::PI).cos() * 0.5 + 0.5);
+                ui.painter().circle_filled(r.rect.left_center() + vec2(20.0, 0.0), 6.0, REC_DOT.gamma_multiply(pulse));
+                ui.ctx().request_repaint_after(Duration::from_millis(50));
+                let r = r.on_hover_text(format!("Hold for a second to stop recording (the key{} asks first)\nRecording to {}", self.key_hint(Builtin::Record), folder.display()));
                 let down = r.is_pointer_button_down_on() || self.test_hold;
                 match (down, self.rec_hold) {
                     (true, _) if self.rec_hold_spent => {}
                     (true, None) => self.rec_hold = Some(Instant::now()),
                     (true, Some(since)) => {
                         let f = (since.elapsed().as_secs_f32() / REC_HOLD_SECS).min(1.0);
-                        // A white fill grows across the pill while it's held.
+                        // A red fill grows across the pill while it's held (see-through, so the text reads).
                         let fill = Rect::from_min_size(r.rect.min, vec2(r.rect.width() * f, r.rect.height()));
-                        ui.painter().with_clip_rect(fill).rect_filled(r.rect, 17.0, Color32::from_white_alpha(70));
+                        ui.painter().with_clip_rect(fill).rect_filled(r.rect, 17.0, REC_HOLD);
                         if f >= 1.0 {
                             self.rec_hold = None;
                             self.rec_hold_spent = true;
@@ -2465,7 +2495,7 @@ impl App {
                 // Instant replay: click to replay (or stop it); right-click for slow motion.
                 let replaying = self.engine.as_ref().is_some_and(|e| e.replay.playing());
                 let rb = egui::Button::new(RichText::new(if replaying { "⟲ Replaying" } else { "⟲ Replay" }).color(if replaying { Color32::WHITE } else { ui.visuals().text_color() }))
-                    .fill(if replaying { RED_DIM } else { ui.visuals().widgets.inactive.weak_bg_fill })
+                    .fill(if replaying { ON_AIR_DIM } else { ui.visuals().widgets.inactive.weak_bg_fill })
                     .min_size(vec2(0.0, 30.0));
                 let r = ui.add(rb).on_hover_text(format!("Play the last {:.0} seconds again, on air. Right-click for slow motion or another camera.", self.cfg.replay.seconds));
                 if r.clicked() {
@@ -2519,8 +2549,10 @@ impl App {
             }
             RecState::Idle => {
                 self.rec_hold_spent = false;
-                let btn = pill(RichText::new("●  RECORD").size(15.0).strong().color(RED), RAISED).stroke(Stroke::new(1.5, RED_DIM));
-                let r = ui.add(btn).on_hover_text("Record every source, the program and the audio (Ctrl/Cmd+R)");
+                let btn = pill(RichText::new("      RECORD").size(15.0).strong().color(Color32::WHITE), RAISED).stroke(Stroke::new(1.5, REC_EDGE));
+                let r = ui.add(btn);
+                ui.painter().circle_filled(r.rect.left_center() + vec2(20.0, 0.0), 6.0, REC_DOT);
+                let r = r.on_hover_text("Record every source, the program and the audio (Ctrl/Cmd+R)");
                 if r.clicked() {
                     self.toggle_record();
                 }
@@ -2561,7 +2593,7 @@ impl App {
             let going = live == 0 && !connecting.is_empty();
             if going {
                 let pulse = ((ui.input(|i| i.time) as f32 * 3.0).sin() + 1.0) * 0.5;
-                let fill = Color32::from_rgb(60, 24, 44).lerp_to_gamma(Color32::from_rgb(150, 30, 90), pulse);
+                let fill = LIVE_DIM.lerp_to_gamma(LIVE_GLOW, pulse);
                 let btn = pill(RichText::new(format!("◉  GOING LIVE{}", waiting::ellipsis(ui.input(|i| i.time) as f32))).size(15.0).strong().color(Color32::WHITE), fill).min_size(vec2(150.0, 0.0));
                 if ui.add(btn).on_hover_text("Connecting. Click to stop.").clicked() {
                     self.toggle_stream();
@@ -2569,7 +2601,7 @@ impl App {
                 status_line = Some((format!("Connecting to {}", connecting.join(", ")), Color32::from_rgb(230, 120, 170)));
                 ui.ctx().request_repaint_after(Duration::from_millis(50));
             } else {
-                let fill = if healthy { LIVE } else { Color32::from_rgb(170, 90, 20) };
+                let fill = if healthy { LIVE } else { LIVE_TROUBLE };
                 let btn = pill(RichText::new(format!("◉  LIVE  {}", fmt_clock(t))).size(15.0).strong().color(Color32::WHITE), fill);
                 if ui.add(btn).on_hover_text("End the stream").clicked() {
                     self.toggle_stream();
@@ -2588,7 +2620,7 @@ impl App {
                 self.settings = Some(self.new_settings().open_at(Section::Streaming));
             }
         } else {
-            let btn = pill(RichText::new("◉  GO LIVE").size(15.0).strong().color(LIVE), RAISED).stroke(Stroke::new(1.5, Color32::from_rgb(110, 30, 70)));
+            let btn = pill(RichText::new("◉  GO LIVE").size(15.0).strong().color(LIVE), RAISED).stroke(Stroke::new(1.5, LIVE_EDGE));
             let names: Vec<String> = self.cfg.streaming.destinations.iter().filter(|d| d.enabled).map(|d| d.name.clone()).collect();
             if ui.add(btn).on_hover_text(format!("Stream to {}", names.join(", "))).clicked() {
                 self.toggle_stream();
@@ -2870,9 +2902,9 @@ impl App {
         let cut = Rect::from_min_size(pos2(rect.right() - 86.0, rect.bottom() - 46.0), vec2(76.0, 36.0));
         let rt = ui.interact(take, ui.scope_id().with("take_btn"), Sense::click());
         let rc = ui.interact(cut, ui.scope_id().with("cut_btn"), Sense::click());
-        painter.rect_filled(take, 6.0, if rt.hovered() { Color32::from_rgb(250, 70, 80) } else { RED });
+        painter.rect_filled(take, 6.0, if rt.hovered() { TAKE_HOVER } else { TAKE });
         painter.text(take.center(), Align2::CENTER_CENTER, "TAKE", FontId::proportional(14.0), Color32::WHITE);
-        painter.rect_filled(cut, 6.0, if rc.hovered() { Color32::from_rgb(60, 66, 80) } else { RAISED });
+        painter.rect_filled(cut, 6.0, if rc.hovered() { NEUTRAL_HOVER } else { RAISED });
         painter.text(cut.center(), Align2::CENTER_CENTER, "CUT", FontId::proportional(14.0), Color32::WHITE);
         if rt.on_hover_text(format!("{} to program{}", self.cfg.transition.mode.label(), self.key_hint(Builtin::Take))).clicked() {
             self.take_preview(false);
@@ -2893,7 +2925,7 @@ impl App {
         if let Some(tex) = self.texture(&ctx, "tall", &slot) {
             painter.image(tex, rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         }
-        painter.rect_stroke(rect, 4.0, Stroke::new(if recording { 2.0 } else { 1.0 }, if recording { RED } else { RED_DIM }), StrokeKind::Outside);
+        painter.rect_stroke(rect, 4.0, Stroke::new(if recording { 2.0 } else { 1.0 }, if recording { ON_AIR } else { ON_AIR_DIM }), StrokeKind::Outside);
         let badge = Rect::from_min_size(rect.min + vec2(8.0, 8.0), vec2(26.0, 18.0));
         painter.rect_filled(badge, 3.0, Color32::from_black_alpha(170));
         painter.text(badge.center(), Align2::CENTER_CENTER, "9:16", FontId::proportional(10.0), Color32::WHITE);
@@ -2913,13 +2945,13 @@ impl App {
         }
         let engine = self.engine.as_ref().unwrap();
         let recording = engine.is_recording();
-        painter.rect_stroke(rect, 4.0, Stroke::new(if recording { 3.0 } else { 1.5 }, if recording { RED } else { RED_DIM }), StrokeKind::Outside);
+        painter.rect_stroke(rect, 4.0, Stroke::new(if recording { 3.0 } else { 1.5 }, if recording { ON_AIR } else { ON_AIR_DIM }), StrokeKind::Outside);
         let live = engine.switcher.live();
         if self.edit_mode && !self.preview_mode() {
             return self.edit_overlay(ui, rect, live);
         }
         let badge = Rect::from_min_size(rect.min + vec2(10.0, 10.0), vec2(74.0, 22.0));
-        painter.rect_filled(badge, 3.0, RED);
+        painter.rect_filled(badge, 3.0, ON_AIR);
         painter.text(badge.center(), Align2::CENTER_CENTER, "PROGRAM", FontId::proportional(11.5), Color32::WHITE);
         let name_chip = label_chip(&painter, badge.right_center() + vec2(12.0, 0.0), &live.name);
         // Status chips after the scene name (the top right is where logos usually sit).
@@ -2931,7 +2963,7 @@ impl App {
         for i in self.scene_offline(&live) {
             if let Some(src) = engine.sources.get(i) {
                 let how = if src.input.self_managed() { "no signal" } else { "no signal, reconnecting…" };
-                chips.push((format!("⚠ {}: {how}", src.name), RED));
+                chips.push((format!("⚠ {}: {how}", src.name), ERROR));
             }
         }
         if auto {
@@ -3499,7 +3531,7 @@ impl App {
             let on_air = live_sources.contains(&i);
             let in_preview = preview_sources.contains(&i);
             let bar = Rect::from_min_size(pic.left_bottom(), vec2(tile_w, label_h));
-            painter.rect_filled(bar, 0.0, if on_air { RED } else if in_preview { GREEN_DIM } else { RAISED });
+            painter.rect_filled(bar, 0.0, if on_air { ON_AIR } else if in_preview { GREEN_DIM } else { RAISED });
             painter.text(bar.left_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, format!("{}  {}", i + 1, name), FontId::proportional(13.0), Color32::WHITE);
             // Media player transport.
             if let Some(p) = &players[i] {
@@ -3564,7 +3596,7 @@ impl App {
                 }
             }
             let stroke = if on_air {
-                Stroke::new(3.0, RED)
+                Stroke::new(3.0, ON_AIR)
             } else if in_preview {
                 Stroke::new(3.0, GREEN)
             } else if resp.hovered() {
@@ -3695,8 +3727,8 @@ impl App {
                     // Fade to black: flashes while the program is black.
                     let black = self.engine.as_ref().is_some_and(|e| e.is_black());
                     let lit = black && (ui.input(|i| i.time) * 2.0).fract() < 0.5;
-                    let ftb = egui::Button::new(RichText::new("FTB").strong().size(12.0).color(if black { Color32::WHITE } else { TEXT_DIM }))
-                        .fill(if lit { RED } else if black { RED_DIM } else { RAISED })
+                    let ftb = egui::Button::new(RichText::new("FTB").strong().size(12.0).color(if lit { Color32::BLACK } else if black { Color32::WHITE } else { TEXT_DIM }))
+                        .fill(if lit { AMBER } else if black { AMBER_DIM } else { RAISED })
                         .min_size(vec2(46.0, 26.0));
                     if ui.add(ftb).on_hover_text(if black { "Fade back up from black" } else { "Fade to black (picture and sound; the length is in Settings → Switching)" }).clicked() {
                         self.act(Action::Ftb(Toggle::Toggle));
@@ -3864,7 +3896,7 @@ impl App {
         }
         let painter = ui.painter_at(rect);
         let fill = if is_live {
-            RED
+            ON_AIR
         } else if is_preview {
             GREEN_DIM
         } else if resp.hovered() {
@@ -3960,7 +3992,7 @@ impl App {
             ui.label(body);
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                if ui.add(egui::Button::new(RichText::new(button).color(Color32::WHITE)).fill(RED)).clicked() {
+                if ui.add(egui::Button::new(RichText::new(button).color(Color32::WHITE)).fill(ERROR)).clicked() {
                     if let Some(e) = &self.engine {
                         match &which {
                             Confirm::EndStream => e.stop_stream(),
@@ -4028,7 +4060,7 @@ impl App {
             let color = match d.state {
                 DestState::Live => GREEN,
                 DestState::Connecting | DestState::Retrying { .. } => AMBER,
-                DestState::Failed => RED,
+                DestState::Failed => ERROR,
                 DestState::Off => LINE,
             };
             let resp = ui
@@ -4106,7 +4138,7 @@ impl App {
                     None => name.clone(),
                 };
                 let over = clock.as_ref().is_some_and(|c| c.1);
-                let text = RichText::new(shown).strong().size(12.5).color(if *on { Color32::BLACK } else if over { RED } else { Color32::WHITE });
+                let text = RichText::new(shown).strong().size(12.5).color(if *on { Color32::BLACK } else if over { ERROR } else { Color32::WHITE });
                 let b = egui::Button::new(text).fill(if *on { AMBER } else { RAISED }).min_size(vec2(64.0, 28.0));
                 let mut r = ui.add(b);
                 let is_timer = self.cfg.graphics.get(i).is_some_and(|g| g.kind == crate::config::GraphicKind::Clock && g.clock.is_timer());
@@ -4376,7 +4408,7 @@ impl App {
                             }
                             ui.label(RichText::new(format!("{:+.1} dB", ac.gain_db)).size(10.5).color(TEXT_DIM));
                             let btn = egui::Button::new(RichText::new(if *on { "ON" } else { "OFF" }).strong().size(11.5).color(if *on { Color32::BLACK } else { Color32::WHITE }))
-                                .fill(if *on { GREEN } else { RED_DIM })
+                                .fill(if *on { GREEN } else { OFF })
                                 .min_size(vec2(56.0, 22.0));
                             if ui.add(btn).on_hover_text(if *on { "Heard in the mixes: click to turn it off" } else { "Off: not heard in the mixes. Click to turn it on" }).clicked() {
                                 on_changes.push((i, !*on));
@@ -4513,7 +4545,7 @@ impl App {
                 let color = match l.level {
                     LogLevel::Info => TEXT_DIM,
                     LogLevel::Warning => AMBER,
-                    LogLevel::Error => RED,
+                    LogLevel::Error => ERROR,
                 };
                 ui.label(RichText::new(format!("{}  {}", l.time, l.text)).color(color).monospace().size(11.5));
             }
@@ -4697,7 +4729,7 @@ impl App {
                         let (sym, color) = match it.level {
                             Level::Ok => ("✔", GREEN),
                             Level::Warn => ("⚠", AMBER),
-                            Level::Fail => ("✖", RED),
+                            Level::Fail => ("✖", ERROR),
                         };
                         ui.label(RichText::new(sym).color(color).strong());
                         ui.label(RichText::new(&it.what).strong());
@@ -4720,7 +4752,7 @@ impl App {
             ui.horizontal(|ui| {
                 if then.is_some() {
                     let label = if worst == Level::Fail { "Start anyway" } else { "Start" };
-                    if ui.add_enabled(done, egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if worst == Level::Fail { RED } else { ACCENT })).clicked() {
+                    if ui.add_enabled(done, egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if worst == Level::Fail { AMBER_DIM } else { ACCENT })).clicked() {
                         proceed = true;
                     }
                     if ui.button("Cancel").clicked() {
@@ -4983,7 +5015,7 @@ impl App {
                     let top = Rect::from_min_size(area.min, vec2(area.width(), area.height() * 0.55));
                     let halves = [Rect::from_min_max(top.min, pos2(top.center().x - 4.0, top.bottom())), Rect::from_min_max(pos2(top.center().x + 4.0, top.top()), top.max)];
                     for (i, (r, tex, name, color)) in
-                        [(halves[0], preview, preview_name.clone().unwrap_or_else(|| "PREVIEW".into()), GREEN), (halves[1], program, live_name.clone(), RED)].into_iter().enumerate()
+                        [(halves[0], preview, preview_name.clone().unwrap_or_else(|| "PREVIEW".into()), GREEN), (halves[1], program, live_name.clone(), ON_AIR)].into_iter().enumerate()
                     {
                         let rr = fit(r.shrink(6.0), canvas_aspect);
                         painter.rect_filled(rr, 0.0, Color32::from_gray(12));
@@ -5009,7 +5041,7 @@ impl App {
                         if let Some(t) = tex {
                             painter.image(*t, rr, uv, Color32::WHITE);
                         }
-                        let color = if *on_air { RED } else if *pv { GREEN } else { Color32::from_gray(70) };
+                        let color = if *on_air { ON_AIR } else if *pv { GREEN } else { Color32::from_gray(70) };
                         painter.rect_stroke(rr, 0.0, Stroke::new(if *on_air || *pv { 3.0 } else { 1.0 }, color), StrokeKind::Outside);
                         painter.text(rr.left_bottom() + vec2(6.0, -6.0), Align2::LEFT_BOTTOM, format!("{} {}", i + 1, name), FontId::proportional(14.0), Color32::WHITE);
                     }
@@ -5580,7 +5612,7 @@ fn draw_meter(ui: &mut egui::Ui, size: egui::Vec2, peak: &[f32], rms: &[f32], ho
         let x = rect.left() + 3.0 + c as f32 * (bar_w + 2.0);
         let p = peak.get(c).copied().unwrap_or(-100.0);
         let r = rms.get(c).copied().unwrap_or(-100.0);
-        let zones = [(-60.0, -18.0, GREEN), (-18.0, -6.0, AMBER), (-6.0, 0.0, RED)];
+        let zones = [(-60.0, -18.0, GREEN), (-18.0, -6.0, AMBER), (-6.0, 0.0, ERROR)];
         for (lo, hi, color) in zones {
             if r > lo {
                 let top = to_y(r.min(hi));
@@ -5595,7 +5627,7 @@ fn draw_meter(ui: &mut egui::Ui, size: egui::Vec2, peak: &[f32], rms: &[f32], ho
         if let Some(&h) = hold.get(c) {
             if h > floor {
                 let y = to_y(h);
-                let color = if h > -1.0 { RED } else { Color32::from_white_alpha(120) };
+                let color = if h > -1.0 { ERROR } else { Color32::from_white_alpha(120) };
                 painter.line_segment([pos2(x, y), pos2(x + bar_w, y)], Stroke::new(1.0, color));
             }
         }
@@ -5834,7 +5866,7 @@ fn precheck_verdict(items: &[CheckItem], done: bool) -> (String, Color32) {
     let worst = items.iter().map(|i| i.level).max().unwrap_or(Level::Ok);
     let warnings = items.iter().filter(|i| i.level == Level::Warn).count();
     match worst {
-        Level::Fail => ("Fix before going live".into(), RED),
+        Level::Fail => ("Fix before going live".into(), ERROR),
         Level::Warn => (format!("{warnings} {}: you can still start", if warnings == 1 { "warning" } else { "warnings" }), AMBER),
         Level::Ok if done => ("Ready to record".into(), GREEN),
         Level::Ok => ("Checking…".into(), TEXT_DIM),

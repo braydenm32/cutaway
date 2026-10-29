@@ -723,7 +723,7 @@ impl SettingsUi {
                         ui.label(RichText::new("Stop recording and streaming to change the program's size or frame rate.").color(AMBER));
                     } else if let Some(m) = &failed {
                         // Why the last Apply didn't work, until something's changed.
-                        ui.label(RichText::new(m).color(RED));
+                        ui.label(RichText::new(m).color(ERROR));
                     } else if restart {
                         ui.label(RichText::new("Applying restarts the video engine (previews blink for a moment).").color(TEXT_DIM));
                     } else if lineup && live {
@@ -733,7 +733,7 @@ impl SettingsUi {
                     } else if self.dirty() {
                         ui.label(RichText::new("Unsaved changes. These apply without interrupting anything.").color(TEXT_DIM));
                     } else if let Some((m, err)) = &self.message {
-                        ui.label(RichText::new(m).color(if *err { RED } else { GREEN }));
+                        ui.label(RichText::new(m).color(if *err { ERROR } else { GREEN }));
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let can_apply = self.dirty() && valid.is_ok() && !blocked;
@@ -957,7 +957,7 @@ impl SettingsUi {
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 let go = if check.names.is_empty() { "Restart and apply" } else { "Remove and apply" };
-                if ui.button(RichText::new(go).color(RED)).clicked() {
+                if ui.button(RichText::new(go).color(ERROR)).clicked() {
                     action = Some(SettingsAction::Apply { cfg: self.draft.clone(), close: check.close });
                     done = true;
                 }
@@ -1937,7 +1937,7 @@ impl SettingsUi {
                 let color = match l.level {
                     LogLevel::Info => TEXT_DIM,
                     LogLevel::Warning => AMBER,
-                    LogLevel::Error => RED,
+                    LogLevel::Error => ERROR,
                 };
                 ui.label(RichText::new(format!("{}  {}", l.time, l.text)).monospace().size(12.0).color(color));
             }
@@ -2524,7 +2524,7 @@ fn paint_level(ui: &egui::Ui, rect: egui::Rect, db: f32) {
     p.rect_filled(rect, 2.0, Color32::from_black_alpha(90));
     let frac = ((db + 60.0) / 60.0).clamp(0.0, 1.0);
     if frac > 0.0 {
-        let colour = if db > -3.0 { RED } else if db > -12.0 { AMBER } else { GREEN };
+        let colour = if db > -3.0 { ERROR } else if db > -12.0 { AMBER } else { GREEN };
         p.rect_filled(egui::Rect::from_min_size(rect.min, vec2(rect.width() * frac, rect.height())), 2.0, colour);
     }
 }

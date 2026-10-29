@@ -141,7 +141,7 @@ impl SettingsUi {
                             hint(ui, &format!("Used by: {}. They won't find it any more.", uses.join(", ")));
                         }
                         ui.horizontal(|ui| {
-                            if ui.add(egui::Button::new(RichText::new("Delete").color(Color32::WHITE)).fill(RED)).clicked() {
+                            if ui.add(egui::Button::new(RichText::new("Delete").color(Color32::WHITE)).fill(ERROR)).clicked() {
                                 let before = all.clone();
                                 self.draft.scenes.remove(i);
                                 self.sel_scene = i.min(self.draft.scenes.len().saturating_sub(1));

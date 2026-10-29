@@ -91,8 +91,8 @@ impl SettingsUi {
             if let Some(s) = live {
                 let p = PtzPreset { name: String::new(), x: s.x, y: s.y, zoom: s.zoom };
                 let b = to_screen(preset_rect(&p, pic.size, out));
-                painter.rect_stroke(b, 0.0, Stroke::new(2.0, RED), StrokeKind::Inside);
-                painter.text(b.left_bottom() + vec2(4.0, -3.0), egui::Align2::LEFT_BOTTOM, "now", egui::FontId::proportional(12.0), RED);
+                painter.rect_stroke(b, 0.0, Stroke::new(2.0, ON_AIR), StrokeKind::Inside);
+                painter.text(b.left_bottom() + vec2(4.0, -3.0), egui::Align2::LEFT_BOTTOM, "now", egui::FontId::proportional(12.0), ON_AIR);
             }
             let boxes: Vec<Rect> = src.ptz.presets.iter().map(|p| to_screen(preset_rect(p, pic.size, out))).collect();
             for (i, b) in boxes.iter().enumerate() {

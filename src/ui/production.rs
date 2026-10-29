@@ -232,7 +232,7 @@ impl App {
         ui.horizontal_wrapped(|ui| {
             for (i, name) in &cams {
                 let on_air = live.contains(i);
-                let text = RichText::new(name).size(12.5).color(if on_air { RED } else { Color32::WHITE });
+                let text = RichText::new(name).size(12.5).color(if on_air { ON_AIR } else { Color32::WHITE });
                 if ui.add(egui::Button::selectable(self.ptz_cam == *i, text)).on_hover_text(if on_air { "On air" } else { "" }).clicked() {
                     self.ptz_cam = *i;
                 }
