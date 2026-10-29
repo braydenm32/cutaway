@@ -525,62 +525,12 @@ pub fn mime(path: &Path) -> &'static str {
     }
 }
 
-/// "1:02:03" or "2:03".
-pub fn timestamp(secs: u64) -> String {
-    let (h, m, s) = (secs / 3600, (secs / 60) % 60, secs % 60);
-    if h > 0 {
-        format!("{h}:{m:02}:{s:02}")
-    } else {
-        format!("{m}:{s:02}")
-    }
-}
-
-/// YouTube chapters from markers (seconds, name): the list YouTube reads
-/// from a description. It needs the first at 0:00, at least three, each at
-/// least ten seconds long; None when the markers don't make that.
-pub fn chapters(markers: &[(f64, String)], duration_s: f64) -> Option<String> {
-    let mut list: Vec<(f64, String)> = Vec::new();
-    for (at, name) in markers.iter().filter(|(at, _)| *at >= 0.0 && *at < duration_s - 10.0) {
-        match list.last() {
-            Some((prev, _)) if at - prev < 10.0 => {
-                // Too close: the later name wins the earlier spot.
-                let p = *prev;
-                list.pop();
-                list.push((p, name.clone()));
-            }
-            _ => list.push((*at, name.clone())),
-        }
-    }
-    match list.first_mut() {
-        Some(first) if first.0 < 10.0 => first.0 = 0.0,
-        _ => list.insert(0, (0.0, "Start".into())),
-    }
-    if list.len() < 3 {
-        return None;
-    }
-    Some(list.iter().map(|(at, name)| format!("{} {}", timestamp(*at as u64), name.trim())).collect::<Vec<_>>().join("\n"))
-}
-
 #[cfg(test)]
 pub mod tests {
     use super::*;
     use crate::util::LockExt;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
-
-    #[test]
-    fn chapters_follow_youtubes_rules() {
-        let m = |v: &[(f64, &str)]| v.iter().map(|(a, n)| (*a, n.to_string())).collect::<Vec<_>>();
-        assert_eq!(chapters(&m(&[(0.0, "Welcome"), (65.0, "News"), (600.0, "Guest")]), 1200.0).unwrap(), "0:00 Welcome\n1:05 News\n10:00 Guest");
-        // A first marker after the start gets a "Start" chapter before it.
-        assert_eq!(chapters(&m(&[(30.0, "A"), (90.0, "B")]), 300.0).unwrap(), "0:00 Start\n0:30 A\n1:30 B");
-        // Just past the start counts as the start.
-        assert!(chapters(&m(&[(3.0, "A"), (90.0, "B"), (200.0, "C")]), 300.0).unwrap().starts_with("0:00 A"));
-        // Too close together: merged; too few: none.
-        assert_eq!(chapters(&m(&[(0.0, "A"), (5.0, "B"), (100.0, "C")]), 300.0), None);
-        assert_eq!(chapters(&m(&[(0.0, "A"), (4000.0, "B"), (5000.0, "C")]), 6000.0).unwrap(), "0:00 A\n1:06:40 B\n1:23:20 C");
-        assert_eq!(chapters(&[], 100.0), None);
-    }
 
     #[test]
     fn encodes_like_a_browser() {

@@ -163,13 +163,16 @@ impl Session {
         std::fs::write(path, zip).with_context(|| format!("writing {}", path.display()))
     }
 
-    /// What the Resolve script reads: the take as a Lua table.
-    pub fn resolve_lua(&self, folder: &Path, cameras: &[String], timeline: Option<&str>) -> String {
+    /// What the Resolve script reads: the take as a Lua table. (The paths
+    /// are where the take is now; the script finds them again if it's moved.)
+    pub fn resolve_lua(&self, folder: &Path, cameras: &[String], timeline: Option<&str>, canvas: (u32, u32)) -> String {
         let lua = |s: &str| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', " "));
         let path = |f: &str| lua(&folder.join(f).to_string_lossy());
         let mut s = String::from("-- Written by Cutaway: read by the \"Cutaway - Build project from a take\" script in DaVinci Resolve.\nreturn {\n");
         let _ = writeln!(s, "  name = {},", lua(&self.name));
         let _ = writeln!(s, "  fps = {},", self.fps);
+        let _ = writeln!(s, "  width = {},", canvas.0);
+        let _ = writeln!(s, "  height = {},", canvas.1);
         let _ = writeln!(s, "  folder = {},", lua(&folder.to_string_lossy()));
         s.push_str("  cameras = {");
         for c in cameras {
@@ -313,8 +316,8 @@ mod tests {
         assert_eq!(&zip[..4], b"PK\x03\x04");
         assert!(zip.windows(11).any(|w| w == b"project.xml"));
 
-        let lua = s.resolve_lua(&folder, &["Program.mp4".into()], Some("Take.fcpxml"));
-        assert!(lua.contains("fps = 30,") && lua.contains("Program.mp4") && lua.contains("frame = 45"));
+        let lua = s.resolve_lua(&folder, &["Program.mp4".into()], Some("Take.fcpxml"), (1920, 1080));
+        assert!(lua.contains("fps = 30,") && lua.contains("width = 1920,") && lua.contains("height = 1080,") && lua.contains("Program.mp4") && lua.contains("frame = 45"));
         let _ = std::fs::remove_dir_all(folder.parent().unwrap());
     }
 

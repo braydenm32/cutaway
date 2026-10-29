@@ -20,7 +20,7 @@ asio = ["cpal/asio"]
 whisper = ["dep:whisper-rs"]
 
 [dependencies]
-eframe = "0.37"
+eframe = { version = "0.37", features = ["persistence"] }
 wgpu = "30"
 pollster = "0.4"
 bytemuck = { version = "1", features = ["derive"] }

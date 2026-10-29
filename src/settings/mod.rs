@@ -1391,7 +1391,11 @@ impl SettingsUi {
                         ui.checkbox(&mut o.resolve_project, "a project from each take");
                         if ui.button("Install the Resolve script").on_hover_text("Adds \"Cutaway - Build project from a take\" to Resolve's Workspace → Scripts menu").clicked() {
                             self.resolve_note = Some(match crate::engine::sessions::install_resolve_script() {
-                                Ok(p) => (format!("Installed in {}. In Resolve: Workspace → Scripts → Cutaway - Build project from a take.", p.display()), false),
+                                Ok(p) => {
+                                    // The script builds from what each take saves.
+                                    o.resolve_project = true;
+                                    (format!("Installed in {}. Takes from now on can be built in Resolve: Workspace → Scripts → Cutaway - Build project from a take.", p.display()), false)
+                                }
                                 Err(e) => (format!("Couldn't install it: {e:#}"), true),
                             });
                         }

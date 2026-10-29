@@ -262,7 +262,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Recording, "Timecode") => "Stamps every file with the time of day as timecode, so editors can line the files up by it.",
         (Recording, "Editor timelines") => "Saves the live edit as a multicam timeline for Final Cut Pro, DaVinci Resolve and Premiere Pro, with every angle and your cuts.",
         (Recording, "Audio sessions") => "Saves a REAPER session and a DAWproject (Fender Studio Pro, Bitwig, Cubase) with every WAV on its own track, lined up.",
-        (Recording, "DaVinci Resolve") => "Saves what Cutaway's Resolve script needs to build a whole project from the take. Install the script once; then in Resolve: Workspace → Scripts → Cutaway - Build project from a take.",
+        (Recording, "DaVinci Resolve") => "Saves what Cutaway's Resolve script needs to build a whole project from the take. Install the script once (that turns this on too); then in Resolve: Workspace → Scripts → Cutaway - Build project from a take.",
         (Recording, "Proxy files") => "Also records small copies of the video files for editing on a laptop; the editor switches to the full files for the final export.",
         (Recording, "Each input on its own track") => "Adds every input as its own audio track in the Program file, after the mix. Players play the mix; editors (Premiere, Resolve, Final Cut) see every track, named after its input, for rebalancing.",
         (Recording, "Input tracks") => "Before the fader: each input as it came in (with its processing), so nothing's lost if a mic was down or off. As heard: what went into the mix.",
@@ -316,7 +316,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Upload, "Description") => "The video's description.",
         (Upload, "Chapters") => "Adds the take's markers to the description as chapters (YouTube needs at least three, ten seconds apart).",
         (Upload, "Google Drive") => "Uploads files from each take to Google Drive. Cutaway only sees the Drive files it makes.",
-        (Upload, "What") => "Which files: the program; the program, the vertical version and the mix; or every file in the take.",
+        (Upload, "What") => "Which files: the program; the program, the vertical version and the mix (and the podcast, when one's made); or every file in the take.",
         (Upload, "Folder") => "A folder in My Drive; each take gets its own folder inside it.",
         (Upload, "When") => "Upload as each take is saved, or wait for you to press Upload. Uploads go one at a time in the background, and pick up again if the connection drops.",
 
