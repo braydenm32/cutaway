@@ -26,6 +26,7 @@ mod guide;
 mod production;
 mod starting;
 mod undo;
+mod takes;
 mod uploads;
 mod waiting;
 
@@ -247,6 +248,8 @@ pub struct App {
     settle_at: Option<Instant>,
     /// Uploads to YouTube and Google Drive.
     uploads: uploads::Uploads,
+    /// The "Take saved" card.
+    takes: takes::Takes,
     /// The live chat, the comment on screen, and the newest one shown.
     chat: Option<crate::net::chat::Chat>,
     comment_on: Option<u64>,
@@ -330,6 +333,7 @@ impl App {
             about_open: false,
             settle_at: None,
             uploads: Default::default(),
+            takes: Default::default(),
             chat: None,
             comment_on: None,
             comment_at: None,
@@ -1884,6 +1888,19 @@ impl App {
                 self.settings = Some(self.new_settings().open_at(section).select_source(source));
                 4
             }
+            // Stop, to show the "Take saved" card.
+            3 if t > 7.0 && std::env::var_os("CUTAWAY_UI_TEST_STOP").is_some() => {
+                self.toggle_record();
+                5
+            }
+            // STOP=resolve: then its Open in Resolve.
+            5 if t > 11.0 && std::env::var("CUTAWAY_UI_TEST_STOP").is_ok_and(|v| v == "resolve") => {
+                let folder = self.engine.as_ref().and_then(|e| e.status.lock_ok().last_take.as_ref().map(|r| r.folder.clone()));
+                if let Some(f) = folder {
+                    self.take_action(takes::TakeAction::Resolve(f), ctx);
+                }
+                6
+            }
             s => s,
         };
         self.self_test = Some((start, next));
@@ -2067,6 +2084,7 @@ impl App {
             (st.rec.clone(), st.last_take.clone(), st.stream.clone(), st.markers, st.disk.clone(), st.background.clone())
         };
         let streaming = engine.is_streaming();
+        self.tick_take_card(matches!(rec, RecState::Recording { .. }), last.as_ref());
         let mut status_line: Option<(String, Color32)> = None;
         let mut marker_clicked = false;
         let mut clip_clicked = false;
@@ -2150,12 +2168,19 @@ impl App {
             }
             RecState::Idle => {
                 let btn = pill(RichText::new("●  RECORD").size(15.0).strong().color(RED), RAISED).stroke(Stroke::new(1.5, RED_DIM));
-                if ui.add(btn).on_hover_text("Record every source, the program and the audio (Ctrl/Cmd+R)").clicked() {
+                let r = ui.add(btn).on_hover_text("Record every source, the program and the audio (Ctrl/Cmd+R)");
+                if r.clicked() {
                     self.toggle_record();
+                }
+                if self.settings.is_none() {
+                    self.take_card(ui.ctx(), r.rect, last.as_ref());
                 }
                 if let Some(t) = &last {
                     let total: u64 = t.files.iter().map(|f| f.1).sum();
-                    status_line = Some((format!("Last take: {} files, {} — {}", t.files.len(), crate::util::human_size(total), t.folder.display()), TEXT_DIM));
+                    // The space left stays in view once there's a take.
+                    let free = disk.as_ref().map(|d| format!(" · {} free", crate::util::human_size(d.free))).unwrap_or_default();
+                    let color = if disk.as_ref().and_then(|d| d.seconds_left()).is_some_and(|s| s < 1800.0) { AMBER } else { TEXT_DIM };
+                    status_line = Some((format!("Last take: {} files, {}{free} — {}", t.files.len(), crate::util::human_size(total), t.folder.display()), color));
                 } else if let Some(d) = &disk {
                     status_line = Some((d.describe(), TEXT_DIM));
                 }

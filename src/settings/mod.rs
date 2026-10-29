@@ -292,6 +292,8 @@ pub struct SettingsUi {
     apps: Option<Vec<String>>,
     /// Installing the Resolve script: what happened.
     resolve_note: Option<(String, bool)>,
+    /// A folded part to open when its page first shows (e.g. "rec_editing").
+    unfold: Option<&'static str>,
     /// The LUT picked for a source, checked: (file, description or problem).
     lut_check: Option<(PathBuf, Result<String, String>)>,
     /// The tab last open in each group.
@@ -429,6 +431,7 @@ impl SettingsUi {
             sel_macro: 0,
             apps: None,
             resolve_note: None,
+            unfold: None,
             lut_check: None,
             last_tab: Default::default(),
             sel_preset: None,
@@ -455,6 +458,13 @@ impl SettingsUi {
 
     pub fn open_at(mut self, section: Section) -> Self {
         self.section = section;
+        self
+    }
+
+    /// Open at a page with one of its folded parts open.
+    pub fn unfold(mut self, section: Section, part: &'static str) -> Self {
+        self.section = section;
+        self.unfold = Some(part);
         self
     }
 
@@ -1397,7 +1407,8 @@ impl SettingsUi {
         .map(|(_, n)| n)
         .collect();
         let state = if extras.is_empty() { "nothing extra".to_string() } else { extras.join(", ") };
-        part(ui, "rec_editing", "For editing", &state, false, |ui| {
+        let unfold = self.unfold.take_if(|p| *p == "rec_editing").is_some();
+        part_with(ui, "rec_editing", "For editing", &state, false, unfold, |ui| {
             egui::Grid::new("rec_editing_grid").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
                 label(ui, "Timecode");
                 ui.checkbox(&mut o.timecode, "the time of day, in every file");
@@ -1814,12 +1825,17 @@ pub(super) fn title(ui: &mut egui::Ui, _text: &str, sub: &str) {
 
 /// A part of a page that folds away, with how it's set when folded.
 pub(super) fn part<R>(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, name: &str, state: &str, open: bool, body: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
+    part_with(ui, id, name, state, open, false, body)
+}
+
+/// A part, opened now if `unfold`.
+pub(super) fn part_with<R>(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, name: &str, state: &str, open: bool, unfold: bool, body: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
     let mut job = egui::text::LayoutJob::default();
     job.append(name, 0.0, egui::TextFormat::simple(egui::FontId::proportional(15.5), Color32::WHITE));
     if !state.is_empty() {
         job.append(&format!("   {state}"), 0.0, egui::TextFormat::simple(egui::FontId::proportional(13.5), TEXT_DIM));
     }
-    let r = egui::CollapsingHeader::new(job).id_salt(id).default_open(open).show(ui, |ui| {
+    let r = egui::CollapsingHeader::new(job).id_salt(id).default_open(open).open(unfold.then_some(true)).show(ui, |ui| {
         ui.add_space(4.0);
         let r = body(ui);
         ui.add_space(6.0);

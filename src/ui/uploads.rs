@@ -300,7 +300,7 @@ impl App {
         }
     }
 
-    fn upload_take(&mut self, report: TakeReport) {
+    pub(super) fn upload_take(&mut self, report: TakeReport) {
         let (jobs, problems) = jobs_for(&self.cfg, &report);
         for p in problems {
             self.toast(format!("Upload: {p}"), true);
