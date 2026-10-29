@@ -1974,6 +1974,11 @@ impl App {
                 2
             }
             2 if t > 4.0 => {
+                if std::env::var_os("CUTAWAY_UI_TEST_SPLIT").is_some() {
+                    // Split the first camera in two and apply, as the Split… button does.
+                    let cfg = self.new_settings().with_split(0, 2).draft_config();
+                    let _ = self.apply_settings(cfg, ctx);
+                }
                 if std::env::var_os("CUTAWAY_UI_TEST_EDIT").is_some() {
                     self.edit_mode = true;
                     self.selected_layer = Some(1);
@@ -4957,6 +4962,14 @@ impl App {
             let new_of = |old: usize| old_uids.get(old).and_then(|u| new_uids.iter().position(|n| n == u));
             for sc in &mut new.scenes {
                 sc.remap_sources(&new_of);
+            }
+        }
+        // Close-ups just cut from a camera also get a scene with them side by side.
+        if !own_scenes {
+            let both = crate::scene::split_scenes(&new.sources, &|i| !old_uids.contains(&new.sources[i].uid), &new.effective_scenes());
+            if !both.is_empty() {
+                new.scenes = new.effective_scenes();
+                new.scenes.extend(both);
             }
         }
         let mut notes = Vec::new();

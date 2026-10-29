@@ -137,7 +137,9 @@ and [Install on Windows](#install-on-windows).
   right"…), with a box on the wide picture to drag onto them and a name
   title to fill in. Each records to its own file, ready for the edit. Each
   close-up is sized to the part of the picture it shows (half a 4K camera
-  is 1080p), so it stays sharp and is cheap to cut out.
+  is 1080p), so it stays sharp and is cheap to cut out. Applying also adds
+  a scene "Cam 1: both" (or "all three") with the close-ups side by side,
+  unless a scene of that name is already there.
 - **See it before you apply it:** in **Settings → Video sources** each source
   shows its picture above its settings (the multiview's own, so nothing is
   opened twice). Crop and mirror show what they'll look like as you change

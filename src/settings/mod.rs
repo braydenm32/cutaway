@@ -470,6 +470,11 @@ impl SettingsUi {
         self
     }
 
+    /// The settings as they are being edited (for the UI self-test).
+    pub fn draft_config(&self) -> Config {
+        self.draft.clone()
+    }
+
     pub fn dirty(&self) -> bool {
         self.draft != self.original
     }
