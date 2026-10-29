@@ -1223,6 +1223,14 @@ it: a project, the YouTube Data API and/or Google Drive API turned on, and a
   older take from **Recent takes** (▾ beside Record), or uploads start straight away if you choose. They go on in the
   background, one at a time, with their progress, and pick up again if the
   connection drops.
+- **Quitting doesn't lose them.** The queue is kept in `uploads.json` beside
+  the settings (what to send and where, and Google's upload session; never
+  your sign-in, which stays in the Keychain / Credential Manager). Next time
+  Cutaway opens, the Uploads panel says "2 uploads didn't finish": **Carry
+  on** picks each up where Google got to (Drive files already sent aren't
+  sent again; a session Google has expired, after about a week, starts that
+  file again), or **Forget them**. It asks rather than starting by itself so
+  an upload never takes your connection during a show.
 
 Two things Google decides: while your Google Cloud app is in **Testing**,
 Google signs Cutaway out after 7 days (publishing the app, which needs no
