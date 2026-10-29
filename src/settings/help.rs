@@ -31,7 +31,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
 
         // ---- Video sources
         (Sources, "Name") => "What this source is called on its button, in the multiview and scenes, and in the name of its own file (ISO_01_Name).",
-        (Sources, "Name title") => "Who's in this picture and their role, for a name title that names whoever is on air (Settings → Graphics → Who's on air). For a camera split into close-ups, set each close-up to its own person. A guest spot left empty uses the name the guest types.",
+        (Sources, "Name title") => "Who's in this picture and their role, for a name title that names whoever is on air (Settings → Graphics → Names of whoever's on air). For a camera split into close-ups, set each close-up to its own person. A guest spot left empty uses the name the guest types.",
         (Sources, "Feed") => "How the network feed arrives. SRT (wait for a sender): another computer or app sends to this one. SRT (pull from an address): Cutaway fetches it from an address you type. RTMP: point OBS, a phone app or an encoder at Cutaway's own RTMP server.",
         (Sources, "Type") => "Where the picture comes from, in groups: cameras and screens on this computer (or a phone), close-ups cut from another source, feeds from the network (SRT or RTMP, picked under Network feed, or NDI), and a media player or test picture. Two people on one camera? Use Virtual PTZ (you aim it) or Auto-framed (it follows them).",
         (Sources, "Device") => "Which camera or capture card. If it's unplugged, the source waits and connects by itself when it's back.",

@@ -279,7 +279,8 @@ Take_2026-10-16_19-30-02/
   between guests.
 - **Names that follow people:** give each source the name and role of
   whoever is in it (**Settings → Video sources → Name title**; a guest spot
-  uses the name the guest types), and add a **Who's on air** title in
+  uses the name the guest types), and add **Names of whoever's on air** (the
+  recommended button; **Fixed title** is for typed text) in
   Settings → Graphics. It names whoever fills the program, changing at each
   cut, and can come on by itself for a few seconds when someone new is on
   air (not again for the same person for 10 minutes, or as you set). Its
