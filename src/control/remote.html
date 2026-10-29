@@ -18,7 +18,7 @@
   .brand { font-weight:700; letter-spacing:3px; font-size:15px; margin-right:auto; }
   button { font:inherit; color:var(--text); background:var(--raised); border:1px solid var(--line); border-radius:12px; padding:12px 14px; min-height:48px; cursor:pointer; }
   button:active { transform:scale(.98); }
-  .pill { border-radius:24px; font-weight:700; min-width:118px; }
+  .pill { border-radius:24px; font-weight:700; min-width:118px; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
   .rec.on { background:var(--red); border-color:var(--red); }
   .live.on { background:var(--live); border-color:var(--live); }
   .monitor { margin:12px 0; position:relative; background:#000; border-radius:10px; overflow:hidden; aspect-ratio:16/9; border:2px solid #401018; }
@@ -65,8 +65,8 @@
 <body>
 <header>
   <div class="brand">CUTAWAY</div>
-  <button class="pill rec" id="rec" onclick="guarded('record')">● RECORD</button>
-  <button class="pill live" id="live" onclick="guarded('live')">◉ GO LIVE</button>
+  <button class="pill rec" id="rec">● RECORD</button>
+  <button class="pill live" id="live">◉ GO LIVE</button>
   <button id="marker" onclick="act('marker')">＋ Marker</button>
   <button id="clip" onclick="act('clip')">✂ Clip</button>
   <button class="replay" id="replay" onclick="act('replay')">⟲ Replay</button>
@@ -119,16 +119,52 @@ async function act(cmd) {
     if (!wsLive) poll();
   } catch (e) { flash('Cutaway isn\'t answering', true); }
 }
-// Stopping a take or ending the stream takes a second tap within 3 s, like
-// the Stream Deck's hold, so a stray tap in a pocket can't split the show.
-let armed = null, armTimer = null;
-function guarded(cmd) {
-  const on = state && (cmd === 'record' ? state.recording : state.live);
-  if (!on || armed === cmd) { armed = null; clearTimeout(armTimer); act(cmd); return; }
-  armed = cmd; clearTimeout(armTimer);
-  armTimer = setTimeout(() => { armed = null; if (state) render(); }, 3000);
+// Stopping a take or ending the stream takes a one-second hold (a fill
+// grows across the button), like the Stream Deck, so a stray tap in a pocket
+// can't split the show. Starting is one tap.
+const HOLD_MS = 1000;
+let holding = null, hint = null, hintTimer = null, heldAt = 0;
+function isOn(cmd) { return !!state && (cmd === 'record' ? state.recording : state.live); }
+function setFill(b, f) { b.style.backgroundImage = f > 0 ? 'linear-gradient(90deg, #ffffff66 ' + (f * 100) + '%, transparent ' + (f * 100) + '%)' : ''; }
+function holdStart(e, cmd) {
+  if (!isOn(cmd) || holding) return;
+  e.preventDefault();
+  const b = e.currentTarget, start = performance.now();
+  holding = { cmd, b };
+  if (state) render();
+  const step = () => {
+    if (!holding || holding.b !== b) return;
+    const f = Math.min(1, (performance.now() - start) / HOLD_MS);
+    setFill(b, f);
+    if (f < 1) { requestAnimationFrame(step); return; }
+    holding = null; heldAt = Date.now(); setFill(b, 0); act(cmd);
+  };
+  requestAnimationFrame(step);
+}
+function holdEnd() {
+  if (!holding) return;
+  // Let go too soon: nothing happens, but say how.
+  const { cmd, b } = holding; holding = null; setFill(b, 0);
+  showHint(cmd);
+}
+function showHint(cmd) {
+  hint = cmd; clearTimeout(hintTimer);
+  hintTimer = setTimeout(() => { hint = null; if (state) render(); }, 1500);
   if (state) render();
 }
+function tapped(cmd) {
+  // The click that ends a hold (or a tap while it's on) never starts or stops anything.
+  if (Date.now() - heldAt < 1500) return;
+  if (isOn(cmd)) { if (!hint) showHint(cmd); return; }
+  act(cmd);
+}
+[['rec', 'record'], ['live', 'live']].forEach(([id, cmd]) => {
+  const b = document.getElementById(id);
+  b.style.touchAction = 'none';
+  b.onpointerdown = e => holdStart(e, cmd);
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => b.addEventListener(ev, holdEnd));
+  b.onclick = () => tapped(cmd);
+});
 // An error stays up for at least 4 s, so the next state push doesn't wipe it before it's read.
 let errUntil = 0;
 function setStatus(text, bad) { const s = document.getElementById('status'); s.textContent = text; s.className = 'status' + (bad ? ' warn' : ''); }
@@ -150,10 +186,10 @@ function render() {
   if (tallySource !== null) return renderTally();
   const rec = document.getElementById('rec'), live = document.getElementById('live');
   rec.className = 'pill rec' + (s.recording ? ' on' : '');
-  rec.textContent = s.saving ? 'Saving ' + Math.round(s.saving.percent) + '%' : s.recording ? (armed === 'record' ? 'Tap again to stop' : '■ REC ' + clock(s.rec_seconds)) : '● RECORD';
+  rec.textContent = s.saving ? 'Saving ' + Math.round(s.saving.percent) + '%' : s.recording ? (hint === 'record' || (holding && holding.cmd === 'record') ? 'Hold to stop' : '■ REC ' + clock(s.rec_seconds)) : '● RECORD';
   rec.title = s.saving ? s.saving.step : '';
   live.className = 'pill live' + (s.live ? ' on' : '');
-  live.textContent = s.live ? (armed === 'live' ? 'Tap again to end' : '◉ LIVE ' + clock(s.live_seconds)) : '◉ GO LIVE';
+  live.textContent = s.live ? (hint === 'live' || (holding && holding.cmd === 'live') ? 'Hold to end' : '◉ LIVE ' + clock(s.live_seconds)) : '◉ GO LIVE';
   document.getElementById('marker').style.display = s.recording ? '' : 'none';
   const clip = document.getElementById('clip');
   clip.style.display = s.recording ? '' : 'none';

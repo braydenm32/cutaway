@@ -671,7 +671,7 @@ Video Extensions** on some PCs.
 | Timers | Right-click a countdown or stopwatch's graphic button: start, pause, reset |
 | Graphics 1–9 | Alt/Option + number, or the graphic buttons; ✎ edits a title's text live |
 | Media player | ⟲ ⏯ ⏭ on its tile; right-click the tile for the playlist |
-| Record / stop | ⌘R, or the record button |
+| Record / stop | ⌘R, or the record button. To stop, hold the **■ REC** button for a second (a fill grows across it; a quick click only says **Hold to stop**); ⌘R asks "Stop recording?" first, so a stray click or key can't split the take |
 | Go live / end stream | The **GO LIVE** button. It has no key unless you give it one in Settings → Shortcuts, so a stray key can't start or end a broadcast (a key gets the same checks and "are you sure?" as the button) |
 | Edit layout | `E`, or **Edit layout**: drag frames, drag the corner to resize (Shift keeps shape), **Fit/Fill** and **Zoom** for the selected frame (or double-click a frame to fill it, scroll to zoom, Option/Alt-drag to move the picture), add/remove sources, scene audio, duplicate, rename, **Save scenes** |
 | Audio strip | Fader = level (double-click resets), **ON** = in the mixes, 🎧 = solo in the headphones |
@@ -791,9 +791,10 @@ network and type the PIN. The remote always has one (Cutaway makes a
 four-digit PIN if you don't set your own), and a device that gets it wrong
 five times in a row waits a minute before it can try again.
 
-To stop a recording or end the stream from the phone, tap the red button
-twice within three seconds (the first tap says **Tap again to stop**), so a
-stray tap can't split the show. When the pre-show check is turned on
+To stop a recording or end the stream from the phone, hold the red (or pink)
+button for a second: a fill grows across it, and letting go sooner does
+nothing (a quick tap says **Hold to stop**), so a stray tap can't split the
+show. Starting is one tap. When the pre-show check is turned on
 (Settings → General → **Pre-show check**), starting from the phone, the Stream Deck, MIDI or OSC runs
 the check on the desk first, the same as the Record button.
 

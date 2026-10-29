@@ -943,11 +943,10 @@ impl SettingsUi {
             label(ui, "Interface size");
             ui.add(egui::Slider::new(&mut self.draft.ui.scale, 0.75..=2.0).step_by(0.05).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
             ui.end_row();
+            // Stopping a recording always takes a hold (the REC button) or a
+            // yes (keys), so only the stream has a choice here.
             label(ui, "Ask before");
-            ui.vertical(|ui| {
-                ui.checkbox(&mut self.draft.ui.confirm_stop_recording, "stopping a recording");
-                ui.checkbox(&mut self.draft.ui.confirm_end_stream, "ending a live stream");
-            });
+            ui.checkbox(&mut self.draft.ui.confirm_end_stream, "ending a live stream");
             ui.end_row();
             label(ui, "Pre-show check");
             ui.checkbox(&mut self.draft.ui.check_before_start, "before recording or going live");
