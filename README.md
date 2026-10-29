@@ -623,7 +623,10 @@ Video Extensions** on some PCs.
   `cutaway.example.toml` explains every option.
 - **Settings** are in six groups (Inputs, Sound, Look, Show, Output and
   General), each with its pages as tabs; less-used parts fold away, showing how
-  they're set. Hover a setting's name, or its ⓘ, for what it does.
+  they're set. Hover a setting's name, or its ⓘ, for what it does. **Find a
+  setting…** at the top of the list matches setting names, their help and page
+  names; click a match to open its page, with the setting's name lit up (Esc
+  clears the box).
 - **The Settings window** can be dragged by its title and resized from its
   corner, so it needn't cover the camera you're adjusting. It opens where you
   left it on this computer; **Centre** puts it back. While it's open, click the

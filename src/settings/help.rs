@@ -3,10 +3,122 @@
 //! page that's showing and the name as written there.
 
 use super::Section;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::sync::OnceLock;
+use std::time::Instant;
 
 thread_local! {
     static PAGE: Cell<Option<Section>> = const { Cell::new(None) };
+    /// The setting "Find a setting" took us to: page, label, when, and whether it has been scrolled to.
+    static TARGET: RefCell<Option<(Section, String, Instant, bool)>> = const { RefCell::new(None) };
+}
+
+/// How long a found setting's name stays lit.
+const LIT_SECS: f32 = 2.5;
+
+fn lit_secs() -> f32 {
+    // Long enough for a scripted screenshot to catch.
+    if std::env::var_os("CUTAWAY_UI_TEST_FINDGO").is_some() { 30.0 } else { LIT_SECS }
+}
+
+/// Light up (and scroll to) this setting's name when its page draws it.
+pub(super) fn find_target(page: Section, label: &str) {
+    TARGET.with(|t| *t.borrow_mut() = Some((page, label.to_string(), Instant::now(), false)));
+}
+
+/// Called as each setting's name is drawn on the page being shown: if it's the one that was found,
+/// how lit it is (1 to 0), and whether to scroll to it (once).
+pub(super) fn lit(name: &str) -> Option<(f32, bool)> {
+    let page = PAGE.with(|p| p.get())?;
+    TARGET.with(|t| {
+        let mut t = t.borrow_mut();
+        let (p, l, since, scrolled) = t.as_mut()?;
+        let age = since.elapsed().as_secs_f32();
+        if age > lit_secs() {
+            *t = None;
+            return None;
+        }
+        if *p != page || l != name {
+            return None;
+        }
+        let first = !*scrolled;
+        *scrolled = true;
+        Some((1.0 - age / lit_secs(), first))
+    })
+}
+
+/// A setting that has help: its page and name, and what the help says.
+pub(super) struct Entry {
+    pub page: Section,
+    pub label: String,
+    pub text: String,
+}
+
+/// Every (page, name) in `for_page`, read from this file's own table, so the list can't fall out of step with it.
+pub(super) fn entries() -> &'static [Entry] {
+    static ALL: OnceLock<Vec<Entry>> = OnceLock::new();
+    ALL.get_or_init(|| parse_entries(include_str!("help.rs")))
+}
+
+fn parse_entries(src: &str) -> Vec<Entry> {
+    let unquote = |s: &str| s.replace("\\\"", "\"").replace("\\n", " ");
+    let mut out = Vec::new();
+    // (Up to the tests at the end.)
+    for line in src.rsplit_once("#[cfg(test)]").map_or(src, |(table, _)| table).lines() {
+        let line = line.trim();
+        let Some((left, right)) = line.split_once(" => \"") else { continue };
+        if !left.starts_with('(') {
+            continue;
+        }
+        let text = unquote(right.trim_end_matches(',').trim_end_matches('"'));
+        for part in left.split(" | ") {
+            let inner = part.trim().trim_start_matches('(').trim_end_matches(')');
+            let Some((page, label)) = inner.split_once(", \"") else { continue };
+            let Some(page) = Section::from_ident(page.trim()) else { continue };
+            out.push(Entry { page, label: unquote(label.trim_end_matches('"')), text: text.clone() });
+        }
+    }
+    out
+}
+
+/// One answer to "Find a setting": a page, or a setting on one.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Hit {
+    pub page: Section,
+    pub label: Option<String>,
+}
+
+/// Settings and pages matching what was typed (every word of it), best first: names, then pages, then
+/// what the help says. At most `max`.
+pub(super) fn search(query: &str, max: usize) -> Vec<Hit> {
+    let words: Vec<String> = query.split_whitespace().map(|w| w.to_lowercase()).collect();
+    if words.is_empty() {
+        return Vec::new();
+    }
+    let has = |hay: &str| words.iter().all(|w| hay.to_lowercase().contains(w.as_str()));
+    let mut out: Vec<Hit> = Vec::new();
+    let push = |h: Hit, out: &mut Vec<Hit>| {
+        if !out.contains(&h) {
+            out.push(h);
+        }
+    };
+    for e in entries() {
+        if has(&e.label) {
+            push(Hit { page: e.page, label: Some(e.label.clone()) }, &mut out);
+        }
+    }
+    for page in Section::ALL {
+        if has(page.label()) {
+            push(Hit { page, label: None }, &mut out);
+        }
+    }
+    for e in entries() {
+        if has(&format!("{} {}", e.label, e.text)) {
+            push(Hit { page: e.page, label: Some(e.label.clone()) }, &mut out);
+        }
+    }
+    out.truncate(max);
+    out
 }
 
 /// The page being drawn (None between pages).
@@ -392,5 +504,25 @@ mod tests {
             }
         }
         assert!(missing.is_empty(), "no help for: {missing:?}");
+    }
+
+    #[test]
+    fn find_a_setting_by_name_page_or_help() {
+        // The table is read as it is: a few known entries, the "|" one with both names.
+        let all = entries();
+        assert!(all.len() > 200, "{}", all.len());
+        assert!(all.iter().any(|e| e.page == Section::Sources && e.label == "Name title" && e.text.contains("on air")));
+        assert!(all.iter().any(|e| e.page == Section::Sources && e.label == "Crop top / bottom"));
+        assert!(all.iter().any(|e| e.page == Section::Upload && e.label == "Client secret" && e.text.starts_with("From the OAuth")));
+        // Names first.
+        let hits = search("name title", 8);
+        assert_eq!(hits[0], Hit { page: Section::Sources, label: Some("Name title".into()) });
+        // A page by its name.
+        assert!(search("streaming", 8).contains(&Hit { page: Section::Streaming, label: None }));
+        // By what the help says (not in any name).
+        assert!(search("gate", 8).iter().any(|h| h.page == Section::Audio));
+        assert!(search("zzzqqq", 8).is_empty());
+        assert!(search("  ", 8).is_empty());
+        assert!(search("e", 8).len() <= 8);
     }
 }
