@@ -515,7 +515,8 @@ impl Engine {
             report.podcast_pending = cfg.podcast.enabled && folder.join("Mix.wav").exists();
             let events = switcher.events_between(t0 + VIDEO_LATENCY, t1 + VIDEO_LATENCY);
             saving("Writing the timeline and notes".into(), 0.95);
-            let written = side.write(&cfg, &report, &summary, &events, t0, t1, wall, fps, (cw, ch), stream_since, cues.as_deref());
+            let (written, backup_problem) = side.write(&cfg, &report, &summary, &events, t0, t1, wall, fps, (cw, ch), stream_since, cues.as_deref());
+            report.problems.extend(backup_problem);
             let mut st = status.lock_ok();
             let total: u64 = report.files.iter().map(|f| f.1).sum();
             st.push(
@@ -616,7 +617,7 @@ struct SideFiles {
 
 impl SideFiles {
     /// Writes the side files (and copies them to the backup). Returns the
-    /// names of the optional ones written.
+    /// names of the optional ones written, and what went wrong with the backup.
     #[allow(clippy::too_many_arguments)]
     fn write(
         &self,
@@ -631,8 +632,9 @@ impl SideFiles {
         canvas: (u32, u32),
         stream_since: Option<Ns>,
         cues: Option<&[super::captions::Cue]>,
-    ) -> Vec<String> {
+    ) -> (Vec<String>, Option<String>) {
         let mut extra = Vec::new();
+        let mut backup_problem = None;
         let mut files: Vec<(String, String)> = Vec::new();
         files.push(("Switches.csv".into(), switch_log(t0, fps, &self.first_scene, events)));
         if !self.on_air.is_empty() {
@@ -748,12 +750,13 @@ impl SideFiles {
                 })
                 .collect();
             if !missing.is_empty() {
+                backup_problem = Some(format!("The backup copy didn't finish: {} of the files didn't fully reach {} (see BACKUP INCOMPLETE.txt there)", missing.len(), b.display()));
                 let _ = std::fs::write(b.join("BACKUP INCOMPLETE.txt"), format!("These files didn't fully reach the backup drive:\n{}\n\nThe main recording in {} is complete.\n", missing.join("\n"), self.folder.display()));
             } else {
                 extra.push(format!("backup in {}", b.display()));
             }
         }
-        extra
+        (extra, backup_problem)
     }
 }
 

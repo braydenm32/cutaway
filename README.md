@@ -223,6 +223,13 @@ and [Install on Windows](#install-on-windows).
   with a button to show the folder.
 - **Saving files** after you stop shows what it's finishing (each video, the
   sound, the timeline) and how far along it is, on the Record button.
+- **Take saved:** once it's done, a card under the Record button says how
+  long the take is, how big, and either ✓ All files saved or ⚠ what went
+  wrong (dropped or repeated frames, a file that failed, a backup copy that
+  didn't finish). Its buttons: **Show in Finder** (Explorer on Windows),
+  **Open in Resolve** (see [Editing your takes](#editing-your-takes)) and
+  **Upload** (when uploads are set up). ✕ puts it away; the next recording
+  does too. The header keeps the last take and the free space in view.
 
 A take looks like this:
 
@@ -1208,8 +1215,8 @@ it: a project, the YouTube Data API and/or Google Drive API turned on, and a
 - **Google Drive** gets the program, the program with the vertical version
   and the mix (and the podcast, when one's made), or the whole take, in a
   folder per take (inside a "Cutaway" folder).
-- An **Upload** button appears in the main window's Uploads panel when a take
-  is saved (and its podcast made), or uploads start straight away if you choose. They go on in the
+- An **Upload** button appears in the main window's Uploads panel (and on
+  the Take saved card) when a take is saved (and its podcast made), or uploads start straight away if you choose. They go on in the
   background, one at a time, with their progress, and pick up again if the
   connection drops.
 
@@ -1235,6 +1242,9 @@ Cutaway only sees the Drive files it made.
   rate and picture size, with bins for the cameras and the audio, proxies
   linked and the live edit as a timeline with the markers. A take moved or
   copied to another drive still works: pick it where it is now.
+  **Open in Resolve** on the Take saved card copies the take's folder and
+  starts the script there; without the script it opens the settings to
+  install it.
 - **REAPER:** open the take's `.rpp`: every WAV is on its own track, lined
   up, with the markers.
 - **Fender Studio Pro (Studio One), Bitwig, Cubase:** open (or import) the
