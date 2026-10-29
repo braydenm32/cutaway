@@ -94,22 +94,15 @@ impl SettingsUi {
                 }
                 ui.add_space(6.0);
                 ui.horizontal_wrapped(|ui| {
-                    if ui.button("＋ Segment").clicked() {
-                        let name = unique(self.draft.rundown.segments.iter().map(|s| s.name.clone()).collect(), if n == 0 { "Intro" } else { "Segment" });
-                        let at = if n == 0 { 0 } else { self.sel_segment + 1 };
-                        self.draft.rundown.segments.insert(at, Segment { name, ..Default::default() });
-                        self.sel_segment = at;
-                    }
-                    if ui.add_enabled(n > 0, egui::Button::new("Remove")).clicked() {
-                        self.draft.rundown.segments.remove(self.sel_segment);
-                    }
-                    if ui.add_enabled(n > 0 && self.sel_segment > 0, egui::Button::new("↑")).clicked() {
-                        self.draft.rundown.segments.swap(self.sel_segment, self.sel_segment - 1);
-                        self.sel_segment -= 1;
-                    }
-                    if ui.add_enabled(n > 0 && self.sel_segment + 1 < n, egui::Button::new("↓")).clicked() {
-                        self.draft.rundown.segments.swap(self.sel_segment, self.sel_segment + 1);
-                        self.sel_segment += 1;
+                    if let Some(edit) = list_buttons(ui, n, self.sel_segment, Some("＋ Segment")) {
+                        apply_list_edit(
+                            &mut self.draft.rundown.segments,
+                            &mut self.sel_segment,
+                            edit,
+                            true,
+                            |list| Some(Segment { name: unique(list.iter().map(|s| s.name.clone()).collect(), if list.is_empty() { "Intro" } else { "Segment" }), ..Default::default() }),
+                            |s, list| Segment { name: unique(list.iter().map(|s| s.name.clone()).collect(), &format!("{} copy", s.name)), ..s.clone() },
+                        );
                     }
                 });
                 if n > 0 {

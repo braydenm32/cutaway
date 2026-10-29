@@ -632,6 +632,10 @@ pub struct SourceConfig {
     pub record: bool,
     /// Delay this video, in milliseconds, to line it up with slower sources.
     pub delay_ms: u32,
+    /// If it drops (no signal) while it's on air, cut to this scene (by
+    /// name; "" = don't switch).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub on_drop_scene: String,
     /// Crop, mirror and colour (program only; the source's own file is untouched).
     pub look: SourceLook,
     /// Media player sources (device "media"): what to play.
@@ -1019,7 +1023,8 @@ impl SourceLook {
 }
 
 /// A source's settings without those that change while it runs (its look,
-/// playlist, framing, PTZ, whether it's recorded and who's in it): if these
+/// playlist, framing, PTZ, whether it's recorded, who's in it and where to
+/// cut if it drops): if these
 /// differ, the source is reopened.
 pub fn source_key(s: &SourceConfig) -> SourceConfig {
     SourceConfig {
@@ -1030,6 +1035,7 @@ pub fn source_key(s: &SourceConfig) -> SourceConfig {
         record: true,
         person: String::new(),
         role: String::new(),
+        on_drop_scene: String::new(),
         ..s.clone()
     }
 }
@@ -1067,6 +1073,7 @@ impl Default for SourceConfig {
             fps: 30,
             record: true,
             delay_ms: 0,
+            on_drop_scene: String::new(),
             look: SourceLook::default(),
             media: MediaConfig::default(),
             network_latency_ms: 300,
@@ -1421,6 +1428,8 @@ impl Default for StreamingConfig {
 pub struct UiConfig {
     /// Interface zoom (1.0 = normal).
     pub scale: f32,
+    /// No longer used (stopping always takes a hold or a yes); kept so old
+    /// settings files still load.
     pub confirm_stop_recording: bool,
     pub confirm_end_stream: bool,
     /// Name of the show profile these settings belong to ("" = none).
@@ -1443,6 +1452,8 @@ pub struct UiConfig {
     /// How wide the column on the right was dragged (0 = its usual width).
     #[serde(skip_serializing_if = "is_zero_f32")]
     pub column_width: f32,
+    /// The clock in the header shows 12-hour time (3:05 PM), not 24-hour.
+    pub clock_12h: bool,
 }
 
 fn is_zero_f32(v: &f32) -> bool {
@@ -1499,7 +1510,7 @@ impl UiConfig {
 
 impl Default for UiConfig {
     fn default() -> Self {
-        UiConfig { scale: 1.0, confirm_stop_recording: false, confirm_end_stream: true, profile: String::new(), check_before_start: false, check_updates: true, auto_update: false, skip_version: String::new(), panel_order: Vec::new(), folded: Vec::new(), column_width: 0.0 }
+        UiConfig { scale: 1.0, confirm_stop_recording: false, confirm_end_stream: true, profile: String::new(), check_before_start: false, check_updates: true, auto_update: false, skip_version: String::new(), panel_order: Vec::new(), folded: Vec::new(), column_width: 0.0, clock_12h: false }
     }
 }
 
@@ -2216,6 +2227,34 @@ impl Config {
         }
     }
 
+    /// Rename source `i`, and everything that points at it by name (close-ups cut from it, sound taken
+    /// from it). Errors if the name is empty or another source has it.
+    pub fn rename_source(&mut self, i: usize, new: &str) -> Result<(), String> {
+        let new = new.trim();
+        if new.is_empty() {
+            return Err("A source needs a name".into());
+        }
+        if self.sources.iter().enumerate().any(|(j, s)| j != i && s.name.trim().eq_ignore_ascii_case(new)) {
+            return Err(format!("There's already a source called {new}"));
+        }
+        let Some(old) = self.sources.get(i).map(|s| s.name.clone()) else { return Err("No such source".into()) };
+        for s in &mut self.sources {
+            if s.framed_from().is_some_and(|f| f.trim().eq_ignore_ascii_case(old.trim())) {
+                s.device = format!("frame:{new}");
+            }
+            if s.virtual_ptz_of().is_some_and(|f| f.trim().eq_ignore_ascii_case(old.trim())) {
+                s.device = format!("vptz:{new}");
+            }
+        }
+        for a in &mut self.audio {
+            if a.device.trim().strip_prefix("source:").is_some_and(|n| n.trim().eq_ignore_ascii_case(old.trim())) {
+                a.device = format!("source:{new}");
+            }
+        }
+        self.sources[i].name = new.to_string();
+        Ok(())
+    }
+
     pub fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading {}", path.display()))?;
@@ -2457,6 +2496,29 @@ mod tests {
         assert!(!cfg.lineup_changed(&named));
         named.sources[0].delay_ms = 40;
         assert!(cfg.lineup_changed(&named));
+    }
+
+    #[test]
+    fn renaming_a_source_takes_what_points_at_it_along() {
+        let mut cfg = Config::default();
+        cfg.sources = vec![
+            SourceConfig { name: "Wide".into(), ..Default::default() },
+            SourceConfig { name: "Wide left".into(), device: "vptz:Wide".into(), ..Default::default() },
+            SourceConfig { name: "Other".into(), ..Default::default() },
+        ];
+        cfg.audio = vec![AudioConfig { name: "Its sound".into(), device: "source:Wide".into(), ..Default::default() }];
+        assert!(cfg.rename_source(0, "  ").is_err());
+        assert!(cfg.rename_source(0, "other").is_err(), "names stay unique");
+        assert!(cfg.rename_source(0, "WIDE").is_ok(), "its own name in other letters is fine");
+        cfg.rename_source(0, "Stage").unwrap();
+        assert_eq!(cfg.sources[0].name, "Stage");
+        assert_eq!(cfg.sources[1].virtual_ptz_of(), Some("Stage"));
+        assert_eq!(cfg.audio[0].device, "source:Stage");
+        // The name titles aren't part of what reopens a camera; the name is.
+        let mut named = cfg.clone();
+        named.sources[0].person = "Alex".into();
+        assert!(!cfg.lineup_changed(&named));
+        assert!(cfg.lineup_changed(&{ let mut r = cfg.clone(); r.rename_source(2, "Else").unwrap(); r }));
     }
 
     #[test]

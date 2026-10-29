@@ -135,19 +135,21 @@ impl SettingsUi {
                 }
                 ui.add_space(6.0);
                 ui.horizontal_wrapped(|ui| {
-                    if ui.button("＋ Add").clicked() {
-                        let used: Vec<String> = self.draft.sources.iter().map(|s| s.device.clone()).collect();
-                        let device = self.video.iter().find(|d| !used.contains(&d.name)).map(|d| d.name.clone()).unwrap_or("test".into());
-                        let name = unique(self.draft.sources.iter().map(|s| s.name.clone()).collect(), "Cam");
-                        self.draft.sources.push(SourceConfig { name, device, ..Default::default() });
-                        self.sel_source = self.draft.sources.len() - 1;
-                    }
-                    let has = n > 0;
-                    if ui.add_enabled(has, egui::Button::new("Duplicate")).clicked() {
-                        let mut s = self.draft.sources[self.sel_source].clone();
-                        s.name = unique(self.draft.sources.iter().map(|s| s.name.clone()).collect(), &s.name);
-                        self.draft.sources.insert(self.sel_source + 1, s);
-                        self.sel_source += 1;
+                    if let Some(edit) = list_buttons(ui, n, self.sel_source, Some("＋ Add")) {
+                        let video = &self.video;
+                        apply_list_edit(
+                            &mut self.draft.sources,
+                            &mut self.sel_source,
+                            edit,
+                            false,
+                            |list| {
+                                let used: Vec<&str> = list.iter().map(|s| s.device.as_str()).collect();
+                                let device = video.iter().find(|d| !used.contains(&d.name.as_str())).map(|d| d.name.clone()).unwrap_or("test".into());
+                                let name = unique(list.iter().map(|s| s.name.clone()).collect(), "Cam");
+                                Some(SourceConfig { name, device, ..Default::default() })
+                            },
+                            |s, list| SourceConfig { name: unique(list.iter().map(|s| s.name.clone()).collect(), &s.name), ..s.clone() },
+                        );
                     }
                     let can_split = self.draft.sources.get(self.sel_source).is_some_and(|s| s.framed_from().is_none() && s.virtual_ptz_of().is_none());
                     ui.add_enabled_ui(can_split, |ui| {
@@ -164,17 +166,6 @@ impl SettingsUi {
                         .response
                         .on_hover_text("Make close-ups of the people in this camera (virtual PTZ cameras), to frame on its picture");
                     });
-                    if ui.add_enabled(has, egui::Button::new("Remove")).clicked() {
-                        self.draft.sources.remove(self.sel_source);
-                    }
-                    if ui.add_enabled(has && self.sel_source > 0, egui::Button::new("↑")).clicked() {
-                        self.draft.sources.swap(self.sel_source, self.sel_source - 1);
-                        self.sel_source -= 1;
-                    }
-                    if ui.add_enabled(has && self.sel_source + 1 < n, egui::Button::new("↓")).clicked() {
-                        self.draft.sources.swap(self.sel_source, self.sel_source + 1);
-                        self.sel_source += 1;
-                    }
                 });
             });
             ui.add_space(14.0);
@@ -196,6 +187,7 @@ impl SettingsUi {
             .filter(|(i, s)| *i != self.sel_source && s.framed_from().is_none() && s.virtual_ptz_of().is_none())
             .map(|(_, s)| (s.name.clone(), s.fps))
             .collect();
+        let scene_names: Vec<String> = self.draft.effective_scenes().iter().map(|s| s.name.clone()).collect();
         let Some(src) = self.draft.sources.get_mut(self.sel_source) else {
             hint(ui, "No sources yet. Add your cameras, capture cards, the screen, a media player or a network input.");
             return;
@@ -434,6 +426,21 @@ impl SettingsUi {
             }
             label(ui, "Record to its own file");
             ui.checkbox(&mut src.record, "");
+            ui.end_row();
+            label(ui, "If it drops while on air");
+            let shown = if src.on_drop_scene.is_empty() {
+                "Don't switch".to_string()
+            } else if scene_names.contains(&src.on_drop_scene) {
+                format!("Cut to {}", src.on_drop_scene)
+            } else {
+                format!("Cut to {} (no such scene now)", src.on_drop_scene)
+            };
+            egui::ComboBox::from_id_salt("src_on_drop").selected_text(shown).width(240.0).show_ui(ui, |ui| {
+                ui.selectable_value(&mut src.on_drop_scene, String::new(), "Don't switch");
+                for n in &scene_names {
+                    ui.selectable_value(&mut src.on_drop_scene, n.clone(), format!("Cut to {n}"));
+                }
+            });
             ui.end_row();
             if !matches!(kind, SourceKind::Framed | SourceKind::VirtualPtz) {
                 label(ui, "Delay");

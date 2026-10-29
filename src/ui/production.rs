@@ -29,7 +29,7 @@ pub(super) struct Queued {
 
 /// Commands that change the scene (not run as scene or rundown cues).
 fn takes_a_scene(a: &Action) -> bool {
-    matches!(a, Action::Scene(_) | Action::CutTo(_) | Action::Preview(_) | Action::Take | Action::Cut | Action::Source(_) | Action::Rundown(_))
+    matches!(a, Action::Scene(_) | Action::CutTo(_) | Action::Preview(_) | Action::Take | Action::Cut | Action::Back | Action::Source(_) | Action::Rundown(_))
 }
 
 impl App {

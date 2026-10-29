@@ -137,7 +137,13 @@ and [Install on Windows](#install-on-windows).
   right"…), with a box on the wide picture to drag onto them and a name
   title to fill in. Each records to its own file, ready for the edit. Each
   close-up is sized to the part of the picture it shows (half a 4K camera
-  is 1080p), so it stays sharp and is cheap to cut out.
+  is 1080p), so it stays sharp and is cheap to cut out. Applying also adds
+  a scene "Cam 1: both" (or "all three") with the close-ups side by side,
+  unless a scene of that name is already there.
+- **Lists work the same everywhere:** video sources, audio inputs, graphics,
+  stream destinations, rundown segments and macros all have the same buttons
+  under the list: **＋ Add**, **Duplicate**, **Remove**, **↑** and **↓**
+  (then any of their own, like **Split…**).
 - **See it before you apply it:** in **Settings → Video sources** each source
   shows its picture above its settings (the multiview's own, so nothing is
   opened twice). Crop and mirror show what they'll look like as you change
@@ -290,7 +296,8 @@ Takes start with the **Take name** from Settings → Recording. Leave it as
   between guests.
 - **Names that follow people:** give each source the name and role of
   whoever is in it (**Settings → Video sources → Name title**; a guest spot
-  uses the name the guest types), and add a **Who's on air** title in
+  uses the name the guest types), and add **Names of whoever's on air** (the
+  recommended button; **Fixed title** is for typed text) in
   Settings → Graphics. It names whoever fills the program, changing at each
   cut, and can come on by itself for a few seconds when someone new is on
   air (not again for the same person for 10 minutes, or as you set). Its
@@ -346,6 +353,14 @@ Takes start with the **Take name** from Settings → Recording. Leave it as
 - **DAW audio.** Each audio input is recorded to WAV (multichannel, or one mono
   file per channel). You pick which two channels feed the mix. Interfaces with
   their own clock are kept locked to the video for hours (drift correction).
+- **Inputs in Settings:** each input in **Settings → Audio inputs** has a live
+  level bar (in the list and beside its name), so you can see a mic is alive
+  without leaving the page; an input you haven't applied yet says "Apply to
+  hear it". **↑ / ↓** move an input (the order of the strips in the mixer;
+  scenes, auto-mix, ducking and talkback follow an input by name, so they
+  carry on; anything that says "input 2" by number, like a remote or MIDI
+  button, now means whichever is second) and **Duplicate** copies one under a
+  new name.
 - **Voice processing** per input: high-pass filter, **noise reduction**
   (RNNoise: fans, hum and room noise turned down, voices kept), noise gate,
   three-band EQ, compressor and de-esser, with a gain-reduction meter on the
@@ -436,7 +451,9 @@ Takes start with the **Take name** from Settings → Recording. Leave it as
   live, markers, clips, replay, fade to black, graphics, macros, PTZ presets
   and moves, the teleprompter, viewer comments, timers, the rundown, sound
   pads, mics and the media player, plus **tally pages** for phones mounted on
-  cameras and a **prompter page** for a tablet.
+  cameras and a **prompter page** for a tablet. **Settings → Remote & MIDI**
+  shows a QR code for the remote's address with the PIN in it: scan it with
+  the phone's camera and the remote opens already signed in.
 - **Stream Deck plugin:** keys with live pictures of every scene and source,
   red and green tally, take/cut, transitions, record and go live (hold to
   confirm), markers, graphics, audio inputs with level meters (and Stream
@@ -606,10 +623,17 @@ Video Extensions** on some PCs.
 ## First run
 
 - **Your first show:** the first time Cutaway opens, a short guide walks
-  through cameras, the microphone, where recordings go, going live
-  (optional), the pre-show check and a test recording. Each step has a
-  button to the right page in Settings and ticks itself off when it's done.
-  Open it again any time with **?** at the top.
+  through cameras, **naming your people**, the microphone, **your scenes**,
+  where recordings go, going live (optional), the pre-show check, a test
+  recording and (optional) **editing afterwards**. Each step has a button to
+  the right page in Settings and ticks itself off when it's done. Naming
+  people is done right in the guide: a name for each camera or close-up,
+  who's in it and their role (the same as **Video sources → Name title**,
+  which changes live without reopening anything; a new camera name reopens
+  that camera for a moment). Your scenes turns on **Edit layout**, and Editing
+  afterwards opens **Recording → For editing**, where the DaVinci Resolve,
+  Premiere Pro and Final Cut projects are switched on. Open it again any time
+  with **?** at the top.
 - **Auto-setup:** on first launch Cutaway writes a settings file with every
   camera and capture card it finds, plus the first audio input, to
   `~/Library/Application Support/Cutaway/config.toml` (on Windows,
@@ -618,7 +642,10 @@ Video Extensions** on some PCs.
   `cutaway.example.toml` explains every option.
 - **Settings** are in six groups (Inputs, Sound, Look, Show, Output and
   General), each with its pages as tabs; less-used parts fold away, showing how
-  they're set. Hover a setting's name, or its ⓘ, for what it does.
+  they're set. Hover a setting's name, or its ⓘ, for what it does. **Find a
+  setting…** at the top of the list matches setting names, their help and page
+  names; click a match to open its page, with the setting's name lit up (Esc
+  clears the box).
 - **The Settings window** can be dragged by its title and resized from its
   corner, so it needn't cover the camera you're adjusting. It opens where you
   left it on this computer; **Centre** puts it back. While it's open, click the
@@ -652,6 +679,14 @@ Video Extensions** on some PCs.
   input's re-syncs and the drives. It turns amber when something needs a look.
 - **A device that misbehaves** doesn't stop the app. It's marked offline, the
   reason is in the Log panel, and it's reopened when it comes back.
+- **A source that drops while it's on air** (a camera unplugged, a network
+  feed gone) puts a red chip on the program monitor ("Cam 2: no signal,
+  reconnecting…"), one error message at the bottom, and a ⚠ on every scene
+  button that uses it, until it's back. To have Cutaway cut away by itself,
+  set **Settings → Video sources → If it drops while on air** to a scene
+  (say, the wide shot for a close-up camera): it cuts there once, as the
+  signal goes, unless that scene also needs a source with no signal. It
+  doesn't switch back when the source returns.
 - **A crash in one part of Cutaway** doesn't spread to the rest: the other
   parts keep using the shared settings and state it left behind, and the
   crash's details are in the log.
@@ -665,7 +700,9 @@ Video Extensions** on some PCs.
 | Action | How |
 |---|---|
 | Take scene 1–9 | Number keys, or click the scene button |
+| Scene buttons | Along the bottom. Each shows a live picture of its scene (its sources where its frames are), ♪ when it changes the sound, and ⚠ when a source in it has no signal; a long name ends in "…" and shows in full when you hover. When they don't all fit, the edge says how many more (**+3 ›**: click it, or scroll sideways). In a window at least 1000 pixels tall they take a second row instead |
 | Cut straight to a scene | Shift + number, or Shift + click |
+| Back to the last scene | `Backspace` (or the `back` command): the scene on air before this one goes back on air with the current transition and its cues (in Preview mode too, without passing through preview). Press it again to go back the other way |
 | Put a source full screen | Click it in the multiview |
 | Preview, then take | Turn on **Preview**; scene keys then load the preview. Space = Take (with the transition), Enter = Cut |
 | Transition | The CUT / MIX / WIPE / PUSH / DIP buttons; `T` toggles between Cut and the last transition |
@@ -673,6 +710,8 @@ Video Extensions** on some PCs.
 | Captions on screen | **CC** or `C` |
 | Who an auto-framed source follows | Right-click its tile: follow and shot size |
 | Marker | `M`, or **◆ Marker** while recording |
+| Named marker | `Shift+M` while recording: the marker goes in at that moment and a box asks for its name (typing doesn't move it; Cancel keeps "Marker 3") |
+| This take's markers | **▾** beside **◆ Marker**: each marker's time, name and the scene on air. Change a name there, or ✕ to take one out, until the take stops (clips show with ✂ and stay as they are) |
 | Save a clip | `K`, or **✂ Clip** while recording (the last 30 seconds, or as set) |
 | Instant replay | **⟲ Replay** while recording (right-click it for slow motion or another camera) |
 | Fade to black | **FTB** under the transitions; again to come back |
@@ -683,14 +722,15 @@ Video Extensions** on some PCs.
 | Timers | Right-click a countdown or stopwatch's graphic button: start, pause, reset |
 | Graphics 1–9 | Alt/Option + number, or the graphic buttons; ✎ edits a title's text live |
 | Media player | ⟲ ⏯ ⏭ on its tile; right-click the tile for the playlist |
-| Record / stop | ⌘R, or the record button |
-| Go live / end stream | The **GO LIVE** button. It has no key unless you give it one in Settings → Shortcuts, so a stray key can't start or end a broadcast (a key gets the same checks and "are you sure?" as the button) |
+| Record / stop | ⌘R, or the record button. To stop, hold the **■ REC** button for a second (a fill grows across it; a quick click only says **Hold to stop**); ⌘R asks "Stop recording?" first, so a stray click or key can't split the take |
+| Go live / end stream | The **GO LIVE** button (until there's somewhere to stream to, the header has a small **Set up streaming** in its place). It has no key unless you give it one in Settings → Shortcuts, so a stray key can't start or end a broadcast (a key gets the same checks and "are you sure?" as the button) |
 | Edit layout | `E`, or **Edit layout**: drag frames, drag the corner to resize (Shift keeps shape), **Fit/Fill** and **Zoom** for the selected frame (or double-click a frame to fill it, scroll to zoom, Option/Alt-drag to move the picture), add/remove sources, scene audio, duplicate, rename, **Save scenes** |
 | Audio strip | Fader = level (double-click resets), **ON** = in the mixes, 🎧 = solo in the headphones |
 | Fold or move a panel on the right | Click its heading (▾) to fold it down to one line, again to open it. Drag a heading onto another panel's heading to move it above that one. Each show remembers its own |
 | Widen the column on the right | Drag its left edge (the three dots), up to about 60% of the window. Each show remembers its width |
 | Second screen | **Screen** in the header. On that window: double-click or `F` for full screen, Esc to leave full screen, Esc again (or ✕, or Cmd/Ctrl+W) to close |
 | Switch show | The show name next to the logo |
+| Time of day | The clock at the right of the header's status line (next to the disk space). Click it to switch between 24-hour and 12-hour time; Cutaway remembers which |
 | Settings | ⌘, |
 
 The keys above are the built-in ones. Any of them (except the numbered
@@ -699,8 +739,8 @@ General → Shortcuts**, where you can also add your own.
 
 ## Going live
 
-1. **Add destinations:** open **Settings → Streaming** (or **Set up** in the
-   Stream panel), click **＋ Add** and pick a service. Paste the stream key
+1. **Add destinations:** open **Settings → Streaming** (or **Set up
+   streaming** in the header, or **Set up** in the Stream panel), click **＋ Add** and pick a service. Paste the stream key
    from that platform's dashboard. Add as many destinations as you like and
    tick the ones to use.
 2. **Set the quality:** set the stream size, frame rate and bitrate. The
@@ -803,9 +843,10 @@ network and type the PIN. The remote always has one (Cutaway makes a
 four-digit PIN if you don't set your own), and a device that gets it wrong
 five times in a row waits a minute before it can try again.
 
-To stop a recording or end the stream from the phone, tap the red button
-twice within three seconds (the first tap says **Tap again to stop**), so a
-stray tap can't split the show. When the pre-show check is turned on
+To stop a recording or end the stream from the phone, hold the red (or pink)
+button for a second: a fill grows across it, and letting go sooner does
+nothing (a quick tap says **Hold to stop**), so a stray tap can't split the
+show. Starting is one tap. When the pre-show check is turned on
 (Settings → General → **Pre-show check**), starting from the phone, the Stream Deck, MIDI or OSC runs
 the check on the desk first, the same as the Record button.
 
@@ -865,6 +906,7 @@ for button feedback.
 | `cut:2` | Cut straight to a scene |
 | `preview:2` | Put a scene in preview |
 | `take` / `cut` | Take / cut the preview to program |
+| `back` | Back to the last scene: the one on air before this one, with the current transition (again goes forward) |
 | `transition:mix` | Choose `cut`, `mix`, `wipe`, `push` or `dip` |
 | `record`, `record:on`, `record:off` | Recording (toggle / on / off) |
 | `live`, `live:on`, `live:off` | The stream |
