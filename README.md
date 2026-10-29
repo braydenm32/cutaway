@@ -140,6 +140,10 @@ and [Install on Windows](#install-on-windows).
   is 1080p), so it stays sharp and is cheap to cut out. Applying also adds
   a scene "Cam 1: both" (or "all three") with the close-ups side by side,
   unless a scene of that name is already there.
+- **Lists work the same everywhere:** video sources, audio inputs, graphics,
+  stream destinations, rundown segments and macros all have the same buttons
+  under the list: **＋ Add**, **Duplicate**, **Remove**, **↑** and **↓**
+  (then any of their own, like **Split…**).
 - **See it before you apply it:** in **Settings → Video sources** each source
   shows its picture above its settings (the multiview's own, so nothing is
   opened twice). Crop and mirror show what they'll look like as you change

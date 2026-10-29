@@ -1051,31 +1051,22 @@ impl SettingsUi {
                     }
                 }
                 ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    if ui.button("＋ Add").clicked() {
-                        let used: Vec<String> = self.draft.audio.iter().map(|a| a.device.clone()).collect();
-                        let device = self.audio.iter().find(|d| !used.contains(&d.name)).or(self.audio.first()).map(|d| d.name.clone()).unwrap_or("default".into());
-                        let name = unique(self.draft.audio.iter().map(|a| a.name.clone()).collect(), &crate::config::audio_input_name(&device));
-                        self.draft.audio.push(AudioConfig { name, device, ..Default::default() });
-                        self.sel_audio = self.draft.audio.len() - 1;
-                    }
-                    if ui.add_enabled(n > 0, egui::Button::new("Duplicate")).clicked() {
-                        let mut copy = self.draft.audio[self.sel_audio].clone();
-                        copy.uid = 0;
-                        copy.name = unique(self.draft.audio.iter().map(|a| a.name.clone()).collect(), &format!("{} copy", copy.name));
-                        self.draft.audio.insert(self.sel_audio + 1, copy);
-                        self.sel_audio += 1;
-                    }
-                    if ui.add_enabled(n > 0, egui::Button::new("Remove")).clicked() {
-                        self.draft.audio.remove(self.sel_audio);
-                    }
-                    if ui.add_enabled(n > 0 && self.sel_audio > 0, egui::Button::new("↑")).on_hover_text("Move up: the order of the strips in the mixer").clicked() {
-                        self.draft.audio.swap(self.sel_audio, self.sel_audio - 1);
-                        self.sel_audio -= 1;
-                    }
-                    if ui.add_enabled(n > 0 && self.sel_audio + 1 < n, egui::Button::new("↓")).on_hover_text("Move down: the order of the strips in the mixer").clicked() {
-                        self.draft.audio.swap(self.sel_audio, self.sel_audio + 1);
-                        self.sel_audio += 1;
+                ui.horizontal_wrapped(|ui| {
+                    if let Some(edit) = list_buttons(ui, n, self.sel_audio, Some("＋ Add")) {
+                        let audio = &self.audio;
+                        apply_list_edit(
+                            &mut self.draft.audio,
+                            &mut self.sel_audio,
+                            edit,
+                            false,
+                            |list| {
+                                let used: Vec<&str> = list.iter().map(|a| a.device.as_str()).collect();
+                                let device = audio.iter().find(|d| !used.contains(&d.name.as_str())).or(audio.first()).map(|d| d.name.clone()).unwrap_or("default".into());
+                                let name = unique(list.iter().map(|a| a.name.clone()).collect(), &crate::config::audio_input_name(&device));
+                                Some(AudioConfig { name, device, ..Default::default() })
+                            },
+                            |a, list| AudioConfig { uid: 0, name: unique(list.iter().map(|a| a.name.clone()).collect(), &format!("{} copy", a.name)), ..a.clone() },
+                        );
                     }
                 });
             });
@@ -1568,7 +1559,7 @@ impl SettingsUi {
                 for i in 0..n {
                     let d = &mut self.draft.streaming.destinations[i];
                     ui.horizontal(|ui| {
-                        ui.checkbox(&mut d.enabled, "").on_hover_text("Include when going live");
+                        ui.checkbox(&mut d.enabled, "").on_hover_text("Go live here: include this destination when you go live. Untick it to keep it set up but skip it.");
                         let warn = if d.problem().is_some() { "  ⚠" } else { "" };
                         let b = egui::Button::selectable(
                             self.sel_dest == i,
@@ -1581,7 +1572,7 @@ impl SettingsUi {
                     });
                 }
                 ui.add_space(6.0);
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     egui::ComboBox::from_id_salt("add_dest").selected_text("＋ Add").width(90.0).show_ui(ui, |ui| {
                         for s in Service::ALL {
                             if ui.selectable_label(false, s.label()).clicked() {
@@ -1602,9 +1593,19 @@ impl SettingsUi {
                             }
                         }
                     });
-                    if ui.add_enabled(n > 0, egui::Button::new("Remove")).clicked() {
-                        self.draft.streaming.destinations.remove(self.sel_dest);
-                        self.show_keys.clear();
+                    if let Some(edit) = list_buttons(ui, n, self.sel_dest, None) {
+                        let changed = apply_list_edit(
+                            &mut self.draft.streaming.destinations,
+                            &mut self.sel_dest,
+                            edit,
+                            false,
+                            |_| None,
+                            |d, list| StreamDestination { name: unique(list.iter().map(|d| d.name.clone()).collect(), &format!("{} copy", d.name)), ..d.clone() },
+                        );
+                        if changed {
+                            // Which keys are showing is by place.
+                            self.show_keys.clear();
+                        }
                     }
                 });
             });
@@ -1651,9 +1652,6 @@ impl SettingsUi {
                             }
                         }
                     });
-                    ui.end_row();
-                    label(ui, "Go live here");
-                    ui.checkbox(&mut d.enabled, "");
                     ui.end_row();
                     label(ui, "Sends");
                     ui.horizontal(|ui| {
@@ -1969,6 +1967,77 @@ pub(super) fn short_device(device: &str) -> String {
         d if d.starts_with("rtmp-in:") => format!("RTMP input :{}", d[8..].split('/').next().unwrap_or("")),
         d => d.chars().take(28).collect(),
     }
+}
+
+/// What the buttons under a list can ask for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum ListEdit {
+    Add,
+    Duplicate,
+    Remove,
+    Up,
+    Down,
+}
+
+/// The same buttons under every list in Settings, in the same order:
+/// ＋ Add (`add`: its label, or None when the list has buttons of its own
+/// for that), Duplicate, Remove, ↑, ↓. Put a list's special buttons after.
+pub(super) fn list_buttons(ui: &mut egui::Ui, n: usize, sel: usize, add: Option<&str>) -> Option<ListEdit> {
+    let mut edit = None;
+    if let Some(label) = add {
+        if ui.button(label).clicked() {
+            edit = Some(ListEdit::Add);
+        }
+    }
+    if ui.add_enabled(n > 0, egui::Button::new("Duplicate")).clicked() {
+        edit = Some(ListEdit::Duplicate);
+    }
+    if ui.add_enabled(n > 0, egui::Button::new("Remove")).clicked() {
+        edit = Some(ListEdit::Remove);
+    }
+    if ui.add_enabled(n > 0 && sel > 0, egui::Button::new("↑")).on_hover_text("Move up").clicked() {
+        edit = Some(ListEdit::Up);
+    }
+    if ui.add_enabled(n > 0 && sel + 1 < n, egui::Button::new("↓")).on_hover_text("Move down").clicked() {
+        edit = Some(ListEdit::Down);
+    }
+    edit
+}
+
+/// Do what a list's buttons asked, keeping `sel` on the same item. `new`
+/// makes the item for ＋ Add (None: nothing), `copy` the copy for Duplicate
+/// (given the item and the list, to name it); an added item goes after the
+/// picked one if `add_after`, otherwise last. True if the list changed.
+pub(super) fn apply_list_edit<T>(list: &mut Vec<T>, sel: &mut usize, edit: ListEdit, add_after: bool, new: impl FnOnce(&[T]) -> Option<T>, copy: impl FnOnce(&T, &[T]) -> T) -> bool {
+    let n = list.len();
+    let at = (*sel).min(n.saturating_sub(1));
+    match edit {
+        ListEdit::Add => {
+            let Some(item) = new(list) else { return false };
+            let to = if add_after && n > 0 { at + 1 } else { n };
+            list.insert(to, item);
+            *sel = to;
+        }
+        ListEdit::Duplicate if n > 0 => {
+            let item = copy(&list[at], list);
+            list.insert(at + 1, item);
+            *sel = at + 1;
+        }
+        ListEdit::Remove if n > 0 => {
+            list.remove(at);
+            *sel = at.min(list.len().saturating_sub(1));
+        }
+        ListEdit::Up if at > 0 => {
+            list.swap(at, at - 1);
+            *sel = at - 1;
+        }
+        ListEdit::Down if at + 1 < n => {
+            list.swap(at, at + 1);
+            *sel = at + 1;
+        }
+        _ => return false,
+    }
+    true
 }
 
 pub(super) fn unique(existing: Vec<String>, base: &str) -> String {
@@ -2479,6 +2548,41 @@ mod tests {
         let before = win.draft.sources.len();
         win.split_source(1, 2);
         assert_eq!(win.draft.sources.len(), before);
+    }
+
+    /// The buttons under every list act the same way.
+    #[test]
+    fn list_buttons_add_copy_remove_and_move() {
+        let mut v = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let mut sel = 1;
+        let new = |l: &[String]| Some(format!("new{}", l.len()));
+        let copy = |x: &String, _: &[String]| format!("{x} copy");
+        assert!(apply_list_edit(&mut v, &mut sel, ListEdit::Add, false, new, copy));
+        assert_eq!((v.as_slice(), sel), (&["a".to_string(), "b".into(), "c".into(), "new3".into()][..], 3));
+        sel = 1;
+        assert!(apply_list_edit(&mut v, &mut sel, ListEdit::Add, true, new, copy));
+        assert_eq!((v[2].as_str(), sel), ("new4", 2));
+        sel = 0;
+        apply_list_edit(&mut v, &mut sel, ListEdit::Duplicate, false, new, copy);
+        assert_eq!((v[1].as_str(), sel), ("a copy", 1));
+        apply_list_edit(&mut v, &mut sel, ListEdit::Down, false, new, copy);
+        assert_eq!((v[2].as_str(), sel), ("a copy", 2));
+        apply_list_edit(&mut v, &mut sel, ListEdit::Up, false, new, copy);
+        apply_list_edit(&mut v, &mut sel, ListEdit::Up, false, new, copy);
+        assert_eq!((v[0].as_str(), sel), ("a copy", 0));
+        // Not past the ends.
+        assert!(!apply_list_edit(&mut v, &mut sel, ListEdit::Up, false, new, copy));
+        // Remove keeps a valid pick, also for the last; an empty list stays so.
+        sel = v.len() - 1;
+        apply_list_edit(&mut v, &mut sel, ListEdit::Remove, false, new, copy);
+        assert_eq!(sel, v.len() - 1);
+        let mut none: Vec<String> = Vec::new();
+        let mut s0 = 0;
+        for e in [ListEdit::Remove, ListEdit::Duplicate, ListEdit::Up, ListEdit::Down] {
+            assert!(!apply_list_edit(&mut none, &mut s0, e, false, new, copy));
+        }
+        // A list with its own add buttons: ＋ Add does nothing here.
+        assert!(!apply_list_edit(&mut v, &mut sel, ListEdit::Add, false, |_| None, copy));
     }
 
     /// An input's live level is found by its identity in what's running,
