@@ -624,6 +624,13 @@ Video Extensions** on some PCs.
 - **The log:** everything Cutaway reports, including the full details of any
   internal error, goes to `~/Library/Logs/Cutaway/Cutaway.log`. Find it under
   **Settings → Diagnostics → Show**, or in Console.app under Log Reports.
+- **Messages and the Log button:** an error stays at the bottom of the
+  window until you click it, and several stack up rather than replacing each
+  other. Disk-space and backup-drive warnings show there too. Every error also
+  goes in the **Log** panel (the button in the header), which counts only the
+  warnings you haven't looked at yet, can show **Warnings only**, and has
+  **Copy** to paste them into a message. If a scene key does nothing, check
+  the header: "Typing: show keys off" means a box has the keyboard (Esc).
 - **Problem report:** **Settings → Diagnostics → Save a problem report…**
   saves one .zip to send: the log, the last take's note, your settings and
   the devices found. Stream keys, passwords and tokens are taken out, even
