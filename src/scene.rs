@@ -165,6 +165,15 @@ pub fn presets(names: &[String]) -> Vec<Scene> {
     out
 }
 
+/// A new scene for the bank: blank, or a copy of a layout (one of
+/// `presets`), named so no other scene has its name.
+pub fn new_scene(layout: Option<&Scene>, existing: &[Scene]) -> Scene {
+    let base = layout.map_or("New scene", |l| l.name.as_str());
+    let taken = |n: &str| existing.iter().any(|s| s.name.eq_ignore_ascii_case(n));
+    let name = if taken(base) { (2..).map(|i| format!("{base} {i}")).find(|n| !taken(n)).unwrap() } else { base.to_string() };
+    Scene { name, layers: layout.map(|l| l.layers.clone()).unwrap_or_default(), ..Default::default() }
+}
+
 /// A scene showing close-ups (sources `close`, in order) side by side, for
 /// "<camera>: both" / "all three". Sized like "Side by side", centred.
 pub fn side_by_side(name: &str, close: &[usize]) -> Scene {
@@ -390,6 +399,22 @@ mod tests {
         two.layers = vec![Layer::at(0, 0.0, 0.0, 0.3, 0.3), Layer::at(2, 0.3, 0.0, 0.7, 1.0)];
         assert_eq!(two.main_source(), Some(2));
         assert_eq!(Scene::default().main_source(), None);
+    }
+
+    #[test]
+    fn new_scenes_get_a_name_of_their_own() {
+        let p = presets(&names(2));
+        let blank = new_scene(None, &p);
+        assert_eq!((blank.name.as_str(), blank.layers.len()), ("New scene", 0));
+        let pip = p.iter().find(|s| s.name == "Picture in picture").unwrap();
+        let again = new_scene(Some(pip), &p);
+        assert_eq!(again.name, "Picture in picture 2");
+        assert_eq!(again.layers, pip.layers);
+        let mut more = p.clone();
+        more.push(again);
+        more.push(Scene { name: "new SCENE".into(), ..Default::default() });
+        assert_eq!(new_scene(Some(pip), &more).name, "Picture in picture 3");
+        assert_eq!(new_scene(None, &more).name, "New scene 2");
     }
 
     #[test]

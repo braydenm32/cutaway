@@ -194,6 +194,8 @@ pub struct App {
     waker: Waker,
     edit_mode: bool,
     selected_layer: Option<usize>,
+    /// A scene button dropped in a new place in the bank: (from, before).
+    bank_move: Option<(usize, usize)>,
     /// A scene's new name being typed (scene, text): it's renamed when
     /// the box is left, so a half-typed name never clashes with another.
     scene_name_edit: Option<(String, String)>,
@@ -412,6 +414,7 @@ impl App {
             column_dragged: false,
             waker,
             edit_mode: false,
+            bank_move: None,
             selected_layer: None,
             scene_name_edit: None,
             history: undo::History::default(),
@@ -667,6 +670,18 @@ impl App {
                 Err(e) => self.log(LogLevel::Error, format!("Remote control: {e:#}")),
             }
         }
+        self.restart_midi();
+        self.osc = None;
+        if self.cfg.osc.enabled {
+            match osc::Osc::start(&self.cfg.osc, self.requests_tx.clone(), self.waker.clone()) {
+                Ok(o) => self.osc = Some(o),
+                Err(e) => self.log(LogLevel::Warning, format!("OSC: {e:#}")),
+            }
+        }
+    }
+
+    /// MIDI as set (its mappings are read when it starts).
+    fn restart_midi(&mut self) {
         self.midi = None;
         if self.cfg.midi.enabled && midi::available() {
             match midi::Midi::start(&self.cfg.midi, self.requests_tx.clone(), self.waker.clone()) {
@@ -674,11 +689,38 @@ impl App {
                 Err(e) => self.log(LogLevel::Warning, format!("MIDI: {e:#}")),
             }
         }
-        self.osc = None;
-        if self.cfg.osc.enabled {
-            match osc::Osc::start(&self.cfg.osc, self.requests_tx.clone(), self.waker.clone()) {
-                Ok(o) => self.osc = Some(o),
-                Err(e) => self.log(LogLevel::Warning, format!("OSC: {e:#}")),
+    }
+
+    fn scene_names(&self) -> Vec<String> {
+        self.scenes.iter().map(|s| s.name.clone()).collect()
+    }
+
+    /// The scene bank was reordered, or a scene renamed or deleted (it was
+    /// `before`, by name): the scenes on air, in preview and last on air take
+    /// their new names, and what the show keeps that picks a scene (macros,
+    /// MIDI, keys, cues, the rundown…) goes on picking the same one.
+    fn scenes_moved(&mut self, before: &[String]) {
+        let after = self.scene_names();
+        if before == after.as_slice() {
+            return;
+        }
+        let renamed = control::scene_renames(before, &after);
+        if let (Some(e), false) = (&self.engine, renamed.is_empty()) {
+            e.switcher.rename_scenes(&|n| renamed.iter().find(|(a, _)| a == n).map(|(_, b)| b.clone()));
+        }
+        let midi = self.cfg.midi.clone();
+        // (The bank's own cues too: it stands in for the saved scenes.)
+        let saved = std::mem::replace(&mut self.cfg.scenes, std::mem::take(&mut self.scenes));
+        let changed = control::follow_scenes(&mut self.cfg, before, &after);
+        self.scenes = std::mem::replace(&mut self.cfg.scenes, saved);
+        if changed {
+            // (Written with the scenes, so the file never has one without the other.)
+            self.scenes_dirty = true;
+            if let Some(e) = &self.engine {
+                let _ = e.update_config(&self.cfg);
+            }
+            if self.cfg.midi != midi {
+                self.restart_midi();
             }
         }
     }
@@ -910,14 +952,10 @@ impl App {
             sc.retain_sources(n);
         }
         self.scenes_dirty = true;
-        // A rename undone or redone: what's on air, in preview and last on
-        // air go by the names they have now.
-        if let Some(e) = &self.engine {
-            let renamed = renames(&before, &self.scenes);
-            if !renamed.is_empty() {
-                e.switcher.rename_scenes(&|n| renamed.iter().find(|(a, _)| a == n).map(|(_, b)| b.clone()));
-            }
-        }
+        // A move or rename undone or redone: what's on air, in preview and
+        // last on air, and what picks a scene, follow.
+        let before: Vec<String> = before.iter().map(|s| s.name.clone()).collect();
+        self.scenes_moved(&before);
         if let Some(e) = &self.engine {
             if self.preview_mode() {
                 // With Preview on, the program never changes but by Take:
@@ -2025,6 +2063,10 @@ impl App {
                 if std::env::var_os("CUTAWAY_UI_TEST_EDIT").is_some() {
                     self.edit_mode = true;
                     self.selected_layer = Some(1);
+                    // EDIT=reorder: picture in picture dragged to the front of the bank.
+                    if std::env::var("CUTAWAY_UI_TEST_EDIT").is_ok_and(|v| v == "reorder") {
+                        self.move_scene(pip, 0);
+                    }
                     // EDIT=move: picture in picture's inset moved, not saved yet (in preview, with Preview on).
                     if std::env::var("CUTAWAY_UI_TEST_EDIT").is_ok_and(|v| v == "move") {
                         if self.preview_mode() {
@@ -2077,6 +2119,10 @@ impl App {
                 }
                 let source = std::env::var("CUTAWAY_UI_TEST_SOURCE").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
                 let mut win = self.new_settings().open_at(section).select_source(source);
+                // SCENE=n picks a scene in Settings → Scenes; SCENE_DELETE=1 asks to delete it.
+                if let Some(n) = std::env::var("CUTAWAY_UI_TEST_SCENE").ok().and_then(|v| v.parse::<usize>().ok()) {
+                    win = win.select_scene(n, std::env::var_os("CUTAWAY_UI_TEST_SCENE_DELETE").is_some());
+                }
                 if let Ok(q) = std::env::var("CUTAWAY_UI_TEST_FIND") {
                     win = win.with_find(&q, std::env::var_os("CUTAWAY_UI_TEST_FINDGO").is_some());
                 }
@@ -3074,6 +3120,8 @@ impl App {
         let cue_suggestions = control::suggestions(&self.cfg);
         let mut changed = false;
         let mut new_scene: Option<Scene> = None;
+        // ＋ New scene: blank or from a layout.
+        let mut fresh: Option<Scene> = None;
         let mut delete = false;
         let (mut undo_clicked, mut redo_clicked) = (false, false);
         let old_name = scene.name.clone();
@@ -3270,6 +3318,9 @@ impl App {
                 })
                 .response
                 .on_hover_text("Scene cues: commands run when this scene is taken");
+                if let Some(s) = crate::settings::new_scene_menu(ui, &names, &self.scenes) {
+                    fresh = Some(s);
+                }
                 if ui.button("Duplicate").on_hover_text("A copy of this scene, to change").clicked() {
                     let mut s = scene.clone();
                     s.name = unique_name(&self.scenes, &format!("{} copy", scene.name));
@@ -3285,6 +3336,19 @@ impl App {
         if let Some(n) = rename_clash {
             self.toast(format!("There's already a scene called {n}"), true);
         }
+        if let Some(s) = fresh {
+            // Added at the end, so no scene's number changes. With Preview on
+            // it goes in preview to edit; never on air.
+            self.remember(undo::Kind::Scenes, format!("New scene {}", s.name));
+            self.scenes.push(s.clone());
+            self.scenes_dirty = true;
+            if in_preview {
+                self.show_edit(s);
+                self.selected_layer = None;
+            } else {
+                self.toast(format!("{} is at the end of the scenes: take it to edit it", s.name), false);
+            }
+        }
         if changed || new_scene.is_some() || (delete && self.scenes.len() > 1) {
             let label = if delete {
                 format!("Delete scene {old_name}")
@@ -3297,14 +3361,8 @@ impl App {
             };
             self.remember(undo::Kind::Scenes, label);
         }
+        let before = self.scene_names();
         if changed {
-            if scene.name != old_name {
-                // The scene on air (or last on air) by its old name keeps its picture, under the new name.
-                if let Some(e) = &self.engine {
-                    let (old, new) = (old_name.clone(), scene.name.clone());
-                    e.switcher.rename_scenes(&|n| (n == old).then(|| new.clone()));
-                }
-            }
             self.show_edit(scene.clone());
             if let Some(s) = self.scenes.iter_mut().find(|s| s.name == old_name) {
                 *s = scene;
@@ -3330,6 +3388,7 @@ impl App {
                 self.take_scene(&s, true);
             }
         }
+        self.scenes_moved(&before);
         let ctx = ui.ctx().clone();
         if undo_clicked {
             self.undo(&ctx);
@@ -3730,6 +3789,21 @@ impl App {
         if let Some((i, cut)) = press {
             self.press_scene(i, cut);
         }
+        if let Some((from, to)) = self.bank_move.take() {
+            self.move_scene(from, to);
+        }
+    }
+
+    /// Move the scene at `from` to before the one at `to` (the end: the
+    /// number of scenes). What picks scenes by number follows (see `scenes_moved`).
+    fn move_scene(&mut self, from: usize, to: usize) {
+        let Some(to) = moved_to(from, to, self.scenes.len()) else { return };
+        let before = self.scene_names();
+        self.remember(undo::Kind::Scenes, format!("Move scene {}", before[from]));
+        let s = self.scenes.remove(from);
+        self.scenes.insert(to, s);
+        self.scenes_dirty = true;
+        self.scenes_moved(&before);
     }
 
     /// One scene button: its number, a live picture of the scene (its
@@ -3737,7 +3811,31 @@ impl App {
     /// scene sound and ⚠ when a source in it has no signal. Some((i, cut)) when pressed.
     fn scene_button(&mut self, ui: &mut egui::Ui, i: usize, s: &Scene, (is_live, is_preview): (bool, bool), missing: Option<&Vec<String>>) -> Option<(usize, bool)> {
         let key = if i < 9 { format!("{}", i + 1) } else { String::new() };
-        let (rect, resp) = ui.allocate_exact_size(BANK_BUTTON, Sense::click());
+        // In Edit layout the buttons can be dragged into another order (never
+        // during the show otherwise, so a slip can't upset it).
+        let (rect, resp) = ui.allocate_exact_size(BANK_BUTTON, if self.edit_mode { Sense::click_and_drag() } else { Sense::click() });
+        if self.edit_mode {
+            resp.dnd_set_drag_payload(BankDrag(i));
+            if resp.dragged() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                if let Some(p) = ui.ctx().pointer_interact_pos() {
+                    let layer = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, ui.scope_id().with("bank_drag")));
+                    let galley = layer.layout_no_wrap(s.name.clone(), FontId::proportional(13.0), Color32::WHITE);
+                    let r = Rect::from_min_size(p + vec2(10.0, -30.0), galley.size() + vec2(16.0, 10.0));
+                    layer.rect_filled(r, 5.0, ACCENT);
+                    layer.galley(r.min + vec2(8.0, 5.0), galley, Color32::WHITE);
+                }
+            }
+            let after = ui.ctx().pointer_interact_pos().is_some_and(|p| p.x > rect.center().x);
+            if resp.dnd_hover_payload::<BankDrag>().is_some_and(|d| d.0 != i) {
+                // Where it would go: a bar on this side of the button.
+                let x = if after { rect.right() + 3.0 } else { rect.left() - 3.0 };
+                ui.painter().line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], Stroke::new(3.0, ACCENT));
+            }
+            if let Some(d) = resp.dnd_release_payload::<BankDrag>() {
+                self.bank_move = Some((d.0, if after { i + 1 } else { i }));
+            }
+        }
         let painter = ui.painter_at(rect);
         let fill = if is_live {
             RED
@@ -3778,6 +3876,7 @@ impl App {
             _ => "Click to take".into(),
         };
         let tip = if elided { format!("{}\n{tip}", s.name) } else { tip };
+        let tip = if self.edit_mode { format!("{tip}\nDrag to change the order") } else { tip };
         let tip = match missing {
             Some(m) => format!("{tip}\n⚠ No signal from {}", m.join(", ")),
             None => tip,
@@ -5171,8 +5270,14 @@ impl App {
             self.peak_hold.clear();
         }
         let vcam_was = self.engine.as_ref().is_some_and(|e| e.virtual_camera_on()) || self.starting.as_ref().is_some_and(|s| s.vcam);
+        let old_names = self.scene_names();
         self.cfg = new;
         self.scenes = if self.cfg.scenes.is_empty() { self.cfg.effective_scenes() } else { self.cfg.scenes.clone() };
+        // Scenes renamed in Settings → Scenes: the one on air keeps its picture under its new name.
+        let renamed = control::scene_renames(&old_names, &self.scene_names());
+        if let (Some(e), false) = (&self.engine, renamed.is_empty()) {
+            e.switcher.rename_scenes(&|n| renamed.iter().find(|(a, _)| a == n).map(|(_, b)| b.clone()));
+        }
         if sources_changed {
             self.reconcile_scenes();
             if let Some(e) = &self.engine {
@@ -5550,16 +5655,17 @@ fn full_screen_icon(p: &egui::Painter, r: Rect, enter: bool, color: Color32) {
     }
 }
 
-/// Scenes renamed between two lists of the same scenes (old name, new
-/// name): the same place, a name the other list doesn't have. Lists of
-/// another length (a scene added or deleted) aren't renames, nor scenes
-/// that only moved.
-fn renames(before: &[Scene], after: &[Scene]) -> Vec<(String, String)> {
-    if before.len() != after.len() {
-        return Vec::new();
+/// A scene button being dragged in the bank (its place).
+struct BankDrag(usize);
+
+/// Where a scene dragged from `from` and dropped before place `to` (0..=n)
+/// ends up in a list of `n`: None if it doesn't move.
+fn moved_to(from: usize, to: usize, n: usize) -> Option<usize> {
+    if from >= n {
+        return None;
     }
-    let has = |list: &[Scene], n: &str| list.iter().any(|s| s.name == n);
-    before.iter().zip(after).filter(|(a, b)| a.name != b.name && !has(after, &a.name) && !has(before, &b.name)).map(|(a, b)| (a.name.clone(), b.name.clone())).collect()
+    let to = if to > from { to - 1 } else { to }.min(n - 1);
+    (to != from).then_some(to)
 }
 
 /// A labelled group of tools on the edit bar ("FRAME", "SCENE").
@@ -5666,13 +5772,15 @@ mod small_tests {
     }
 
     #[test]
-    fn renames_are_told_from_moves() {
-        use super::{renames, Scene};
-        let list = |names: &[&str]| names.iter().map(|n| Scene { name: n.to_string(), ..Default::default() }).collect::<Vec<_>>();
-        assert_eq!(renames(&list(&["A", "B"]), &list(&["A", "Wide"])), vec![("B".to_string(), "Wide".to_string())]);
-        assert!(renames(&list(&["A", "B"]), &list(&["B", "A"])).is_empty(), "only moved");
-        assert!(renames(&list(&["A", "B"]), &list(&["A"])).is_empty(), "deleted");
-        assert!(renames(&list(&["A", "B"]), &list(&["A", "B"])).is_empty());
+    fn dropped_scenes_land_where_the_bar_was() {
+        use super::moved_to;
+        // Four scenes: the first dropped before the third ends up second.
+        assert_eq!(moved_to(0, 2, 4), Some(1));
+        assert_eq!(moved_to(0, 4, 4), Some(3), "after the last");
+        assert_eq!(moved_to(3, 0, 4), Some(0));
+        assert_eq!(moved_to(1, 1, 4), None, "before itself");
+        assert_eq!(moved_to(1, 2, 4), None, "after itself");
+        assert_eq!(moved_to(5, 0, 4), None);
     }
 
     #[test]
