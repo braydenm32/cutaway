@@ -680,6 +680,7 @@ Video Extensions** on some PCs.
 | Widen the column on the right | Drag its left edge (the three dots), up to about 60% of the window. Each show remembers its width |
 | Second screen | **Screen** in the header. On that window: double-click or `F` for full screen, Esc to leave full screen, Esc again (or ✕, or Cmd/Ctrl+W) to close |
 | Switch show | The show name next to the logo |
+| Time of day | The clock at the right of the header's status line (next to the disk space). Click it to switch between 24-hour and 12-hour time; Cutaway remembers which |
 | Settings | ⌘, |
 
 The keys above are the built-in ones. Any of them (except the numbered
