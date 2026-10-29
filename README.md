@@ -270,7 +270,10 @@ Takes start with the **Take name** from Settings → Recording. Leave it as
 
 - **Scenes.** Preset scenes (each source full screen, side by side,
   picture-in-picture, grid) plus your own: drag and resize frames live, then
-  save them.
+  save them. Start a new scene blank or from one of those layouts
+  (**＋ New scene** in Edit layout or Settings → Scenes), and put the scene
+  buttons in the order you want (drag them in Edit layout, or ↑ ↓ in
+  Settings → Scenes): keys 1–9 take the first nine.
 - **Fill, crop and zoom per scene.** Each frame in a scene can show the whole
   picture (fit) or fill the frame, cropped to its shape, so a camera in a tall
   half-screen box has no black bars. Zoom in (scroll over the frame, up to
@@ -729,7 +732,9 @@ Video Extensions** on some PCs.
 | Media player | ⟲ ⏯ ⏭ on its tile; right-click the tile for the playlist |
 | Record / stop | ⌘R, or the record button. To stop, hold the **■ REC** button for a second (a fill grows across it; a quick click only says **Hold to stop**); ⌘R asks "Stop recording?" first, so a stray click or key can't split the take |
 | Go live / end stream | The **GO LIVE** button (until there's somewhere to stream to, the header has a small **Set up streaming** in its place). It has no key unless you give it one in Settings → Shortcuts, so a stray key can't start or end a broadcast (a key gets the same checks and "are you sure?" as the button) |
-| Edit layout | `E`, or **Edit layout**. With **Preview** on you edit the scene in preview (click a scene to pick it; the one on air goes there if preview is empty): the program, and so the recording and stream, stays exactly as it is until you **Take** or **Cut** it. With Preview off you edit the scene on air, and changes show at once. The bar has two groups. **Frame**: **Add source**, **Remove**, **To front**, **Full frame**, **Fit/Fill** and **Zoom** for the selected frame. **Scene**: its name, **Audio** (inputs it turns on or off), **Cues**, **Duplicate**, **Delete**. Drag frames, drag the corner to resize (Shift keeps shape), double-click a frame to fill it, scroll to zoom, Option/Alt-drag to move the picture. **Unsaved** shows until the scenes are written to disk: **Save scenes**, or a few seconds after **Done** |
+| Put scenes in order | In **Edit layout**, drag a scene button along the bank (a bar shows where it goes). Only in Edit layout, so a slip during the show can't move one. Or ↑ ↓ in **Settings → Show → Scenes**, which also renames, duplicates, deletes (it asks first, and says what uses the scene) and starts new scenes |
+| New scene | **＋ New scene** in Edit layout (or Settings → Scenes): **Blank**, or from a layout (a source full screen, side by side, picture in picture, grid). It goes at the end of the bank, so no other scene's number changes. With Preview on it goes in preview to edit; otherwise take it to edit it |
+| Edit layout | `E`, or **Edit layout**. With **Preview** on you edit the scene in preview (click a scene to pick it; the one on air goes there if preview is empty): the program, and so the recording and stream, stays exactly as it is until you **Take** or **Cut** it. With Preview off you edit the scene on air, and changes show at once. The bar has two groups. **Frame**: **Add source**, **Remove**, **To front**, **Full frame**, **Fit/Fill** and **Zoom** for the selected frame. **Scene**: its name, **Audio** (inputs it turns on or off), **Cues**, **＋ New scene**, **Duplicate**, **Delete**. Drag frames, drag the corner to resize (Shift keeps shape), double-click a frame to fill it, scroll to zoom, Option/Alt-drag to move the picture. **Unsaved** shows until the scenes are written to disk: **Save scenes**, or a few seconds after **Done** |
 | Audio strip | Fader = level (double-click resets), **ON** = in the mixes, 🎧 = solo in the headphones |
 | Fold or move a panel on the right | Click its heading (▾) to fold it down to one line, again to open it. Drag a heading onto another panel's heading to move it above that one. Each show remembers its own |
 | Widen the column on the right | Drag its left edge (the three dots), up to about 60% of the window. Each show remembers its width |
@@ -941,6 +946,19 @@ for button feedback.
 
 A number picks by position, unless something is named that number (a scene
 called "2"). A macro that runs itself is stopped there, with a message.
+
+**When scenes move.** `scene:3` means the third scene button, wherever it
+came from: that's what the number keys, Stream Deck scene keys (their
+pictures show the scene in that place), the remote, OSC and commands sent
+from Companion or scripts do, so they always match the bank. Commands kept
+in Cutaway itself are different: when you reorder or delete scenes,
+macros, MIDI mappings, your own keys and cues that take a scene by number
+are changed to its new number, so they keep taking the same scene. Things
+that go by name (the rundown's scenes, "if it drops, cut to", automatic
+switching, the vertical version's layouts, `scene:Wide`) are unaffected by
+the order, and follow a scene when it's renamed. Back to the last scene
+goes by name too. A deleted scene's references are left as they were
+(Settings → Scenes lists them before you delete).
 
 Scenes and rundown segments can run commands as **cues** when they start
 (Edit layout → Cues; Settings → Rundown), e.g. a break scene that

@@ -542,6 +542,132 @@ impl Action {
     }
 }
 
+/// Scenes were moved, renamed or deleted (`before` → `after`, by name):
+/// what the show keeps that picks a scene goes on picking the same one.
+/// Commands saved in macros, MIDI mappings, your own keys and cues that
+/// take a scene by number (`scene:3`) get its new number; anything that
+/// names a renamed scene (`scene:Wide`, a rundown segment, "if it drops,
+/// cut to", automatic switching, vertical layouts) gets its new name. A
+/// deleted scene's references are left as they are. True if anything changed.
+/// (Numbers from outside, like the number keys, a Stream Deck key or an OSC
+/// message, mean the button in that place, so they aren't changed.)
+pub fn follow_scenes(cfg: &mut Config, before: &[String], after: &[String]) -> bool {
+    if before == after {
+        return false;
+    }
+    let renamed = scene_renames(before, after);
+    let new_name = |n: &str| renamed.iter().find(|(a, _)| a.eq_ignore_ascii_case(n.trim())).map(|(_, b)| b.clone());
+    let new_pos = |i: usize| -> Option<usize> {
+        let name = before.get(i)?;
+        let name = new_name(name).unwrap_or_else(|| name.clone());
+        after.iter().position(|a| *a == name)
+    };
+    let mut changed = false;
+    let mut fix = |c: &mut String| {
+        if let Some(n) = follow_command(c, before, &new_pos, &new_name) {
+            *c = n;
+            changed = true;
+        }
+    };
+    for m in &mut cfg.macros {
+        m.commands.iter_mut().for_each(&mut fix);
+    }
+    for m in &mut cfg.midi.mappings {
+        fix(&mut m.action);
+    }
+    for k in &mut cfg.keys.custom {
+        fix(&mut k.command);
+    }
+    for s in &mut cfg.rundown.segments {
+        s.cues.iter_mut().for_each(&mut fix);
+    }
+    for s in &mut cfg.scenes {
+        s.cues.iter_mut().for_each(&mut fix);
+    }
+    let mut rename = |n: &mut String| {
+        if let Some(x) = new_name(n) {
+            *n = x;
+            changed = true;
+        }
+    };
+    for s in &mut cfg.sources {
+        rename(&mut s.on_drop_scene);
+    }
+    rename(&mut cfg.auto_switch.wide_scene);
+    for r in &mut cfg.auto_switch.rules {
+        rename(&mut r.scene);
+    }
+    for s in &mut cfg.rundown.segments {
+        rename(&mut s.scene);
+    }
+    for l in &mut cfg.vertical.layouts {
+        rename(&mut l.scene);
+    }
+    changed
+}
+
+/// Scenes renamed between two lists of the same scenes (old name, new
+/// name): the same place, a name the other list doesn't have. Lists of
+/// another length (a scene added or deleted) aren't renames, nor scenes
+/// that only moved.
+pub fn scene_renames(before: &[String], after: &[String]) -> Vec<(String, String)> {
+    if before.len() != after.len() {
+        return Vec::new();
+    }
+    before.iter().zip(after).filter(|(a, b)| a != b && !after.contains(a) && !before.contains(b)).map(|(a, b)| (a.clone(), b.clone())).collect()
+}
+
+/// A command that picks a scene, made to pick it where it is now (None:
+/// it doesn't pick a scene, or still picks the same one).
+fn follow_command(c: &str, before: &[String], new_pos: &dyn Fn(usize) -> Option<usize>, new_name: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    let (verb, rest) = c.split_once(':')?;
+    if !matches!(verb.trim().to_lowercase().as_str(), "scene" | "take" | "cut" | "preview" | "pvw") || rest.trim().is_empty() {
+        return None;
+    }
+    match Target::parse(rest) {
+        // (A number that's a scene's name is that name.)
+        Target::Index(i) if !before.iter().any(|n| n.trim() == (i + 1).to_string()) => {
+            let j = new_pos(i)?;
+            (j != i).then(|| format!("{verb}:{}", j + 1))
+        }
+        _ => new_name(rest.trim()).map(|n| format!("{verb}:{n}")),
+    }
+}
+
+/// What in the show picks the scene at `i` (in `names`), for "are you sure"
+/// before it's deleted: "Macro Break", "MIDI note 36", "Rundown: Intro"…
+pub fn scene_uses(cfg: &Config, names: &[String], i: usize) -> Vec<String> {
+    let Some(name) = names.get(i) else { return Vec::new() };
+    let picks = |c: &str| match Action::parse(c) {
+        Ok(Action::Scene(t) | Action::CutTo(t) | Action::Preview(t)) => t.find(names) == Some(i),
+        _ => false,
+    };
+    let mut out = Vec::new();
+    for m in &cfg.macros {
+        if m.commands.iter().any(|c| picks(c)) {
+            out.push(format!("macro {}", m.name));
+        }
+    }
+    for m in cfg.midi.mappings.iter().filter(|m| picks(&m.action)) {
+        out.push(format!("MIDI {}", m.message));
+    }
+    for k in cfg.keys.custom.iter().filter(|k| picks(&k.command)) {
+        out.push(format!("the {} key", k.key));
+    }
+    for s in &cfg.rundown.segments {
+        if s.scene.eq_ignore_ascii_case(name) || s.cues.iter().any(|c| picks(c)) {
+            out.push(format!("rundown segment {}", s.name));
+        }
+    }
+    for s in cfg.sources.iter().filter(|s| s.on_drop_scene.eq_ignore_ascii_case(name)) {
+        out.push(format!("\"if it drops\" on {}", s.name));
+    }
+    if cfg.auto_switch.wide_scene.eq_ignore_ascii_case(name) || cfg.auto_switch.rules.iter().any(|r| r.scene.eq_ignore_ascii_case(name)) {
+        out.push("automatic switching".into());
+    }
+    out
+}
+
 /// A request from a controller, with somewhere to send the result.
 pub struct Request {
     pub action: Action,
@@ -633,6 +759,54 @@ pub fn suggestions(cfg: &Config) -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_commands_follow_their_scene() {
+        use crate::config::{AutoRule, CustomKey, Macro, MidiMapping, Segment, SourceConfig};
+        let names = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let mut cfg = Config::default();
+        cfg.macros.push(Macro { name: "Break".into(), commands: vec!["scene:2".into(), "wait:1".into(), "Cut: 3".into(), "scene:Host".into()], ..Default::default() });
+        cfg.midi.mappings.push(MidiMapping { message: "note 36".into(), action: "preview:1".into() });
+        cfg.keys.custom.push(CustomKey { key: "G".into(), command: "scene:7".into() });
+        cfg.rundown.segments.push(Segment { name: "Intro".into(), scene: "Host".into(), cues: vec!["take:2".into()], ..Default::default() });
+        cfg.sources.push(SourceConfig { name: "Cam 2".into(), on_drop_scene: "Wide".into(), ..Default::default() });
+        cfg.auto_switch.rules.push(AutoRule { input: "Mic".into(), channel: 1, scene: "Host".into() });
+        let before = names(&["Wide", "Host", "Guest", "7"]);
+        // Wide moves to the end: Host is 1, Guest 2.
+        let after = names(&["Host", "Guest", "7", "Wide"]);
+        assert!(follow_scenes(&mut cfg, &before, &after));
+        assert_eq!(cfg.macros[0].commands, vec!["scene:1", "wait:1", "Cut:2", "scene:Host"]);
+        assert_eq!(cfg.midi.mappings[0].action, "preview:4");
+        assert_eq!(cfg.keys.custom[0].command, "scene:7", "a scene called 7 is picked by name");
+        assert_eq!(cfg.rundown.segments[0].cues, vec!["take:1"]);
+        assert_eq!(cfg.sources[0].on_drop_scene, "Wide");
+        // Nothing moved: nothing changes.
+        assert!(!follow_scenes(&mut cfg, &after, &after));
+        // Host renamed: names follow, numbers stay.
+        let renamed = names(&["Presenter", "Guest", "7", "Wide"]);
+        assert!(follow_scenes(&mut cfg, &after, &renamed));
+        assert_eq!(cfg.macros[0].commands[3], "scene:Presenter");
+        assert_eq!(cfg.macros[0].commands[0], "scene:1");
+        assert_eq!(cfg.rundown.segments[0].scene, "Presenter");
+        assert_eq!(cfg.auto_switch.rules[0].scene, "Presenter");
+        // Guest deleted: what pointed at it stays; what was after it moves up.
+        cfg.keys.custom[0].command = "cut:2".into();
+        cfg.midi.mappings[0].action = "scene:4".into();
+        assert!(follow_scenes(&mut cfg, &renamed, &names(&["Presenter", "7", "Wide"])));
+        assert_eq!(cfg.keys.custom[0].command, "cut:2");
+        assert_eq!(cfg.midi.mappings[0].action, "scene:3");
+    }
+
+    #[test]
+    fn says_what_uses_a_scene() {
+        use crate::config::{Macro, SourceConfig};
+        let mut cfg = Config::default();
+        cfg.macros.push(Macro { name: "Break".into(), commands: vec!["scene:2".into()], ..Default::default() });
+        cfg.sources.push(SourceConfig { name: "Cam 1".into(), on_drop_scene: "Host".into(), ..Default::default() });
+        let names: Vec<String> = ["Wide", "Host"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(scene_uses(&cfg, &names, 1), vec!["macro Break", "\"if it drops\" on Cam 1"]);
+        assert!(scene_uses(&cfg, &names, 0).is_empty());
+    }
 
     #[test]
     fn parses_commands() {

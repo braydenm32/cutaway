@@ -359,6 +359,12 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Rundown, "Notes") => "Talking points, who's on, what to set up: shown with the rundown in the main window, and on the teleprompter when it follows the rundown.",
         (Rundown, "Chapters") => "Adds a marker as each segment starts, so it becomes a chapter in the files and the podcast.",
 
+        // ---- Scenes
+        (Scenes, "Name") => "What the scene's button says. Renamed when you leave the box; what goes by its name (the rundown, \"if it drops, cut to\", automatic switching, scene:Name commands) follows the new name.",
+        (Scenes, "Number key") => "The key that takes it: 1–9 for the first nine scenes, in order. Use ↑ and ↓ (or drag the buttons in Edit layout) to put the ones you use most first. Stream Deck keys, the remote and scene:3 from MIDI or OSC also go by place.",
+        (Scenes, "Shows") => "Its frames and which source is in each. Move and resize them with Edit layout in the main window.",
+        (Scenes, "Sound and cues") => "Inputs it turns on or off and commands it runs when it's taken: set them in Edit layout (Audio, Cues).",
+
         // ---- Macros
         (Macros, "Name") => "What the macro's button says. Run it from its button, the Stream Deck (Macro key), the remote, MIDI, cues, or the command macro:Name.",
         (Macros, "Colour") => "The button's colour.",
@@ -500,7 +506,7 @@ mod tests {
     #[test]
     fn every_setting_is_explained() {
         use Section::*;
-        let files: [(&str, &[Section]); 16] = [
+        let files: [(&str, &[Section]); 17] = [
             (include_str!("mod.rs"), &[General, Audio, Program, Recording, Streaming, Diagnostics]),
             (include_str!("sources.rs"), &[Sources]),
             (include_str!("mixing.rs"), &[Mixing, Audio]),
@@ -514,6 +520,7 @@ mod tests {
             (include_str!("outputs.rs"), &[Outputs]),
             (include_str!("prompter.rs"), &[Prompter]),
             (include_str!("rundown.rs"), &[Rundown]),
+            (include_str!("scenes.rs"), &[Scenes]),
             (include_str!("sound.rs"), &[Pads, Syrinscape]),
             (include_str!("upload.rs"), &[Upload]),
             (include_str!("vertical.rs"), &[Vertical]),

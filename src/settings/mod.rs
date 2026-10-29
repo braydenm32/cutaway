@@ -16,6 +16,7 @@ mod preview;
 mod outputs;
 mod rotations;
 mod rundown;
+mod scenes;
 mod scheduled;
 mod shortcuts;
 mod sound;
@@ -45,6 +46,7 @@ pub enum Section {
     Syrinscape,
     Program,
     Switching,
+    Scenes,
     Graphics,
     Rundown,
     Macros,
@@ -63,7 +65,7 @@ pub enum Section {
 }
 
 impl Section {
-    pub(super) const ALL: [Section; 23] = [
+    pub(super) const ALL: [Section; 24] = [
         Section::General,
         Section::Sources,
         Section::Audio,
@@ -72,6 +74,7 @@ impl Section {
         Section::Syrinscape,
         Section::Program,
         Section::Switching,
+        Section::Scenes,
         Section::Graphics,
         Section::Rundown,
         Section::Macros,
@@ -108,6 +111,7 @@ impl Section {
             Section::Syrinscape => "Syrinscape",
             Section::Program => "Program",
             Section::Switching => "Switching",
+            Section::Scenes => "Scenes",
             Section::Graphics => "Graphics",
             Section::Rundown => "Rundown",
             Section::Macros => "Macros",
@@ -161,7 +165,7 @@ impl Group {
             Group::Inputs => "Cameras, mics and guests",
             Group::Sound => "Mixing, headphones, pads",
             Group::Look => "Program, graphics, captions",
-            Group::Show => "Switching, rundown, prompter",
+            Group::Show => "Scenes, switching, rundown",
             Group::Output => "Recording, streaming, screens",
             Group::General => "Shows, control, diagnostics",
         }
@@ -172,7 +176,7 @@ impl Group {
             Group::Inputs => &[Section::Sources, Section::Audio, Section::Guests],
             Group::Sound => &[Section::Mixing, Section::Pads, Section::Syrinscape],
             Group::Look => &[Section::Program, Section::Graphics, Section::Captions],
-            Group::Show => &[Section::Switching, Section::Rundown, Section::Macros, Section::Prompter, Section::Comments],
+            Group::Show => &[Section::Scenes, Section::Switching, Section::Rundown, Section::Macros, Section::Prompter, Section::Comments],
             Group::Output => &[Section::Recording, Section::Streaming, Section::Vertical, Section::Upload, Section::Outputs],
             Group::General => &[Section::General, Section::Control, Section::Shortcuts, Section::Diagnostics],
         }
@@ -229,6 +233,7 @@ pub struct SettingsContext {
 }
 
 pub use preview::Picture;
+pub(crate) use scenes::new_scene_menu;
 
 /// Applying would take sources or inputs out of a show that's recording or
 /// live: asked first.
@@ -295,6 +300,11 @@ pub struct SettingsUi {
     syrin_soundset: Option<String>,
     sel_segment: usize,
     sel_macro: usize,
+    /// Settings → Scenes: the scene picked, its new name being typed, and
+    /// the scene waiting for "Delete".
+    sel_scene: usize,
+    scene_rename: Option<(usize, String)>,
+    confirm_scene_delete: Option<usize>,
     /// Apps that can be listened to (for "Sound from an app").
     apps: Option<Vec<String>>,
     /// Installing the Resolve script: what happened.
@@ -435,6 +445,9 @@ impl SettingsUi {
             syrin_soundset: None,
             sel_segment: 0,
             sel_macro: 0,
+            sel_scene: 0,
+            scene_rename: None,
+            confirm_scene_delete: None,
             apps: None,
             resolve_note: None,
             lut_check: None,
@@ -499,13 +512,20 @@ impl SettingsUi {
         self
     }
 
+    /// Settings → Scenes with this scene picked, and asking whether to delete it (for the UI self-test).
+    pub fn select_scene(mut self, i: usize, confirm_delete: bool) -> Self {
+        self.sel_scene = i;
+        self.confirm_scene_delete = confirm_delete.then_some(i);
+        self
+    }
+
     /// The settings as they are being edited (for the UI self-test).
     pub fn draft_config(&self) -> Config {
         self.draft.clone()
     }
 
     pub fn dirty(&self) -> bool {
-        self.draft != self.original
+        self.draft != self.original || self.scene_rename_pending()
     }
 
     /// Called by the app after it tried to apply (`now`: the settings in
@@ -644,6 +664,7 @@ impl SettingsUi {
                                         Section::Switching => self.switching(ui, info),
                                         Section::Graphics => self.graphics(ui),
                                         Section::Rundown => self.rundown(ui),
+                                        Section::Scenes => self.scenes(ui),
                                         Section::Macros => self.macros(ui),
                                         Section::Prompter => self.prompter(ui),
                                         Section::Comments => self.comments(ui),
@@ -731,6 +752,7 @@ impl SettingsUi {
                         }
                         if ui.add_enabled(self.dirty(), egui::Button::new("Revert")).on_hover_text("Undo every change since the last save").clicked() {
                             self.draft = self.original.clone();
+                            self.scene_rename = None;
                         }
                         if ui.small_button("Centre").on_hover_text("Put this window back in the middle, at its usual size").clicked() {
                             self.centre = true;
@@ -834,6 +856,8 @@ impl SettingsUi {
     /// Apply the draft, unless that takes sources or inputs out of a show
     /// that's recording or live, or restarts one: then ask first.
     fn apply(&mut self, close: bool, info: &SettingsContext) -> SettingsAction {
+        // A scene's name still being typed counts.
+        self.commit_scene_rename();
         if info.recording || info.streaming {
             let (names, on_air) = self.leaving(&info.on_air);
             let restarting = self.restarting();
@@ -958,6 +982,7 @@ impl SettingsUi {
             Section::Pads => a.pads != b.pads,
             Section::Syrinscape => a.syrinscape != b.syrinscape,
             Section::Rundown => a.rundown != b.rundown,
+            Section::Scenes => a.scenes != b.scenes,
             Section::Macros => a.macros != b.macros,
             Section::Prompter => a.prompter != b.prompter,
             Section::Comments => a.comments != b.comments,
