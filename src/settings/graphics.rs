@@ -36,6 +36,11 @@ impl SettingsUi {
                     }
                 }
                 ui.add_space(6.0);
+                let named = self.draft.sources.iter().filter(|s| !s.person.trim().is_empty()).count();
+                if named == 0 && self.draft.graphics.iter().any(|g| g.kind == GraphicKind::Title && g.follow) {
+                    ui.label(RichText::new(format!("⚠ 0 of {} sources have a name: set them in Video sources → Name title", self.draft.sources.len())).color(AMBER));
+                    ui.add_space(4.0);
+                }
                 ui.horizontal_wrapped(|ui| {
                     let names: Vec<String> = self.draft.graphics.iter().map(|g| g.name.clone()).collect();
                     if ui.button("＋ Logo").clicked() {
@@ -45,12 +50,12 @@ impl SettingsUi {
                             self.sel_graphic = self.draft.graphics.len() - 1;
                         }
                     }
-                    if ui.button("＋ Name title").clicked() {
-                        self.draft.graphics.push(Graphic::title(&unique(names.clone(), "Title"), "Your Name", "Role or topic"));
+                    if ui.button("＋ Names of whoever's on air (recommended)").on_hover_text("A name title that names whoever is on air, from the Name title set on each source (Video sources)").clicked() {
+                        self.draft.graphics.push(Graphic::names(&unique(names.clone(), "Names")));
                         self.sel_graphic = self.draft.graphics.len() - 1;
                     }
-                    if ui.button("＋ Who's on air").on_hover_text("A name title that names whoever is on air, from the names set on each source").clicked() {
-                        self.draft.graphics.push(Graphic::names(&unique(names.clone(), "Names")));
+                    if ui.button("＋ Fixed title").clicked() {
+                        self.draft.graphics.push(Graphic::title(&unique(names.clone(), "Title"), "Your Name", "Role or topic"));
                         self.sel_graphic = self.draft.graphics.len() - 1;
                     }
                     if ui.button("＋ Clock or countdown").clicked() {
