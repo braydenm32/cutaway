@@ -918,6 +918,17 @@ impl App {
         self.run_sequence("Cue", cues, true);
     }
 
+    /// The scene on air before this one, back on air as if its button were
+    /// pressed to take it (with the transition and its cues). A scene since
+    /// changed in the bank goes back as it is now.
+    fn back_to_last_scene(&mut self) -> Result<String, String> {
+        let e = self.engine.as_ref().ok_or("the engine isn't running")?;
+        let last = e.switcher.previous().ok_or("nothing else has been on air yet")?;
+        let scene = self.scenes.iter().find(|s| s.name == last.name).cloned().unwrap_or(last);
+        self.take_scene(&scene, false);
+        Ok(scene.name)
+    }
+
     /// Preview to program; the old program goes to preview.
     fn take_preview(&mut self, cut: bool) {
         let Some(e) = &self.engine else { return };
@@ -1079,6 +1090,10 @@ impl App {
                     (self.waker)();
                 }
                 Ok(format!("{} in preview", s.name))
+            }
+            Action::Back => {
+                let name = self.back_to_last_scene()?;
+                Ok(format!("Back to {name}"))
             }
             Action::Take | Action::Cut => {
                 if self.engine.as_ref().is_none_or(|e| e.switcher.preview().is_none()) {
@@ -1736,6 +1751,11 @@ impl App {
             Builtin::Auto => {
                 let on = !self.auto_on();
                 self.set_auto(on);
+            }
+            Builtin::Back => {
+                if let Err(e) = self.back_to_last_scene() {
+                    self.toast(format!("Can't go back: {e}"), false);
+                }
             }
             Builtin::Take | Builtin::CutPreview => {
                 if self.preview_mode() {

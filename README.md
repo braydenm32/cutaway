@@ -654,6 +654,7 @@ Video Extensions** on some PCs.
 |---|---|
 | Take scene 1–9 | Number keys, or click the scene button |
 | Cut straight to a scene | Shift + number, or Shift + click |
+| Back to the last scene | `Backspace` (or the `back` command): the scene on air before this one goes back on air with the current transition and its cues (in Preview mode too, without passing through preview). Press it again to go back the other way |
 | Put a source full screen | Click it in the multiview |
 | Preview, then take | Turn on **Preview**; scene keys then load the preview. Space = Take (with the transition), Enter = Cut |
 | Transition | The CUT / MIX / WIPE / PUSH / DIP buttons; `T` toggles between Cut and the last transition |
@@ -854,6 +855,7 @@ for button feedback.
 | `cut:2` | Cut straight to a scene |
 | `preview:2` | Put a scene in preview |
 | `take` / `cut` | Take / cut the preview to program |
+| `back` | Back to the last scene: the one on air before this one, with the current transition (again goes forward) |
 | `transition:mix` | Choose `cut`, `mix`, `wipe`, `push` or `dip` |
 | `record`, `record:on`, `record:off` | Recording (toggle / on / off) |
 | `live`, `live:on`, `live:off` | The stream |
