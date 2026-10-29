@@ -4,6 +4,35 @@ use super::*;
 use crate::config::MidiMapping;
 use crate::control::{midi, profiles};
 
+/// The remote's address with the PIN in it (`?pin=`, which the page reads), for the QR code.
+fn remote_link(url: &str, pin: &str) -> String {
+    let pin = pin.trim();
+    if pin.is_empty() {
+        return format!("{url}/");
+    }
+    let mut enc = String::new();
+    for b in pin.bytes() {
+        if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
+            enc.push(b as char);
+        } else {
+            enc.push_str(&format!("%{b:02X}"));
+        }
+    }
+    format!("{url}/?pin={enc}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::remote_link;
+
+    #[test]
+    fn the_qr_link_carries_the_pin() {
+        assert_eq!(remote_link("http://10.0.0.5:8080", " 4821 "), "http://10.0.0.5:8080/?pin=4821");
+        assert_eq!(remote_link("http://10.0.0.5:8080", "a b&c"), "http://10.0.0.5:8080/?pin=a%20b%26c");
+        assert_eq!(remote_link("http://10.0.0.5:8080", ""), "http://10.0.0.5:8080/");
+    }
+}
+
 impl SettingsUi {
     pub(super) fn control(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
         title(ui, "Remote & MIDI", "Run the show from a phone or tablet, a Stream Deck, Companion, show-control software or a MIDI controller.");
@@ -41,6 +70,14 @@ impl SettingsUi {
                     if ui.small_button("Copy").clicked() {
                         ui.ctx().copy_text(url.clone());
                     }
+                });
+                ui.horizontal(|ui| {
+                    qr_code(ui, &remote_link(&url, &r.pin), 132.0);
+                    ui.vertical(|ui| {
+                        ui.add_space(4.0);
+                        ui.label(RichText::new("Scan with your phone's camera").size(12.5).color(TEXT_DIM));
+                        hint(ui, "It opens the remote already signed in with the PIN.");
+                    });
                 });
                 if info.remote_port.is_none() && self.original.remote.enabled {
                     ui.label(RichText::new("⚠ The remote isn't running (see the log: the port may be in use).").color(AMBER));

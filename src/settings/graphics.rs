@@ -36,47 +36,47 @@ impl SettingsUi {
                     }
                 }
                 ui.add_space(6.0);
-                ui.horizontal_wrapped(|ui| {
+                let named = self.draft.sources.iter().filter(|s| !s.person.trim().is_empty()).count();
+                if named == 0 && self.draft.graphics.iter().any(|g| g.kind == GraphicKind::Title && g.follow) {
+                    ui.label(RichText::new(format!("⚠ 0 of {} sources have a name: set them in Video sources → Name title", self.draft.sources.len())).color(AMBER));
+                    ui.add_space(4.0);
+                }
+                ui.vertical(|ui| {
                     let names: Vec<String> = self.draft.graphics.iter().map(|g| g.name.clone()).collect();
-                    if ui.button("＋ Logo").clicked() {
+                    if ui.add(egui::Button::new("＋ Names of whoever's on air (recommended)").min_size(vec2(220.0, 0.0))).on_hover_text("A name title that names whoever is on air, from the Name title set on each source (Video sources)").clicked() {
+                        self.draft.graphics.push(Graphic::names(&unique(names.clone(), "Names")));
+                        self.sel_graphic = self.draft.graphics.len() - 1;
+                    }
+                    if ui.add(egui::Button::new("＋ Fixed title").min_size(vec2(220.0, 0.0))).clicked() {
+                        self.draft.graphics.push(Graphic::title(&unique(names.clone(), "Title"), "Your Name", "Role or topic"));
+                        self.sel_graphic = self.draft.graphics.len() - 1;
+                    }
+                    if ui.add(egui::Button::new("＋ Logo").min_size(vec2(220.0, 0.0))).clicked() {
                         // Cancelling the picker adds nothing.
                         if let Some(f) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg"]).pick_file() {
                             self.draft.graphics.push(Graphic { name: unique(names.clone(), "Logo"), visible: true, image: f, ..Default::default() });
                             self.sel_graphic = self.draft.graphics.len() - 1;
                         }
                     }
-                    if ui.button("＋ Name title").clicked() {
-                        self.draft.graphics.push(Graphic::title(&unique(names.clone(), "Title"), "Your Name", "Role or topic"));
-                        self.sel_graphic = self.draft.graphics.len() - 1;
-                    }
-                    if ui.button("＋ Who's on air").on_hover_text("A name title that names whoever is on air, from the names set on each source").clicked() {
-                        self.draft.graphics.push(Graphic::names(&unique(names.clone(), "Names")));
-                        self.sel_graphic = self.draft.graphics.len() - 1;
-                    }
-                    if ui.button("＋ Clock or countdown").clicked() {
+                    if ui.add(egui::Button::new("＋ Clock or countdown").min_size(vec2(220.0, 0.0))).clicked() {
                         self.draft.graphics.push(Graphic::clock(&unique(names.clone(), "Clock"), ClockKind::Time, ""));
                         self.sel_graphic = self.draft.graphics.len() - 1;
                     }
-                    if ui.button("＋ Scrolling ticker").clicked() {
+                    if ui.add(egui::Button::new("＋ Scrolling ticker").min_size(vec2(220.0, 0.0))).clicked() {
                         self.draft.graphics.push(Graphic::ticker(&unique(names.clone(), "Ticker"), "Your first headline\nAnd another", ""));
                         self.sel_graphic = self.draft.graphics.len() - 1;
                     }
-                    if ui.button("＋ Web page").on_hover_text("A web page or HTML file over the picture, see-through where it's empty: alerts, chat boxes, scoreboards.").clicked() {
+                    if ui.add(egui::Button::new("＋ Web page").min_size(vec2(220.0, 0.0))).on_hover_text("A web page or HTML file over the picture, see-through where it's empty: alerts, chat boxes, scoreboards.").clicked() {
                         let mut g = Graphic::web(&unique(names, "Web page"), "");
                         g.page_size = [self.draft.program.width, self.draft.program.height];
                         self.draft.graphics.push(g);
                         self.sel_graphic = self.draft.graphics.len() - 1;
                     }
-                    if ui.add_enabled(n > 0, egui::Button::new("Remove")).clicked() {
-                        self.draft.graphics.remove(self.sel_graphic);
-                    }
-                    if ui.add_enabled(n > 0 && self.sel_graphic > 0, egui::Button::new("↑")).clicked() {
-                        self.draft.graphics.swap(self.sel_graphic, self.sel_graphic - 1);
-                        self.sel_graphic -= 1;
-                    }
-                    if ui.add_enabled(n > 0 && self.sel_graphic + 1 < n, egui::Button::new("↓")).clicked() {
-                        self.draft.graphics.swap(self.sel_graphic, self.sel_graphic + 1);
-                        self.sel_graphic += 1;
+                });
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    if let Some(edit) = list_buttons(ui, n, self.sel_graphic, None) {
+                        apply_list_edit(&mut self.draft.graphics, &mut self.sel_graphic, edit, false, |_| None, |g, list| Graphic { name: unique(list.iter().map(|g| g.name.clone()).collect(), &format!("{} copy", g.name)), ..g.clone() });
                     }
                 });
             });

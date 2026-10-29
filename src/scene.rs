@@ -165,6 +165,46 @@ pub fn presets(names: &[String]) -> Vec<Scene> {
     out
 }
 
+/// A scene showing close-ups (sources `close`, in order) side by side, for
+/// "<camera>: both" / "all three". Sized like "Side by side", centred.
+pub fn side_by_side(name: &str, close: &[usize]) -> Scene {
+    let n = close.len().max(1) as f32;
+    let gap = 0.01;
+    let w = (0.98 - gap * (n - 1.0)) / n;
+    let layers = close.iter().enumerate().map(|(k, &i)| Layer::at(i, gap + k as f32 * (w + gap), (1.0 - w) / 2.0, w, w)).collect();
+    Scene { name: name.into(), layers, ..Default::default() }
+}
+
+/// The scenes for close-ups just cut from a camera (a split): for each
+/// camera that has two or more new virtual-PTZ close-ups (`is_new(i)`),
+/// "<camera>: both" (or "all three"), unless a scene by that name exists.
+pub fn split_scenes(sources: &[crate::config::SourceConfig], is_new: &dyn Fn(usize) -> bool, existing: &[Scene]) -> Vec<Scene> {
+    let mut out: Vec<Scene> = Vec::new();
+    for (i, s) in sources.iter().enumerate() {
+        let Some(wide) = s.virtual_ptz_of().filter(|_| is_new(i)) else { continue };
+        let key = wide.to_lowercase();
+        if sources.iter().take(i).enumerate().any(|(j, o)| is_new(j) && o.virtual_ptz_of().is_some_and(|w| w.to_lowercase() == key)) {
+            continue; // handled with the first of its group
+        }
+        let close: Vec<usize> = sources.iter().enumerate().filter(|(j, o)| is_new(*j) && o.virtual_ptz_of().is_some_and(|w| w.to_lowercase() == key)).map(|(j, _)| j).collect();
+        if close.len() < 2 || close.len() > 4 {
+            continue;
+        }
+        let shown = sources.iter().find(|o| o.name.eq_ignore_ascii_case(wide)).map_or(wide, |o| o.name.as_str());
+        let tail = match close.len() {
+            2 => "both",
+            3 => "all three",
+            _ => "all four",
+        };
+        let name = format!("{shown}: {tail}");
+        if existing.iter().chain(&out).any(|e| e.name.eq_ignore_ascii_case(&name)) {
+            continue;
+        }
+        out.push(side_by_side(&name, &close));
+    }
+    out
+}
+
 /// Evenly spaced grid holding all `n` sources.
 pub fn grid(n: usize) -> Scene {
     let cols = (n as f32).sqrt().ceil().max(1.0) as usize;
@@ -308,6 +348,31 @@ mod tests {
     use super::*;
 
     const CANVAS: (u32, u32) = (1920, 1080);
+
+    #[test]
+    fn a_split_gets_a_scene_with_its_close_ups_side_by_side() {
+        use crate::config::SourceConfig;
+        let cam = |n: &str, d: &str| SourceConfig { name: n.into(), device: d.into(), ..Default::default() };
+        let src = vec![cam("Wide", "test:bars"), cam("Wide left", "vptz:Wide"), cam("Wide right", "vptz:Wide"), cam("Screen", "test:gradient")];
+        let found = split_scenes(&src, &|i| i == 1 || i == 2, &[]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name, "Wide: both");
+        let (a, b) = (found[0].layers[0], found[0].layers[1]);
+        assert_eq!((a.source, b.source), (1, 2));
+        // The same frames as "Side by side".
+        let sbs = presets(&names(2)).into_iter().find(|s| s.name == "Side by side").unwrap();
+        assert_eq!((a.x, a.w, a.h), (sbs.layers[0].x, sbs.layers[0].w, sbs.layers[0].h));
+        assert!((a.y - sbs.layers[0].y).abs() < 0.01);
+        assert!((b.x - sbs.layers[1].x).abs() < 1e-4);
+        // Not again if the scene is there, or if the close-ups aren't new.
+        assert!(split_scenes(&src, &|i| i == 1 || i == 2, &found).is_empty());
+        assert!(split_scenes(&src, &|_| false, &[]).is_empty());
+        // Three close-ups: "all three", inside the canvas.
+        let src3 = vec![cam("Wide", "test:bars"), cam("a", "vptz:wide"), cam("b", "vptz:Wide"), cam("c", "vptz:Wide")];
+        let s3 = &split_scenes(&src3, &|i| i > 0, &[])[0];
+        assert_eq!(s3.name, "Wide: all three");
+        assert!(s3.layers.iter().all(|l| l.x >= 0.0 && l.x + l.w <= 1.0));
+    }
 
     fn names(n: usize) -> Vec<String> {
         (1..=n).map(|i| format!("Cam {i}")).collect()
