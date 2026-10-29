@@ -49,6 +49,8 @@ use theme::*;
 
 /// The right-hand column's usual width.
 const COLUMN_WIDTH: f32 = 400.0;
+/// How long the REC button is held to stop the take.
+const REC_HOLD_SECS: f32 = 1.0;
 
 /// Cutaway's icon for its windows and, while it runs, the Dock or taskbar
 /// (drawn by assets/logo/make_logo.py). Without it they'd show egui's.
@@ -192,6 +194,13 @@ pub struct App {
     drag: Option<Drag>,
     settings: Option<SettingsUi>,
     confirm: Option<Confirm>,
+    /// The REC button: when the hold to stop began, whether this press
+    /// already stopped the take, and until when "Hold to stop" shows.
+    rec_hold: Option<Instant>,
+    rec_hold_spent: bool,
+    rec_hint_until: Option<Instant>,
+    /// The self-test holds the REC button (for a screenshot).
+    test_hold: bool,
     /// Closing was confirmed (or nothing was running): let the window go.
     quit_ok: bool,
     log_open: bool,
@@ -372,6 +381,10 @@ impl App {
             drag: None,
             settings: None,
             confirm: None,
+            rec_hold: None,
+            rec_hold_spent: false,
+            rec_hint_until: None,
+            test_hold: false,
             quit_ok: false,
             log_open: false,
             guide_open: false,
@@ -919,10 +932,10 @@ impl App {
     fn toggle_record(&mut self) {
         let Some(e) = &self.engine else { return };
         if e.is_recording() {
-            if self.cfg.ui.confirm_stop_recording && self.confirm.is_none() {
+            // Keys always ask (the REC button is held instead), so a stray
+            // Cmd+R can't split the take.
+            if self.confirm.is_none() {
                 self.confirm = Some(Confirm::StopRecording);
-            } else {
-                e.stop_recording();
             }
         } else if self.cfg.ui.check_before_start && self.precheck.is_none() {
             self.start_precheck(Some(Then::Record));
@@ -1816,6 +1829,13 @@ impl App {
         }
         let t = start.elapsed().as_secs_f32();
         ctx.request_repaint_after(Duration::from_millis(100));
+        if step >= 3 && std::env::var_os("CUTAWAY_UI_TEST_HOLD").is_some() {
+            // Held part way: the fill shows, but it never gets to stop the take.
+            self.test_hold = true;
+            if self.rec_hold.is_some_and(|h| h.elapsed() > Duration::from_millis(600)) {
+                self.rec_hold = Some(Instant::now() - Duration::from_millis(600));
+            }
+        }
         let pip = self.scenes.iter().position(|s| s.name == "Picture in picture").unwrap_or(0);
         let next = match step {
             0 if t > 2.0 => {
@@ -2071,9 +2091,37 @@ impl App {
             RecState::Recording { since, folder } => {
                 let t = since.elapsed();
                 let blink = (t.as_millis() / 600) % 2 == 0;
-                let btn = pill(RichText::new(format!("■  REC  {}", fmt_clock(t))).size(15.0).strong().color(Color32::WHITE), if blink { RED } else { Color32::from_rgb(200, 40, 52) });
-                if ui.add(btn).on_hover_text(format!("Stop recording (Ctrl/Cmd+R)\nRecording to {}", folder.display())).clicked() {
-                    self.toggle_record();
+                // Held for a second to stop, so a stray click can't split the take.
+                let hint = self.rec_hold.is_some() || self.rec_hint_until.is_some_and(|u| Instant::now() < u);
+                let text = if hint { "■  Hold to stop".to_string() } else { format!("■  REC  {}", fmt_clock(t)) };
+                let btn = pill(RichText::new(text).size(15.0).strong().color(Color32::WHITE), if blink { RED } else { Color32::from_rgb(200, 40, 52) });
+                let r = ui.add(btn).on_hover_text(format!("Hold for a second to stop recording (the key{} asks first)\nRecording to {}", self.key_hint(Builtin::Record), folder.display()));
+                let down = r.is_pointer_button_down_on() || self.test_hold;
+                match (down, self.rec_hold) {
+                    (true, _) if self.rec_hold_spent => {}
+                    (true, None) => self.rec_hold = Some(Instant::now()),
+                    (true, Some(since)) => {
+                        let f = (since.elapsed().as_secs_f32() / REC_HOLD_SECS).min(1.0);
+                        // A white fill grows across the pill while it's held.
+                        let fill = Rect::from_min_size(r.rect.min, vec2(r.rect.width() * f, r.rect.height()));
+                        ui.painter().with_clip_rect(fill).rect_filled(r.rect, 17.0, Color32::from_white_alpha(70));
+                        if f >= 1.0 {
+                            self.rec_hold = None;
+                            self.rec_hold_spent = true;
+                            if let Some(e) = &self.engine {
+                                e.stop_recording();
+                            }
+                        }
+                        ui.ctx().request_repaint();
+                    }
+                    (false, held) => {
+                        if held.is_some() {
+                            // Let go too soon: nothing happens, but say how.
+                            self.rec_hint_until = Some(Instant::now() + Duration::from_millis(1500));
+                        }
+                        self.rec_hold = None;
+                        self.rec_hold_spent = false;
+                    }
                 }
                 let mtext = if markers > 0 { format!("◆ Marker ({markers})") } else { "◆ Marker".into() };
                 if ui.add(egui::Button::new(mtext).min_size(vec2(0.0, 30.0))).on_hover_text(format!("Mark this moment{}: becomes a chapter and a timeline marker", self.key_hint(Builtin::Marker))).clicked() {
@@ -2142,6 +2190,7 @@ impl App {
                 ui.ctx().request_repaint_after(Duration::from_millis(100));
             }
             RecState::Idle => {
+                self.rec_hold_spent = false;
                 let btn = pill(RichText::new("●  RECORD").size(15.0).strong().color(RED), RAISED).stroke(Stroke::new(1.5, RED_DIM));
                 if ui.add(btn).on_hover_text("Record every source, the program and the audio (Ctrl/Cmd+R)").clicked() {
                     self.toggle_record();

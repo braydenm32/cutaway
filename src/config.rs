@@ -1421,6 +1421,8 @@ impl Default for StreamingConfig {
 pub struct UiConfig {
     /// Interface zoom (1.0 = normal).
     pub scale: f32,
+    /// No longer used (stopping always takes a hold or a yes); kept so old
+    /// settings files still load.
     pub confirm_stop_recording: bool,
     pub confirm_end_stream: bool,
     /// Name of the show profile these settings belong to ("" = none).
