@@ -51,6 +51,8 @@ use theme::*;
 const COLUMN_WIDTH: f32 = 400.0;
 /// How long the REC button is held to stop the take.
 const REC_HOLD_SECS: f32 = 1.0;
+/// A scene button's size.
+const BANK_BUTTON: egui::Vec2 = vec2(132.0, 84.0);
 
 /// Cutaway's icon for its windows and, while it runs, the Dock or taskbar
 /// (drawn by assets/logo/make_logo.py). Without it they'd show egui's.
@@ -244,6 +246,11 @@ pub struct App {
     ptz_zoom: Option<f32>,
     /// The last replay problem shown.
     replay_problem: Option<String>,
+    /// The scene bank: scenes that don't fit in one row (last frame), how
+    /// many rows it has, and a scroll asked for by its edge arrows.
+    bank_overflows: bool,
+    bank_rows: usize,
+    bank_scroll_to: Option<f32>,
     /// Sources known to have no signal (None: not looked yet with this
     /// engine, so the ones missing from the start don't count as drops).
     dropped: Option<HashSet<String>>,
@@ -344,6 +351,9 @@ impl App {
             ptz_drive: None,
             ptz_zoom: None,
             replay_problem: None,
+            bank_overflows: false,
+            bank_rows: 1,
+            bank_scroll_to: None,
             dropped: None,
             offline_sources: Vec::new(),
             scheduled_done: None,
@@ -1907,6 +1917,23 @@ impl App {
                 return;
             }
         }
+        if step == 0 {
+            // A window this size (CUTAWAY_UI_TEST_WINDOW=1500x1200).
+            if let Some((w, h)) = std::env::var("CUTAWAY_UI_TEST_WINDOW").ok().and_then(|v| v.split_once('x').and_then(|(w, h)| Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?)))) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(vec2(w, h)));
+            }
+        }
+        if step == 0 && self.scenes.len() < 12 {
+            // More scenes than fit, some with long names (CUTAWAY_UI_TEST_SCENES=16).
+            if let Some(n) = std::env::var("CUTAWAY_UI_TEST_SCENES").ok().and_then(|v| v.parse::<usize>().ok()) {
+                let base = self.scenes.clone();
+                for k in 0..n.saturating_sub(self.scenes.len()) {
+                    let mut sc = base[k % base.len()].clone();
+                    sc.name = if k % 3 == 0 { format!("{} with the whole panel, take {}", sc.name, k + 2) } else { format!("{} {}", sc.name, k + 2) };
+                    self.scenes.push(sc);
+                }
+            }
+        }
         if step == 3 && self.test_drop.is_none() {
             // A source on air losing its signal (CUTAWAY_UI_TEST_DROP=2), and where to cut (…_DROP_TO=scene).
             if let Some(i) = std::env::var("CUTAWAY_UI_TEST_DROP").ok().and_then(|v| v.parse::<usize>().ok()).filter(|i| *i >= 1) {
@@ -3445,63 +3472,151 @@ impl App {
                 });
             });
             ui.separator();
-            egui::ScrollArea::horizontal().id_salt("bank").show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    for (i, s) in self.scenes.iter().enumerate() {
-                        let is_live = live_name.as_deref() == Some(s.name.as_str());
-                        let is_preview = preview_name.as_deref() == Some(s.name.as_str());
-                        let key = if i < 9 { format!("{}", i + 1) } else { String::new() };
-                        let (rect, resp) = ui.allocate_exact_size(vec2(132.0, 84.0), Sense::click());
-                        let painter = ui.painter_at(rect);
-                        let fill = if is_live {
-                            RED
-                        } else if is_preview {
-                            GREEN_DIM
-                        } else if resp.hovered() {
-                            Color32::from_rgb(44, 49, 59)
-                        } else {
-                            RAISED
-                        };
-                        painter.rect_filled(rect, 6.0, fill);
-                        if is_preview {
-                            painter.rect_stroke(rect, 6.0, Stroke::new(2.0, GREEN), StrokeKind::Inside);
-                        }
-                        let thumb = Rect::from_min_size(rect.min + vec2(10.0, 10.0), vec2(48.0, 27.0));
-                        painter.rect_filled(thumb, 2.0, Color32::from_black_alpha(120));
-                        for l in &s.layers {
-                            let r = Rect::from_min_size(thumb.min + vec2(l.x * thumb.width(), l.y * thumb.height()), vec2(l.w * thumb.width(), l.h * thumb.height())).intersect(thumb);
-                            painter.rect_filled(r, 1.0, Color32::from_white_alpha(70));
-                            painter.rect_stroke(r, 1.0, Stroke::new(1.0, Color32::from_white_alpha(160)), StrokeKind::Inside);
-                        }
-                        if !s.audio_on.is_empty() || !s.audio_off.is_empty() {
-                            painter.text(thumb.right_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, "♪", FontId::proportional(13.0), Color32::from_white_alpha(180));
-                        }
-                        painter.text(rect.right_top() + vec2(-10.0, 9.0), Align2::RIGHT_TOP, &key, FontId::monospace(13.0), if is_live { Color32::WHITE } else { TEXT_DIM });
-                        let missing = no_signal.get(i).filter(|m| !m.is_empty());
-                        if missing.is_some() {
-                            painter.text(rect.right_top() + vec2(-28.0, 8.0), Align2::RIGHT_TOP, "⚠", FontId::proportional(14.0), if is_live { Color32::WHITE } else { AMBER });
-                        }
-                        let name: String = s.name.chars().take(18).collect();
-                        painter.text(rect.left_bottom() + vec2(10.0, -10.0), Align2::LEFT_BOTTOM, name, FontId::proportional(13.5), Color32::WHITE);
-                        if resp.clicked() {
-                            press = Some((i, ui.input(|inp| inp.modifiers.shift)));
-                        }
-                        let tip = match (i < 9, self.cfg.transition.preview_mode) {
-                            (true, true) => format!("Press {} to preview (Shift+{} cuts to program)", i + 1, i + 1),
-                            (true, false) => format!("Press {} (Shift+{} to cut)", i + 1, i + 1),
-                            _ => "Click to take".into(),
-                        };
-                        let tip = match missing {
-                            Some(m) => format!("{tip}\n⚠ No signal from {}", m.join(", ")),
-                            None => tip,
-                        };
-                        resp.on_hover_text(tip);
+            // One row that scrolls, or two when the window is tall enough
+            // and they don't fit in one (the panel grows: see `bank_height`).
+            let gap = ui.spacing().item_spacing.x;
+            let n = self.scenes.len();
+            let one_row = n as f32 * (BANK_BUTTON.x + gap) - gap;
+            self.bank_overflows = one_row > ui.available_width() + 0.5;
+            let rows = self.bank_rows.max(1);
+            let per_row = n.div_ceil(rows).max(1);
+            let mut area = egui::ScrollArea::horizontal().id_salt("bank");
+            if let Some(x) = self.bank_scroll_to.take() {
+                area = area.horizontal_scroll_offset(x);
+            }
+            let scenes = self.scenes.clone();
+            let out = area.show(ui, |ui| {
+                ui.vertical(|ui| {
+                    for row in scenes.chunks(per_row).enumerate() {
+                        ui.horizontal(|ui| {
+                            for (j, s) in row.1.iter().enumerate() {
+                                let i = row.0 * per_row + j;
+                                let tags = (live_name.as_deref() == Some(s.name.as_str()), preview_name.as_deref() == Some(s.name.as_str()));
+                                if let Some(p) = self.scene_button(ui, i, s, tags, no_signal.get(i)) {
+                                    press = Some(p);
+                                }
+                            }
+                        });
                     }
                 });
             });
+            // Scenes out of sight: a fade and an arrow at that edge (with how many), to scroll a page.
+            let view = out.inner_rect;
+            let (x, content) = (out.state.clamped_offset().x, out.content_size.x);
+            let step = BANK_BUTTON.x + gap;
+            let hidden_left = ((x / step).floor().max(0.0) as usize * rows).min(n);
+            let hidden_right = (((content - x - view.width()) / step).ceil().max(0.0) as usize * rows).min(n);
+            let mut edge = |ui: &mut egui::Ui, left: bool, count: usize| {
+                let w = 70.0;
+                let r = if left { Rect::from_min_size(view.min, vec2(w, view.height())) } else { Rect::from_min_size(pos2(view.right() - w, view.top()), vec2(w, view.height())) };
+                let resp = ui.interact(r, ui.scope_id().with(("bank_edge", left)), Sense::click());
+                let p = ui.painter_at(r);
+                let (solid, clear) = (PANEL, PANEL.gamma_multiply(0.0));
+                let mut mesh = egui::Mesh::default();
+                let (a, b) = if left { (solid, clear) } else { (clear, solid) };
+                mesh.colored_vertex(r.left_top(), a);
+                mesh.colored_vertex(r.right_top(), b);
+                mesh.colored_vertex(r.right_bottom(), b);
+                mesh.colored_vertex(r.left_bottom(), a);
+                mesh.add_triangle(0, 1, 2);
+                mesh.add_triangle(0, 2, 3);
+                p.add(mesh);
+                let label = if left { format!("‹ {count}") } else { format!("+{count} ›") };
+                let galley = p.layout_no_wrap(label, FontId::proportional(14.0), Color32::WHITE);
+                let size = galley.size() + vec2(14.0, 8.0);
+                let chip = if left { Rect::from_min_size(r.left_center() + vec2(2.0, -size.y / 2.0), size) } else { Rect::from_min_size(r.right_center() - vec2(size.x + 2.0, size.y / 2.0), size) };
+                p.rect_filled(chip, size.y / 2.0, if resp.hovered() { ACCENT } else { Color32::from_rgb(58, 64, 78) });
+                p.galley(chip.min + vec2(7.0, 4.0), galley, Color32::WHITE);
+                let more = if count == 1 { "1 more scene".to_string() } else { format!("{count} more scenes") };
+                if resp.on_hover_text(more).clicked() {
+                    self.bank_scroll_to = Some(if left { (x - view.width() + step).max(0.0) } else { x + view.width() - step });
+                }
+            };
+            if x > 1.0 {
+                edge(ui, true, hidden_left.max(1));
+            }
+            if x + view.width() < content - 1.0 {
+                edge(ui, false, hidden_right.max(1));
+            }
         });
         if let Some((i, cut)) = press {
             self.press_scene(i, cut);
+        }
+    }
+
+    /// One scene button: its number, a live picture of the scene (its
+    /// sources' multiview pictures where its frames are), its name, ♪ for
+    /// scene sound and ⚠ when a source in it has no signal. Some((i, cut)) when pressed.
+    fn scene_button(&mut self, ui: &mut egui::Ui, i: usize, s: &Scene, (is_live, is_preview): (bool, bool), missing: Option<&Vec<String>>) -> Option<(usize, bool)> {
+        let key = if i < 9 { format!("{}", i + 1) } else { String::new() };
+        let (rect, resp) = ui.allocate_exact_size(BANK_BUTTON, Sense::click());
+        let painter = ui.painter_at(rect);
+        let fill = if is_live {
+            RED
+        } else if is_preview {
+            GREEN_DIM
+        } else if resp.hovered() {
+            Color32::from_rgb(44, 49, 59)
+        } else {
+            RAISED
+        };
+        painter.rect_filled(rect, 6.0, fill);
+        if is_preview {
+            painter.rect_stroke(rect, 6.0, Stroke::new(2.0, GREEN), StrokeKind::Inside);
+        }
+        let canvas = self.engine.as_ref().map(|e| e.info.canvas).unwrap_or((1920, 1080));
+        let tw = 76.0;
+        let th = (tw * canvas.1 as f32 / canvas.0.max(1) as f32).clamp(20.0, 46.0);
+        let thumb = Rect::from_min_size(rect.min + vec2(8.0, 8.0), vec2(tw, th));
+        self.scene_thumb(&painter, thumb, s, canvas);
+        if !s.audio_on.is_empty() || !s.audio_off.is_empty() {
+            painter.text(thumb.right_bottom() + vec2(6.0, 0.0), Align2::LEFT_BOTTOM, "♪", FontId::proportional(13.0), Color32::from_white_alpha(180));
+        }
+        painter.text(rect.right_top() + vec2(-10.0, 9.0), Align2::RIGHT_TOP, &key, FontId::monospace(13.0), if is_live { Color32::WHITE } else { TEXT_DIM });
+        let missing = missing.filter(|m| !m.is_empty());
+        if missing.is_some() {
+            painter.text(rect.right_top() + vec2(-10.0, 28.0), Align2::RIGHT_TOP, "⚠", FontId::proportional(14.0), if is_live { Color32::WHITE } else { AMBER });
+        }
+        // The name, cut short with "…" when it's long (the whole of it is in the hover text).
+        let mut job = egui::text::LayoutJob::simple_singleline(s.name.clone(), FontId::proportional(13.5), Color32::WHITE);
+        job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - 18.0);
+        let galley = ui.fonts_mut(|f| f.layout_job(job));
+        let elided = galley.elided;
+        painter.galley(pos2(rect.left() + 9.0, rect.bottom() - 9.0 - galley.size().y), galley, Color32::WHITE);
+        let press = resp.clicked().then(|| (i, ui.input(|inp| inp.modifiers.shift)));
+        let tip = match (i < 9, self.cfg.transition.preview_mode) {
+            (true, true) => format!("Press {} to preview (Shift+{} cuts to program)", i + 1, i + 1),
+            (true, false) => format!("Press {} (Shift+{} to cut)", i + 1, i + 1),
+            _ => "Click to take".into(),
+        };
+        let tip = if elided { format!("{}\n{tip}", s.name) } else { tip };
+        let tip = match missing {
+            Some(m) => format!("{tip}\n⚠ No signal from {}", m.join(", ")),
+            None => tip,
+        };
+        resp.on_hover_text(tip);
+        press
+    }
+
+    /// A small live picture of a scene: each frame's source as the
+    /// multiview last showed it (no extra GPU work), placed, cropped and
+    /// filled as on air; a grey box for a source with no picture yet.
+    fn scene_thumb(&self, painter: &egui::Painter, thumb: Rect, scene: &Scene, canvas: (u32, u32)) {
+        painter.rect_filled(thumb, 2.0, Color32::from_black_alpha(140));
+        let p = painter.with_clip_rect(thumb.intersect(painter.clip_rect()));
+        let k = thumb.width() / canvas.0.max(1) as f32;
+        for l in &scene.layers {
+            let Some((_, tex)) = self.textures.get(&format!("src{}", l.source)) else {
+                let r = Rect::from_min_size(thumb.min + vec2(l.x * thumb.width(), l.y * thumb.height()), vec2(l.w * thumb.width(), l.h * thumb.height())).intersect(thumb);
+                p.rect_filled(r, 1.0, Color32::from_white_alpha(70));
+                p.rect_stroke(r, 1.0, Stroke::new(1.0, Color32::from_white_alpha(160)), StrokeKind::Inside);
+                continue;
+            };
+            let [w, h] = tex.size();
+            let look = self.cfg.sources.get(l.source).map(|c| c.look.clone()).unwrap_or_default();
+            let (uv, (x, y, fw, fh)) = thumb_view(look.crop_rect(), look.cropped_aspect(w as f32 / h.max(1) as f32), l, canvas);
+            let r = Rect::from_min_size(thumb.min + vec2(x * k, y * k), vec2(fw * k, fh * k));
+            p.image(tex.id(), r, uv, Color32::WHITE);
         }
     }
 
@@ -5003,7 +5118,10 @@ impl eframe::App for App {
         }
 
         egui::Panel::top("header").exact_size(54.0).frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(14, 6))).show(ui, |ui| self.header(ui));
-        egui::Panel::bottom("bank").exact_size(104.0).frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(14, 6))).show(ui, |ui| self.scene_bank(ui));
+        // A second row of scenes when they don't fit in one and the window is tall.
+        self.bank_rows = if self.bank_overflows && ctx.content_rect().height() >= 1000.0 { 2 } else { 1 };
+        let bank_height = 104.0 + (self.bank_rows - 1) as f32 * (BANK_BUTTON.y + 6.0);
+        egui::Panel::bottom("bank").exact_size(bank_height).frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(14, 6))).show(ui, |ui| self.scene_bank(ui));
         if self.log_open {
             egui::Panel::bottom("log").resizable(true).default_size(150.0).frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin::same(8))).show(ui, |ui| self.log_panel(ui));
         }
@@ -5243,6 +5361,16 @@ fn unique_name(scenes: &[Scene], base: &str) -> String {
     (2..).map(|i| format!("{base} {i}")).find(|n| !scenes.iter().any(|s| &s.name == n)).unwrap()
 }
 
+/// Where a layer's picture goes on a scene thumbnail (x, y, w, h in canvas
+/// pixels) and the part of the source texture shown there: the frame's
+/// placement (fit, fill, zoom) of the picture after the source's own crop.
+fn thumb_view(crop: [f32; 4], cropped_aspect: f32, layer: &Layer, canvas: (u32, u32)) -> (Rect, (f32, f32, f32, f32)) {
+    let (rect, part) = crate::scene::place(layer, canvas, cropped_aspect);
+    let u = |f: f32| crop[0] + f * (crop[2] - crop[0]);
+    let v = |f: f32| crop[1] + f * (crop[3] - crop[1]);
+    (Rect::from_min_max(pos2(u(part[0]), v(part[1])), pos2(u(part[2]), v(part[3]))), rect)
+}
+
 /// Where to cut when sources on air have just dropped: the first one's
 /// chosen scene, unless it's on already or needs a source with no signal too.
 fn cut_after_drop(dropped: &[String], sources: &[crate::config::SourceConfig], scenes: &[Scene], offline: &[bool], live: &str) -> Option<Scene> {
@@ -5373,6 +5501,24 @@ mod desk_tests {
         // A scene that's gone.
         sources[1].on_drop_scene = "Nowhere".into();
         assert!(cut_after_drop(&["Cam 2".into()], &sources, &scenes, &none, &scenes[1].name).is_none());
+    }
+
+    #[test]
+    fn scene_thumbnails_crop_and_fill_as_on_air() {
+        use super::{thumb_view, Layer};
+        // Full frame, no crop: the whole texture over the whole canvas.
+        let full = Layer::at(0, 0.0, 0.0, 1.0, 1.0);
+        let (uv, r) = thumb_view([0.0, 0.0, 1.0, 1.0], 16.0 / 9.0, &full, (1920, 1080));
+        assert_eq!((uv.min.x, uv.min.y, uv.max.x, uv.max.y), (0.0, 0.0, 1.0, 1.0));
+        assert_eq!(r, (0.0, 0.0, 1920.0, 1080.0));
+        // Cropped to its left half (taller than square), filling a square frame: all of that half's width, its middle rows.
+        let mut sq = Layer::at(0, 0.0, 0.0, 0.5, 1.0);
+        sq.w = 1080.0 / 1920.0;
+        sq.fill = true;
+        let (uv, r) = thumb_view([0.0, 0.0, 0.5, 1.0], 8.0 / 9.0, &sq, (1920, 1080));
+        assert!((r.2 - 1080.0).abs() < 0.5 && (r.3 - 1080.0).abs() < 0.5);
+        assert_eq!((uv.min.x, uv.max.x), (0.0, 0.5));
+        assert!((uv.min.y - 1.0 / 18.0).abs() < 1e-4 && (uv.max.y - 17.0 / 18.0).abs() < 1e-4, "{uv:?}");
     }
 
     #[test]

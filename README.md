@@ -661,6 +661,7 @@ Video Extensions** on some PCs.
 | Action | How |
 |---|---|
 | Take scene 1–9 | Number keys, or click the scene button |
+| Scene buttons | Along the bottom. Each shows a live picture of its scene (its sources where its frames are), ♪ when it changes the sound, and ⚠ when a source in it has no signal; a long name ends in "…" and shows in full when you hover. When they don't all fit, the edge says how many more (**+3 ›**: click it, or scroll sideways). In a window at least 1000 pixels tall they take a second row instead |
 | Cut straight to a scene | Shift + number, or Shift + click |
 | Back to the last scene | `Backspace` (or the `back` command): the scene on air before this one goes back on air with the current transition and its cues (in Preview mode too, without passing through preview). Press it again to go back the other way |
 | Put a source full screen | Click it in the multiview |
