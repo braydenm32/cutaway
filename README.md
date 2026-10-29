@@ -640,6 +640,14 @@ Video Extensions** on some PCs.
   input's re-syncs and the drives. It turns amber when something needs a look.
 - **A device that misbehaves** doesn't stop the app. It's marked offline, the
   reason is in the Log panel, and it's reopened when it comes back.
+- **A source that drops while it's on air** (a camera unplugged, a network
+  feed gone) puts a red chip on the program monitor ("Cam 2: no signal,
+  reconnecting…"), one error message at the bottom, and a ⚠ on every scene
+  button that uses it, until it's back. To have Cutaway cut away by itself,
+  set **Settings → Video sources → If it drops while on air** to a scene
+  (say, the wide shot for a close-up camera): it cuts there once, as the
+  signal goes, unless that scene also needs a source with no signal. It
+  doesn't switch back when the source returns.
 - **A crash in one part of Cutaway** doesn't spread to the rest: the other
   parts keep using the shared settings and state it left behind, and the
   crash's details are in the log.

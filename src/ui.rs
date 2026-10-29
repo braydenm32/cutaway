@@ -16,7 +16,7 @@ use crate::scene::{Layer, Scene};
 use crate::settings::{Section, SettingsAction, SettingsContext, SettingsUi};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, CornerRadius, FontId, Key, Rect, RichText, Sense, Stroke, StrokeKind};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -201,6 +201,8 @@ pub struct App {
     rec_hint_until: Option<Instant>,
     /// The self-test holds the REC button (for a screenshot).
     test_hold: bool,
+    /// The self-test takes this source's signal away (by number).
+    test_drop: Option<usize>,
     /// Closing was confirmed (or nothing was running): let the window go.
     quit_ok: bool,
     log_open: bool,
@@ -240,6 +242,11 @@ pub struct App {
     ptz_zoom: Option<f32>,
     /// The last replay problem shown.
     replay_problem: Option<String>,
+    /// Sources known to have no signal (None: not looked yet with this
+    /// engine, so the ones missing from the start don't count as drops).
+    dropped: Option<HashSet<String>>,
+    /// Each source (by number): no signal now.
+    offline_sources: Vec<bool>,
     /// The scheduled start this session already went live for.
     scheduled_done: Option<String>,
     /// Slow motion ticked in the Replay button's menu.
@@ -330,6 +337,8 @@ impl App {
             ptz_drive: None,
             ptz_zoom: None,
             replay_problem: None,
+            dropped: None,
+            offline_sources: Vec::new(),
             scheduled_done: None,
             replay_slow: false,
             qr_for: None,
@@ -385,6 +394,7 @@ impl App {
             rec_hold_spent: false,
             rec_hint_until: None,
             test_hold: false,
+            test_drop: None,
             quit_ok: false,
             log_open: false,
             guide_open: false,
@@ -1849,6 +1859,15 @@ impl App {
         }
         let t = start.elapsed().as_secs_f32();
         ctx.request_repaint_after(Duration::from_millis(100));
+        if step == 3 && self.test_drop.is_none() {
+            // A source on air losing its signal (CUTAWAY_UI_TEST_DROP=2), and where to cut (…_DROP_TO=scene).
+            if let Some(i) = std::env::var("CUTAWAY_UI_TEST_DROP").ok().and_then(|v| v.parse::<usize>().ok()).filter(|i| *i >= 1) {
+                if let (Ok(to), Some(src)) = (std::env::var("CUTAWAY_UI_TEST_DROP_TO"), self.cfg.sources.get_mut(i - 1)) {
+                    src.on_drop_scene = to;
+                }
+                self.test_drop = Some(i - 1);
+            }
+        }
         if step >= 3 && std::env::var_os("CUTAWAY_UI_TEST_HOLD").is_some() {
             // Held part way: the fill shows, but it never gets to stop the take.
             self.test_hold = true;
@@ -1945,9 +1964,44 @@ impl App {
                 }
             }
         }
+        self.watch_dropped_sources();
+        let Some(e) = &self.engine else { return };
         // A sharper monitor picture while a second screen shows it.
         let want = if self.cfg.display.output != DisplayOutput::Off { e.info.canvas.0.min(1920) } else { self.cfg.program.preview_width };
         e.preview_width.store(want, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// A source on air that loses its signal: one error message, and (if
+    /// its settings say so) a cut to a scene that doesn't need it, once.
+    fn watch_dropped_sources(&mut self) {
+        let Some(e) = &self.engine else { return };
+        let offline = e.status.lock_ok().offline.clone();
+        let names: Vec<String> = e.sources.iter().map(|s| s.name.clone()).collect();
+        // By name in the status (audio inputs are listed there too), and not delivering.
+        self.offline_sources = e.sources.iter().map(|s| offline.contains(&s.name) && !s.input.alive()).collect();
+        if let Some(o) = self.test_drop.and_then(|i| self.offline_sources.get_mut(i)) {
+            *o = true;
+        }
+        let now: HashSet<String> = names.iter().zip(&self.offline_sources).filter(|(_, off)| **off).map(|(n, _)| n.clone()).collect();
+        let Some(before) = self.dropped.replace(now.clone()) else { return };
+        let live = e.switcher.live();
+        let on_air = live.sources();
+        let mut dropped = Vec::new();
+        for (i, name) in names.iter().enumerate() {
+            if now.contains(name) && !before.contains(name) && on_air.contains(&i) {
+                self.toast(format!("{name} dropped while on air: no signal"), true);
+                dropped.push(name.clone());
+            }
+        }
+        if let Some(scene) = cut_after_drop(&dropped, &self.cfg.sources, &self.scenes, &self.offline_sources, &live.name) {
+            self.take_scene(&scene, true);
+            self.toast(format!("Cut to {}", scene.name), false);
+        }
+    }
+
+    /// Each source a scene shows that has no signal now.
+    fn scene_offline(&self, scene: &Scene) -> Vec<usize> {
+        scene.sources().into_iter().filter(|i| self.offline_sources.get(*i).copied().unwrap_or(false)).collect()
     }
 
     /// The right-hand column's edge: a grip to show it can be dragged, and
@@ -2594,6 +2648,13 @@ impl App {
         let auto = engine.auto_switch_enabled();
         let auto_st = engine.status.lock_ok().auto_switch.clone();
         let mut chips: Vec<(String, Color32)> = Vec::new();
+        // A source on air with no signal, first.
+        for i in self.scene_offline(&live) {
+            if let Some(src) = engine.sources.get(i) {
+                let how = if src.input.self_managed() { "no signal" } else { "no signal, reconnecting…" };
+                chips.push((format!("⚠ {}: {how}", src.name), RED));
+            }
+        }
         if auto {
             let talking = auto_st.talking.iter().filter(|t| **t).count();
             let text = if auto_st.paused_for > 0.0 { format!("AUTO (paused {:.0}s)", auto_st.paused_for.ceil()) } else if talking > 0 { format!("AUTO · {talking} talking") } else { "AUTO".into() };
@@ -3252,6 +3313,9 @@ impl App {
         let live_name = self.engine.as_ref().map(|e| e.switcher.live().name);
         let preview_name = self.engine.as_ref().and_then(|e| e.switcher.preview()).map(|p| p.name);
         let mut press: Option<(usize, bool)> = None;
+        // Scenes that show a source with no signal: its names.
+        let source_names: Vec<String> = self.engine.as_ref().map(|e| e.sources.iter().map(|s| s.name.clone()).collect()).unwrap_or_default();
+        let no_signal: Vec<Vec<String>> = self.scenes.iter().map(|s| self.scene_offline(s).into_iter().filter_map(|i| source_names.get(i).cloned()).collect()).collect();
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
                 ui.label(RichText::new("TRANSITION").color(TEXT_DIM).size(11.0));
@@ -3354,6 +3418,10 @@ impl App {
                             painter.text(thumb.right_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, "♪", FontId::proportional(13.0), Color32::from_white_alpha(180));
                         }
                         painter.text(rect.right_top() + vec2(-10.0, 9.0), Align2::RIGHT_TOP, &key, FontId::monospace(13.0), if is_live { Color32::WHITE } else { TEXT_DIM });
+                        let missing = no_signal.get(i).filter(|m| !m.is_empty());
+                        if missing.is_some() {
+                            painter.text(rect.right_top() + vec2(-28.0, 8.0), Align2::RIGHT_TOP, "⚠", FontId::proportional(14.0), if is_live { Color32::WHITE } else { AMBER });
+                        }
                         let name: String = s.name.chars().take(18).collect();
                         painter.text(rect.left_bottom() + vec2(10.0, -10.0), Align2::LEFT_BOTTOM, name, FontId::proportional(13.5), Color32::WHITE);
                         if resp.clicked() {
@@ -3363,6 +3431,10 @@ impl App {
                             (true, true) => format!("Press {} to preview (Shift+{} cuts to program)", i + 1, i + 1),
                             (true, false) => format!("Press {} (Shift+{} to cut)", i + 1, i + 1),
                             _ => "Click to take".into(),
+                        };
+                        let tip = match missing {
+                            Some(m) => format!("{tip}\n⚠ No signal from {}", m.join(", ")),
+                            None => tip,
                         };
                         resp.on_hover_text(tip);
                     }
@@ -5019,6 +5091,15 @@ fn unique_name(scenes: &[Scene], base: &str) -> String {
     (2..).map(|i| format!("{base} {i}")).find(|n| !scenes.iter().any(|s| &s.name == n)).unwrap()
 }
 
+/// Where to cut when sources on air have just dropped: the first one's
+/// chosen scene, unless it's on already or needs a source with no signal too.
+fn cut_after_drop(dropped: &[String], sources: &[crate::config::SourceConfig], scenes: &[Scene], offline: &[bool], live: &str) -> Option<Scene> {
+    let target = dropped.iter().filter_map(|n| sources.iter().find(|s| &s.name == n)).map(|s| s.on_drop_scene.as_str()).find(|t| !t.is_empty())?;
+    let scene = scenes.iter().find(|s| s.name == target)?;
+    let blind = scene.sources().iter().any(|i| offline.get(*i).copied().unwrap_or(false));
+    (scene.name != live && !blind).then(|| scene.clone())
+}
+
 /// The time of day for the header: "15:05", or "3:05 PM".
 fn clock_text(t: chrono::NaiveTime, twelve: bool) -> String {
     if twelve { t.format("%-I:%M %p").to_string() } else { t.format("%H:%M").to_string() }
@@ -5116,9 +5197,31 @@ fn precheck_verdict(items: &[CheckItem], done: bool) -> (String, Color32) {
 }
 
 #[cfg(test)]
-mod clock_tests {
+mod desk_tests {
     use super::clock_text;
     use chrono::NaiveTime;
+
+    #[test]
+    fn cuts_away_from_a_dropped_source_once_and_safely() {
+        use super::{cut_after_drop, Scene};
+        use crate::config::SourceConfig;
+        let names: Vec<String> = ["Cam 1", "Cam 2", "Cam 3"].iter().map(|s| s.to_string()).collect();
+        let scenes: Vec<Scene> = crate::scene::presets(&names);
+        let wide = scenes[0].name.clone();
+        let mut sources: Vec<SourceConfig> = names.iter().map(|n| SourceConfig { name: n.clone(), ..Default::default() }).collect();
+        let none = [false, true, false];
+        // Not set: stays.
+        assert!(cut_after_drop(&["Cam 2".into()], &sources, &scenes, &none, &scenes[1].name).is_none());
+        sources[1].on_drop_scene = wide.clone();
+        assert_eq!(cut_after_drop(&["Cam 2".into()], &sources, &scenes, &none, &scenes[1].name).map(|s| s.name), Some(wide.clone()));
+        // Already on: nothing to do.
+        assert!(cut_after_drop(&["Cam 2".into()], &sources, &scenes, &none, &wide).is_none());
+        // The chosen scene has no signal either.
+        assert!(cut_after_drop(&["Cam 2".into()], &sources, &scenes, &[true, true, false], &scenes[1].name).is_none());
+        // A scene that's gone.
+        sources[1].on_drop_scene = "Nowhere".into();
+        assert!(cut_after_drop(&["Cam 2".into()], &sources, &scenes, &none, &scenes[1].name).is_none());
+    }
 
     #[test]
     fn header_clock_in_12_and_24_hours() {
