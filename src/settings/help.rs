@@ -13,6 +13,29 @@ thread_local! {
     static TARGET: RefCell<Option<(Section, String, Instant, bool)>> = const { RefCell::new(None) };
 }
 
+thread_local! {
+    /// A folded part to unfold the next time it's drawn (its id, as `{:?}`).
+    static OPEN_PART: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Unfold the part drawn with this id when its page next shows it.
+pub(super) fn open_part(id: &str) {
+    OPEN_PART.with(|p| *p.borrow_mut() = Some(format!("{id:?}")));
+}
+
+/// Whether this part (`{:?}` of its id) was asked to unfold: once.
+pub(super) fn take_open_part(id_debug: &str) -> bool {
+    OPEN_PART.with(|p| {
+        let mut p = p.borrow_mut();
+        if p.as_deref() == Some(id_debug) {
+            *p = None;
+            true
+        } else {
+            false
+        }
+    })
+}
+
 /// How long a found setting's name stays lit.
 const LIT_SECS: f32 = 2.5;
 

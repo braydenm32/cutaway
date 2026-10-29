@@ -466,6 +466,12 @@ impl SettingsUi {
         self
     }
 
+    /// Open a page with one of its folded parts (by the id it's drawn with) unfolded.
+    pub fn open_part_at(self, section: Section, part: &str) -> Self {
+        help::open_part(part);
+        self.open_at(section)
+    }
+
     /// Open with source `i` split into `n` close-ups, ready to frame.
     pub fn with_split(mut self, i: usize, n: usize) -> Self {
         self.split_source(i, n);
@@ -1923,7 +1929,11 @@ pub(super) fn part<R>(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::De
     if !state.is_empty() {
         job.append(&format!("   {state}"), 0.0, egui::TextFormat::simple(egui::FontId::proportional(13.5), TEXT_DIM));
     }
-    let r = egui::CollapsingHeader::new(job).id_salt(id).default_open(open).show(ui, |ui| {
+    let mut header = egui::CollapsingHeader::new(job).default_open(open);
+    if help::take_open_part(&format!("{id:?}")) {
+        header = header.open(Some(true));
+    }
+    let r = header.id_salt(id).show(ui, |ui| {
         ui.add_space(4.0);
         let r = body(ui);
         ui.add_space(6.0);
