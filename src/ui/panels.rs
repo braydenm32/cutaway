@@ -100,14 +100,14 @@ impl App {
                         ui.label(RichText::new(format!("{}/{}", i + 1, st.count)).color(TEXT_DIM).monospace());
                         ui.add(egui::Label::new(RichText::new(&st.name).strong().size(16.0).color(Color32::WHITE)).truncate());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(RichText::new(left).monospace().size(22.0).strong().color(if over { RED } else { Color32::WHITE }));
+                            ui.label(RichText::new(left).monospace().size(22.0).strong().color(if over { ERROR } else { Color32::WHITE }));
                         });
                     });
                     if st.planned > 0.0 {
                         let f = (st.elapsed / st.planned).min(1.0) as f32;
                         let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 4.0), Sense::hover());
                         ui.painter().rect_filled(r, 2.0, LINE);
-                        ui.painter().rect_filled(Rect::from_min_size(r.min, vec2(r.width() * f, r.height())), 2.0, if f >= 1.0 { RED } else if f > 0.85 { AMBER } else { GREEN });
+                        ui.painter().rect_filled(Rect::from_min_size(r.min, vec2(r.width() * f, r.height())), 2.0, if f >= 1.0 { ERROR } else if f > 0.85 { AMBER } else { GREEN });
                     }
                     ui.horizontal(|ui| {
                         let next = st.next.clone().map(|n| format!("Next: {n}")).unwrap_or_else(|| "Last segment".into());
@@ -390,7 +390,7 @@ impl App {
                     let playing = self.syrinscape.is_playing(b);
                     let text = RichText::new(&b.name).size(12.5).color(if playing { Color32::BLACK } else { Color32::WHITE });
                     let fill = match (b.kind, playing) {
-                        (SyrinKind::StopAll, _) => RED_DIM,
+                        (SyrinKind::StopAll, _) => ERROR_DIM,
                         (_, true) => Color32::from_rgb(150, 110, 220),
                         _ => RAISED,
                     };
@@ -484,13 +484,13 @@ impl App {
         };
         let mut left = vec![(now.format("%-I:%M:%S %p").to_string(), big.clone(), Color32::WHITE)];
         if let Some(r) = recording {
-            left.push((format!("● REC {}", crate::engine::timers::fmt_span(r, false)), small.clone(), RED));
+            left.push((format!("● REC {}", crate::engine::timers::fmt_span(r, false)), small.clone(), REC_DOT));
         }
         boxed(area.left_top() + vec2(pad, pad), Align2::LEFT_TOP, left);
         if let Some((name, elapsed, planned)) = segment {
             let (t, over) = left_text(elapsed, planned);
             // Left of the full-screen button's corner.
-            boxed(area.right_top() + vec2(-76.0, pad), Align2::RIGHT_TOP, vec![(name, small, Color32::from_gray(220)), (t, big, if over { RED } else { Color32::WHITE })]);
+            boxed(area.right_top() + vec2(-76.0, pad), Align2::RIGHT_TOP, vec![(name, small, Color32::from_gray(220)), (t, big, if over { ERROR } else { Color32::WHITE })]);
         }
     }
 }

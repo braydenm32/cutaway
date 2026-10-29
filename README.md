@@ -354,7 +354,10 @@ Takes start with the **Take name** from Settings → Recording. Leave it as
   or any tablet's browser, mirrored for a glass if needed, rolled and paused
   from Cutaway, the Stream Deck, the remote or a keyboard on the tablet.
 - **Tally:** red for on air, green for preview, in the multiview, on the
-  phone remote and on MIDI pads.
+  phone remote and on MIDI pads. Red means on air and nothing else: the
+  REC button is a dark pill with a pulsing red dot, LIVE is pink, and TAKE
+  (blue) and FTB (amber while the program is black) aren't red, so in a
+  dim room you can tell recording, on air and live apart at a glance.
 
 ### Audio
 
@@ -730,7 +733,7 @@ Video Extensions** on some PCs.
 | Timers | Right-click a countdown or stopwatch's graphic button: start, pause, reset |
 | Graphics 1–9 | Alt/Option + number, or the graphic buttons; ✎ edits a title's text live |
 | Media player | ⟲ ⏯ ⏭ on its tile; right-click the tile for the playlist |
-| Record / stop | ⌘R, or the record button. To stop, hold the **■ REC** button for a second (a fill grows across it; a quick click only says **Hold to stop**); ⌘R asks "Stop recording?" first, so a stray click or key can't split the take |
+| Record / stop | ⌘R, or the record button. To stop, hold the **REC** button (the dark one with the pulsing red dot) for a second (a red fill grows across it; a quick click only says **Hold to stop**); ⌘R asks "Stop recording?" first, so a stray click or key can't split the take |
 | Go live / end stream | The **GO LIVE** button (until there's somewhere to stream to, the header has a small **Set up streaming** in its place). It has no key unless you give it one in Settings → Shortcuts, so a stray key can't start or end a broadcast (a key gets the same checks and "are you sure?" as the button) |
 | Put scenes in order | In **Edit layout**, drag a scene button along the bank (a bar shows where it goes). Only in Edit layout, so a slip during the show can't move one. Or ↑ ↓ in **Settings → Show → Scenes**, which also renames, duplicates, deletes (it asks first, and says what uses the scene) and starts new scenes |
 | New scene | **＋ New scene** in Edit layout (or Settings → Scenes): **Blank**, or from a layout (a source full screen, side by side, picture in picture, grid). It goes at the end of the bank, so no other scene's number changes. With Preview on it goes in preview to edit; otherwise take it to edit it |
@@ -853,7 +856,7 @@ network and type the PIN. The remote always has one (Cutaway makes a
 four-digit PIN if you don't set your own), and a device that gets it wrong
 five times in a row waits a minute before it can try again.
 
-To stop a recording or end the stream from the phone, hold the red (or pink)
+To stop a recording or end the stream from the phone, hold the REC (or pink LIVE)
 button for a second: a fill grows across it, and letting go sooner does
 nothing (a quick tap says **Hold to stop**), so a stray tap can't split the
 show. Starting is one tap. When the pre-show check is turned on

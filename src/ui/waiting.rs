@@ -26,7 +26,7 @@ pub(super) fn link_bars(painter: &egui::Painter, rect: Rect, q: crate::engine::g
     let (lit, color) = match q {
         LinkQuality::Good => (3, GREEN),
         LinkQuality::Weak => (2, AMBER),
-        LinkQuality::Poor => (1, RED),
+        LinkQuality::Poor => (1, ERROR),
     };
     let w = rect.width() / 4.0;
     for k in 0..3 {

@@ -290,7 +290,7 @@ impl SettingsUi {
                             if ui.small_button("Keep it").clicked() {
                                 self.deleting = None;
                             }
-                            if ui.add(egui::Button::new(RichText::new("Delete for good").color(Color32::WHITE)).fill(RED).small()).clicked() {
+                            if ui.add(egui::Button::new(RichText::new("Delete for good").color(Color32::WHITE)).fill(ERROR).small()).clicked() {
                                 self.message = Some(match profiles::delete(&dir, name) {
                                     Ok(()) => (format!("Deleted \"{name}\""), false),
                                     Err(e) => (format!("{e:#}"), true),

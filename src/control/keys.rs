@@ -26,7 +26,7 @@ pub enum KeyKind {
 
 const PANEL: [u8; 4] = [22, 25, 31, 255];
 const RAISED: [u8; 4] = [34, 38, 46, 255];
-const RED: [u8; 4] = [232, 52, 64, 255];
+const ON_AIR: [u8; 4] = [232, 52, 64, 255];
 const GREEN: [u8; 4] = [58, 196, 112, 255];
 const GREEN_DIM: [u8; 4] = [28, 110, 64, 255];
 const AMBER: [u8; 3] = [245, 166, 35];
@@ -135,7 +135,7 @@ pub fn render(src: &KeySources, state: &ShowState, kind: KeyKind, size: u32, lab
         }
     }
     let edge = match tally {
-        "program" => Some(RED),
+        "program" => Some(ON_AIR),
         "preview" => Some(GREEN),
         _ => None,
     };
@@ -149,7 +149,7 @@ pub fn render(src: &KeySources, state: &ShowState, kind: KeyKind, size: u32, lab
     }
     if label {
         let fill = match tally {
-            "program" => RED,
+            "program" => ON_AIR,
             "preview" => GREEN_DIM,
             _ => RAISED,
         };
@@ -213,7 +213,7 @@ mod tests {
         let img = render(&src, &state, KeyKind::Scene(0), 144, true).unwrap();
         assert_eq!(img.dimensions(), (144, 144));
         // Red tally border, blue on the left half of the picture, yellow on the right.
-        assert_eq!(img.get_pixel(1, 1).0, RED);
+        assert_eq!(img.get_pixel(1, 1).0, ON_AIR);
         let (pic_y, left_x, right_x) = (52, 40, 104);
         assert!(img.get_pixel(left_x, pic_y)[2] > 200 && img.get_pixel(left_x, pic_y)[0] < 50, "{:?}", img.get_pixel(left_x, pic_y));
         assert!(img.get_pixel(right_x, pic_y)[0] > 200 && img.get_pixel(right_x, pic_y)[1] > 200);
