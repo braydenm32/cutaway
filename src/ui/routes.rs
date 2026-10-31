@@ -48,7 +48,7 @@ pub struct Route {
     pub legacy: bool,
 }
 
-/// Not moved yet.
+/// Not moved yet. (A moved route is written out with `legacy: false`.)
 const fn r(id: &'static str, label: &'static str, was: &'static [Input]) -> Route {
     Route { id, label, was, legacy: true }
 }
@@ -106,13 +106,13 @@ pub const ROUTES: &[Route] = &[
     r("main.stream.scheduled", "Scheduled go-live", &[Display]),
     // ---- monitors and Edit layout
     r("mon.engine_error", "Engine problem", &[Mouse]),
-    r("mon.starting", "Starting", &[Display]),
+    Route { id: "mon.starting", label: "Starting", was: &[Display], legacy: false },
     r("mon.waiting.rescue", "Recovered take", &[Mouse]),
-    r("mon.preview", "Preview", &[Display]),
-    r("mon.preview.take", "Take", &[Mouse]),
-    r("mon.preview.cut", "Cut", &[Mouse]),
+    Route { id: "mon.preview", label: "Preview", was: &[Display], legacy: false },
+    Route { id: "mon.preview.take", label: "Take", was: &[Mouse], legacy: false },
+    Route { id: "mon.preview.cut", label: "Cut", was: &[Mouse], legacy: false },
     r("mon.tall", "Vertical monitor", &[Mouse]),
-    r("mon.program", "Program", &[Display]),
+    Route { id: "mon.program", label: "Program", was: &[Display], legacy: false },
     r("mon.edit.overlay", "Move and size on the picture", &[Mouse]),
     r("mon.edit.toolbar", "Edit layout toolbar", &[Mouse]),
     r("edit.done", "Done editing", &[Mouse]),
@@ -133,23 +133,23 @@ pub const ROUTES: &[Route] = &[
     r("edit.scene.duplicate", "Duplicate scene", &[Mouse]),
     r("edit.scene.delete", "Delete scene", &[Mouse]),
     // ---- multiview
-    r("mv.tile", "Multiview tile", &[Mouse]),
-    r("mv.media", "Media play, next, restart", &[Mouse]),
-    r("mv.framing", "Auto-framing", &[Mouse]),
-    r("ctx.mv.framing", "Follow and shot", &[RightClick]),
-    r("ctx.mv.playlist", "Playlist", &[RightClick]),
-    r("ctx.mv.split", "Split into close-ups", &[RightClick]),
+    Route { id: "mv.tile", label: "Multiview tile", was: &[Mouse], legacy: false },
+    Route { id: "mv.media", label: "Media play, next, restart", was: &[Mouse], legacy: false },
+    Route { id: "mv.framing", label: "Auto-framing", was: &[Mouse], legacy: false },
+    Route { id: "ctx.mv.framing", label: "Follow and shot", was: &[RightClick], legacy: false },
+    Route { id: "ctx.mv.playlist", label: "Playlist", was: &[RightClick], legacy: false },
+    Route { id: "ctx.mv.split", label: "Split into close-ups", was: &[RightClick], legacy: false },
     r("mv.guest_warn", "Guest link warning", &[Hover]),
     // ---- scene bank
-    r("bank.transition", "Transition", &[Mouse]),
-    r("bank.ftb", "Fade to black", &[Mouse]),
-    r("bank.ms", "Transition length", &[Mouse]),
-    r("bank.preview", "Preview on or off", &[Mouse]),
-    r("bank.auto", "Auto switching", &[Mouse]),
-    r("bank.cc", "Captions", &[Mouse]),
+    Route { id: "bank.transition", label: "Transition", was: &[Mouse], legacy: false },
+    Route { id: "bank.ftb", label: "Fade to black", was: &[Mouse], legacy: false },
+    Route { id: "bank.ms", label: "Transition length", was: &[Mouse], legacy: false },
+    Route { id: "bank.preview", label: "Preview on or off", was: &[Mouse], legacy: false },
+    Route { id: "bank.auto", label: "Auto switching", was: &[Mouse], legacy: false },
+    Route { id: "bank.cc", label: "Captions", was: &[Mouse], legacy: false },
     r("bank.edit", "Edit layout", &[Mouse]),
-    r("bank.scene", "Scenes", &[Mouse]),
-    r("bank.overflow", "More scenes", &[Mouse]),
+    Route { id: "bank.scene", label: "Scenes", was: &[Mouse], legacy: false },
+    Route { id: "bank.overflow", label: "More scenes", was: &[Mouse], legacy: false },
     // ---- right-column panels
     r("panel.heading.fold", "Fold a panel", &[Mouse]),
     r("panel.heading.reorder", "Move a panel", &[Mouse]),
@@ -234,7 +234,7 @@ pub const ROUTES: &[Route] = &[
     r("key.segment_prev", "Previous segment key", &[Key]),
     m("key.clip", "Clip key", &[Key]),
     r("key.talkback", "Talkback key", &[Key]),
-    r("key.back", "Last scene", &[Key]),
+    Route { id: "key.back", label: "Last scene", was: &[Key], legacy: false },
     r("key.number", "Scene and source number keys", &[Key]),
     r("key.graphic", "Graphic keys", &[Key]),
     r("key.pad", "Sound pad keys", &[Key]),

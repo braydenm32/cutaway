@@ -60,8 +60,10 @@ pub const AREAS: &[Area] = &[
             Sect { id: "multiview", label: "Multiview", help: &[], routes: &[
                 "mv.tile", "mv.media", "mv.framing", "ctx.mv.framing", "ctx.mv.playlist", "ctx.mv.split", "mv.guest_warn"] },
             Sect { id: "bank", label: "Scene bank", help: &[], routes: &[
+                // CUT, MIX and the length, Wipe/Push/Dip/Stinger under ⋯ (usage
+                // audit rank 19), Fade to black set apart at the end; under
+                // them Preview, AUTO (greyed until it has rules), CC and ⟲ Back.
                 "bank.scene", "bank.overflow", "bank.transition", "bank.ms", "bank.preview", "bank.cc",
-                // the ⋯ beside CUT / MIX (usage audit rank 19):
                 "bank.ftb", "bank.auto", "main.rec.replay", "ctx.replay", "key.back"] },
             Sect { id: "column", label: "Panels", help: &[], routes: &[
                 "panel.audio", "audio.fader", "audio.onoff", "audio.solo", "audio.phones",
@@ -250,7 +252,8 @@ pub const VISIBLE: &[(&str, &str)] = &[
     ("cmd.prompter", "show/switch/column"), ("cmd.comment", "show/switch/column"), ("cmd.guest", "show/switch/column"),
     // right-click and hover
     ("ctx.replay", "show/switch/bank"), ("ctx.clock", "graphics/timers"), ("ctx.ptz.preset", "sources/closeups"),
-    ("ctx.mv.split", "sources/closeups"), ("ctx.mv.framing", "sources/closeups"), ("ctx.mv.playlist", "sources/media"),
+    // (the tile's ⋯ offers what its right-click does)
+    ("ctx.mv.split", "show/switch/multiview"), ("ctx.mv.framing", "show/switch/multiview"), ("ctx.mv.playlist", "show/switch/multiview"),
     ("mv.guest_warn", "status"),
     // reachable only one way today
     ("dlg.marker_name", "status"), ("main.header.clock", "more/app/general"),
