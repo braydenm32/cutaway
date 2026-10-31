@@ -665,6 +665,8 @@ Video Extensions** on some PCs.
   closes). While it's open, click the
   main window and your show's keys work again (it says **Show keys active**)
   as long as the pointer's away from Settings; click in Settings to type there.
+  OK and Apply put on only what you changed in Settings, so a fader, ON/OFF,
+  transition or anything else changed on the desk meanwhile stays as it is.
 - **Starting up:** the window opens straight away; while the cameras come up,
   the monitors show a clapperboard with a line from the studio floor.
 - **Check your hardware:** `cutaway --probe-encoders` shows the encoders

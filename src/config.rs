@@ -2459,6 +2459,123 @@ pub fn parse_color(s: &str) -> Option<u32> {
     u32::from_str_radix(hex, 16).ok().map(|rgb| 0xff00_0000 | rgb)
 }
 
+impl Config {
+    /// The settings in effect (`self`) with only what was changed in
+    /// `edited` since `base` (the copy it was made from) put on top. So
+    /// anything changed meanwhile somewhere else (a fader, ON/OFF, the
+    /// transition, the clock, a title on the desk) stays as it is now,
+    /// unless it was changed in `edited` too, where `edited` wins.
+    ///
+    /// Compared field by field. Sources and inputs are matched by their
+    /// identity (`uid`); other lists item by item while none was added or
+    /// taken away on either side, or else taken whole from `edited`.
+    pub fn with_edits(&self, base: &Config, edited: &Config) -> Config {
+        if base == edited {
+            return self.clone();
+        }
+        if self == base {
+            return edited.clone();
+        }
+        let value = |c: &Config| {
+            let mut v = serde_json::to_value(c).unwrap_or(serde_json::Value::Null);
+            // A source's and an input's identity isn't saved, so put it in
+            // for matching and take it back out after.
+            for (list, uids) in [("sources", c.sources.iter().map(|s| s.uid).collect::<Vec<_>>()), ("audio", c.audio.iter().map(|a| a.uid).collect())] {
+                if let Some(items) = v.get_mut(list).and_then(|l| l.as_array_mut()) {
+                    for (item, uid) in items.iter_mut().zip(uids) {
+                        if let Some(o) = item.as_object_mut() {
+                            o.insert(UID_KEY.into(), uid.into());
+                        }
+                    }
+                }
+            }
+            v
+        };
+        let (b, e, l) = (value(base), value(edited), value(self));
+        if b.is_null() || e.is_null() || l.is_null() {
+            return edited.clone();
+        }
+        let merged = merge3(Some(&b), Some(&e), Some(&l)).unwrap_or(serde_json::Value::Null);
+        let Ok(mut out) = serde_json::from_value::<Config>(merged.clone()) else {
+            // Can't happen for settings that went in and out the same way,
+            // but never lose the edit: applying it whole is what Apply always did.
+            return edited.clone();
+        };
+        let uid_of = |list: &str, i: usize| merged.get(list).and_then(|l| l.get(i)).and_then(|s| s.get(UID_KEY)).and_then(|u| u.as_u64()).unwrap_or(0);
+        for (i, s) in out.sources.iter_mut().enumerate() {
+            s.uid = uid_of("sources", i);
+        }
+        for (i, a) in out.audio.iter_mut().enumerate() {
+            a.uid = uid_of("audio", i);
+        }
+        out.held_secrets = self.held_secrets.clone();
+        out
+    }
+}
+
+/// Where `Config::with_edits` keeps a source's or input's identity while it compares.
+const UID_KEY: &str = "\u{0}uid";
+
+/// Three-way merge of one value: `base` is the copy edited into `edited`,
+/// `live` is what it is now. None: not there (a field left out when empty).
+fn merge3(base: Option<&serde_json::Value>, edited: Option<&serde_json::Value>, live: Option<&serde_json::Value>) -> Option<serde_json::Value> {
+    use serde_json::Value;
+    if edited == base {
+        return live.cloned();
+    }
+    if live == base {
+        return edited.cloned();
+    }
+    match (base, edited, live) {
+        (Some(Value::Object(b)), Some(Value::Object(e)), Some(Value::Object(l))) => {
+            let mut out = serde_json::Map::new();
+            // Edited's fields first, then any only the live one has.
+            for k in e.keys().chain(l.keys().filter(|k| !e.contains_key(*k))) {
+                if let Some(v) = merge3(b.get(k), e.get(k), l.get(k)) {
+                    out.insert(k.clone(), v);
+                }
+            }
+            Some(Value::Object(out))
+        }
+        (Some(Value::Array(b)), Some(Value::Array(e)), Some(Value::Array(l))) => Some(Value::Array(merge_lists(b, e, l))),
+        // Changed on both sides into different kinds of thing: the edit wins.
+        _ => edited.cloned(),
+    }
+}
+
+fn merge_lists(b: &[serde_json::Value], e: &[serde_json::Value], l: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    let uid = |v: &serde_json::Value| v.get(UID_KEY).and_then(|u| u.as_u64());
+    // (Only once every item that was there has its identity.)
+    if b.iter().chain(e).chain(l).all(|v| uid(v).is_some()) && b.iter().chain(l).all(|v| uid(v) != Some(0)) {
+        let find = |list: &[serde_json::Value], id: u64| list.iter().find(|v| uid(v) == Some(id)).cloned();
+        // The edited list decides what's there and in what order; each item
+        // keeps what changed meanwhile.
+        let mut out: Vec<serde_json::Value> = e
+            .iter()
+            .filter_map(|item| match uid(item) {
+                Some(id) if id != 0 => match (find(b, id), find(l, id)) {
+                    (Some(bi), Some(li)) => merge3(Some(&bi), Some(item), Some(&li)),
+                    _ => Some(item.clone()),
+                },
+                _ => Some(item.clone()),
+            })
+            .collect();
+        // Added meanwhile (not in the edit's copy): kept.
+        for item in l {
+            if let Some(id) = uid(item).filter(|id| *id != 0) {
+                if find(b, id).is_none() && find(e, id).is_none() {
+                    out.push(item.clone());
+                }
+            }
+        }
+        return out;
+    }
+    if b.len() == e.len() && b.len() == l.len() {
+        return b.iter().zip(e).zip(l).filter_map(|((bi, ei), li)| merge3(Some(bi), Some(ei), Some(li))).collect();
+    }
+    e.to_vec()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2748,6 +2865,122 @@ mod tests {
     fn colors() {
         assert_eq!(parse_color("#10131a"), Some(0xff10131a));
         assert_eq!(parse_color("nope"), None);
+    }
+
+    fn show_for_edits() -> Config {
+        let mut c = Config::default();
+        c.sources = vec![
+            SourceConfig { name: "Wide".into(), device: "test:bars".into(), ..Default::default() },
+            SourceConfig { name: "Couch".into(), device: "test:gradient".into(), ..Default::default() },
+        ];
+        c.sources[1].ptz.presets = vec![PtzPreset { name: "Maya".into(), ..Default::default() }];
+        c.audio = vec![
+            AudioConfig { name: "Mic".into(), channels: 1, in_program: true, ..Default::default() },
+            AudioConfig { name: "Guest".into(), channels: 1, in_program: true, ..Default::default() },
+        ];
+        c.graphics = vec![Graphic { name: "Lower third".into(), title: "Maya".into(), ..Default::default() }];
+        c.assign_uids();
+        c.scenes = c.effective_scenes();
+        c
+    }
+
+    /// Nothing changed meanwhile: what comes back is the edit, exactly
+    /// (sources' and inputs' identities included).
+    #[test]
+    fn edits_on_settings_nobody_else_changed_come_back_whole() {
+        let live = show_for_edits();
+        let mut edited = live.clone();
+        edited.sources.swap(0, 1);
+        edited.sources.push(SourceConfig { name: "Screen".into(), device: "test:smpte".into(), ..Default::default() });
+        edited.audio.remove(0);
+        edited.output.take_prefix = "Ep 3".into();
+        edited.graphics[0].subtitle = "Host".into();
+        assert_eq!(live.with_edits(&live, &edited), edited);
+        assert_eq!(live.with_edits(&live, &live), live);
+        // Through the field-by-field compare: everything else comes back
+        // exactly as it went in.
+        let mut moved = live.clone();
+        moved.ui.clock_12h = !live.ui.clock_12h;
+        let mut expected = edited.clone();
+        expected.ui.clock_12h = moved.ui.clock_12h;
+        assert_eq!(moved.with_edits(&live, &edited), expected);
+    }
+
+    /// Settings Apply keeps what was changed on the desk while Settings was
+    /// open (numbers audit #1): levels, ON/OFF, the transition, Preview,
+    /// headphones, the second screen, the clock, PTZ presets, titles.
+    #[test]
+    fn edits_keep_what_changed_meanwhile() {
+        let base = show_for_edits();
+        let mut live = base.clone();
+        live.audio[0].gain_db = -12.5;
+        live.audio[1].in_program = false;
+        live.transition.mode = TransitionMode::Cut;
+        live.transition.duration_ms = 900;
+        live.transition.preview_mode = !base.transition.preview_mode;
+        live.mix.monitor_volume_db = -6.0;
+        live.display.output = DisplayOutput::Multiview;
+        live.ui.clock_12h = !base.ui.clock_12h;
+        live.ui.folded = vec!["Rundown".into()];
+        live.sources[1].ptz.presets.push(PtzPreset { name: "Sam".into(), ..Default::default() });
+        live.graphics[0].title = "Maya Lopez".into();
+        // In Settings meanwhile: other things, some on the same items.
+        let mut edited = base.clone();
+        edited.audio[0].delay_ms = 40;
+        edited.audio[1].name = "Sam".into();
+        edited.sources[1].name = "Sofa".into();
+        edited.graphics[0].subtitle = "Host".into();
+        edited.output.take_prefix = "Ep 3".into();
+        let now = live.with_edits(&base, &edited);
+        // The desk's changes stay...
+        assert_eq!(now.audio[0].gain_db, -12.5);
+        assert!(!now.audio[1].in_program);
+        assert_eq!((now.transition.mode, now.transition.duration_ms), (TransitionMode::Cut, 900));
+        assert_eq!(now.transition.preview_mode, live.transition.preview_mode);
+        assert_eq!(now.mix.monitor_volume_db, -6.0);
+        assert_eq!(now.display.output, DisplayOutput::Multiview);
+        assert_eq!(now.ui.clock_12h, live.ui.clock_12h);
+        assert_eq!(now.ui.folded, live.ui.folded);
+        assert_eq!(now.sources[1].ptz.presets.len(), 2);
+        assert_eq!(now.graphics[0].title, "Maya Lopez");
+        // ...and so do the edits.
+        assert_eq!(now.audio[0].delay_ms, 40);
+        assert_eq!(now.audio[1].name, "Sam");
+        assert_eq!(now.sources[1].name, "Sofa");
+        assert_eq!(now.graphics[0].subtitle, "Host");
+        assert_eq!(now.output.take_prefix, "Ep 3");
+        assert_eq!(now.sources.iter().map(|s| s.uid).collect::<Vec<_>>(), base.sources.iter().map(|s| s.uid).collect::<Vec<_>>());
+        assert_eq!(now.audio.iter().map(|a| a.uid).collect::<Vec<_>>(), base.audio.iter().map(|a| a.uid).collect::<Vec<_>>());
+        // Changed in both places: the edit wins.
+        let mut edited = base.clone();
+        edited.audio[0].gain_db = -3.0;
+        assert_eq!(live.with_edits(&base, &edited).audio[0].gain_db, -3.0);
+    }
+
+    /// Sources and inputs are matched by who they are, so reordering or
+    /// removing them in Settings doesn't move a change onto the wrong one.
+    #[test]
+    fn edits_find_sources_and_inputs_by_identity() {
+        let base = show_for_edits();
+        let mut live = base.clone();
+        live.audio[1].gain_db = -20.0;
+        live.sources[1].ptz.presets.clear();
+        let mut edited = base.clone();
+        edited.audio.swap(0, 1);
+        edited.sources.reverse();
+        edited.sources.push(SourceConfig { name: "Screen".into(), device: "test:smpte".into(), ..Default::default() });
+        let now = live.with_edits(&base, &edited);
+        assert_eq!(now.audio.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["Guest", "Mic"]);
+        assert_eq!((now.audio[0].gain_db, now.audio[1].gain_db), (-20.0, 0.0));
+        assert_eq!(now.sources.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Couch", "Wide", "Screen"]);
+        assert!(now.sources[0].ptz.presets.is_empty());
+        assert_eq!(now.sources[2].uid, 0, "a new source gets its identity when applied");
+        // Taken out in Settings: gone, whatever changed on it meanwhile.
+        let mut edited = base.clone();
+        edited.audio.remove(1);
+        let now = live.with_edits(&base, &edited);
+        assert_eq!(now.audio.len(), 1);
+        assert_eq!(now.audio[0].name, "Mic");
     }
 }
 

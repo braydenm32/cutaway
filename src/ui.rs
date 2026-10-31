@@ -29,6 +29,9 @@ mod undo;
 mod takes;
 mod uploads;
 mod waiting;
+/// The redesign's map of every route and where it lives (data only for now).
+mod nav;
+mod routes;
 
 pub mod theme {
     use eframe::egui::Color32;
@@ -5168,12 +5171,17 @@ impl App {
         }
     }
 
-    /// A settings window on the settings as they are now, scenes included
-    /// (they can have changes not saved yet).
-    fn new_settings(&self) -> SettingsUi {
+    /// The settings as they are now, scenes included (they can have
+    /// changes not saved yet).
+    fn live_settings(&self) -> Config {
         let mut cfg = self.cfg.clone();
         cfg.scenes = self.scenes.clone();
-        let win = SettingsUi::new(cfg);
+        cfg
+    }
+
+    /// A settings window on the settings as they are now.
+    fn new_settings(&self) -> SettingsUi {
+        let win = SettingsUi::new(self.live_settings());
         match self.settings_page {
             Some(section) => win.open_at(section),
             None => win,
@@ -5267,8 +5275,11 @@ impl App {
                 self.settings = None;
                 self.sync = Some(SyncWizard::default());
             }
-            SettingsAction::Apply { cfg, close } => {
+            SettingsAction::Apply { cfg, base, close } => {
                 let before = self.snapshot(undo::Kind::Settings, "Settings change");
+                // Only what was changed in Settings: a fader moved or a
+                // transition picked on the desk meanwhile stays as it is.
+                let cfg = self.live_settings().with_edits(&base, &cfg);
                 let result = self.apply_settings(cfg, ctx);
                 let ok = result.is_ok();
                 if ok && before.settings_differ(&self.cfg) {
