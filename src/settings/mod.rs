@@ -65,7 +65,7 @@ pub enum Section {
 }
 
 impl Section {
-    pub(super) const ALL: [Section; 24] = [
+    pub(crate) const ALL: [Section; 24] = [
         Section::General,
         Section::Sources,
         Section::Audio,
@@ -187,7 +187,9 @@ impl Group {
 pub enum SettingsAction {
     None,
     Close,
-    Apply { cfg: Config, close: bool },
+    /// `base`: the settings `cfg` was edited from, so only what changed
+    /// since is applied (anything changed on the desk meanwhile stays).
+    Apply { cfg: Config, base: Box<Config>, close: bool },
     /// Turn the virtual camera on or off now.
     VirtualCamera(bool),
     /// Close and measure lip sync.
@@ -400,6 +402,19 @@ const RESOLUTIONS: &[(u32, u32, &str)] = &[
 ];
 const RATES: &[u32] = &[24, 25, 30, 50, 60];
 
+/// An input's level in 0.5 dB steps. It takes only a change made on it:
+/// just drawing it rounds the level to its steps (and pulls one set below
+/// −40 dB, by MIDI or a command, up to −40), which isn't a change of yours
+/// and mustn't make the page look edited (numbers audit #2).
+fn gain_slider(ui: &mut egui::Ui, gain_db: &mut f64) -> egui::Response {
+    let mut g = *gain_db as f32;
+    let r = ui.add(egui::Slider::new(&mut g, -40.0..=12.0).suffix(" dB").step_by(0.5));
+    if r.changed() && (r.dragged() || r.clicked() || r.has_focus()) {
+        *gain_db = g as f64;
+    }
+    r
+}
+
 impl SettingsUi {
     pub fn new(cfg: Config) -> Self {
         SettingsUi {
@@ -543,6 +558,24 @@ impl SettingsUi {
                 if self.draft.audio.len() == now.audio.len() {
                     for (d, n) in self.draft.audio.iter_mut().zip(&now.audio) {
                         d.uid = n.uid;
+                    }
+                }
+                // (The lists differ when something was added meanwhile
+                // outside Settings: new ones are found by name instead.)
+                for d in 0..self.draft.sources.len() {
+                    if self.draft.sources[d].uid == 0 {
+                        let name = &self.draft.sources[d].name;
+                        if let Some(n) = now.sources.iter().find(|n| &n.name == name && self.draft.sources.iter().all(|o| o.uid != n.uid)) {
+                            self.draft.sources[d].uid = n.uid;
+                        }
+                    }
+                }
+                for d in 0..self.draft.audio.len() {
+                    if self.draft.audio[d].uid == 0 {
+                        let name = &self.draft.audio[d].name;
+                        if let Some(n) = now.audio.iter().find(|n| &n.name == name && self.draft.audio.iter().all(|o| o.uid != n.uid)) {
+                            self.draft.audio[d].uid = n.uid;
+                        }
                     }
                 }
                 self.original = self.draft.clone();
@@ -887,7 +920,7 @@ impl SettingsUi {
                 return SettingsAction::None;
             }
         }
-        SettingsAction::Apply { cfg: self.draft.clone(), close }
+        SettingsAction::Apply { cfg: self.draft.clone(), base: Box::new(self.original.clone()), close }
     }
 
     /// The sources that stay but reopen when applied (what the engine's
@@ -979,7 +1012,7 @@ impl SettingsUi {
             ui.horizontal(|ui| {
                 let go = if check.names.is_empty() { "Restart and apply" } else { "Remove and apply" };
                 if ui.button(RichText::new(go).color(ERROR)).clicked() {
-                    action = Some(SettingsAction::Apply { cfg: self.draft.clone(), close: check.close });
+                    action = Some(SettingsAction::Apply { cfg: self.draft.clone(), base: Box::new(self.original.clone()), close: check.close });
                     done = true;
                 }
                 if ui.button("Keep editing").clicked() {
@@ -1227,10 +1260,7 @@ impl SettingsUi {
                     });
                     ui.end_row();
                     label(ui, "Gain");
-                    let mut g = a.gain_db as f32;
-                    if ui.add(egui::Slider::new(&mut g, -40.0..=12.0).suffix(" dB").step_by(0.5)).changed() {
-                        a.gain_db = g as f64;
-                    }
+                    gain_slider(ui, &mut a.gain_db);
                     ui.end_row();
                     label(ui, "On");
                     ui.checkbox(&mut a.in_program, "heard in the mixes");
@@ -2675,6 +2705,58 @@ mod tests {
         let mut win = SettingsUi::new(Config::default());
         win.section = Section::Comments;
         assert!(win.shown(Section::Comments));
+    }
+
+    /// Apply hands over the settings it was opened on with the edit, so the
+    /// app puts on only what was changed here: a fader moved on the desk
+    /// while Settings was open keeps its level (numbers audit #1), and a
+    /// level changed here does apply. After a save, the next Apply starts
+    /// from there.
+    #[test]
+    fn apply_keeps_desk_changes_made_meanwhile() {
+        let mut cfg = Config::default();
+        cfg.audio = vec![
+            crate::config::AudioConfig { name: "Mic".into(), channels: 1, in_program: true, ..Default::default() },
+            crate::config::AudioConfig { name: "Guest".into(), channels: 1, in_program: true, ..Default::default() },
+        ];
+        cfg.assign_uids();
+        let mut live = cfg.clone();
+        let mut win = SettingsUi::new(cfg);
+        win.draft.audio[1].delay_ms = 40;
+        // On the desk, while Settings is open.
+        live.audio[0].gain_db = -18.0;
+        live.transition.duration_ms = 1200;
+        let SettingsAction::Apply { cfg, base, .. } = win.apply(false, &ctx(false)) else { panic!("applies") };
+        let now = live.with_edits(&base, &cfg);
+        assert_eq!(now.audio[0].gain_db, -18.0, "the fader moved on the desk stays");
+        assert_eq!(now.transition.duration_ms, 1200);
+        assert_eq!(now.audio[1].delay_ms, 40, "the change made in Settings applies");
+        win.applied(Ok(()), &now);
+        assert!(!win.dirty());
+        // A level changed in Settings applies too, and the desk's other
+        // change from before isn't undone by it.
+        win.draft.audio[1].gain_db = -6.0;
+        let SettingsAction::Apply { cfg, base, .. } = win.apply(false, &ctx(false)) else { panic!("applies") };
+        let next = now.with_edits(&base, &cfg);
+        assert_eq!((next.audio[0].gain_db, next.audio[1].gain_db), (-18.0, -6.0));
+        assert_eq!(next.transition.duration_ms, 1200);
+    }
+
+    /// Just showing a level that isn't on a 0.5 dB step, or is below −40 dB,
+    /// leaves it as it is, so the page doesn't look edited.
+    #[test]
+    fn showing_a_level_doesnt_change_it() {
+        let ctx = egui::Context::default();
+        for start in [-3.3, -55.0, 0.0, 12.0] {
+            let mut g = start;
+            for _ in 0..3 {
+                let mut out = ctx.run_ui(Default::default(), |ui| {
+                    gain_slider(ui, &mut g);
+                });
+                out.textures_delta.clear();
+            }
+            assert_eq!(g, start);
+        }
     }
 
     /// Taking a source out while recording asks first; while not, it doesn't.

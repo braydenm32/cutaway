@@ -218,7 +218,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Audio, "Device") => "Where the sound comes from: an audio interface or loopback device, the sound of a media player or network source (\"Sound from …\"), another app's sound, the sound pads, or a test tone.",
         (Audio, "Channels to capture") => "How many of the device's channels to take in. Every one is recorded to the WAV; pick which ones feed the mix below.",
         (Audio, "Program left / right") => "Which captured channels make the left and right of the mix. Pick the same channel for both to put a mono mic in the middle.",
-        (Audio, "Gain") => "Level before everything else (processing, the fader and the mixes). Set it so speech peaks well below 0 dB on the meter.",
+        (Audio, "Gain") => "Level before everything else (processing, the fader and the mixes). Set it so speech peaks well below 0 dB on the meter. Apply changes it only if you moved it here, so a fader moved on the desk meanwhile keeps its level.",
         (Audio, "On") => "Whether this input is heard in the mixes at all, the same as its ON button. Its WAV records either way.",
         (Audio, "Heard in") => "Which mixes it goes into. Leave music out of the recording to add it in the edit, or keep a talkback mic out of the stream.",
         (Audio, "Auto-mix") => "Makes this mic one of the ones the automatic mixer shares out: up while this person talks, down while someone else does. Turn automatic mixing on in Mixing & headphones.",
