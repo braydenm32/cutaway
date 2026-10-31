@@ -51,7 +51,6 @@ impl App {
             s.vcam |= self.engine.as_ref().is_some_and(|e| e.virtual_camera_on());
             return;
         }
-        self.starts_count += 1;
         let old = self.engine.take();
         let vcam = old.as_ref().is_some_and(|e| e.virtual_camera_on()) || self.vcam_wanted;
         self.vcam_wanted = false;
@@ -176,7 +175,8 @@ impl App {
         // The slate's writing.
         let inner = board.shrink(18.0);
         painter.text(egui::pos2(inner.left(), inner.top()), egui::Align2::LEFT_TOP, "CUTAWAY", egui::FontId::monospace(TEXT_BODY), TEXT_DIM);
-        let take = format!("TAKE {}", self.starts_count);
+        // The take that's next: restarting the cameras isn't a take (numbers audit #23).
+        let take = format!("TAKE {}", self.takes_made + 1);
         painter.text(egui::pos2(inner.right(), inner.top()), egui::Align2::RIGHT_TOP, take, egui::FontId::monospace(TEXT_BODY), TEXT_DIM);
         painter.text(egui::pos2(inner.center().x, inner.center().y - 6.0), egui::Align2::CENTER_CENTER, title, egui::FontId::proportional((w / 13.0).clamp(20.0, 32.0)), Color32::WHITE);
         painter.text(egui::pos2(inner.center().x, inner.center().y + 26.0), egui::Align2::CENTER_CENTER, sub, egui::FontId::proportional(TEXT_STATE), TEXT_DIM);
