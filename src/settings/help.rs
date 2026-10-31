@@ -160,9 +160,9 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
     let text = match (page, name) {
         // ---- General & shows
         (General, "Interface size") => "Makes everything in Cutaway's window bigger or smaller: text, buttons and monitors. Handy on a big screen across the room, or a small laptop.",
-        (General, "Ask before") => "Asks you to confirm before the stream ends, so a stray click or key can't end the show. A recording is always protected: hold the REC button for a second to stop it, and its key (Cmd/Ctrl+R) asks first. On the phone remote and the Stream Deck, stopping or ending takes a one-second hold.",
-        (General, "Pre-show check") => "Before you record or go live, Cutaway checks that every source has a picture, the inputs have sound, the disk has room and the stream servers answer. Anything wrong is listed, and you can still go ahead. Starting from the phone remote, the Stream Deck, MIDI or OSC runs it too.",
-        (General, "Updates") => "When Cutaway starts, it asks GitHub whether there's a newer release and tells you if there is (nothing about you or your show is sent); Update now in that notice downloads and puts it in. With the second box ticked, Cutaway downloads it by itself and puts it in the next time you close Cutaway, keeping your settings and shows.",
+        (General, "Ask before") => "Asks you to confirm before the stream ends, so a stray click or key can't end the show. A recording is always protected: hold the REC pill (top right; it says hold to stop under its time) for a second to stop it, and its key (Cmd/Ctrl+R) asks first. On the phone remote and the Stream Deck, stopping or ending takes a one-second hold.",
+        (General, "Pre-show check") => "Before you record or go live, Cutaway checks that every source has a picture, the inputs have sound, the disk has room and the stream servers answer. Anything wrong is listed, and you can still go ahead. Starting from the phone remote, the Stream Deck, MIDI or OSC runs it too. Run it by hand from the status light (top right) or Record › Recording › Before you start.",
+        (General, "Updates") => "When Cutaway starts, it asks GitHub whether there's a newer release and tells you if there is, with a blue dot on More in the rail (nothing about you or your show is sent); Update now in More › App › Updates & about downloads and puts it in. With the second box ticked, Cutaway downloads it by itself and puts it in the next time you close Cutaway, keeping your settings and shows.",
 
         // ---- Video sources
         (Sources, "Name") => "What this source is called on its button, in the multiview and scenes, and in the name of its own file (ISO_01_Name).",
@@ -338,7 +338,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Switching, "Its sound") => "The stinger's volume. It plays through the Sound pads input.",
         (Switching, "Fade length") => "How long Fade to black takes. FTB in the bottom bar (or ftb from the Stream Deck, MIDI or the remote) fades everything, graphics included; press it again to come back.",
         (Switching, "Sound fades too") => "The recording and the stream fade out with the picture. Headphones and callers keep hearing.",
-        (Switching, "Replay the last") => "How much of the program a replay plays again. Press ⟲ Replay in the header while recording (or replay from the Stream Deck, MIDI or the remote); it fades in over the live picture while the show's sound carries on.",
+        (Switching, "Replay the last") => "How much of the program a replay plays again. Press ⟲ Replay under the status light (top right) while recording (or replay from the Stream Deck, MIDI or the remote); it fades in over the live picture while the show's sound carries on.",
         (Switching, "Shows") => "What ⟲ Replay plays again: the program as it went out, one camera (from its own recording, so a moment the program missed), or up to four cameras at once in a grid. Right-click ⟲ Replay to pick another each time. Cameras need \"Record to its own file\" on, and files that aren't ProRes.",
         (Switching, "Slow motion") => "The speed of a slow-motion replay (right-click ⟲ Replay, or replay:slow).",
         (Switching, "Label") => "Shows REPLAY in the corner while a replay plays.",
@@ -462,7 +462,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Upload, "When") => "Upload as each take is saved, or wait for you to press Upload. Uploads go one at a time in the background, and pick up again if the connection drops.",
 
         // ---- Screens & webcam
-        (Outputs, "Show") => "What the second-screen window shows: the program, the multiview or the teleprompter. It opens on the screen chosen below. Double-click it (or press F) to fill the screen; Esc leaves full screen, and Esc again (or its ✕) closes it. The header's Screen button turns it on and off.",
+        (Outputs, "Show") => "What the second-screen window shows: the program, the multiview or the teleprompter. It opens on the screen chosen below. Double-click it (or press F) to fill the screen; Esc leaves full screen, and Esc again (or its ✕) closes it. Second screen under the status light (top right) turns it on and off.",
         (Outputs, "Full screen") => "Opens it filling its screen. Never over Cutaway itself: on the screen Cutaway is on (or with only one screen) it opens in a window.",
         (Outputs, "Clocks") => "Shows the time and the rundown segment's time left, on this screen only: for presenters, not viewers.",
         (Outputs, "Program") => "Sends the program, with the recording mix, as an NDI source that other computers, OBS, vMix, NDI Studio Monitor and NDI recorders on the network can use.",

@@ -1,11 +1,15 @@
 //! The first-show guide: a few steps from opening Cutaway to a first
-//! recording, each with a button to the right page in Settings. It opens
-//! by itself the first time Cutaway runs, and from the ? button after.
+//! recording, each with a button to the right page. It opens by itself
+//! the first time Cutaway runs, and from More › App › Help after.
 
 use super::theme::*;
 use super::App;
 use crate::settings::Section;
 use eframe::egui::{self, RichText};
+
+/// Less free than this on the recordings drive: the guide's folder step
+/// asks for more room.
+const GUIDE_LOW_BYTES: u64 = 20_000_000_000;
 
 const CAMERA_PRIVACY: &str = "on Mac: System Settings → Privacy & Security → Camera; on Windows: Settings → Privacy & security → Camera";
 
@@ -21,6 +25,8 @@ impl App {
         if !self.guide_open {
             return;
         }
+        // The key as it's set now (numbers audit #22).
+        let record_key = self.key_hint(crate::control::shortcuts::Builtin::Record);
         // What's set up, as it is now.
         let (cams_alive, sound_peak) = match &self.engine {
             Some(e) => (
@@ -32,7 +38,7 @@ impl App {
         let cams = self.cfg.sources.len();
         let mics = self.cfg.audio.len();
         let folder = self.cfg.output.folder.clone();
-        let free = crate::engine::health::disk_space(&folder).map(|(free, _)| free as f64 / 1e9);
+        let free = crate::engine::health::disk_space(&folder).map(|(free, _)| free);
         let dests = self.cfg.streaming.destinations.iter().filter(|d| d.enabled && !d.key.trim().is_empty()).count();
         if mics > 0 && sound_peak > -60.0 {
             self.guide_heard = true;
@@ -157,11 +163,11 @@ impl App {
                 }
 
                 let folder_text = match free {
-                    Some(gb) if gb < 20.0 => format!("{}: only {gb:.0} GB free. An hour of 1080p takes a few GB per camera, so free some space or pick another drive.", folder.display()),
-                    Some(gb) => format!("{} ({gb:.0} GB free). An hour of 1080p takes a few GB per camera.", folder.display()),
+                    Some(b) if b < GUIDE_LOW_BYTES => format!("{}: only {} free. An hour of 1080p takes a few GB per camera, so free some space or pick another drive.", folder.display(), crate::util::human_size(b)),
+                    Some(b) => format!("{} ({} free). An hour of 1080p takes a few GB per camera.", folder.display(), crate::util::human_size(b)),
                     None => format!("{} (not there yet; it's made when you record).", folder.display()),
                 };
-                let folder_state = if free.is_some_and(|gb| gb < 20.0) { Step::Todo } else { Step::Done };
+                let folder_state = if free.is_some_and(|b| b < GUIDE_LOW_BYTES) { Step::Todo } else { Step::Done };
                 if step(ui, folder_state, "Where recordings go", folder_text, Some("Recording…"), None) {
                     go = Some(Section::Recording);
                 }
@@ -190,7 +196,7 @@ impl App {
                     ui,
                     if recorded { Step::Done } else { Step::Todo },
                     "Record a test",
-                    "Press Record (R), talk for ten seconds while switching cameras, then Stop. Watch the take back from its folder before the real show.".into(),
+                    format!("Press Record{}, talk for ten seconds while switching cameras, then hold REC to stop. Watch the take back from its folder before the real show.", record_key),
                     None,
                     None,
                 );
@@ -211,14 +217,14 @@ impl App {
                     if ui.button("Done").clicked() {
                         done = true;
                     }
-                    ui.label(RichText::new("Open this again from ? at the top.").color(TEXT_DIM));
+                    ui.label(RichText::new("Open this again from More › App › Help.").color(TEXT_DIM));
                 });
             });
         if let Some(section) = go {
-            self.settings = Some(self.new_settings().open_at(section));
+            self.open_page(section, None);
         }
         if let Some((section, part)) = go_part {
-            self.settings = Some(self.new_settings().open_part_at(section, part));
+            self.open_page(section, Some(part));
         }
         if edit_layout {
             self.edit_mode = true;

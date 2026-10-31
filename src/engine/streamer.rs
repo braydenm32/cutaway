@@ -57,7 +57,12 @@ pub struct DestStatus {
 
 #[derive(Debug, Clone, Default)]
 pub struct StreamStatus {
+    /// When Go Live was pressed (connecting starts).
     pub since: Option<Instant>,
+    /// When the first destination was really live: what the LIVE clock
+    /// counts from, on the desk, the phone and OSC alike (None while it's
+    /// still connecting).
+    pub on_air_since: Option<Instant>,
     pub stopping: bool,
     pub encoder: String,
     pub destinations: Vec<DestStatus>,
@@ -65,6 +70,20 @@ pub struct StreamStatus {
     pub error: Option<String>,
     /// The video bitrate, while it's lowered for a struggling connection.
     pub lowered_kbps: Option<u32>,
+}
+
+impl StreamStatus {
+    /// What the LIVE clock counts from: the first destination really on
+    /// air (None while it's connecting, or not streaming).
+    pub fn live_clock_from(&self) -> Option<Instant> {
+        self.on_air_since
+    }
+
+    /// Seconds on air so far: the one LIVE time, for the desk and the
+    /// controllers alike (0 while connecting).
+    pub fn live_seconds(&self) -> f64 {
+        self.live_clock_from().map(|s| s.elapsed().as_secs_f64()).unwrap_or(0.0)
+    }
 }
 
 /// Readable name for a destination's state.
@@ -260,6 +279,7 @@ impl StreamSession {
             let mut st = ctx.status.lock_ok();
             st.stream = StreamStatus {
                 since: Some(Instant::now()),
+                on_air_since: None,
                 stopping: false,
                 encoder: encoder.clone(),
                 destinations: enabled
@@ -638,6 +658,9 @@ impl Destination {
         if let Some(d) = st.stream.destinations.get_mut(self.index) {
             f(d);
         }
+        if st.stream.on_air_since.is_none() && st.stream.destinations.iter().any(|d| d.state == DestState::Live) {
+            st.stream.on_air_since = Some(Instant::now());
+        }
         drop(st);
         (self.waker)();
     }
@@ -810,6 +833,17 @@ impl Destination {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The LIVE clock starts when a destination is really on air, not
+    /// when Go Live was pressed (numbers audit #5).
+    #[test]
+    fn live_clock_waits_for_the_connection() {
+        let connecting = StreamStatus { since: Some(Instant::now() - std::time::Duration::from_secs(7)), ..Default::default() };
+        assert_eq!(connecting.live_clock_from(), None);
+        assert_eq!(connecting.live_seconds(), 0.0);
+        let on_air = StreamStatus { on_air_since: Some(Instant::now() - std::time::Duration::from_secs(2)), ..connecting };
+        assert!((on_air.live_seconds() - 2.0).abs() < 0.5);
+    }
 
     fn v(t: Ns) -> Pkt {
         Pkt::Video(VideoPacket {
