@@ -32,10 +32,9 @@ pub fn space_problem(d: &DiskStatus) -> Option<String> {
     let left = d.seconds_left();
     if d.free < health::MIN_START_BYTES || left.is_some_and(|s| s < health::MIN_START_SECONDS) {
         Some(format!(
-            "not enough space on the drive for {} ({} free{}). Free up space or choose another folder in Settings → Recording",
+            "not enough space on the drive for {} ({}). Free up space or choose another folder in Record › Recording",
             d.path.display(),
-            human_size(d.free),
-            left.map(|s| format!(", about {} of recording", health::fmt_left(s))).unwrap_or_default()
+            d.describe(),
         ))
     } else {
         None

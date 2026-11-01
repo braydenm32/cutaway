@@ -32,16 +32,37 @@ pub struct DiskStatus {
     pub measured: bool,
 }
 
+/// Less recording time than this left on the drive: it shows amber
+/// everywhere (the top bar, the status light, the pre-show check) and the
+/// first warning comes up. The one limit for "low on space".
+pub const LOW_SECONDS: f64 = 30.0 * 60.0;
+
 impl DiskStatus {
     pub fn seconds_left(&self) -> Option<f64> {
         (self.rate > 1.0).then(|| self.free as f64 / self.rate)
     }
 
-    /// "412 GB free · about 9 h 20 min"
+    /// Less than LOW_SECONDS of recording left.
+    pub fn low(&self) -> bool {
+        self.seconds_left().is_some_and(|s| s < LOW_SECONDS)
+    }
+
+    /// "9 h 20 min left" (None when the write rate isn't known).
+    pub fn left_text(&self) -> Option<String> {
+        self.seconds_left().map(|s| format!("{} left", fmt_left(s)))
+    }
+
+    /// "412 GB free"
+    pub fn free_text(&self) -> String {
+        format!("{} free", human_size(self.free))
+    }
+
+    /// "412 GB free · 9 h 20 min left": the one wording, wherever the
+    /// drive is described (top bar, status light, pre-check, the phone).
     pub fn describe(&self) -> String {
-        match self.seconds_left() {
-            Some(s) => format!("{} free · about {} of recording", human_size(self.free), fmt_left(s)),
-            None => format!("{} free", human_size(self.free)),
+        match self.left_text() {
+            Some(left) => format!("{} · {left}", self.free_text()),
+            None => self.free_text(),
         }
     }
 }
@@ -59,9 +80,13 @@ pub fn pick_rate(measured: Option<f64>, running_for: f64, estimate: f64) -> (f64
     }
 }
 
+/// Recording time left: "9 h 20 min", "45 min", "under 1 min" (never
+/// "0 min" while there's still some).
 pub fn fmt_left(secs: f64) -> String {
     let m = (secs / 60.0) as u64;
-    if m >= 600 {
+    if m == 0 {
+        "under 1 min".to_string()
+    } else if m >= 600 {
         format!("{} h", m / 60)
     } else if m >= 60 {
         format!("{} h {} min", m / 60, m % 60)
@@ -150,6 +175,10 @@ pub struct SourceHealth {
     pub fps: f32,
     pub expected_fps: u32,
     pub alive: bool,
+    /// `fps` is a real reading. Just after the engine starts or the
+    /// sources change there's nothing to measure from yet, and a 0 there
+    /// isn't a stalled camera.
+    pub measured: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -158,6 +187,10 @@ pub struct FileHealth {
     pub encoded: u64,
     pub repeated: u64,
     pub dropped: u64,
+    /// Repeated and dropped in the last RECENT_SECONDS: what turns them
+    /// amber (one bad moment early on doesn't keep them amber all show).
+    pub recent_repeated: u64,
+    pub recent_dropped: u64,
     pub resized: u64,
     pub backlog: u64,
     pub failed: bool,
@@ -179,6 +212,49 @@ pub struct Health {
     pub compositor_skips: u64,
 }
 
+/// How far back "recent" frame trouble counts.
+pub const RECENT_SECONDS: f64 = 60.0;
+/// More repeated or dropped frames than this in RECENT_SECONDS is a problem.
+pub const RECENT_FRAMES_LIMIT: u64 = 30;
+
+impl SourceHealth {
+    /// Measured well under its set frame rate.
+    pub fn slow(&self) -> bool {
+        self.measured && self.expected_fps > 0 && self.fps < self.expected_fps as f32 * 0.8
+    }
+}
+
+impl FileHealth {
+    pub fn repeating(&self) -> bool {
+        self.recent_repeated >= RECENT_FRAMES_LIMIT
+    }
+
+    pub fn dropping(&self) -> bool {
+        self.recent_dropped >= RECENT_FRAMES_LIMIT
+    }
+}
+
+/// Counts that only ever go up (a file's repeated frames, say), sampled
+/// once a second: how many were added in the last `window` seconds.
+#[derive(Clone, Debug, Default)]
+pub struct RecentCounts {
+    samples: VecDeque<(f64, u64)>,
+}
+
+impl RecentCounts {
+    /// `at`: seconds on any steady clock; `total`: the count now. Returns
+    /// how much it went up in the last `window` seconds.
+    pub fn push(&mut self, at: f64, total: u64, window: f64) -> u64 {
+        self.samples.push_back((at, total));
+        // Keep one sample at or before the window's start, to count from.
+        while self.samples.len() > 1 && at - self.samples[1].0 >= window {
+            self.samples.pop_front();
+        }
+        let from = self.samples.front().map(|(_, n)| *n).unwrap_or(total);
+        total.saturating_sub(from)
+    }
+}
+
 impl Health {
     /// Anything that needs attention, in words.
     pub fn problems(&self) -> Vec<String> {
@@ -186,7 +262,7 @@ impl Health {
         for s in &self.sources {
             if !s.alive {
                 out.push(format!("{}: no signal", s.name));
-            } else if s.expected_fps > 0 && s.fps < s.expected_fps as f32 * 0.8 {
+            } else if s.slow() {
                 out.push(format!("{}: {:.0} fps (set to {})", s.name, s.fps, s.expected_fps));
             }
         }
@@ -215,11 +291,14 @@ pub struct TakeMonitor {
     warned: u8,
     backup_warned: bool,
     started: Instant,
+    /// Each file's repeated and dropped frames, for the recent counts.
+    recent: Vec<(RecentCounts, RecentCounts)>,
 }
 
 impl TakeMonitor {
     pub fn new(folder: PathBuf, backup: Option<PathBuf>, stats: Vec<(String, Arc<VideoStats>)>) -> Self {
-        TakeMonitor { folder, backup, stats, sizes: VecDeque::new(), warned: 0, backup_warned: false, started: Instant::now() }
+        let recent = vec![Default::default(); stats.len()];
+        TakeMonitor { folder, backup, stats, sizes: VecDeque::new(), warned: 0, backup_warned: false, started: Instant::now(), recent }
     }
 
     /// Bytes per second written, once there's enough history.
@@ -271,8 +350,11 @@ impl HealthMonitor {
         let channels: Vec<(u32, bool)> = audio.iter().map(|a| (a.channels(), a.cfg.record)).collect();
         let estimate = estimate_rate(&cfg, &channels);
 
-        // Sources: frame rate actually arriving.
-        if self.last_frames.len() != sources.len() || self.seen != generation {
+        // Sources: frame rate actually arriving. A fresh count (the engine
+        // just started, or the sources changed) has nothing to measure
+        // from until the next tick.
+        let fresh = self.last_frames.len() != sources.len() || self.seen != generation;
+        if fresh {
             self.seen = generation;
             self.last_frames = sources.iter().map(|s| (Instant::now(), s.slot.frames())).collect();
         }
@@ -282,7 +364,7 @@ impl HealthMonitor {
             let dt = last.0.elapsed().as_secs_f32().max(0.1);
             let fps = (frames.saturating_sub(last.1)) as f32 / dt;
             *last = (Instant::now(), frames);
-            health.sources.push(SourceHealth { name: s.cfg.name.clone(), fps, expected_fps: s.cfg.fps, alive: s.alive() });
+            health.sources.push(SourceHealth { name: s.cfg.name.clone(), fps, expected_fps: s.cfg.fps, alive: s.alive(), measured: !fresh });
         }
         for a in &audio {
             // Sound from a media player or network input comes and goes.
@@ -295,12 +377,17 @@ impl HealthMonitor {
         let mut warnings = Vec::new();
         let (main_rate, measured) = match take.as_mut() {
             Some(t) => {
-                for (label, s) in &t.stats {
+                let at = t.started.elapsed().as_secs_f64();
+                t.recent.resize(t.stats.len(), Default::default());
+                for ((label, s), (rep, drop)) in t.stats.iter().zip(t.recent.iter_mut()) {
+                    let (repeated, dropped) = (s.repeated.load(Ordering::Relaxed), s.dropped.load(Ordering::Relaxed));
                     health.files.push(FileHealth {
                         label: label.clone(),
                         encoded: s.encoded.load(Ordering::Relaxed),
-                        repeated: s.repeated.load(Ordering::Relaxed),
-                        dropped: s.dropped.load(Ordering::Relaxed),
+                        repeated,
+                        dropped,
+                        recent_repeated: rep.push(at, repeated, RECENT_SECONDS),
+                        recent_dropped: drop.push(at, dropped, RECENT_SECONDS),
                         resized: s.resized.load(Ordering::Relaxed),
                         backlog: s.backlog.load(Ordering::Relaxed),
                         failed: s.failed.load(Ordering::Relaxed),
@@ -328,7 +415,7 @@ impl HealthMonitor {
             } else if left < 10.0 * 60.0 && t.warned < 2 {
                 t.warned = 2;
                 warnings.push(format!("Only about {} of recording space left on {}", fmt_left(left), d.path.display()));
-            } else if left < 30.0 * 60.0 && t.warned < 1 {
+            } else if left < LOW_SECONDS && t.warned < 1 {
                 t.warned = 1;
                 warnings.push(format!("About {} of recording space left on {}", fmt_left(left), d.path.display()));
             }
@@ -361,6 +448,30 @@ impl HealthMonitor {
 mod tests {
     use super::*;
 
+    /// Health: no false "0 fps" before there's anything to measure, and
+    /// frame trouble counts from the last minute only (numbers audit #3, #17).
+    #[test]
+    fn health_counts_only_what_it_can_see() {
+        let s = SourceHealth { name: "Cam".into(), fps: 0.0, expected_fps: 30, alive: true, measured: false };
+        assert!(!s.slow());
+        assert!(Health { sources: vec![s.clone()], ..Default::default() }.problems().is_empty());
+        assert!(SourceHealth { measured: true, ..s }.slow());
+
+        let mut r = RecentCounts::default();
+        assert_eq!(r.push(0.0, 0, 60.0), 0);
+        // A bad moment early on...
+        assert_eq!(r.push(1.0, 50, 60.0), 50);
+        // ...counts while it's recent...
+        assert_eq!(r.push(30.0, 50, 60.0), 50);
+        // ...and not a minute later.
+        for t in 31..=62 {
+            r.push(t as f64, 50, 60.0);
+        }
+        assert_eq!(r.push(63.0, 52, 60.0), 2);
+        let f = FileHealth { repeated: 500, recent_repeated: 2, ..Default::default() };
+        assert!(!f.repeating());
+    }
+
     #[test]
     fn rate_is_estimated_until_settled() {
         assert_eq!(pick_rate(Some(8e6), 10.0, 2e6), (2e6, false));
@@ -380,6 +491,12 @@ mod tests {
         assert!(r > 3.0e6 && r < 3.8e6, "{r}");
         assert_eq!(fmt_left(45.0 * 60.0), "45 min");
         assert_eq!(fmt_left(125.0 * 60.0), "2 h 5 min");
+        assert_eq!(fmt_left(40.0), "under 1 min");
+        let d = DiskStatus { path: PathBuf::new(), free: 412_000_000_000, total: 1_000_000_000_000, rate: 412_000_000_000.0 / (9.0 * 3600.0 + 20.0 * 60.0), measured: false };
+        assert_eq!(d.describe(), "412 GB free · 9 h 20 min left");
+        assert!(!d.low());
+        assert!(DiskStatus { rate: 412_000_000_000.0 / (20.0 * 60.0), ..d.clone() }.low());
+        assert_eq!(DiskStatus { rate: 0.0, ..d }.describe(), "412 GB free");
         assert!(disk_space(Path::new("/tmp/does/not/exist/yet")).is_some_and(|(f, t)| f <= t && t > 0));
     }
 }

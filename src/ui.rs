@@ -32,6 +32,7 @@ mod waiting;
 /// The redesign's map of every route and where it lives (data only for now).
 mod nav;
 mod routes;
+mod shell;
 
 pub mod theme {
     use eframe::egui::Color32;
@@ -353,7 +354,6 @@ pub struct App {
     test_drop: Option<usize>,
     /// Closing was confirmed (or nothing was running): let the window go.
     quit_ok: bool,
-    log_open: bool,
     /// The first-show guide is showing.
     guide_open: bool,
     /// No remembered window yet: fit the first one to the screen.
@@ -368,7 +368,8 @@ pub struct App {
     guide_checked: bool,
     /// Edit layout was turned on from the guide (its scenes step).
     guide_scenes: bool,
-    health_open: bool,
+    /// The rail, the top bar's tabs and the status light.
+    shell: shell::Shell,
     peak_hold: HashMap<String, PeakHold>,
     /// Messages at the bottom, newest last. Errors stay until clicked;
     /// the rest go after a few seconds.
@@ -410,12 +411,10 @@ pub struct App {
     replay_slow: bool,
     /// A phone camera's QR code on show: its link id.
     qr_for: Option<String>,
-    /// A newer Cutaway, once GitHub has said so; and its window.
+    /// A newer Cutaway, once GitHub has said so (More › App › Updates & about).
     update: Arc<std::sync::Mutex<Option<crate::net::update::Release>>>,
-    update_open: bool,
-    /// The logo beside the name in the top bar; clicking it opens About.
+    /// The logo at the top of the rail; clicking it opens About.
     logo: egui::TextureHandle,
-    about_open: bool,
     /// When this (just updated) version counts as started properly.
     settle_at: Option<Instant>,
     /// Uploads to YouTube and Google Drive.
@@ -511,9 +510,7 @@ impl App {
             replay_slow: false,
             qr_for: None,
             update: Arc::new(std::sync::Mutex::new(None)),
-            update_open: false,
             logo: logo_texture(&cc.egui_ctx),
-            about_open: false,
             settle_at: None,
             uploads: Default::default(),
             takes: Default::default(),
@@ -568,7 +565,6 @@ impl App {
             test_drop: None,
             test_marker_list: false,
             quit_ok: false,
-            log_open: false,
             guide_open: false,
             fit_window: false,
             guide_recorded: false,
@@ -576,7 +572,7 @@ impl App {
             guide_heard: false,
             guide_checked: false,
             guide_scenes: false,
-            health_open: false,
+            shell: shell::Shell::load(cc.storage),
             peak_hold: HashMap::new(),
             toasts: Vec::new(),
             log_seen: 0,
@@ -635,7 +631,7 @@ impl App {
         if let Ok(v) = std::env::var("CUTAWAY_UI_TEST_UPDATE") {
             use crate::net::self_update::{self as su, Finish, Stage, Staged};
             *app.update.lock_ok() = Some(crate::net::update::Release { version: v.clone(), url: "https://github.com".into(), notes: "• Something new\n• A fix".into(), assets: Vec::new() });
-            app.update_open = true;
+            app.go("more/app/about");
             match std::env::var("CUTAWAY_UI_TEST_UPDATE_STAGE").as_deref() {
                 Ok("downloading") => su::show_stage(Stage::Downloading { got: 12_400_000, total: Some(36_700_000) }, Finish::Ask),
                 Ok("ready") => su::show_stage(Stage::Ready(Staged { version: v, new_item: PathBuf::new() }), Finish::Ask),
@@ -669,29 +665,26 @@ impl App {
 
     /// The update window: what's new, then getting it, then putting it in.
     /// About Cutaway: the logo, this version, and where to read more.
-    fn about_window(&mut self, ctx: &egui::Context) {
-        let mut open = true;
-        egui::Window::new("About Cutaway").open(&mut open).collapsible(false).resizable(false).default_width(380.0).show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.add(egui::Image::new(&self.logo).max_height(64.0));
-                ui.vertical(|ui| {
-                    ui.label(RichText::new("Cutaway").size(TEXT_TITLE).strong().color(Color32::WHITE));
-                    ui.label(RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).color(TEXT_DIM));
-                    ui.label(RichText::new("Record, switch and stream your show.").color(TEXT_DIM));
-                });
-            });
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                let repo = format!("https://github.com/{}", crate::net::update::REPO);
-                if ui.button("What's new").on_hover_text("Every version's release notes").clicked() {
-                    ui.ctx().open_url(egui::OpenUrl::new_tab(format!("{repo}/releases")));
-                }
-                if ui.button("Help and source").on_hover_text("Cutaway's guide and code on GitHub").clicked() {
-                    ui.ctx().open_url(egui::OpenUrl::new_tab(&repo));
-                }
+    /// Cutaway, its version and where to read more (More › App › Updates & about).
+    fn about_body(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.add(egui::Image::new(&self.logo).max_height(64.0));
+            ui.vertical(|ui| {
+                ui.label(RichText::new("Cutaway").size(TEXT_TITLE).strong().color(Color32::WHITE));
+                ui.label(RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).color(TEXT_DIM));
+                ui.label(RichText::new("Record, switch and stream your show.").color(TEXT_DIM));
             });
         });
-        self.about_open &= open;
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            let repo = format!("https://github.com/{}", crate::net::update::REPO);
+            if ui.button("What's new").on_hover_text("Every version's release notes").clicked() {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(format!("{repo}/releases")));
+            }
+            if ui.button("Help and source").on_hover_text("Cutaway's guide and code on GitHub").clicked() {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(&repo));
+            }
+        });
     }
 
     fn update_window(&mut self, ui: &mut egui::Ui, r: &crate::net::update::Release, live: bool, skip: &mut bool, restart: &mut bool) {
@@ -1263,7 +1256,7 @@ impl App {
             return;
         }
         if !self.cfg.streaming.destinations.iter().any(|d| d.enabled) {
-            self.settings = Some(self.new_settings().open_at(Section::Streaming));
+            self.open_page(Section::Streaming, None);
             self.toast("Add a streaming destination first".into(), false);
             return;
         }
@@ -1655,13 +1648,13 @@ impl App {
             RecState::Finalizing { step, done, .. } => Some(crate::control::state::SavingState { step: step.clone(), percent: (done * 100.0).round().clamp(0.0, 100.0) as u32 }),
             _ => None,
         };
-        let live_seconds = st.stream.since.map(|s| s.elapsed().as_secs_f64()).unwrap_or(0.0);
+        // The same LIVE time as the desk's: from the first destination really live.
+        let live_seconds = st.stream.live_seconds();
         let mut problems = st.health.problems();
         if st.rec_failed.is_some() {
             problems.push("recording problem".into());
         }
         let disk = st.disk.as_ref().map(|d| d.describe()).unwrap_or_default();
-        let offline = st.offline.clone();
         let markers = st.markers;
         drop(st);
         let tally = |i: usize| if live_sources.contains(&i) { "program" } else if preview_sources.contains(&i) { "preview" } else { "off" }.to_string();
@@ -1686,7 +1679,7 @@ impl App {
                 .iter()
                 .map(|s| show::SceneState { name: s.name.clone(), program: s.name == live.name, preview: preview.as_ref().is_some_and(|p| p.name == s.name) })
                 .collect(),
-            sources: e.sources.iter().enumerate().map(|(i, s)| show::SourceState { name: s.name.clone(), tally: tally(i), offline: offline.contains(&s.name) }).collect(),
+            sources: e.sources.iter().enumerate().map(|(i, s)| show::SourceState { name: s.name.clone(), tally: tally(i), offline: e.source_offline(i) }).collect(),
             graphics: e.graphics.list().into_iter().map(|(name, on, _)| show::GraphicState { name, on }).collect(),
             rotations: e.rotations.list().into_iter().map(|r| show::RotationState { name: r.name, running: r.running, showing: r.showing }).collect(),
             inputs: e
@@ -1899,7 +1892,9 @@ impl App {
         }
         // (Settings lets them through after a click outside it, while the
         // pointer's away from it.)
-        if ctx.egui_wants_keyboard_input() || self.settings.as_ref().is_some_and(|s| !s.keys_beside(ctx)) || self.title_edit.is_some() || self.marker_name.is_some() || self.confirm.is_some() || self.precheck.is_some() || self.sync.is_some() {
+        // (An area page's settings let them through, except while one of
+        // its questions is up or it's waiting for a key.)
+        if ctx.egui_wants_keyboard_input() || self.settings.as_ref().is_some_and(|s| s.busy()) || self.title_edit.is_some() || self.marker_name.is_some() || self.confirm.is_some() || self.precheck.is_some() || self.sync.is_some() {
             return;
         }
         if self.keymap.as_ref().is_none_or(|(c, _)| *c != self.cfg.keys) {
@@ -1937,6 +1932,8 @@ impl App {
                     }
                 }
                 Some(_) => {}
+                // ⌘1–⌘7 to the areas, Esc back to Show (unless given to something else).
+                None if !repeat && self.shell_key(combo) => {}
                 None if !repeat => self.numbered_key(combo),
                 None => {}
             }
@@ -2251,11 +2248,19 @@ impl App {
                 if std::env::var_os("CUTAWAY_UI_TEST_CHECK").is_some() {
                     self.start_precheck(None);
                 }
+                // The status light's panel, on Now (HEALTH) or the Log (LOG).
                 if std::env::var_os("CUTAWAY_UI_TEST_HEALTH").is_some() {
-                    self.health_open = true;
+                    self.shell.open_status = Some(shell::StatusTab::Now);
                 }
                 if std::env::var_os("CUTAWAY_UI_TEST_LOG").is_some() {
-                    self.log_open = true;
+                    self.shell.open_status = Some(shell::StatusTab::Log);
+                }
+                // An area (CUTAWAY_UI_TEST_AREA=record/streaming/where).
+                if let Ok(place) = std::env::var("CUTAWAY_UI_TEST_AREA") {
+                    match nav::AREAS.iter().position(|a| a.id == place) {
+                        Some(i) => self.go_area(i),
+                        None => self.go(&place),
+                    }
                 }
                 if std::env::var_os("CUTAWAY_UI_TEST_SYNC").is_some() {
                     let job = self.engine.as_ref().map(|e| e.measure_sync(3.0));
@@ -2305,7 +2310,7 @@ impl App {
             }
             // STOP=takes: then the Recent takes menu.
             5 if t > 11.0 && std::env::var("CUTAWAY_UI_TEST_STOP").is_ok_and(|v| v == "takes") => {
-                self.takes.open_menu = true;
+                self.go("record/takes/takes");
                 6
             }
             // STOP=resolve: then its Open in Resolve.
@@ -2361,10 +2366,9 @@ impl App {
     /// its settings say so) a cut to a scene that doesn't need it, once.
     fn watch_dropped_sources(&mut self) {
         let Some(e) = &self.engine else { return };
-        let offline = e.status.lock_ok().offline.clone();
         let names: Vec<String> = e.sources.iter().map(|s| s.name.clone()).collect();
-        // By name in the status (audio inputs are listed there too), and not delivering.
-        self.offline_sources = e.sources.iter().map(|s| offline.contains(&s.name) && !s.input.alive()).collect();
+        // Offline as it's meant everywhere (numbers audit #29).
+        self.offline_sources = (0..e.sources.len()).map(|i| e.source_offline(i)).collect();
         if let Some(o) = self.test_drop.and_then(|i| self.offline_sources.get_mut(i)) {
             *o = true;
         }
@@ -2435,385 +2439,25 @@ impl App {
 
     // ---- header ----------------------------------------------------------------
 
-    fn header(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_centered(|ui| {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                self.header_right(ui);
-                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| self.header_left(ui));
-            });
-        });
-    }
-
-    fn header_right(&mut self, ui: &mut egui::Ui) {
-        if header_button(ui, self.guide_open, "?", 0).on_hover_text("Your first show: a step-by-step guide").clicked() {
-            self.guide_open = !self.guide_open;
-        }
-        if header_button(ui, false, "Settings", 0).on_hover_text(format!("Settings{}", self.key_hint(Builtin::Settings))).clicked() {
-            self.open_settings();
-        }
-        let update = self.update.lock_ok().clone().filter(|r| r.version != self.cfg.ui.skip_version);
-        if let Some(r) = &update {
-            use crate::net::self_update::{self as su, Finish, Stage};
-            let text = match (su::stage(), su::finish()) {
-                (Stage::Downloading { .. } | Stage::Preparing, _) => format!("⬆ Getting {}…", r.version),
-                (Stage::Ready(_), Finish::OnQuit) => format!("⬆ {} installs when you quit", r.version),
-                (Stage::Ready(_), _) => format!("⬆ {} is ready", r.version),
-                _ => format!("⬆ {} is out", r.version),
-            };
-            if ui.add(egui::Button::selectable(self.update_open, RichText::new(text).color(ACCENT))).on_hover_text("A newer Cutaway").clicked() {
-                self.update_open = !self.update_open;
-            }
-        }
-        if let (true, Some(r)) = (self.update_open, update) {
-            let mut open = true;
-            let mut skip = false;
-            let live = self.engine.as_ref().is_some_and(|e| e.is_recording() || e.is_streaming()) || self.busy().is_some();
-            let mut restart = false;
-            egui::Window::new(format!("Cutaway {}", r.version)).open(&mut open).collapsible(false).resizable(false).default_width(440.0).show(ui.ctx(), |ui| {
-                self.update_window(ui, &r, live, &mut skip, &mut restart);
-            });
-            if skip {
-                self.cfg.ui.skip_version = r.version.clone();
-                self.cfg_dirty = true;
-                open = false;
-            }
-            if restart {
-                crate::net::self_update::choose(crate::net::self_update::Finish::Restart);
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-            }
-            self.update_open = open;
-        }
-        let (warn_count, problems) = self
-            .engine
-            .as_ref()
-            .map(|e| {
-                let st = e.status.lock_ok();
-                (st.log.iter().filter(|l| l.level != LogLevel::Info && l.seq > self.log_seen).count(), st.health.problems().len())
-            })
-            .unwrap_or((0, 0));
-        // A box in the main window has the keyboard: say why scene keys don't work.
-        if self.settings.is_none() && ui.ctx().egui_wants_keyboard_input() {
-            ui.label(RichText::new("⌨ Typing: show keys off (Esc)").color(AMBER).size(TEXT_BODY))
-                .on_hover_text("A box here has the keyboard, so number keys, Space and the rest type into it. Press Esc or click elsewhere to use your show keys again.");
-        }
-        // Only warnings not seen yet: a number that stays up all show means nothing.
-        if header_button(ui, self.log_open, "Log", warn_count).on_hover_text(if warn_count > 0 { "Warnings since you last looked at the log" } else { "Everything Cutaway has noted this session" }).clicked() {
-            self.log_open = !self.log_open;
-        }
-        if header_button(ui, self.health_open, "Health", problems).on_hover_text(if problems > 0 { "Problems now: sources, files, inputs and disk at a glance" } else { "Sources, files, inputs and disk at a glance" }).clicked() {
-            self.health_open = !self.health_open;
-        }
-        if header_button(ui, false, "Check", 0).on_hover_text("Pre-show check: sources, sound, disk, encoder and stream servers").clicked() {
-            self.start_precheck(None);
-        }
-        let screen_on = self.cfg.display.output != DisplayOutput::Off;
-        if header_button(ui, screen_on, "Screen", 0).on_hover_text("Program, multiview or prompter on another screen (Settings → Screens & webcam). Esc closes it.").clicked() {
-            self.cfg.display.output = if screen_on { DisplayOutput::Off } else { DisplayOutput::Program };
-            self.cfg_dirty = true;
-        }
-        if crate::platform::vcam::available() {
-            let on = self.engine.as_ref().is_some_and(|e| e.virtual_camera_on());
-            if header_button(ui, on, "Webcam", 0).on_hover_text("Send the program to the \"Cutaway\" camera for Zoom, Teams, Meet…").clicked() {
-                if !on && !crate::platform::vcam::installed() {
-                    self.settings = Some(self.new_settings().open_at(Section::Outputs));
-                } else {
-                    self.set_virtual_camera(!on);
-                }
-            }
-        }
-    }
-
-    fn header_left(&mut self, ui: &mut egui::Ui) {
-        let pill = |text: RichText, fill: Color32| egui::Button::new(text).fill(fill).min_size(vec2(150.0, 34.0)).corner_radius(17.0);
-        let name = egui::Button::image_and_text(
-            egui::Image::new(&self.logo).max_height(20.0),
-            // (The wordmark: its own size.)
-            RichText::new("CUTAWAY").size(17.0).strong().color(Color32::WHITE).extra_letter_spacing(3.0),
-        )
-        .frame(false);
-        if ui.add(name).on_hover_text("About Cutaway").clicked() {
-            self.about_open = !self.about_open;
-        }
-        if self.about_open {
-            self.about_window(ui.ctx());
-        }
-        self.show_menu(ui);
-        ui.add_space(10.0);
-        let card = self.engine.as_ref().map(|e| {
-            let st = e.status.lock_ok();
-            (matches!(st.rec, RecState::Recording { .. }), st.last_take.clone())
-        });
-        if let Some((recording, last)) = card {
-            self.tick_take_card(recording, last.as_ref());
-        }
-        let Some(engine) = &self.engine else { return };
-        let (rec, last, stream, markers, disk, background) = {
-            let st = engine.status.lock_ok();
-            (st.rec.clone(), st.last_take.clone(), st.stream.clone(), st.markers, st.disk.clone(), st.background.clone())
-        };
-        let streaming = engine.is_streaming();
-        let mut status_line: Option<(String, Color32)> = None;
-        let mut marker_clicked = false;
-        let mut clip_clicked = false;
-        // Some(Some((slow, angle))): replay; Some(None): stop it.
-        let mut replay_clicked: Option<Option<(bool, Option<control::ReplayAngle>)>> = None;
-
-        // ---- record
-        match &rec {
-            RecState::Recording { since, folder } => {
-                let t = since.elapsed();
-                // Held for a second to stop, so a stray click can't split the take.
-                let hint = self.rec_hold.is_some() || self.rec_hint_until.is_some_and(|u| Instant::now() < u);
-                let text = if hint { "      Hold to stop".to_string() } else { format!("      REC  {}", fmt_clock(t)) };
-                // A dark pill with a pulsing red dot (red alone means on air).
-                let btn = pill(RichText::new(text).size(TEXT_STATE).strong().color(Color32::WHITE), REC_PILL).stroke(Stroke::new(1.5, REC_EDGE));
-                let r = ui.add(btn);
-                let pulse = 0.55 + 0.45 * ((t.as_secs_f32() * std::f32::consts::PI).cos() * 0.5 + 0.5);
-                ui.painter().circle_filled(r.rect.left_center() + vec2(20.0, 0.0), 6.0, REC_DOT.gamma_multiply(pulse));
-                ui.ctx().request_repaint_after(Duration::from_millis(50));
-                let r = r.on_hover_text(format!("Hold for a second to stop recording (the key{} asks first)\nRecording to {}", self.key_hint(Builtin::Record), folder.display()));
-                let down = r.is_pointer_button_down_on() || self.test_hold;
-                match (down, self.rec_hold) {
-                    (true, _) if self.rec_hold_spent => {}
-                    (true, None) => self.rec_hold = Some(Instant::now()),
-                    (true, Some(since)) => {
-                        let f = (since.elapsed().as_secs_f32() / REC_HOLD_SECS).min(1.0);
-                        // A red fill grows across the pill while it's held (see-through, so the text reads).
-                        let fill = Rect::from_min_size(r.rect.min, vec2(r.rect.width() * f, r.rect.height()));
-                        ui.painter().with_clip_rect(fill).rect_filled(r.rect, 17.0, REC_HOLD);
-                        if f >= 1.0 {
-                            self.rec_hold = None;
-                            self.rec_hold_spent = true;
-                            if let Some(e) = &self.engine {
-                                e.stop_recording();
-                            }
-                        }
-                        ui.ctx().request_repaint();
-                    }
-                    (false, held) => {
-                        if held.is_some() {
-                            // Let go too soon: nothing happens, but say how.
-                            self.rec_hint_until = Some(Instant::now() + Duration::from_millis(1500));
-                        }
-                        self.rec_hold = None;
-                        self.rec_hold_spent = false;
-                    }
-                }
-                let mtext = if markers > 0 { format!("◆ Marker ({markers})") } else { "◆ Marker".into() };
-                let gap = ui.spacing().item_spacing.x;
-                ui.spacing_mut().item_spacing.x = 2.0;
-                if ui.add(egui::Button::new(mtext).min_size(vec2(0.0, 30.0))).on_hover_text(format!("Mark this moment{}: becomes a chapter and a timeline marker. {} adds one and asks for its name", self.key_hint(Builtin::Marker), self.key_label_or(Builtin::NamedMarker, "A key set in Settings → Shortcuts"))).clicked() {
-                    marker_clicked = true;
-                }
-                let list = ui.add(egui::Button::new("▾").min_size(vec2(22.0, 30.0))).on_hover_text("This take's markers: rename or take them out");
-                ui.spacing_mut().item_spacing.x = gap;
-                if std::mem::take(&mut self.test_marker_list) {
-                    egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(&list));
-                }
-                let take_markers = engine.take_markers();
-                egui::Popup::from_toggle_button_response(&list)
-                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                    .show(|ui| self.marker_list(ui, &take_markers));
-                if ui
-                    .add(egui::Button::new("✂ Clip").min_size(vec2(0.0, 30.0)))
-                    .on_hover_text(format!("Save the last {} seconds as a clip in the take's Clips folder{}", self.cfg.output.clip_seconds, self.key_hint(Builtin::Clip)))
-                    .clicked()
-                {
-                    clip_clicked = true;
-                }
-                // Instant replay: click to replay (or stop it); right-click for slow motion.
-                let replaying = self.engine.as_ref().is_some_and(|e| e.replay.playing());
-                let rb = egui::Button::new(RichText::new(if replaying { "⟲ Replaying" } else { "⟲ Replay" }).color(if replaying { Color32::WHITE } else { ui.visuals().text_color() }))
-                    .fill(if replaying { ON_AIR_DIM } else { ui.visuals().widgets.inactive.weak_bg_fill })
-                    .min_size(vec2(0.0, 30.0));
-                let r = ui.add(rb).on_hover_text(format!("Play the last {:.0} seconds again, on air. Right-click for slow motion or another camera.", self.cfg.replay.seconds));
-                if r.clicked() {
-                    replay_clicked = Some(if replaying { None } else { Some((false, None)) });
-                }
-                let angles: Vec<String> = self.engine.as_ref().map(|e| e.sources.iter().filter(|s| s.record).map(|s| s.name.clone()).collect()).unwrap_or_default();
-                let mut slow = self.replay_slow;
-                r.context_menu(|ui| {
-                    ui.checkbox(&mut slow, "Slow motion");
-                    ui.separator();
-                    let mut pick = |ui: &mut egui::Ui, text: &str, angle: control::ReplayAngle| {
-                        if ui.button(text).clicked() {
-                            replay_clicked = Some(Some((slow, Some(angle))));
-                            ui.close();
-                        }
-                    };
-                    pick(ui, "Replay the program", control::ReplayAngle::Program);
-                    if !angles.is_empty() {
-                        ui.label(RichText::new("From one camera").size(TEXT_SMALL).color(TEXT_DIM));
-                        for a in &angles {
-                            pick(ui, &format!("   {a}"), control::ReplayAngle::Source(control::Target::Name(a.clone())));
-                        }
-                    }
-                    if angles.len() >= 2 {
-                        pick(ui, &format!("Every angle at once ({})", angles.len().min(4)), control::ReplayAngle::Quad);
-                    }
-                    if replaying {
-                        ui.separator();
-                        if ui.button("Stop the replay").clicked() {
-                            replay_clicked = Some(None);
-                            ui.close();
-                        }
-                    }
-                });
-                self.replay_slow = slow;
-                if let Some(d) = &disk {
-                    let left = d.seconds_left().map(crate::engine::health::fmt_left).unwrap_or_default();
-                    status_line = Some((format!("{} free · {left} left", crate::util::human_size(d.free)), if d.seconds_left().is_some_and(|s| s < 1800.0) { AMBER } else { TEXT_DIM }));
-                }
-                ui.ctx().request_repaint_after(Duration::from_millis(250));
-            }
-            RecState::Finalizing { folder, step, done } => {
-                let t = ui.input(|i| i.time) as f32;
-                let r = ui.add_enabled(false, pill(RichText::new(format!("Saving files  {:.0}%", done * 100.0)).size(TEXT_STATE).color(Color32::WHITE), RAISED));
-                // A bar along the bottom of the button fills as it goes.
-                let bar = Rect::from_min_size(r.rect.left_bottom() - vec2(0.0, 3.0), vec2(r.rect.width(), 3.0));
-                ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * done.clamp(0.02, 1.0), bar.height())), 1.5, ACCENT);
-                status_line = Some((format!("{step}{}", waiting::ellipsis(t)), ACCENT));
-                r.on_disabled_hover_text(format!("Finishing the take in {}", folder.display()));
-                ui.ctx().request_repaint_after(Duration::from_millis(100));
-            }
-            RecState::Idle => {
-                self.rec_hold_spent = false;
-                let btn = pill(RichText::new("      RECORD").size(TEXT_STATE).strong().color(Color32::WHITE), RAISED).stroke(Stroke::new(1.5, REC_EDGE));
-                let r = ui.add(btn);
-                ui.painter().circle_filled(r.rect.left_center() + vec2(20.0, 0.0), 6.0, REC_DOT);
-                let r = r.on_hover_text("Record every source, the program and the audio (Ctrl/Cmd+R)");
-                if r.clicked() {
-                    self.toggle_record();
-                }
-                let m = ui.menu_button(RichText::new("▾").size(TEXT_STATE).color(TEXT_DIM), |ui| self.recent_takes_menu(ui)).response.on_hover_text("Recent takes");
-                if std::mem::take(&mut self.takes.open_menu) {
-                    egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(&m));
-                }
-                if self.settings.is_none() {
-                    self.take_card(ui.ctx(), r.rect, last.as_ref());
-                }
-                if let Some(t) = &last {
-                    let total: u64 = t.files.iter().map(|f| f.1).sum();
-                    // The space left stays in view once there's a take.
-                    let free = disk.as_ref().map(|d| format!(" · {} free", crate::util::human_size(d.free))).unwrap_or_default();
-                    let color = if disk.as_ref().and_then(|d| d.seconds_left()).is_some_and(|s| s < 1800.0) { AMBER } else { TEXT_DIM };
-                    status_line = Some((format!("Last take: {} files, {}{free} — {}", t.files.len(), crate::util::human_size(total), t.folder.display()), color));
-                } else if let Some(d) = &disk {
-                    status_line = Some((d.describe(), TEXT_DIM));
-                }
-                if let Some((what, f)) = &background {
-                    status_line = Some((format!("{what}… {:.0}%", f * 100.0), ACCENT));
-                    ui.ctx().request_repaint_after(Duration::from_millis(250));
-                }
-            }
-        }
-
-        // ---- stream
-        if stream.stopping {
-            ui.add_enabled(false, pill(RichText::new("Ending stream…").size(TEXT_STATE).color(Color32::WHITE), RAISED));
-            ui.ctx().request_repaint_after(Duration::from_millis(250));
-        } else if streaming {
-            let t = stream.since.map(|s| s.elapsed()).unwrap_or_default();
-            let live = stream.destinations.iter().filter(|d| d.state == DestState::Live).count();
-            let total = stream.destinations.iter().filter(|d| d.state != DestState::Off).count();
-            let healthy = live == total && total > 0;
-            // Nothing's live yet, but it's trying: say so, not "LIVE".
-            let connecting: Vec<&str> = stream.destinations.iter().filter(|d| matches!(d.state, DestState::Connecting | DestState::Retrying { .. })).map(|d| d.name.as_str()).collect();
-            let going = live == 0 && !connecting.is_empty();
-            if going {
-                let pulse = ((ui.input(|i| i.time) as f32 * 3.0).sin() + 1.0) * 0.5;
-                let fill = LIVE_DIM.lerp_to_gamma(LIVE_GLOW, pulse);
-                let btn = pill(RichText::new(format!("◉  GOING LIVE{}", waiting::ellipsis(ui.input(|i| i.time) as f32))).size(TEXT_STATE).strong().color(Color32::WHITE), fill).min_size(vec2(150.0, 0.0));
-                if ui.add(btn).on_hover_text("Connecting. Click to stop.").clicked() {
-                    self.toggle_stream();
-                }
-                status_line = Some((format!("Connecting to {}", connecting.join(", ")), LIVE_SOFT));
-                ui.ctx().request_repaint_after(Duration::from_millis(50));
-            } else {
-                let fill = if healthy { LIVE } else { LIVE_TROUBLE };
-                let btn = pill(RichText::new(format!("◉  LIVE  {}", fmt_clock(t))).size(TEXT_STATE).strong().color(Color32::WHITE), fill);
-                if ui.add(btn).on_hover_text("End the stream").clicked() {
-                    self.toggle_stream();
-                }
-            }
-            if !healthy && !going {
-                status_line = Some((format!("{live} of {total} destinations live — see Stream panel"), AMBER));
-            }
-            ui.ctx().request_repaint_after(Duration::from_millis(250));
-        } else if !self.cfg.streaming.destinations.iter().any(|d| d.enabled) {
-            // Nowhere to stream to: a quiet way in, not a big button that can't work.
-            let b = egui::Button::new(RichText::new("◉ Set up streaming").size(TEXT_BODY).color(ACCENT)).frame(false);
-            let r = ui.add(b);
-            ui.add_space(10.0);
-            if r.on_hover_text("Add a place to stream to (YouTube, Twitch, any RTMP server…) in Settings → Streaming. The GO LIVE button appears once there is one.").clicked() {
-                self.settings = Some(self.new_settings().open_at(Section::Streaming));
-            }
-        } else {
-            let btn = pill(RichText::new("◉  GO LIVE").size(TEXT_STATE).strong().color(LIVE), RAISED).stroke(Stroke::new(1.5, LIVE_EDGE));
-            let names: Vec<String> = self.cfg.streaming.destinations.iter().filter(|d| d.enabled).map(|d| d.name.clone()).collect();
-            if ui.add(btn).on_hover_text(format!("Stream to {}", names.join(", "))).clicked() {
-                self.toggle_stream();
-            }
-        }
-        // A scheduled stream coming up says so, over the everyday line (disk
-        // space, the last take) but not over warnings or progress.
-        let everyday = status_line.as_ref().is_none_or(|(_, c)| *c == TEXT_DIM);
-        let scheduled = if streaming || !everyday { None } else { self.scheduled_line() };
-        let (text, color) = scheduled.or(status_line).unwrap_or_else(|| (self.cfg.output.folder.display().to_string(), TEXT_DIM));
-        // The time of day at the right, the line taking what's left before it.
-        let clock = clock_text(chrono::Local::now().naive_local().time(), self.cfg.ui.clock_12h);
-        let clock_w = 80.0;
-        ui.scope(|ui| {
-            ui.set_max_width((ui.available_width() - clock_w).max(0.0));
-            ui.add(egui::Label::new(RichText::new(text).color(color).size(TEXT_BODY)).truncate());
-        });
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add_space(8.0);
-            let b = egui::Button::new(RichText::new(clock).size(TEXT_STATE).color(TEXT_DIM)).frame(false);
-            let tip = if self.cfg.ui.clock_12h { "The time here. Click for 24-hour time" } else { "The time here. Click for 12-hour time" };
-            if ui.add(b).on_hover_text(tip).clicked() {
-                self.cfg.ui.clock_12h = !self.cfg.ui.clock_12h;
-                self.cfg_dirty = true;
-            }
-        });
-        let secs_left = 60 - chrono::Timelike::second(&chrono::Local::now()) as u64;
-        ui.ctx().request_repaint_after(Duration::from_secs(secs_left.clamp(1, 60)));
-        if marker_clicked {
-            match self.add_marker(None) {
-                Ok(n) => self.toast(format!("{n} added"), false),
-                Err(e) => self.toast(e, true),
-            }
-        }
-        if clip_clicked {
-            match self.run_action(Action::Clip(None)) {
-                Ok(m) => self.toast(m, false),
-                Err(e) => self.toast(e, true),
-            }
-        }
-        if let Some(r) = replay_clicked {
-            let cmd = match r {
-                Some((slow, angle)) => control::ReplayCmd::Play { seconds: None, slow, angle },
-                None => control::ReplayCmd::Stop,
-            };
-            if let Err(e) = self.run_action(Action::Replay(cmd)) {
-                self.toast(e, true);
-            }
-        }
-        if let Some(p) = self.engine.as_ref().and_then(|e| e.replay.problem()) {
-            if self.replay_problem.as_deref() != Some(p.as_str()) {
-                self.replay_problem = Some(p.clone());
-                self.toast(p, true);
-            }
-        }
-    }
-
-    /// The show (profile) picker.
-    fn show_menu(&mut self, ui: &mut egui::Ui) {
+    /// The show (profile) picker, under the logo at the top of the rail
+    /// (`width`: what it has).
+    fn show_menu(&mut self, ui: &mut egui::Ui, width: f32) {
         let Some(path) = self.save_path.clone() else { return };
         let dir = crate::config::profiles_dir(&path);
         let current = self.cfg.ui.profile.clone();
-        let text = if current.is_empty() { "No show ▾".to_string() } else { format!("{current} ▾") };
-        ui.menu_button(RichText::new(text).color(TEXT_DIM), |ui| {
+        let name = if current.is_empty() { "No show".to_string() } else { current.clone() };
+        // As much of the name as fits, then ▾; all of it on hover.
+        let font = FontId::proportional(TEXT_SMALL);
+        let fits = |t: &str| ui.painter().layout_no_wrap(t.to_string(), font.clone(), Color32::WHITE).size().x <= width - 8.0;
+        let mut short = format!("{name} ▾");
+        let mut keep = name.chars().count();
+        while !fits(&short) && keep > 1 {
+            keep -= 1;
+            short = format!("{}… ▾", name.chars().take(keep).collect::<String>().trim_end());
+        }
+        let r = ui.menu_button(RichText::new(short).size(TEXT_SMALL).color(TEXT_DIM), |ui| {
+            ui.label(RichText::new(format!("Show: {name}")).strong());
+            ui.separator();
             let list = profiles::list(&dir);
             if list.is_empty() {
                 ui.label(RichText::new("No saved shows yet").color(TEXT_DIM));
@@ -2825,11 +2469,12 @@ impl App {
                 }
             }
             ui.separator();
-            if ui.button("Save as a show…").clicked() {
-                self.settings = Some(self.new_settings().open_at(Section::General));
+            if ui.button("Save as a show…").on_hover_text("More › App › Shows").clicked() {
+                self.open_page(Section::General, None);
                 ui.close();
             }
         });
+        r.response.on_hover_text(format!("{name}: switch shows, or save this one as a show"));
     }
 
     /// The name this setup is saved under before switching shows, when it
@@ -3312,7 +2957,8 @@ impl App {
         let (mut undo_clicked, mut redo_clicked) = (false, false);
         let old_name = scene.name.clone();
         let mut rename_clash = None;
-        let cmd = if cfg!(target_os = "macos") { "⌘" } else { "Ctrl+" };
+        // The keys as they're set now (numbers audit #22).
+        let (undo_key, redo_key) = (self.key_hint(Builtin::Undo), self.key_hint(Builtin::Redo));
         // A heading, what's being edited, and Undo / Save / Done.
         ui.horizontal(|ui| {
             ui.label(RichText::new("EDIT LAYOUT").color(AMBER).strong());
@@ -3335,14 +2981,14 @@ impl App {
                     ui.add(chip).on_hover_text("Changes to scenes not written to disk yet");
                 }
                 if ui.add_enabled(self.history.can_redo().is_some(), egui::Button::new("↷ Redo")).on_hover_text(match self.history.can_redo() {
-                    Some(l) => format!("Redo: {l} ({cmd}Shift+Z)"),
-                    None => format!("Nothing to redo ({cmd}Shift+Z)"),
+                    Some(l) => format!("Redo: {l}{redo_key}"),
+                    None => format!("Nothing to redo{redo_key}"),
                 }).clicked() {
                     redo_clicked = true;
                 }
                 if ui.add_enabled(self.history.can_undo().is_some(), egui::Button::new("↶ Undo")).on_hover_text(match self.history.can_undo() {
-                    Some(l) => format!("Undo: {l} ({cmd}Z)"),
-                    None => format!("Nothing to undo ({cmd}Z)"),
+                    Some(l) => format!("Undo: {l}{undo_key}"),
+                    None => format!("Nothing to undo{undo_key}"),
                 }).clicked() {
                     undo_clicked = true;
                 }
@@ -4447,7 +4093,7 @@ impl App {
                 r = r.on_hover_text(match problem {
                     Some(p) => format!("⚠ {p}"),
                     None if is_timer => "Show / hide. Right-click to start, pause or reset it.".into(),
-                    None if i < 9 => format!("Show / hide (Alt+{})", i + 1),
+                    None if i < 9 => format!("Show / hide ({})", shortcuts::KeyCombo { alt: true, ..shortcuts::KeyCombo::plain(shortcuts::DIGITS[i]) }.label()),
                     None => "Show / hide".into(),
                 } + &shown.unwrap_or_default());
                 if r.clicked() {
@@ -4842,7 +4488,7 @@ impl App {
                 ui.ctx().copy_text(text.join("\n"));
             }
         });
-        egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt("status_log").stick_to_bottom(true).max_height(360.0).auto_shrink([false, true]).show(ui, |ui| {
             for l in log.iter().filter(|l| !self.log_warnings_only || l.level != LogLevel::Info) {
                 let color = match l.level {
                     LogLevel::Info => TEXT_DIM,
@@ -4856,11 +4502,13 @@ impl App {
 
     // ---- health ----------------------------------------------------------------------
 
-    fn health_window(&mut self, ctx: &egui::Context) {
-        if !self.health_open {
+    /// Everything at a glance, under the status light's Now: drives,
+    /// sources, the files being recorded and the sound.
+    fn health_body(&mut self, ui: &mut egui::Ui) {
+        let Some(engine) = &self.engine else {
+            ui.label(RichText::new("The engine isn't running.").color(TEXT_DIM));
             return;
-        }
-        let Some(engine) = &self.engine else { return };
+        };
         let (h, disk, backup) = {
             let st = engine.status.lock_ok();
             (st.health.clone(), st.disk.clone(), st.backup_disk.clone())
@@ -4888,70 +4536,73 @@ impl App {
                 parts.join(" · ")
             })
             .collect();
-        let mut open = true;
-        egui::Window::new("Health").open(&mut open).default_width(520.0).collapsible(false).show(ctx, |ui| {
-            let ok = |ui: &mut egui::Ui, good: bool, text: String| {
-                ui.label(RichText::new(text).color(if good { Color32::WHITE } else { AMBER }));
-            };
-            ui.label(RichText::new("DRIVES").color(TEXT_DIM).size(TEXT_SMALL));
-            match &disk {
-                Some(d) => ok(ui, d.seconds_left().is_none_or(|s| s > 1800.0), format!("Recording: {} of {} ({})", d.describe(), crate::util::human_size(d.total), if d.measured { "rate measured" } else { "rate estimated" })),
-                None => ok(ui, false, "Recording drive: unknown".into()),
-            }
-            if let Some(b) = &backup {
-                ok(ui, b.free > crate::engine::health::MIN_START_BYTES, format!("Backup: {}", b.describe()));
-            }
-            ui.add_space(8.0);
-            ui.label(RichText::new("SOURCES").color(TEXT_DIM).size(TEXT_SMALL));
-            egui::Grid::new("h_src").num_columns(4).striped(true).show(ui, |ui| {
-                for (i, s) in h.sources.iter().enumerate() {
-                    ui.label(&s.name);
-                    let good = s.alive && (s.expected_fps == 0 || s.fps >= s.expected_fps as f32 * 0.8);
-                    ok(ui, good, if s.alive { format!("{:.1} fps", s.fps) } else { "no signal".into() });
-                    ui.label(RichText::new(format!("set to {}", s.expected_fps)).color(TEXT_DIM));
-                    ui.label(RichText::new(extras.get(i).cloned().unwrap_or_default()).color(TEXT_DIM));
-                    ui.end_row();
-                }
-            });
-            if !h.files.is_empty() {
-                ui.add_space(8.0);
-                ui.label(RichText::new("FILES BEING RECORDED").color(TEXT_DIM).size(TEXT_SMALL));
-                egui::Grid::new("h_files").num_columns(5).striped(true).show(ui, |ui| {
-                    for t in ["File", "Frames", "Repeated", "Dropped", "Waiting"] {
-                        ui.label(RichText::new(t).color(TEXT_DIM).size(TEXT_SMALL));
-                    }
-                    ui.end_row();
-                    for f in &h.files {
-                        ui.label(&f.label);
-                        let r = ui.label(RichText::new(if f.failed { "failed".into() } else { f.encoded.to_string() }).color(if f.failed { AMBER } else { Color32::WHITE }));
-                        if f.resized > 0 {
-                            r.on_hover_text(format!("{} frames were rescaled because the source changed size", f.resized));
-                        }
-                        ok(ui, f.repeated < 30, f.repeated.to_string());
-                        ok(ui, f.dropped < 30, f.dropped.to_string());
-                        ok(ui, f.backlog <= 30, f.backlog.to_string());
-                        ui.end_row();
-                    }
-                });
-                ui.label(RichText::new("Repeated: the source skipped a frame (filled in). Dropped: extra frames from a fast source. Waiting: frames queued for the encoder (should stay small).").size(TEXT_SMALL).color(TEXT_DIM));
-            }
-            ui.add_space(8.0);
-            ui.label(RichText::new("AUDIO").color(TEXT_DIM).size(TEXT_SMALL));
-            egui::Grid::new("h_audio").num_columns(3).striped(true).show(ui, |ui| {
-                for a in &h.audio {
-                    ui.label(&a.name);
-                    ok(ui, a.alive, if a.alive { "OK".into() } else { "no signal".into() });
-                    ok(ui, a.resyncs == 0, format!("{} re-syncs", a.resyncs));
-                    ui.end_row();
-                }
-            });
-            ui.add_space(6.0);
-            ok(ui, h.compositor_skips == 0, format!("Program frames skipped (computer too busy): {}", h.compositor_skips));
-        });
-        if !open {
-            self.health_open = false;
+        let ok = |ui: &mut egui::Ui, good: bool, text: String| {
+            ui.label(RichText::new(text).color(if good { Color32::WHITE } else { AMBER }));
+        };
+        ui.label(RichText::new("DRIVES").color(TEXT_DIM).size(TEXT_SMALL));
+        match &disk {
+            // The same words and limit as the top bar (numbers audit #15, #16).
+            Some(d) => ok(ui, !d.low(), format!("Recording: {} (of {}, {})", d.describe(), crate::util::human_size(d.total), if d.measured { "rate measured" } else { "rate estimated" })),
+            None => ok(ui, false, "Recording drive: unknown".into()),
         }
-        ctx.request_repaint_after(Duration::from_millis(500));
+        if let Some(b) = &backup {
+            ok(ui, b.free > crate::engine::health::MIN_START_BYTES, format!("Backup: {}", b.describe()));
+        }
+        ui.add_space(8.0);
+        ui.label(RichText::new("SOURCES").color(TEXT_DIM).size(TEXT_SMALL));
+        egui::Grid::new("h_src").num_columns(4).striped(true).show(ui, |ui| {
+            for (i, s) in h.sources.iter().enumerate() {
+                ui.label(&s.name);
+                // Nothing to measure from yet just after a start: no false 0 fps (numbers audit #3).
+                let text = match (s.alive, s.measured) {
+                    (false, _) => "no signal".to_string(),
+                    (true, false) => "measuring…".to_string(),
+                    (true, true) => format!("{:.1} fps", s.fps),
+                };
+                ok(ui, s.alive && !s.slow(), text);
+                ui.label(RichText::new(format!("set to {}", s.expected_fps)).color(TEXT_DIM));
+                ui.label(RichText::new(extras.get(i).cloned().unwrap_or_default()).color(TEXT_DIM));
+                ui.end_row();
+            }
+        });
+        if !h.files.is_empty() {
+            ui.add_space(8.0);
+            ui.label(RichText::new("FILES BEING RECORDED").color(TEXT_DIM).size(TEXT_SMALL));
+            egui::Grid::new("h_files").num_columns(5).striped(true).show(ui, |ui| {
+                for t in ["File", "Frames", "Repeated", "Dropped", "Waiting"] {
+                    ui.label(RichText::new(t).color(TEXT_DIM).size(TEXT_SMALL));
+                }
+                ui.end_row();
+                for f in &h.files {
+                    ui.label(&f.label);
+                    let r = ui.label(RichText::new(if f.failed { "failed".into() } else { f.encoded.to_string() }).color(if f.failed { AMBER } else { Color32::WHITE }));
+                    if f.resized > 0 {
+                        r.on_hover_text(format!("{} frames were rescaled because the source changed size", f.resized));
+                    }
+                    // Totals for the take; amber only for trouble in the last minute (numbers audit #17).
+                    let recent = |ui: &mut egui::Ui, bad: bool, total: u64, recent: u64| {
+                        ui.label(RichText::new(total.to_string()).color(if bad { AMBER } else { Color32::WHITE })).on_hover_text(format!("{recent} in the last minute"));
+                    };
+                    recent(ui, f.repeating(), f.repeated, f.recent_repeated);
+                    recent(ui, f.dropping(), f.dropped, f.recent_dropped);
+                    ok(ui, f.backlog <= 30, f.backlog.to_string());
+                    ui.end_row();
+                }
+            });
+            ui.label(RichText::new(format!("Repeated: the source skipped a frame (filled in). Dropped: extra frames from a fast source. Amber when there were {} or more in the last minute. Waiting: frames queued for the encoder (should stay small).", crate::engine::health::RECENT_FRAMES_LIMIT)).size(TEXT_SMALL).color(TEXT_DIM));
+        }
+        ui.add_space(8.0);
+        ui.label(RichText::new("AUDIO").color(TEXT_DIM).size(TEXT_SMALL));
+        egui::Grid::new("h_audio").num_columns(3).striped(true).show(ui, |ui| {
+            for a in &h.audio {
+                ui.label(&a.name);
+                ok(ui, a.alive, if a.alive { "OK".into() } else { "no signal".into() });
+                ok(ui, a.resyncs == 0, format!("{} re-syncs", a.resyncs));
+                ui.end_row();
+            }
+        });
+        ui.add_space(6.0);
+        ok(ui, h.compositor_skips == 0, format!("Program frames skipped (computer too busy): {}", h.compositor_skips));
     }
 
     // ---- pre-show check -----------------------------------------------------------------
@@ -5441,12 +5092,6 @@ impl App {
 
     // ---- settings ---------------------------------------------------------------
 
-    fn open_settings(&mut self) {
-        if self.settings.is_none() {
-            self.settings = Some(self.new_settings());
-        }
-    }
-
     /// The settings as they are now, scenes included (they can have
     /// changes not saved yet).
     fn live_settings(&self) -> Config {
@@ -5524,12 +5169,10 @@ impl App {
         }
     }
 
-    fn settings_window(&mut self, ctx: &egui::Context) {
-        if self.settings.is_none() {
-            return;
-        }
+    /// What a Settings page shows from the running show, the sources'
+    /// pictures (as the multiview shows them) included.
+    fn settings_info(&mut self, ctx: &egui::Context) -> SettingsContext {
         let mut info = self.settings_context();
-        // The sources' pictures, as the multiview shows them.
         if let Some(e) = &self.engine {
             let slots: Vec<(usize, u64, Arc<FrameSlot>)> = e.sources.iter().enumerate().map(|(i, s)| (i, s.uid, s.preview.clone())).collect();
             info.virtual_ptz = e.sources.iter().enumerate().filter_map(|(i, s)| Some((s.uid, e.ptz(i)?.virt.clone()?))).collect();
@@ -5540,9 +5183,11 @@ impl App {
                 }
             }
         }
-        let Some(win) = self.settings.as_mut() else { return };
-        let action = win.show(ctx, &info);
-        self.settings_page = Some(win.section());
+        info
+    }
+
+    /// Do what a Settings page asked for.
+    fn settings_action(&mut self, action: SettingsAction, ctx: &egui::Context) {
         match action {
             SettingsAction::None => {}
             SettingsAction::Close => self.settings = None,
@@ -5568,10 +5213,6 @@ impl App {
                     self.settings = None;
                 }
             }
-        }
-        // Live levels in Settings → Switching.
-        if self.settings.is_some() {
-            ctx.request_repaint_after(Duration::from_millis(200));
         }
     }
 
@@ -5741,11 +5382,36 @@ impl App {
     }
 }
 
+impl App {
+    /// The windows, dialogs and messages over everything (whichever area is open).
+    fn over_the_window(&mut self, ctx: &egui::Context) {
+        self.display_window(ctx);
+        self.guide_window(ctx);
+        self.confirm_dialog(ctx);
+        self.title_dialog(ctx);
+        self.marker_name_dialog(ctx);
+        self.precheck_dialog(ctx);
+        self.sync_dialog(ctx);
+        self.rescue_card(ctx);
+        self.toasts(ctx);
+        // Warnings the engine wants seen (disk filling up, backup drive full).
+        let alerts = self.engine.as_ref().map(|e| std::mem::take(&mut e.status.lock_ok().alerts)).unwrap_or_default();
+        for a in alerts {
+            self.toast(a, true);
+        }
+    }
+}
+
 impl eframe::App for App {
     /// Only the window's size and place are remembered (eframe's
     /// persistence), not egui's own state.
     fn persist_egui_memory(&self) -> bool {
         false
+    }
+
+    /// Each area's last tab, beside the window's size (this computer, not the show).
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        self.shell.save(storage);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -5786,14 +5452,21 @@ impl eframe::App for App {
             ctx.request_repaint_after(Duration::from_millis(250));
         }
 
-        egui::Panel::top("header").exact_size(54.0).frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(14, 6))).show(ui, |ui| self.header(ui));
+        // The rail of areas down the left, the top bar with the area's tabs
+        // and the status cluster, then Show's desk or the area's page.
+        self.sync_shell();
+        let rail = Self::rail_width(&ctx);
+        egui::Panel::left("rail").exact_size(rail).resizable(false).frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(0, 6))).show(ui, |ui| self.rail(ui));
+        egui::Panel::top("header").exact_size(shell::TOP_BAR).frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(14, 6))).show(ui, |ui| self.top_bar(ui));
+        if !self.on_show() {
+            egui::CentralPanel::default().frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin::symmetric(20, 12))).show(ui, |ui| self.area_page(ui));
+            self.over_the_window(&ctx);
+            return;
+        }
         // A second row of scenes when they don't fit in one and the window is tall.
         self.bank_rows = if self.bank_overflows && ctx.content_rect().height() >= 1000.0 { 2 } else { 1 };
         let bank_height = 104.0 + (self.bank_rows - 1) as f32 * (BANK_BUTTON.y + 6.0);
         egui::Panel::bottom("bank").exact_size(bank_height).frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(14, 6))).show(ui, |ui| self.scene_bank(ui));
-        if self.log_open {
-            egui::Panel::bottom("log").resizable(true).default_size(150.0).frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin::same(8))).show(ui, |ui| self.log_panel(ui));
-        }
         // The column on the right: drag its edge to make it wider (kept with the show).
         let widest = (ui.available_width() * 0.6).max(COLUMN_WIDTH);
         let width = if self.cfg.ui.column_width > 0.0 { self.cfg.ui.column_width } else { COLUMN_WIDTH };
@@ -5834,24 +5507,7 @@ impl eframe::App for App {
         self.column_edge(&ctx, column.response.rect);
         egui::CentralPanel::default().frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin::same(14))).show(ui, |ui| self.monitors(ui));
 
-        self.display_window(&ctx);
-        self.health_window(&ctx);
-        self.guide_window(&ctx);
-        if self.settings.is_some() {
-            self.settings_window(&ctx);
-        }
-        self.confirm_dialog(&ctx);
-        self.title_dialog(&ctx);
-        self.marker_name_dialog(&ctx);
-        self.precheck_dialog(&ctx);
-        self.sync_dialog(&ctx);
-        self.rescue_card(&ctx);
-        self.toasts(&ctx);
-        // Warnings the engine wants seen (disk filling up, backup drive full).
-        let alerts = self.engine.as_ref().map(|e| std::mem::take(&mut e.status.lock_ok().alerts)).unwrap_or_default();
-        for a in alerts {
-            self.toast(a, true);
-        }
+        self.over_the_window(&ctx);
     }
 
     fn on_exit(&mut self) {
@@ -5896,13 +5552,6 @@ fn quit_text(recording: bool, live: bool, busy: Option<String>) -> (String, Stri
 }
 
 // ---- drawing helpers -------------------------------------------------------------
-
-/// A button in the header: all alike, lit while its window or output is
-/// on, with an amber count when there's something to look at ("Log (3)").
-fn header_button(ui: &mut egui::Ui, on: bool, label: &str, count: usize) -> egui::Response {
-    let text = if count > 0 { RichText::new(format!("{label} ({count})")).color(AMBER) } else { RichText::new(label) };
-    ui.add(egui::Button::new(text.size(TEXT_BODY)).selected(on).min_size(vec2(0.0, 28.0)))
-}
 
 /// Text drawn a second time half a pixel over, for a bold look (the
 /// interface font has no bold of its own).

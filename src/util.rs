@@ -30,10 +30,14 @@ pub fn unbase64(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// A size as every part of Cutaway writes it: "412 GB", "8.5 GB",
+/// "640.2 MB", "12 KB" (whole gigabytes from 10 GB up, one decimal below).
 pub fn human_size(bytes: u64) -> String {
     let b = bytes as f64;
-    if b >= 1e9 {
-        format!("{:.2} GB", b / 1e9)
+    if b >= 9.95e9 {
+        format!("{:.0} GB", b / 1e9)
+    } else if b >= 1e9 {
+        format!("{:.1} GB", b / 1e9)
     } else if b >= 1e6 {
         format!("{:.1} MB", b / 1e6)
     } else {
@@ -181,6 +185,15 @@ pub fn guard<T>(what: &str, f: impl FnOnce() -> anyhow::Result<T>) -> anyhow::Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_size_format() {
+        assert_eq!(human_size(412_345_000_000), "412 GB");
+        assert_eq!(human_size(10_000_000_000), "10 GB");
+        assert_eq!(human_size(8_460_000_000), "8.5 GB");
+        assert_eq!(human_size(640_200_000), "640.2 MB");
+        assert_eq!(human_size(12_000), "12 KB");
+    }
 
     #[test]
     fn folder_names_are_safe_everywhere() {

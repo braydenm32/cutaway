@@ -52,7 +52,7 @@ impl App {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.small_button("Set up").clicked() {
-                    self.settings = Some(self.new_settings().open_at(section));
+                    self.open_page(section, None);
                 }
             });
         });
@@ -416,7 +416,12 @@ impl App {
             let painter = ui.painter_at(rect);
             painter.rect_filled(rect, 17.0, if talking { AMBER } else { RAISED });
             painter.rect_stroke(rect, 17.0, Stroke::new(1.0, if talking { AMBER } else { LINE }), StrokeKind::Inside);
-            painter.text(rect.center(), Align2::CENTER_CENTER, if talking { "TALKING" } else { "TALK  (hold, or B)" }, FontId::proportional(TEXT_BODY), if talking { Color32::BLACK } else { Color32::WHITE });
+            // The key as it's set now (numbers audit #22).
+            let idle = match self.key_label_or(crate::control::shortcuts::Builtin::Talkback, "") {
+                k if k.is_empty() => "TALK  (hold)".to_string(),
+                k => format!("TALK  (hold, or {k})"),
+            };
+            painter.text(rect.center(), Align2::CENTER_CENTER, if talking { "TALKING" } else { idle.as_str() }, FontId::proportional(TEXT_BODY), if talking { Color32::BLACK } else { Color32::WHITE });
             let down = resp.is_pointer_button_down_on();
             if down != self.talk_held {
                 self.talk_held = down;

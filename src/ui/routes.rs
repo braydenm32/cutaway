@@ -12,7 +12,7 @@
 //! `legacy: true`: still drawn in its 0.9.7 place (the old header, the
 //! Settings window...). Each redesign PR flips its routes to `false` once
 //! the new home in nav.rs is drawn and every `was` still reaches it.
-// (Data the redesign PRs start drawing from; until then only the tests read it.)
+// (Only the tests read it so far; ⌘K search will read the labels.)
 #![allow(dead_code)]
 
 /// A way in.
@@ -53,49 +53,55 @@ const fn r(id: &'static str, label: &'static str, was: &'static [Input]) -> Rout
     Route { id, label, was, legacy: true }
 }
 
+/// Moved to its new home (redesign PR 1 on: the rail, the top bar and the
+/// status light).
+const fn m(id: &'static str, label: &'static str, was: &'static [Input]) -> Route {
+    Route { id, label, was, legacy: false }
+}
+
 /// Commands come in through your own keys, Stream Deck "Command", MIDI,
 /// OSC `/cutaway/<verb>` and `/api/action?do=` (and macros).
 const CMD: &[Input] = &[Key, StreamDeck, Midi, Osc, Http];
 
 pub const ROUTES: &[Route] = &[
     // ---- main window header, right
-    r("main.header.help", "Shortcuts cheat sheet", &[Mouse]),
-    r("main.header.settings", "Settings", &[Mouse]),
-    r("main.header.update", "Update button", &[Mouse]),
-    r("win.update", "Update", &[Mouse]),
-    r("main.header.typing", "Typing, keys paused", &[Display]),
-    r("main.header.log", "Log button", &[Mouse]),
-    r("panel.log", "Log", &[Mouse]),
-    r("main.header.health", "Health button", &[Mouse]),
-    r("win.health", "Health", &[Mouse]),
-    r("main.header.check", "Check button", &[Mouse]),
-    r("dlg.precheck", "Pre-show check", &[Mouse]),
-    r("main.header.screen", "Second screen button", &[Mouse]),
+    m("main.header.help", "Shortcuts cheat sheet", &[Mouse]),
+    m("main.header.settings", "Settings", &[Mouse]),
+    m("main.header.update", "Update button", &[Mouse]),
+    m("win.update", "Update", &[Mouse]),
+    m("main.header.typing", "Typing, keys paused", &[Display]),
+    m("main.header.log", "Log button", &[Mouse]),
+    m("panel.log", "Log", &[Mouse]),
+    m("main.header.health", "Health button", &[Mouse]),
+    m("win.health", "Health", &[Mouse]),
+    m("main.header.check", "Check button", &[Mouse]),
+    m("dlg.precheck", "Pre-show check", &[Mouse]),
+    m("main.header.screen", "Second screen button", &[Mouse]),
     r("win.display", "Second screen", &[Mouse]),
-    r("main.header.webcam", "Webcam (virtual camera)", &[Mouse]),
-    r("main.header.clock", "Clock, 12 or 24 hour", &[Mouse]),
+    m("main.header.webcam", "Webcam (virtual camera)", &[Mouse]),
+    m("main.header.clock", "Clock, 12 or 24 hour", &[Mouse]),
     // ---- header, left: show, recording, stream
-    r("main.header.logo", "About Cutaway", &[Mouse]),
-    r("win.about", "About", &[Mouse]),
-    r("main.header.show", "Show menu", &[Mouse]),
-    r("menu.show.switch", "Switch to another show", &[Mouse]),
-    r("dlg.confirm.switch", "Switch show?", &[Mouse]),
-    r("menu.show.save_as", "Save as a show", &[Mouse]),
-    r("main.rec.record", "Record", &[Mouse]),
-    r("main.rec.stop", "Stop recording", &[Mouse]),
-    r("dlg.confirm.stoprec", "Stop recording?", &[Mouse]),
-    r("main.rec.marker", "Marker", &[Mouse]),
-    r("dlg.marker_name", "Named marker", &[Key]),
-    r("menu.markers", "Markers so far", &[Mouse]),
-    r("main.rec.clip", "Clip", &[Mouse]),
+    m("main.header.logo", "About Cutaway", &[Mouse]),
+    m("win.about", "About", &[Mouse]),
+    m("main.header.show", "Show menu", &[Mouse]),
+    m("menu.show.switch", "Switch to another show", &[Mouse]),
+    m("dlg.confirm.switch", "Switch show?", &[Mouse]),
+    m("menu.show.save_as", "Save as a show", &[Mouse]),
+    m("main.rec.record", "Record", &[Mouse]),
+    m("main.rec.stop", "Stop recording", &[Mouse]),
+    m("dlg.confirm.stoprec", "Stop recording?", &[Mouse]),
+    m("main.rec.marker", "Marker", &[Mouse]),
+    m("dlg.marker_name", "Named marker", &[Key]),
+    m("menu.markers", "Markers so far", &[Mouse]),
+    m("main.rec.clip", "Clip", &[Mouse]),
     r("main.rec.replay", "Replay", &[Mouse]),
     r("ctx.replay", "Replay angle and slow motion", &[RightClick]),
-    r("main.rec.recent", "Recent takes", &[Mouse]),
+    m("main.rec.recent", "Recent takes", &[Mouse]),
     r("main.rec.takecard", "Last take", &[Mouse]),
-    r("main.stream.golive", "Go live", &[Mouse]),
-    r("main.stream.setup", "Set up streaming", &[Mouse]),
-    r("main.stream.live", "End the stream", &[Mouse]),
-    r("dlg.confirm.endstream", "End the stream?", &[Mouse]),
+    m("main.stream.golive", "Go live", &[Mouse]),
+    m("main.stream.setup", "Set up streaming", &[Mouse]),
+    m("main.stream.live", "End the stream", &[Mouse]),
+    m("dlg.confirm.endstream", "End the stream?", &[Mouse]),
     r("main.stream.panel", "Stream", &[Display]),
     r("main.stream.scheduled", "Scheduled go-live", &[Display]),
     // ---- monitors and Edit layout
@@ -174,10 +180,10 @@ pub const ROUTES: &[Route] = &[
     r("audio.phones", "Headphone volume", &[Mouse]),
     // ---- windows and dialogs
     r("dlg.sync", "Measure lip sync", &[Mouse]),
-    r("dlg.confirm.quit", "Quit while recording?", &[Mouse]),
+    m("dlg.confirm.quit", "Quit while recording?", &[Mouse]),
     r("win.guide", "First-show guide", &[Mouse]),
     // ---- the Settings window
-    r("set.frame.titlebar", "Settings title bar", &[Mouse]),
+    m("set.frame.titlebar", "Settings title bar", &[Mouse]),
     r("set.frame.find", "Find a setting", &[Mouse]),
     r("set.frame.revert", "Revert", &[Mouse]),
     r("set.frame.problem", "Go to the problem", &[Mouse]),
@@ -212,21 +218,21 @@ pub const ROUTES: &[Route] = &[
     r("set.general.shortcuts", "Shortcuts", &[Mouse]),
     r("set.general.diagnostics", "Diagnostics", &[Mouse]),
     // ---- keys
-    r("key.settings", "Settings key", &[Key]),
+    m("key.settings", "Settings key", &[Key]),
     r("key.undo", "Undo key", &[Key]),
     r("key.redo", "Redo key", &[Key]),
-    r("key.record", "Record key", &[Key]),
+    m("key.record", "Record key", &[Key]),
     r("key.transition", "Transition key", &[Key]),
     r("key.edit", "Edit layout key", &[Key]),
-    r("key.marker", "Marker key", &[Key]),
-    r("key.marker_named", "Named marker key", &[Key]),
+    m("key.marker", "Marker key", &[Key]),
+    m("key.marker_named", "Named marker key", &[Key]),
     r("key.auto", "Auto switching key", &[Key]),
     r("key.take", "Take key", &[Key]),
     r("key.cut", "Cut key", &[Key]),
     r("key.captions", "Captions key", &[Key]),
     r("key.segment_next", "Next segment key", &[Key]),
     r("key.segment_prev", "Previous segment key", &[Key]),
-    r("key.clip", "Clip key", &[Key]),
+    m("key.clip", "Clip key", &[Key]),
     r("key.talkback", "Talkback key", &[Key]),
     Route { id: "key.back", label: "Last scene", was: &[Key], legacy: false },
     r("key.number", "Scene and source number keys", &[Key]),
@@ -242,11 +248,11 @@ pub const ROUTES: &[Route] = &[
     r("cmd.cut", "cut", CMD),
     r("cmd.transition", "transition", CMD),
     r("cmd.ftb", "ftb", CMD),
-    r("cmd.record", "record", CMD),
-    r("cmd.stop", "stop", CMD),
-    r("cmd.golive", "golive", CMD),
-    r("cmd.endstream", "endstream", CMD),
-    r("cmd.marker", "marker", CMD),
+    m("cmd.record", "record", CMD),
+    m("cmd.stop", "stop", CMD),
+    m("cmd.golive", "golive", CMD),
+    m("cmd.endstream", "endstream", CMD),
+    m("cmd.marker", "marker", CMD),
     r("cmd.graphic", "graphic", CMD),
     r("cmd.title", "title", CMD),
     r("cmd.captions", "captions", CMD),

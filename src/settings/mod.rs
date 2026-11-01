@@ -1,6 +1,7 @@
-//! The Settings window: a sidebar of sections, each editing a draft copy of
-//! the configuration. Nothing changes until Apply/OK; changes that need the
-//! video engine rebuilt are flagged, everything else applies live.
+//! The Settings pages: each edits a draft copy of the configuration, and
+//! they open inside the main window as the rail's areas (ui/shell.rs).
+//! Nothing changes until Apply/OK; changes that need the video engine
+//! rebuilt are flagged, everything else applies live.
 
 mod captions;
 mod capture_picker;
@@ -130,12 +131,17 @@ impl Section {
         }
     }
 
+    // (The old window's groups: kept for "Find a setting" to know them by, redesign PR 2.)
+    #[allow(dead_code)]
     fn group(self) -> Group {
         Group::ALL.into_iter().find(|g| g.sections().contains(&self)).unwrap_or(Group::General)
     }
 }
 
-/// The sidebar: a few groups, each with its pages as tabs.
+/// The old Settings window's sidebar: a few groups, each with its pages as
+/// tabs. The rail's areas (ui/nav.rs) took their place; the names stay
+/// for "Find a setting" to know them by (redesign PR 2).
+#[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 enum Group {
     Inputs,
@@ -146,6 +152,7 @@ enum Group {
     General,
 }
 
+#[allow(dead_code)]
 impl Group {
     const ALL: [Group; 6] = [Group::Inputs, Group::Sound, Group::Look, Group::Show, Group::Output, Group::General];
 
@@ -313,84 +320,11 @@ pub struct SettingsUi {
     resolve_note: Option<(String, bool)>,
     /// The LUT picked for a source, checked: (file, description or problem).
     lut_check: Option<(PathBuf, Result<String, String>)>,
-    /// The tab last open in each group.
-    last_tab: std::collections::HashMap<Group, Section>,
     /// The virtual PTZ preset picked in the picture: (source, preset).
     sel_preset: Option<(usize, usize)>,
-    /// Where the window sits (as fractions of the main window), as last
-    /// saved on this computer; and where it was put back to the middle.
-    place: Option<Place>,
-    centre: bool,
-    /// The window's rect this frame, and whether the last click was
-    /// outside it (then show keys work while the pointer's away).
-    rect: Option<egui::Rect>,
-    outside: bool,
     /// The bottom bar's height, as last drawn.
     bar_h: f32,
-    /// While the mouse is down: where the window was if it went down on it.
-    held: Option<Option<egui::Rect>>,
 }
-
-/// Where the Settings window was left: fractions of the main window's
-/// size, so it lands in the same spot when that's another size.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct Place {
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-}
-
-impl Place {
-    /// Kept per computer (not in the show's settings): beside the settings file.
-    fn file() -> Option<PathBuf> {
-        crate::config::default_config_path().parent().map(|d| d.join("Settings window.txt"))
-    }
-
-    fn load() -> Option<Place> {
-        let text = std::fs::read_to_string(Self::file()?).ok()?;
-        Self::parse(&text)
-    }
-
-    fn parse(text: &str) -> Option<Place> {
-        let v: Vec<f32> = text.split_whitespace().filter_map(|t| t.parse().ok()).collect();
-        let ok = |f: f32| f.is_finite() && (0.0..=1.0).contains(&f);
-        match v[..] {
-            [x, y, w, h] if [x, y, w, h].into_iter().all(ok) && w > 0.05 && h > 0.05 => Some(Place { x, y, w, h }),
-            _ => None,
-        }
-    }
-
-    fn save(&self) {
-        if cfg!(test) {
-            return;
-        }
-        if let Some(f) = Self::file() {
-            let _ = std::fs::write(f, format!("{:.4} {:.4} {:.4} {:.4}\n", self.x, self.y, self.w, self.h));
-        }
-    }
-
-    fn of(r: egui::Rect, screen: egui::Rect) -> Place {
-        let (sw, sh) = (screen.width().max(1.0), screen.height().max(1.0));
-        Place {
-            x: ((r.min.x - screen.min.x) / sw).clamp(0.0, 1.0),
-            y: ((r.min.y - screen.min.y) / sh).clamp(0.0, 1.0),
-            w: (r.width() / sw).clamp(0.0, 1.0),
-            h: (r.height() / sh).clamp(0.0, 1.0),
-        }
-    }
-
-    /// On this screen, no smaller than the window can be and fully on it.
-    fn rect(&self, screen: egui::Rect) -> egui::Rect {
-        let size = vec2((self.w * screen.width()).max(MIN_SIZE.x), (self.h * screen.height()).max(MIN_SIZE.y)).min(screen.size());
-        let min = egui::pos2(screen.min.x + self.x * screen.width(), screen.min.y + self.y * screen.height());
-        let min = min.min(screen.max - size).max(screen.min);
-        egui::Rect::from_min_size(min, size)
-    }
-}
-
-/// The Settings window's smallest size.
-const MIN_SIZE: egui::Vec2 = vec2(640.0, 420.0);
 
 const RESOLUTIONS: &[(u32, u32, &str)] = &[
     (1280, 720, "1280×720 (720p)"),
@@ -466,23 +400,9 @@ impl SettingsUi {
             apps: None,
             resolve_note: None,
             lut_check: None,
-            last_tab: Default::default(),
             sel_preset: None,
-            place: Place::load(),
-            centre: false,
-            rect: None,
-            outside: false,
             bar_h: 48.0,
-            held: None,
         }
-    }
-
-    /// Show keys work while Settings is open: after a click outside it,
-    /// while the pointer's away from it and nothing in it waits for a key.
-    pub fn keys_beside(&self, ctx: &egui::Context) -> bool {
-        let busy = self.key_capture.is_some() || self.confirm_discard || self.confirm_reset || self.confirm_remove.is_some();
-        let over = self.rect.is_some_and(|r| ctx.input(|i| i.pointer.hover_pos().is_some_and(|p| r.contains(p))));
-        self.outside && !busy && !over
     }
 
     pub fn section(&self) -> Section {
@@ -492,12 +412,6 @@ impl SettingsUi {
     pub fn open_at(mut self, section: Section) -> Self {
         self.section = section;
         self
-    }
-
-    /// Open a page with one of its folded parts (by the id it's drawn with) unfolded.
-    pub fn open_part_at(self, section: Section, part: &str) -> Self {
-        help::open_part(part);
-        self.open_at(section)
     }
 
     /// Open with source `i` split into `n` close-ups, ready to frame.
@@ -589,252 +503,196 @@ impl SettingsUi {
         }
     }
 
-    pub fn show(&mut self, ctx: &egui::Context, info: &SettingsContext) -> SettingsAction {
-        // Settings' text is a little larger than the main window's (its
-        // drop-downs and explanations too, which take the app's style).
+    /// The settings as a page inside the main window (a rail area), not a
+    /// window of its own: the rail and the top bar's tabs stand in for the
+    /// sidebar and tabs, so this draws the page and the bottom bar under it.
+    /// "Find a setting…" goes where the caller draws `find_input`; while
+    /// something's typed there its matches show in place of the page. Esc
+    /// (not while typing) asks to close, as ✕ did.
+    pub fn show_page(&mut self, ui: &mut egui::Ui, info: &SettingsContext, find_enter: bool) -> SettingsAction {
+        let ctx = ui.ctx().clone();
         let normal = ctx.global_style();
         let mut larger = (*normal).clone();
         for f in larger.text_styles.values_mut() {
             f.size = (f.size * TEXT_SCALE * 2.0).round() / 2.0;
         }
-        ctx.set_global_style(larger);
-        let action = self.show_window(ctx, info);
+        ctx.set_global_style(larger.clone());
+        ui.set_style(larger);
+        let typing = ctx.memory(|m| m.focused().is_some());
+        let esc = self.key_capture.is_none() && !typing && ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        let mut action = SettingsAction::None;
+        let size = ui.available_size();
+        let body_h = (size.y - self.bar_h).max(120.0);
+        ui.allocate_ui_with_layout(vec2(size.x, body_h), Layout::top_down(Align::Min), |ui| {
+            ui.set_min_height(body_h);
+            let width = ui.available_width().min(640.0);
+            if !self.find_hits(ui, find_enter, width) {
+                egui::ScrollArea::vertical().id_salt(self.section).max_height(body_h).auto_shrink([false, false]).show(ui, |ui| self.page(ui, info));
+            }
+        });
+        let top = ui.cursor().top();
+        ui.separator();
+        if let Some(a) = self.bottom_bar(ui, info) {
+            action = a;
+        }
+        self.bar_h = ui.min_rect().bottom() - top + ui.spacing().item_spacing.y;
+        if let Some(a) = self.after(&ctx, esc) {
+            action = a;
+        }
         ctx.set_global_style(normal);
         action
     }
 
-    fn show_window(&mut self, ctx: &egui::Context, info: &SettingsContext) -> SettingsAction {
-        let mut action = SettingsAction::None;
-        let mut open = true;
-        // (Esc while recording a shortcut's key only stops that.)
-        let esc = self.key_capture.is_none() && ctx.input(|i| i.key_pressed(egui::Key::Escape));
-
-        let screen = ctx.content_rect();
-        let size = vec2((screen.width() - 80.0).clamp(MIN_SIZE.x, 1120.0), (screen.height() - 80.0).clamp(MIN_SIZE.y, 780.0));
-        let middle = egui::Rect::from_center_size(screen.center(), size.min(screen.size()));
-        let start = self.place.map(|p| p.rect(screen)).unwrap_or(middle);
-        // Esc closes Settings unless show keys are being used beside it.
-        let esc = esc && !self.keys_beside(ctx);
-        // Esc in the find box clears it first.
-        let esc = if esc && !self.find.is_empty() {
-            self.find.clear();
+    /// Asked to leave the page (for Show): closes now when nothing's
+    /// changed, or asks "Discard your changes?" first (true: closed).
+    pub fn leave(&mut self) -> bool {
+        if self.dirty() {
+            self.confirm_discard = true;
             false
         } else {
-            esc
+            true
+        }
+    }
+
+    /// Waiting for an answer or a key: the show's keys stay off meanwhile.
+    pub fn busy(&self) -> bool {
+        self.key_capture.is_some() || self.confirm_discard || self.confirm_reset || self.confirm_remove.is_some()
+    }
+
+    /// Open one of the page's folded parts (by the id it's drawn with).
+    pub fn unfold(&self, part: &str) {
+        help::open_part(part);
+    }
+
+    /// Go to another page, keeping every change made so far.
+    pub fn go_to(&mut self, section: Section) {
+        self.section = section;
+    }
+
+    /// The page itself (its settings, top to bottom).
+    fn page(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
+        ui.add_space(4.0);
+        help::set_page(Some(self.section));
+        match self.section {
+            Section::General => self.general(ui, info),
+            Section::Sources => self.sources(ui, info),
+            Section::Audio => self.audio_inputs(ui, info),
+            Section::Mixing => self.mixing(ui),
+            Section::Pads => self.pads(ui),
+            Section::Syrinscape => self.syrinscape(ui),
+            Section::Program => self.program(ui),
+            Section::Switching => self.switching(ui, info),
+            Section::Graphics => self.graphics(ui),
+            Section::Rundown => self.rundown(ui),
+            Section::Scenes => self.scenes(ui),
+            Section::Macros => self.macros(ui),
+            Section::Prompter => self.prompter(ui),
+            Section::Comments => self.comments(ui),
+            Section::Guests => self.guests(ui, info),
+            Section::Captions => self.captions(ui, info),
+            Section::Recording => self.recording(ui, info),
+            Section::Streaming => self.streaming(ui),
+            Section::Vertical => self.vertical(ui),
+            Section::Upload => self.upload(ui),
+            Section::Outputs => self.outputs(ui, info),
+            Section::Control => self.control(ui, info),
+            Section::Shortcuts => self.shortcuts(ui),
+            Section::Diagnostics => self.diagnostics(ui, info),
+        }
+        help::set_page(None);
+        ui.add_space(12.0);
+    }
+
+    /// Revert, what's going on, then Cancel / Apply / OK. Returns what to do.
+    fn bottom_bar(&mut self, ui: &mut egui::Ui, info: &SettingsContext) -> Option<SettingsAction> {
+        let mut action = None;
+        let valid = self.draft.check();
+        let restart = self.original.needs_restart(&self.draft);
+        let live = info.recording || info.streaming;
+        let blocked = restart && live;
+        let lineup = !restart && self.original.lineup_changed(&self.draft);
+        let failed = match (&self.message, &self.failed) {
+            (Some((m, true)), Some(f)) if **f == self.draft => Some(m.clone()),
+            _ => None,
         };
-        // Its own title bar (below): the title, Centre and ✕.
-        let mut window = egui::Window::new("Settings")
-            .title_bar(false)
-            .collapsible(false)
-            .resizable(true)
-            .min_size(MIN_SIZE)
-            .default_rect(start)
-            .constrain_to(screen);
-        if std::mem::take(&mut self.centre) {
-            window = window.current_pos(middle.min);
-        }
-        let bar_h = self.bar_h;
-        let mut centre = false;
-        let shown = window.show(ctx, |ui| {
-                // The title bar: double-click the title (or Centre) to put the
-                // window back in the middle; ✕ closes, as Cancel does.
-                let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), egui::Sense::hover());
-                let title = ui.interact(row.shrink2(vec2(120.0, 0.0)), ui.scope_id().with("settings_title"), egui::Sense::click());
-                ui.painter().text(row.center(), egui::Align2::CENTER_CENTER, "Settings", egui::FontId::proportional(TEXT_HEADING), Color32::from_gray(200));
-                if title.on_hover_text("Double-click to put this window back in the middle").double_clicked() {
-                    centre = true;
-                }
-                let close = egui::Rect::from_min_size(egui::pos2(row.right() - 28.0, row.top() + 2.0), vec2(26.0, 26.0));
-                if ui.put(close, egui::Button::new(RichText::new("✕").size(TEXT_STATE)).frame(false)).on_hover_text("Close (Esc)").clicked() {
-                    open = false;
-                }
-                let c = egui::Rect::from_min_size(egui::pos2(close.left() - 74.0, row.top() + 4.0), vec2(66.0, 22.0));
-                if ui.put(c, egui::Button::new(RichText::new("Centre").size(TEXT_SMALL))).on_hover_text("Put this window back in the middle, at its usual size (or double-click the title)").clicked() {
-                    centre = true;
-                }
-                ui.separator();
-                // The window's size, as the person has dragged it: the pages
-                // take what the bottom bar leaves (exactly, or it would grow).
-                let size = ui.available_size();
-                let body_h = (size.y - bar_h).max(160.0);
-                ui.allocate_ui_with_layout(vec2(size.x, body_h), Layout::top_down(Align::Min), |ui| {
-                    ui.horizontal_top(|ui| {
-                        // ---- sidebar: the groups
-                        ui.vertical(|ui| {
-                            ui.set_width(204.0);
-                            ui.set_min_height(body_h);
-                            let here = self.section.group();
-                            let found = self.find_box(ui);
-                            for g in Group::ALL.into_iter().filter(|_| !found) {
-                                let changed = g.sections().iter().any(|s| self.section_dirty(*s));
-                                let mut text = egui::text::LayoutJob::default();
-                                let name = if changed { format!("{}  •\n", g.label()) } else { format!("{}\n", g.label()) };
-                                text.append(&name, 0.0, egui::TextFormat::simple(egui::FontId::proportional(TEXT_HEADING), if g == here { Color32::WHITE } else { Color32::from_rgb(214, 218, 226) }));
-                                text.append(g.summary(), 0.0, egui::TextFormat::simple(egui::FontId::proportional(TEXT_BODY), TEXT_DIM));
-                                let b = egui::Button::selectable(g == here, text).min_size(vec2(204.0, 50.0));
-                                if ui.add(b).clicked() && g != here {
-                                    self.last_tab.insert(here, self.section);
-                                    self.section = self.last_tab.get(&g).copied().unwrap_or(g.sections()[0]);
-                                }
-                                ui.add_space(2.0);
-                            }
-                        });
-                        ui.separator();
-                        // ---- content: the group's pages as tabs, then the page
-                        ui.vertical(|ui| {
-                            ui.set_width(size.x - 234.0);
-                            let tabs: Vec<Section> = self.section.group().sections().iter().copied().filter(|&t| self.shown(t)).collect();
-                            let mut tabs_h = 0.0;
-                            if tabs.len() > 1 {
-                                let r = ui.horizontal(|ui| {
-                                    for &t in &tabs {
-                                        let text = if self.section_dirty(t) { format!("{}  •", t.label()) } else { t.label().to_string() };
-                                        let on = self.section == t;
-                                        let b = egui::Button::selectable(on, RichText::new(text).size(TEXT_STATE)).min_size(vec2(0.0, 30.0));
-                                        if ui.add(b).clicked() {
-                                            self.section = t;
-                                        }
-                                    }
-                                });
-                                ui.add_space(2.0);
-                                ui.separator();
-                                tabs_h = r.response.rect.height() + 10.0;
-                            }
-                            egui::ScrollArea::vertical().id_salt(self.section).max_height(body_h - tabs_h).auto_shrink([false, false]).show(
-                                ui,
-                                |ui| {
-                                    ui.add_space(4.0);
-                                    help::set_page(Some(self.section));
-                                    match self.section {
-                                        Section::General => self.general(ui, info),
-                                        Section::Sources => self.sources(ui, info),
-                                        Section::Audio => self.audio_inputs(ui, info),
-                                        Section::Mixing => self.mixing(ui),
-                                        Section::Pads => self.pads(ui),
-                                        Section::Syrinscape => self.syrinscape(ui),
-                                        Section::Program => self.program(ui),
-                                        Section::Switching => self.switching(ui, info),
-                                        Section::Graphics => self.graphics(ui),
-                                        Section::Rundown => self.rundown(ui),
-                                        Section::Scenes => self.scenes(ui),
-                                        Section::Macros => self.macros(ui),
-                                        Section::Prompter => self.prompter(ui),
-                                        Section::Comments => self.comments(ui),
-                                        Section::Guests => self.guests(ui, info),
-                                        Section::Captions => self.captions(ui, info),
-                                        Section::Recording => self.recording(ui, info),
-                                        Section::Streaming => self.streaming(ui),
-                                        Section::Vertical => self.vertical(ui),
-                                        Section::Upload => self.upload(ui),
-                                        Section::Outputs => self.outputs(ui, info),
-                                        Section::Control => self.control(ui, info),
-                                        Section::Shortcuts => self.shortcuts(ui),
-                                        Section::Diagnostics => self.diagnostics(ui, info),
-                                    }
-                                    help::set_page(None);
-                                    ui.add_space(12.0);
-                                },
-                            );
-                        });
-                    });
-                });
-                // ---- bottom bar
-                let top = ui.cursor().top();
-                ui.separator();
-                let valid = self.draft.check();
-                let restart = self.original.needs_restart(&self.draft);
-                let live = info.recording || info.streaming;
-                let blocked = restart && live;
-                let lineup = !restart && self.original.lineup_changed(&self.draft);
-                let failed = match (&self.message, &self.failed) {
-                    (Some((m, true)), Some(f)) if **f == self.draft => Some(m.clone()),
-                    _ => None,
-                };
-                ui.horizontal(|ui| {
-                    // Revert on its own at the left, away from OK.
-                    if ui.add_enabled(self.dirty(), egui::Button::new("Revert")).on_hover_text("Undo every change since the last save").clicked() {
-                        self.draft = self.original.clone();
-                        self.scene_rename = None;
-                    }
-                    if let Err(e) = &valid {
-                        let r = ui.add(egui::Label::new(RichText::new(format!("⚠ {}", e.message)).color(AMBER)).sense(egui::Sense::click()));
-                        let r = r.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Click to go there");
-                        if r.clicked() {
-                            use crate::config::ProblemAt;
-                            match e.at {
-                                ProblemAt::Program => self.section = Section::Program,
-                                ProblemAt::Source(i) => {
-                                    self.section = Section::Sources;
-                                    self.sel_source = i;
-                                }
-                                ProblemAt::Audio(i) => {
-                                    self.section = Section::Audio;
-                                    self.sel_audio = i;
-                                }
-                                ProblemAt::Recording => self.section = Section::Recording,
-                                ProblemAt::Streaming => self.section = Section::Streaming,
-                                ProblemAt::Control => self.section = Section::Control,
-                            }
-                        }
-                    } else if blocked {
-                        ui.label(RichText::new("Stop recording and streaming to change the program's size or frame rate.").color(AMBER));
-                    } else if let Some(m) = &failed {
-                        // Why the last Apply didn't work, until something's changed.
-                        ui.label(RichText::new(m).color(ERROR));
-                    } else if restart {
-                        ui.label(RichText::new("Applying restarts the video engine (previews blink for a moment).").color(TEXT_DIM));
-                    } else if lineup && live {
-                        ui.label(RichText::new("Unsaved changes. Sources you added, removed or changed update on Apply; the show carries on.").color(TEXT_DIM));
-                    } else if lineup {
-                        ui.label(RichText::new("Unsaved changes. Sources you added, removed or changed update on Apply; the rest carries on.").color(TEXT_DIM));
-                    } else if self.dirty() {
-                        ui.label(RichText::new("Unsaved changes. These apply without interrupting anything.").color(TEXT_DIM));
-                    } else if let Some((m, err)) = &self.message {
-                        ui.label(RichText::new(m).color(if *err { ERROR } else { GREEN }));
-                    }
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let can_apply = self.dirty() && valid.is_ok() && !blocked;
-                        // Nothing changed: nothing to apply (Cancel or ✕ closes).
-                        if ui.add_enabled(can_apply, egui::Button::new("OK").min_size(vec2(72.0, 28.0))).on_disabled_hover_text(if self.dirty() { "Fix what's marked first" } else { "Nothing has changed" }).clicked() {
-                            action = self.apply(true, info);
-                        }
-                        if ui.add_enabled(can_apply, egui::Button::new("Apply").min_size(vec2(72.0, 28.0))).clicked() {
-                            action = self.apply(false, info);
-                        }
-                        if ui.button("Cancel").clicked() {
-                            if self.dirty() {
-                                self.confirm_discard = true;
-                            } else {
-                                action = SettingsAction::Close;
-                            }
-                        }
-                        if self.keys_beside(ui.ctx()) {
-                            ui.label(RichText::new("⌨ Show keys active").color(TEXT_DIM))
-                                .on_hover_text("Your show's keys work while the pointer's over the main window. Click in Settings to type here again.");
-                        }
-                    });
-                });
-                self.bar_h = ui.min_rect().bottom() - top + ui.spacing().item_spacing.y;
-            });
-        if centre {
-            self.centre = true;
-            self.place = None;
-            if let Some(f) = Place::file() {
-                let _ = std::fs::remove_file(f);
+        ui.horizontal(|ui| {
+            // Revert on its own at the left, away from OK.
+            if ui.add_enabled(self.dirty(), egui::Button::new("Revert")).on_hover_text("Undo every change since the last save").clicked() {
+                self.draft = self.original.clone();
+                self.scene_rename = None;
             }
-        }
-        self.track_window(ctx, shown.map(|r| r.response.rect), screen);
+            if let Err(e) = &valid {
+                let r = ui.add(egui::Label::new(RichText::new(format!("⚠ {}", e.message)).color(AMBER)).sense(egui::Sense::click()));
+                let r = r.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Click to go there");
+                if r.clicked() {
+                    use crate::config::ProblemAt;
+                    match e.at {
+                        ProblemAt::Program => self.section = Section::Program,
+                        ProblemAt::Source(i) => {
+                            self.section = Section::Sources;
+                            self.sel_source = i;
+                        }
+                        ProblemAt::Audio(i) => {
+                            self.section = Section::Audio;
+                            self.sel_audio = i;
+                        }
+                        ProblemAt::Recording => self.section = Section::Recording,
+                        ProblemAt::Streaming => self.section = Section::Streaming,
+                        ProblemAt::Control => self.section = Section::Control,
+                    }
+                }
+            } else if blocked {
+                ui.label(RichText::new("Stop recording and streaming to change the program's size or frame rate.").color(AMBER));
+            } else if let Some(m) = &failed {
+                // Why the last Apply didn't work, until something's changed.
+                ui.label(RichText::new(m).color(ERROR));
+            } else if restart {
+                ui.label(RichText::new("Applying restarts the video engine (previews blink for a moment).").color(TEXT_DIM));
+            } else if lineup && live {
+                ui.label(RichText::new("Unsaved changes. Sources you added, removed or changed update on Apply; the show carries on.").color(TEXT_DIM));
+            } else if lineup {
+                ui.label(RichText::new("Unsaved changes. Sources you added, removed or changed update on Apply; the rest carries on.").color(TEXT_DIM));
+            } else if self.dirty() {
+                ui.label(RichText::new("Unsaved changes. These apply without interrupting anything.").color(TEXT_DIM));
+            } else if let Some((m, err)) = &self.message {
+                ui.label(RichText::new(m).color(if *err { ERROR } else { GREEN }));
+            }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let can_apply = self.dirty() && valid.is_ok() && !blocked;
+                // Nothing changed: nothing to apply (Cancel or ✕ closes).
+                if ui.add_enabled(can_apply, egui::Button::new("OK").min_size(vec2(72.0, 28.0))).on_disabled_hover_text(if self.dirty() { "Fix what's marked first" } else { "Nothing has changed" }).clicked() {
+                    action = Some(self.apply(true, info));
+                }
+                if ui.add_enabled(can_apply, egui::Button::new("Apply").min_size(vec2(72.0, 28.0))).clicked() {
+                    action = Some(self.apply(false, info));
+                }
+                if ui.button("Cancel").clicked() {
+                    if self.dirty() {
+                        self.confirm_discard = true;
+                    } else {
+                        action = Some(SettingsAction::Close);
+                    }
+                }
+            });
+        });
+        action
+    }
+
+    /// After the page: what it asked for, the "are you sure?" boxes, and
+    /// closing (`close`: asked to close, by ✕, Esc or leaving the page).
+    fn after(&mut self, ctx: &egui::Context, close: bool) -> Option<SettingsAction> {
+        let mut action = None;
         if let Some(a) = self.pending.take() {
-            action = a;
+            action = Some(a);
         }
         if let Some(a) = self.confirm_remove_window(ctx) {
-            action = a;
+            action = Some(a);
         }
-        if (!open || esc) && !self.confirm_discard && !self.confirm_reset && self.confirm_remove.is_none() {
+        if close && !self.confirm_discard && !self.confirm_reset && self.confirm_remove.is_none() {
             if self.dirty() {
                 self.confirm_discard = true;
             } else {
-                action = SettingsAction::Close;
+                action = Some(SettingsAction::Close);
             }
         }
         if self.confirm_discard {
@@ -845,7 +703,7 @@ impl SettingsUi {
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if ui.button("Discard").clicked() {
-                        action = SettingsAction::Close;
+                        action = Some(SettingsAction::Close);
                         self.confirm_discard = false;
                     }
                     if ui.button("Keep editing").clicked() {
@@ -880,31 +738,6 @@ impl SettingsUi {
             }
         }
         action
-    }
-
-    /// Remember where the window was left (once it's let go after a drag
-    /// or resize), and whether the last click was outside it.
-    fn track_window(&mut self, ctx: &egui::Context, rect: Option<egui::Rect>, screen: egui::Rect) {
-        self.rect = rect;
-        let Some(rect) = rect else { return };
-        let (pressed, down) = ctx.input(|i| (i.pointer.any_pressed().then(|| i.pointer.interact_pos()).flatten(), i.pointer.any_down()));
-        if let Some(p) = pressed {
-            // (A drop-down's list can hang outside the window: that's still Settings.)
-            self.outside = !rect.contains(p) && ctx.layer_id_at(p).is_none_or(|l| l.order == egui::Order::Background);
-            // (The resize corner sits just outside the frame.)
-            self.held = Some(rect.expand(8.0).contains(p).then_some(rect));
-        }
-        if down {
-            return;
-        }
-        if let Some(Some(before)) = self.held.take() {
-            let moved = (before.min - rect.min).length() > 1.0 || (before.size() - rect.size()).length() > 1.0;
-            if moved && !self.centre {
-                let now = Place::of(rect, screen);
-                now.save();
-                self.place = Some(now);
-            }
-        }
     }
 
     /// Apply the draft, unless that takes sources or inputs out of a show
@@ -1026,7 +859,8 @@ impl SettingsUi {
         action
     }
 
-    fn section_dirty(&self, s: Section) -> bool {
+    /// Changes not applied yet on this page.
+    pub fn section_dirty(&self, s: Section) -> bool {
         let (a, b) = (&self.draft, &self.original);
         match s {
             Section::General => a.ui != b.ui,
@@ -1649,13 +1483,15 @@ impl SettingsUi {
 
     // ---- Streaming ----------------------------------------------------------------
 
-    /// Whether a page is in the sidebar. Viewer comments reads a live
-    /// stream's chat, so it waits until there's somewhere to stream to,
-    /// unless it's already set up (or asked for directly).
-    /// "Find a setting…" at the top of the sidebar: matches show in place of the pages (true while they do).
-    fn find_box(&mut self, ui: &mut egui::Ui) -> bool {
-        let r = ui.add(egui::TextEdit::singleline(&mut self.find).hint_text("Find a setting…").desired_width(204.0).margin(vec2(8.0, 6.0)));
-        ui.add_space(4.0);
+    /// The "Find a setting…" box on its own. True when Enter was pressed in it.
+    pub fn find_input(&mut self, ui: &mut egui::Ui, width: f32) -> bool {
+        let r = ui.add(egui::TextEdit::singleline(&mut self.find).hint_text("Find a setting…").desired_width(width).margin(vec2(8.0, 6.0)));
+        r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+    }
+
+    /// What "Find a setting…" found, as buttons that go there (true while
+    /// something's typed; Enter takes the first).
+    fn find_hits(&mut self, ui: &mut egui::Ui, enter: bool, width: f32) -> bool {
         if self.find.trim().is_empty() {
             return false;
         }
@@ -1670,12 +1506,11 @@ impl SettingsUi {
                 Some(l) => format!("{l} — {}", h.page.label()),
                 None => format!("{} (page)", h.page.label()),
             };
-            if ui.add(egui::Button::new(RichText::new(text).size(TEXT_BODY)).min_size(vec2(204.0, 28.0)).wrap()).clicked() {
+            if ui.add(egui::Button::new(RichText::new(text).size(TEXT_BODY)).min_size(vec2(width, 28.0)).wrap()).clicked() {
                 go = Some(h.clone());
             }
         }
-        // Enter takes the first.
-        if go.is_none() && r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        if go.is_none() && enter {
             go = hits.first().cloned();
         }
         if let Some(h) = go {
@@ -1686,19 +1521,6 @@ impl SettingsUi {
             self.find.clear();
         }
         true
-    }
-
-    fn shown(&self, s: Section) -> bool {
-        match s {
-            Section::Comments => {
-                self.section == s
-                    || !self.draft.streaming.destinations.is_empty()
-                    || !self.original.streaming.destinations.is_empty()
-                    || self.draft.comments != crate::config::CommentsConfig::default()
-                    || self.original.comments != crate::config::CommentsConfig::default()
-            }
-            _ => true,
-        }
     }
 
     fn streaming(&mut self, ui: &mut egui::Ui) {
@@ -2690,23 +2512,6 @@ mod tests {
         }
     }
 
-    /// Viewer comments waits for a stream destination, unless it's
-    /// already set up or asked for.
-    #[test]
-    fn viewer_comments_waits_for_a_stream() {
-        let mut win = SettingsUi::new(Config::default());
-        assert!(!win.shown(Section::Comments));
-        assert!(win.shown(Section::Vertical) && win.shown(Section::Upload) && win.shown(Section::Captions));
-        win.draft.streaming.destinations.push(StreamDestination::default());
-        assert!(win.shown(Section::Comments));
-        let mut cfg = Config::default();
-        cfg.comments.twitch_channel = "mine".into();
-        assert!(SettingsUi::new(cfg).shown(Section::Comments));
-        let mut win = SettingsUi::new(Config::default());
-        win.section = Section::Comments;
-        assert!(win.shown(Section::Comments));
-    }
-
     /// Apply hands over the settings it was opened on with the edit, so the
     /// app puts on only what was changed here: a fader moved on the desk
     /// while Settings was open keeps its level (numbers audit #1), and a
@@ -2862,25 +2667,6 @@ mod tests {
         assert_eq!(input_level(&cfg, &levels, 99), None);
         assert_eq!(input_level(&cfg, &levels, 0), None);
         assert_eq!(input_level(&cfg, &[], 11), None);
-    }
-
-    /// Where the window was left comes back on another size of screen,
-    /// whole and on it; anything odd in the file is ignored.
-    #[test]
-    fn window_place_fits_the_screen() {
-        let big = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(2000.0, 1200.0));
-        let r = egui::Rect::from_min_size(egui::pos2(1000.0, 600.0), vec2(800.0, 500.0));
-        let p = Place::of(r, big);
-        assert_eq!(Place::parse(&format!("{} {} {} {}", p.x, p.y, p.w, p.h)), Some(p));
-        assert!((p.rect(big).min - r.min).length() < 0.5);
-        // A small screen: no smaller than the window can be, and fully on it.
-        let small = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(1000.0, 700.0));
-        let fit = p.rect(small);
-        assert!(small.contains_rect(fit), "{fit:?}");
-        assert!(fit.width() >= MIN_SIZE.x && fit.height() >= MIN_SIZE.y);
-        assert_eq!(Place::parse(""), None);
-        assert_eq!(Place::parse("0.1 0.1 2 0.5"), None);
-        assert_eq!(Place::parse("0.1 0.1 NaN 0.5"), None);
     }
 
     /// While recording, a change that restarts a source asks first (with

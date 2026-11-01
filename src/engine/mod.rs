@@ -490,6 +490,35 @@ enum CutoutState {
     Failed(u8),
 }
 
+/// The one meaning of "offline", everywhere it's shown or acted on (the
+/// dropped-source banner and cut-away, the phone and OSC, the pre-show
+/// check): the watchdog has found it silent and marked it (`marked`), and
+/// it still isn't delivering. (A camera that just came back is online at
+/// once, before the watchdog's next look.)
+pub fn is_offline(alive: bool, marked: bool) -> bool {
+    marked && !alive
+}
+
+impl Engine {
+    /// Video source `i` is offline (see `is_offline`).
+    pub fn source_offline(&self, i: usize) -> bool {
+        let Some(s) = self.sources.get(i) else { return false };
+        let marked = self.status.lock_ok().offline.contains(&s.name);
+        is_offline(s.input.alive(), marked)
+    }
+
+    /// Audio input `i` is offline (see `is_offline`). Sound that comes
+    /// from a media player or a network source comes and goes, and never is.
+    pub fn input_offline(&self, i: usize) -> bool {
+        let Some(a) = self.audio.get(i) else { return false };
+        if a.input.from_source() {
+            return false;
+        }
+        let marked = self.status.lock_ok().offline.contains(&a.name);
+        is_offline(a.input.alive(), marked)
+    }
+}
+
 impl Engine {
     /// Open every source, start the compositor and mixer. An unexpected
     /// failure anywhere becomes an error message rather than a crash.
@@ -1627,10 +1656,10 @@ impl Engine {
         (self.waker)();
         let (status, waker) = (self.status.clone(), self.waker.clone());
         let handle = std::thread::spawn(move || {
-            let since = status.lock_ok().stream.since;
+            let since = status.lock_ok().stream.live_clock_from();
             session.stop();
             let mut st = status.lock_ok();
-            let length = since.map(|s| fmt_duration(s.elapsed())).unwrap_or_default();
+            let length = since.map(|s| fmt_duration(s.elapsed())).unwrap_or_else(|| "it never connected".into());
             st.stream = StreamStatus::default();
             st.push(LogLevel::Info, format!("Stream ended ({length})"));
             drop(st);
@@ -2230,6 +2259,16 @@ pub fn fmt_duration(d: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One "offline" (numbers audit #29).
+    #[test]
+    fn one_meaning_of_offline() {
+        assert!(is_offline(false, true));
+        // Back: online straight away.
+        assert!(!is_offline(true, true));
+        // Not marked (a paused media player, a camera still starting).
+        assert!(!is_offline(false, false));
+    }
 
     /// Sources and inputs added, removed and moved while recording: what's
     /// on air stays on air, the recording carries on, and the files say

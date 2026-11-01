@@ -4,12 +4,11 @@
 //! parts of the window that aren't an area's page. Order inside every area
 //! follows the usage audit's ranking (shots/1-usage-audit.md).
 //!
-//! The rail, the top-bar tabs, ⌘K search, the "Set up ›" links and the
-//! status light's "fix it" links will all be drawn from it. For now
-//! (redesign PR 0) it's data only: nothing in the app reads it yet, and the
-//! tests below check it against every route there is, so nothing gets
-//! lost on the way.
-// (Data the redesign PRs start drawing from; until then only the tests read it.)
+//! The rail and the top-bar tabs are drawn from it (ui/shell.rs); ⌘K
+//! search, the "Set up ›" links and the status light's "fix it" links will
+//! be too. The tests below check it against every route there is, so
+//! nothing gets lost on the way.
+// (Parts are still only read by the tests until later redesign PRs draw them.)
 #![allow(dead_code)]
 
 use crate::settings::Section as Page;
