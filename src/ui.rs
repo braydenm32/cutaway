@@ -2371,6 +2371,17 @@ impl App {
                         });
                     }
                 }
+                if std::env::var_os("CUTAWAY_UI_TEST_TOOLS_EDIT").is_some() {
+                    // TOOLS_EDIT=1: More › Show tools › Rundown with the first segment made 1:30 (saved as you go).
+                    self.go("more/tools/rundown");
+                    if let Some(win) = self.settings.as_mut() {
+                        win.edit_draft(|c| {
+                            if let Some(s) = c.rundown.segments.first_mut() {
+                                s.seconds = 90;
+                            }
+                        });
+                    }
+                }
                 if std::env::var_os("CUTAWAY_UI_TEST_SOUND_EDIT").is_some() {
                     // SOUND_EDIT=1: Sound › Inputs with the first input's level at −52.5 dB (saved as you go)
                     // and a USB mic added (waiting for Apply on the bar).
@@ -2677,7 +2688,7 @@ impl App {
             }
             ui.separator();
             if ui.button("Save as a show…").on_hover_text("More › App › Shows").clicked() {
-                self.open_page(Section::General, None);
+                self.go("more/app/shows");
                 ui.close();
             }
         });
@@ -2728,7 +2739,12 @@ impl App {
                 match self.apply_settings_as(cfg, ctx, true) {
                     Ok(()) => {
                         self.history.record(before);
-                        self.toast(format!("Switched to \"{name}\""), false)
+                        self.toast(format!("Switched to \"{name}\""), false);
+                        // A settings page open (More › App › Shows) shows the new show.
+                        let now = self.live_settings();
+                        if let Some(win) = self.settings.as_mut() {
+                            win.replaced(&now);
+                        }
                     }
                     Err(e) => self.toast(e, true),
                 }
@@ -2770,10 +2786,18 @@ impl App {
                 ui.add_space(80.0);
                 ui.label(RichText::new("The engine couldn't start").size(TEXT_TITLE).color(Color32::WHITE));
                 ui.add_space(8.0);
-                ui.label(RichText::new(err).color(AMBER));
+                ui.label(RichText::new(&err).color(AMBER));
                 ui.add_space(16.0);
-                if ui.button("Open settings").clicked() {
-                    self.open_settings();
+                // To the area most likely at fault: the program picture when
+                // it's about the size, rate or GPU, else the sources.
+                let low = err.to_lowercase();
+                let (label, place) = if ["program", "frame rate", "resolution", "gpu", "graphics", "adapter", "wgpu"].iter().any(|w| low.contains(w)) {
+                    ("Check the program picture ›", "scenes/program/picture")
+                } else {
+                    ("Check the sources ›", "sources/cameras/list")
+                };
+                if ui.button(label).clicked() {
+                    self.go(place);
                 }
                 if ui.button("Try again").clicked() {
                     self.start_engine();
@@ -3881,6 +3905,9 @@ impl App {
                     ui.close();
                 }
             }
+            ui.separator();
+            // Instant replay (was the header's Replay and its right-click menu).
+            ui.menu_button("⟲ Replay", |ui| self.replay_menu(ui));
             ui.separator();
             if ui.button("Transition settings ›").on_hover_text("Scenes › Switching: the same transition and length, with directions and the dip colour").clicked() {
                 open_switching = true;
@@ -5520,6 +5547,7 @@ impl App {
             input_meters: meters,
             input_on: on,
             talkback_key: self.key_label_or(crate::control::shortcuts::Builtin::Talkback, ""),
+            undo_key: self.key_label_or(crate::control::shortcuts::Builtin::Undo, ""),
             syrin: {
                 // (Only what the page shows: not the soundsets browsed here.)
                 let st = self.syrinscape.state.lock_ok();
@@ -5631,7 +5659,9 @@ impl App {
                 self.settings = None;
                 self.sync = Some(SyncWizard::default());
             }
-            SettingsAction::Apply { cfg, base, close } => {
+            SettingsAction::Replace { cfg, label } => self.replace_settings(*cfg, &label, ctx),
+            SettingsAction::SwitchShow(name) => self.confirm = Some(Confirm::SwitchShow(name)),
+            SettingsAction::Apply { cfg, base } => {
                 let before = self.snapshot(undo::Kind::Settings, "Settings change");
                 // Only what was changed in Settings: a fader moved or a
                 // transition picked on the desk meanwhile stays as it is.
@@ -5644,10 +5674,35 @@ impl App {
                 if let Some(win) = self.settings.as_mut() {
                     win.applied(result, &self.cfg);
                 }
-                if ok && close {
-                    self.settings = None;
-                }
             }
+        }
+    }
+
+    /// Every setting at once (imported, or reset to defaults: More › App ›
+    /// Shows), as one Undo step. Not while recording or live, as switching
+    /// shows.
+    fn replace_settings(&mut self, mut cfg: Config, label: &str, ctx: &egui::Context) {
+        if self.engine.as_ref().is_some_and(|e| e.is_recording() || e.is_streaming()) {
+            self.toast("Stop recording and streaming first: this changes every setting".into(), true);
+            return;
+        }
+        let before = self.snapshot(undo::Kind::Settings, label.to_string());
+        // Its own scenes (settings without any make them from its sources).
+        if cfg.scenes.is_empty() {
+            cfg.scenes = cfg.effective_scenes();
+        }
+        // The show it's saved as stays this one.
+        cfg.ui.profile = self.cfg.ui.profile.clone();
+        match self.apply_settings_as(cfg, ctx, true) {
+            Ok(()) => {
+                self.history.record(before);
+                self.toast(format!("{label}: done. ↶ Undo puts the old settings back"), false);
+            }
+            Err(e) => self.toast(e, true),
+        }
+        let now = self.live_settings();
+        if let Some(win) = self.settings.as_mut() {
+            win.replaced(&now);
         }
     }
 
@@ -5918,6 +5973,7 @@ impl eframe::App for App {
         for a in std::mem::take(&mut self.deferred_settings) {
             self.settings_action(a, &ctx);
         }
+        self.sync_segment_clock();
         // The rail of areas down the left, the top bar with the area's tabs
         // and the status cluster, then Show's desk or the area's page.
         self.sync_shell();

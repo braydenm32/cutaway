@@ -1,9 +1,9 @@
 //! "Saves as you go": how an area page applies its changes as they're
-//! made, with Undo, instead of the old OK / Apply / Cancel / Revert bar.
+//! made, with Undo. (The old Settings window's OK / Apply / Cancel /
+//! Revert bar is gone: every page works this way.)
 //!
-//! The mechanism, for the pages listed in `LIVE` (the calm redesign moves
-//! more pages here area by area; to move one, add its `Section` to `LIVE`
-//! and make sure `copy_section` names every field the page edits):
+//! The mechanism, for every page (`copy_section` must name every field a
+//! page edits):
 //!
 //! * The page still edits `SettingsUi::draft`, so its drawing code doesn't
 //!   change. After each frame `live_step` sends what changed as
@@ -39,18 +39,31 @@
 //! change at once); the program's size or frame rate restarts the cameras,
 //! so it waits on the bar.
 //!
+//! The More area works the same way: the rundown, macros, teleprompter,
+//! viewer comments, the remote, OSC, MIDI, shortcuts and the app's own
+//! settings apply as made. A port or the interface size being dragged
+//! applies when it's let go (each change restarts the remote, or zooms
+//! the window under the pointer). Loading a show, importing settings or
+//! resetting them replaces everything at once, after a question, as one
+//! Undo step (`SettingsAction::Replace`, `SwitchShow`).
+//!
+//! "Undo changes on this page" puts the page back as it was when it was
+//! opened (changes made elsewhere meanwhile, on the desk say, stay).
+//!
 //! Pages drawn by the app itself (People & names) use the same rules
 //! directly: they change `App::cfg`, call `remember` for Undo and save.
 
 use super::*;
 use std::time::{Duration, Instant};
 
-/// The pages that save as you go.
-pub const LIVE: &[Section] = &[Section::Sources, Section::Guests, Section::Audio, Section::Mixing, Section::Pads, Section::Syrinscape, Section::Graphics, Section::Captions, Section::Recording, Section::Streaming, Section::Scenes, Section::Switching, Section::Program];
+/// The pages that save as you go: all of them.
+pub const LIVE: &[Section] = &Section::ALL;
 
-/// Whether a page saves as you go.
-pub fn is_live(s: Section) -> bool {
-    LIVE.contains(&s)
+/// Settings applied only once the pointer is let go: each step of a drag
+/// would restart the remote or OSC on another port, or zoom the window
+/// under the slider being dragged.
+fn settles(applied: &Config, now: &Config) -> bool {
+    applied.ui.scale != now.ui.scale || applied.remote.port != now.remote.port || applied.osc.port != now.osc.port || applied.osc.feedback_port != now.osc.feedback_port
 }
 
 /// While a slider is dragged, it's applied at most this often.
@@ -307,14 +320,18 @@ impl SettingsUi {
         let mut b = Config::default();
         copy_section(s, &lp, &mut a);
         copy_section(s, &d, &mut b);
-        a != b || (is_live(s) && audio_keys(&lp) != audio_keys(&d))
+        a != b || audio_keys(&lp) != audio_keys(&d)
     }
 
     /// Keep the draft on top of the settings in effect (`now`): what was
     /// changed elsewhere shows here, and what's being edited here stays.
     pub fn rebase(&mut self, now: &Config) {
-        if !is_live(self.section) || self.original == *now {
+        if self.original == *now {
             return;
+        }
+        // (Changed elsewhere: "Undo changes on this page" keeps that too.)
+        if let Some((_, start)) = self.page_start.as_mut() {
+            *start = now.with_edits(&self.original, start);
         }
         self.draft = now.with_edits(&self.original, &self.draft);
         self.original = now.clone();
@@ -322,41 +339,43 @@ impl SettingsUi {
 
     /// This frame's change to apply, if it's time (see the module's notes).
     pub(super) fn live_step(&mut self, ctx: &egui::Context) -> Option<SettingsAction> {
-        if !is_live(self.section) {
-            return None;
-        }
         // (A clock just added takes the show's 12/24-hour format, as the app
         // would make it: otherwise it would be sent again and again.)
         self.draft.sync_clock_format();
         let lp = self.live_part();
-        if lp == self.original || self.failed.as_deref() == Some(&lp) || lp.check().is_err() {
+        if lp == self.original {
+            // (Nothing to save: an "Undo changes on this page" that only
+            // dropped held changes doesn't name a later change.)
+            self.next_label = None;
+            return None;
+        }
+        if self.failed.as_deref() == Some(&lp) || lp.check().is_err() {
             return None;
         }
         // Still typing: wait for Enter or a click elsewhere.
         if ctx.egui_wants_keyboard_input() {
             return None;
         }
-        if ctx.input(|i| i.pointer.any_down()) && self.last_live.is_some_and(|t| t.elapsed() < DRAG_EVERY) {
+        let down = ctx.input(|i| i.pointer.any_down());
+        if down && (settles(&self.original, &lp) || self.last_live.is_some_and(|t| t.elapsed() < DRAG_EVERY)) {
             ctx.request_repaint_after(DRAG_EVERY);
             return None;
         }
         self.last_live = Some(Instant::now());
-        let label = self.live_label(&lp);
+        let label = self.next_label.take().unwrap_or_else(|| self.live_label(&lp));
         Some(SettingsAction::Live { cfg: lp, base: Box::new(self.original.clone()), label })
     }
 
     /// Leaving: what's waiting to be applied, whatever has the keyboard.
     pub fn take_live(&mut self) -> Option<SettingsAction> {
         // (A scene's new name still in its box counts.)
-        if is_live(self.section) {
-            self.commit_scene_rename();
-        }
+        self.commit_scene_rename();
         self.draft.sync_clock_format();
         let lp = self.live_part();
         if lp == self.original || lp.check().is_err() {
             return None;
         }
-        let label = self.live_label(&lp);
+        let label = self.next_label.take().unwrap_or_else(|| self.live_label(&lp));
         let base = Box::new(self.original.clone());
         // Counted as applied from here (the app applies it next).
         self.original = lp.clone();
@@ -368,8 +387,11 @@ impl SettingsUi {
     pub fn applied_live(&mut self, result: Result<(), String>, sent: &Config, now: &Config) {
         match result {
             Ok(()) => {
-                self.failed = None;
-                self.message = None;
+                // Why the last change didn't save goes; what a button did
+                // ("Scheduled …", "Signed in as …") stays.
+                if self.failed.take().is_some() || self.message.as_ref().is_some_and(|(_, err)| *err) {
+                    self.message = None;
+                }
                 self.rebase_any(now);
             }
             Err(e) => {
@@ -381,15 +403,20 @@ impl SettingsUi {
         }
     }
 
-    /// An Undo or Redo put settings back (`now`): a page that saves as you
-    /// go keeps what's held back on it; the others count as applied, as
-    /// they always have.
+    /// An Undo or Redo put settings back (`now`): the page keeps what's
+    /// held back on it.
     pub fn restored(&mut self, now: &Config) {
-        if is_live(self.section) {
-            self.rebase_any(now);
-        } else {
-            self.applied(Ok(()), now);
-        }
+        self.rebase_any(now);
+    }
+
+    /// Everything was replaced (a show loaded, settings imported or reset):
+    /// the page starts again from `now`, with nothing held.
+    pub fn replaced(&mut self, now: &Config) {
+        self.draft = now.clone();
+        self.original = now.clone();
+        self.failed = None;
+        self.page_start = None;
+        self.scene_rename = None;
     }
 
     fn rebase_any(&mut self, now: &Config) {
@@ -425,6 +452,19 @@ impl SettingsUi {
             ([], []) if lp.graphics != o.graphics => "Graphics".into(),
             ([], []) if lp.rotations != o.rotations => "Graphics taking turns".into(),
             ([], []) if lp.captions != o.captions => "Captions settings".into(),
+            ([], []) if lp.rundown != o.rundown => "Rundown".into(),
+            ([], []) if lp.macros != o.macros => "Macros".into(),
+            ([], []) if lp.prompter != o.prompter => "Teleprompter".into(),
+            ([], []) if lp.comments != o.comments => "Viewer comments settings".into(),
+            ([], []) if lp.remote != o.remote => "Phone remote settings".into(),
+            ([], []) if lp.osc != o.osc || lp.midi != o.midi => "OSC and MIDI settings".into(),
+            ([], []) if lp.keys != o.keys => "Shortcuts".into(),
+            ([], []) if lp.output != o.output || lp.podcast != o.podcast => "Recording settings".into(),
+            ([], []) if lp.streaming != o.streaming || lp.schedule != o.schedule => "Streaming settings".into(),
+            ([], []) if lp.vertical != o.vertical => "Vertical version".into(),
+            ([], []) if lp.upload != o.upload => "Upload settings".into(),
+            ([], []) if lp.display != o.display || lp.ndi_out != o.ndi_out => "Screens & webcam".into(),
+            ([], []) if lp.ui != o.ui => "General settings".into(),
             ([], []) => "Settings change".into(),
             ([], _) => "Sound inputs".into(),
             _ => "Sources settings".into(),
@@ -442,7 +482,36 @@ impl SettingsUi {
         self.draft.program = self.original.program.clone();
     }
 
-    /// The bar under a live page: Undo and Redo, how saving is going, and
+    /// The page as it was when it was opened (for "Undo changes on this
+    /// page"), noted the first time it's drawn.
+    fn page_start(&mut self) -> &Config {
+        if self.page_start.as_ref().is_none_or(|(s, _)| *s != self.section) {
+            self.page_start = Some((self.section, self.original.clone()));
+        }
+        &self.page_start.as_ref().expect("just set").1
+    }
+
+    /// Whether this page has changed since it was opened.
+    fn page_changed(&mut self) -> bool {
+        let section = self.section;
+        let start = self.page_start().clone();
+        let (mut a, mut b) = (Config::default(), Config::default());
+        copy_section(section, &start, &mut a);
+        copy_section(section, &self.draft, &mut b);
+        a != b
+    }
+
+    /// "Undo changes on this page": back to how it was when it was opened,
+    /// as one Undo step (what restarts a source waits on the bar as usual).
+    pub(super) fn undo_page(&mut self) {
+        let section = self.section;
+        let start = self.page_start().clone();
+        self.scene_rename = None;
+        copy_section(section, &start, &mut self.draft);
+        self.next_label = Some("Undo changes on this page".into());
+    }
+
+    /// The bar under every page: Undo and Redo, how saving is going, and
     /// the held changes with their Apply.
     pub(super) fn live_bar(&mut self, ui: &mut egui::Ui, info: &SettingsContext) -> Option<SettingsAction> {
         let mut action = None;
@@ -451,13 +520,12 @@ impl SettingsUi {
         let held = if self.held(self.section) { held } else { Vec::new() };
         let live = info.recording || info.streaming;
         let typing = ui.ctx().egui_wants_keyboard_input() && self.live_part() != self.original;
-        let failed = match (&self.message, &self.failed) {
-            (Some((m, true)), Some(_)) => Some(m.clone()),
-            _ => None,
-        };
+        let changed = self.page_changed();
+        let key = &info.undo_key;
         ui.horizontal(|ui| {
             let undo = ui.add_enabled(info.undo.is_some(), egui::Button::new("↶ Undo")).on_hover_text(match &info.undo {
-                Some(l) => format!("Undo: {l} (⌘Z when you're not typing)"),
+                Some(l) if key.is_empty() => format!("Undo: {l}"),
+                Some(l) => format!("Undo: {l} ({key} when you're not typing)"),
                 None => "Nothing to undo".into(),
             });
             if undo.clicked() {
@@ -470,24 +538,34 @@ impl SettingsUi {
             if redo.clicked() {
                 action = Some(SettingsAction::Redo);
             }
+            let back = ui.add_enabled(changed, egui::Button::new("Undo changes on this page"));
+            let tip = if key.is_empty() { "Put this page back as it was when you opened it (↶ Undo brings the changes back)".to_string() } else { format!("Put this page back as it was when you opened it ({key} or ↶ Undo brings the changes back)") };
+            if back.on_hover_text(tip).on_disabled_hover_text("Nothing changed on this page since you opened it").clicked() {
+                self.undo_page();
+            }
             ui.add_space(8.0);
             if let Err(e) = &valid {
                 let r = ui.add(egui::Label::new(RichText::new(format!("⚠ {}", e.message)).color(AMBER)).sense(egui::Sense::click()));
                 if r.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Click to go there").clicked() {
-                    match e.at {
-                        crate::config::ProblemAt::Source(i) => {
+                    use crate::config::ProblemAt;
+                    action = Some(SettingsAction::Go(match e.at {
+                        ProblemAt::Source(i) => {
                             self.sel_source = i;
-                            action = Some(SettingsAction::Go("sources/cameras/list"));
+                            "sources/cameras/list"
                         }
-                        crate::config::ProblemAt::Audio(i) => {
+                        ProblemAt::Audio(i) => {
                             self.sel_audio = i;
-                            action = Some(SettingsAction::Go("sound/inputs/inputs"));
+                            "sound/inputs/inputs"
                         }
-                        _ => {}
-                    }
+                        ProblemAt::Program => "scenes/program/picture",
+                        ProblemAt::Recording => "record/recording/quality",
+                        ProblemAt::Streaming => "record/streaming/where",
+                        ProblemAt::Control => "more/control/remote",
+                    }));
                 }
-            } else if let Some(m) = &failed {
-                ui.label(RichText::new(m).color(ERROR));
+            } else if let Some((m, err)) = &self.message {
+                // Why the last change didn't save, or what a button did ("Exported to…").
+                ui.add(egui::Label::new(RichText::new(m).color(if *err { ERROR } else { TEXT_DIM })).truncate()).on_hover_text(m.clone());
             } else if typing {
                 ui.label(RichText::new("Saves when you press Enter or click elsewhere").color(TEXT_DIM));
             } else if held.is_empty() {
@@ -503,8 +581,9 @@ impl SettingsUi {
                         Restarts::Nothing => "Apply",
                     };
                     let b = egui::Button::new(RichText::new(text).color(Color32::WHITE)).fill(ACCENT.gamma_multiply(0.55)).min_size(vec2(0.0, 28.0));
-                    if ui.add_enabled(can, b).on_hover_text("These changes open, close or restart sources or sound inputs, so they wait for you").on_disabled_hover_text("Fix what's marked first").clicked() {
-                        action = Some(self.apply(false, info));
+                    let why = if blocked { "Stop recording and streaming to change the program's size or frame rate" } else { "Fix what's marked first" };
+                    if ui.add_enabled(can, b).on_hover_text("These changes open, close or restart sources or sound inputs, so they wait for you").on_disabled_hover_text(why).clicked() {
+                        action = Some(self.apply(info));
                     }
                     if ui.button("Undo these").on_hover_text("Forget the changes waiting here (what's already saved stays)").clicked() {
                         self.drop_held();
@@ -651,18 +730,70 @@ mod tests {
         let mut win2 = SettingsUi::new(win.draft.clone()).open_at(Section::Graphics);
         win2.restore_graphic("names");
         assert_eq!(win2.graphic_name().as_deref(), Some("Names"));
-        assert!(is_live(Section::Captions));
     }
 
-    /// An old page (not saving as you go) keeps its draft until Apply.
+    /// The More area's pages save as you go too: the rundown, a macro, the
+    /// teleprompter, the remote, shortcuts and the app's own settings.
     #[test]
-    fn old_pages_wait_for_apply() {
+    fn more_pages_save_as_you_go() {
+        let applied = with_scenes();
+        let ctx = egui::Context::default();
+        type Edit = (Section, fn(&mut Config), &'static str);
+        let edits: [Edit; 6] = [
+            (Section::Rundown, |c| c.rundown.segments[0].seconds = 90, "Rundown"),
+            (Section::Macros, |c| c.macros[0].name = "Break".into(), "Macros"),
+            (Section::Prompter, |c| c.prompter.mirror = !c.prompter.mirror, "Teleprompter"),
+            (Section::Control, |c| c.remote.enabled = !c.remote.enabled, "Phone remote settings"),
+            (Section::Shortcuts, |c| c.keys.builtin.insert("record".into(), String::new()).map_or((), |_| ()), "Shortcuts"),
+            (Section::General, |c| c.ui.confirm_end_stream = !c.ui.confirm_end_stream, "General settings"),
+        ];
+        for (page, edit, want) in edits {
+            let mut win = SettingsUi::new(applied.clone()).open_at(page);
+            edit(&mut win.draft);
+            let Some(SettingsAction::Live { cfg, label, .. }) = win.live_step(&ctx) else { panic!("{page:?}: nothing to save") };
+            assert_eq!(label, want);
+            win.applied_live(Ok(()), &cfg, &cfg);
+            assert!(!win.unapplied(), "{page:?}: nothing waits");
+            assert!(!win.held(page));
+        }
+    }
+
+    /// A port or the interface size being dragged applies when it's let go.
+    #[test]
+    fn ports_and_size_apply_when_let_go() {
         let applied = two();
-        let mut win = SettingsUi::new(applied.clone()).open_at(Section::Prompter);
-        win.draft.prompter.mirror = !win.draft.prompter.mirror;
-        assert!(win.live_step(&egui::Context::default()).is_none());
-        assert!(win.unapplied());
-        assert!(!is_live(Section::Prompter));
+        let mut moved = applied.clone();
+        moved.remote.port += 1;
+        assert!(settles(&applied, &moved));
+        let mut moved = applied.clone();
+        moved.ui.scale = 1.25;
+        assert!(settles(&applied, &moved));
+        let mut other = applied.clone();
+        other.remote.enabled = !other.remote.enabled;
+        assert!(!settles(&applied, &other));
+    }
+
+    /// "Undo changes on this page": back to how it was when it was opened,
+    /// keeping what was changed on the desk meanwhile.
+    #[test]
+    fn undo_changes_on_this_page() {
+        let applied = with_scenes();
+        let ctx = egui::Context::default();
+        let mut win = SettingsUi::new(applied.clone()).open_at(Section::Rundown);
+        assert!(!win.page_changed());
+        win.draft.rundown.segments[0].seconds = 90;
+        let Some(SettingsAction::Live { cfg, .. }) = win.live_step(&ctx) else { panic!() };
+        win.applied_live(Ok(()), &cfg, &cfg);
+        assert!(win.page_changed());
+        // Meanwhile on the desk: a macro renamed.
+        let mut desk = cfg.clone();
+        desk.macros[0].name = "Desk".into();
+        win.rebase(&desk);
+        win.undo_page();
+        let Some(SettingsAction::Live { cfg, label, .. }) = win.live_step(&ctx) else { panic!() };
+        assert_eq!(label, "Undo changes on this page");
+        assert_eq!(cfg.rundown.segments[0].seconds, applied.rundown.segments[0].seconds);
+        assert_eq!(cfg.macros[0].name, "Desk", "the desk's change stays");
     }
 
     fn with_mics() -> Config {
@@ -739,14 +870,11 @@ mod tests {
     }
 
     /// Scenes › Scenes: a rename applies when the box is left, with what
-    /// picks the scene by name; a move takes "scene:3" along; a rundown
-    /// edit waiting on its own page's Apply isn't sent with them.
+    /// picks the scene by name; a move takes "scene:3" along.
     #[test]
     fn scenes_save_as_you_go_with_what_picks_them() {
         let applied = with_scenes();
         let mut win = SettingsUi::new(applied.clone()).open_at(Section::Scenes);
-        // Waiting on the old Rundown page (not saving as you go).
-        win.draft.rundown.segments[0].name = "Opening".into();
         win.scene_rename = Some((1, "Presenter".into()));
         win.commit_scene_rename();
         let ctx = egui::Context::default();
@@ -754,7 +882,6 @@ mod tests {
         assert_eq!(label, "Rename scene Host");
         assert_eq!(cfg.scenes[1].name, "Presenter");
         assert_eq!(cfg.rundown.segments[0].scene, "Presenter", "the rundown follows the name");
-        assert_eq!(cfg.rundown.segments[0].name, "Intro", "the Rundown page's edit waits for its Apply");
         win.applied_live(Ok(()), &cfg, &cfg);
         assert!(!win.held(Section::Scenes));
         // Grid moved to the top: the macro that took the third scene follows it.
@@ -768,7 +895,7 @@ mod tests {
         assert_eq!(cfg.macros[0].commands, vec!["scene:1".to_string()]);
         win.applied_live(Ok(()), &cfg, &cfg);
         assert!(!win.held(Section::Scenes));
-        assert!(win.unapplied(), "only the rundown's own edit is left");
+        assert!(!win.unapplied(), "nothing waits");
     }
 
     /// A name still being typed is applied when you leave the page.

@@ -1,8 +1,8 @@
-//! The Settings pages: each edits a draft copy of the configuration, and
+//! The settings pages: each edits a draft copy of the configuration, and
 //! they open inside the main window as the rail's areas (ui/shell.rs).
-//! The pages in `live::LIVE` save as you go, with Undo (see live.rs); on
-//! the others nothing changes until Apply/OK, and changes that need the
-//! video engine rebuilt are flagged, everything else applies live.
+//! Every page saves as you go, with Undo (see live.rs); only changes that
+//! open, close or restart a source, an input or the program picture wait
+//! on the page's bar for "Apply (restarts cameras)".
 
 mod captions;
 mod capture_picker;
@@ -35,7 +35,6 @@ use crate::devices::{self, DeviceInfo, Kind, Mode, TEST_PATTERN_NAMES};
 use crate::engine::{LogLevel, LogLine};
 use crate::ui::theme::*;
 use eframe::egui::{self, vec2, Align, Color32, Layout, RichText};
-pub use live::is_live;
 pub use graphics::GraphicsView;
 pub use mixing::MixView;
 pub use switching::SwitchView;
@@ -227,7 +226,12 @@ pub enum SettingsAction {
     Close,
     /// `base`: the settings `cfg` was edited from, so only what changed
     /// since is applied (anything changed on the desk meanwhile stays).
-    Apply { cfg: Config, base: Box<Config>, close: bool },
+    Apply { cfg: Config, base: Box<Config> },
+    /// Replace every setting at once (settings imported, or reset), as one
+    /// Undo step called `label`. Asked first on the page.
+    Replace { cfg: Box<Config>, label: String },
+    /// Switch to a saved show (the app asks first, as the show menu does).
+    SwitchShow(String),
     /// Turn the virtual camera on or off now.
     VirtualCamera(bool),
     /// Close and measure lip sync.
@@ -298,6 +302,8 @@ pub struct SettingsContext {
     pub input_on: Vec<bool>,
     /// The talkback key as it's set now ("B"), or empty when it has none.
     pub talkback_key: String,
+    /// Undo's key as it's set now ("⌘Z"; empty when it has none), for the page's hints.
+    pub undo_key: String,
     /// Syrinscape as the desk's connection sees it: what's playing, the
     /// volume, the last problem.
     pub syrin: crate::control::syrinscape::SyrinState,
@@ -339,7 +345,6 @@ struct RemoveCheck {
     restarting: Vec<String>,
     recording: bool,
     streaming: bool,
-    close: bool,
 }
 
 type EncoderLists = (Vec<String>, Vec<String>);
@@ -360,7 +365,6 @@ pub struct SettingsUi {
     show_keys: HashSet<usize>,
     encoders: Arc<Mutex<Option<EncoderLists>>>,
     confirm_discard: bool,
-    confirm_reset: bool,
     confirm_remove: Option<RemoveCheck>,
     message: Option<(String, bool)>,
     /// The settings an Apply failed for: its error shows until they change.
@@ -427,6 +431,21 @@ pub struct SettingsUi {
     switch_view: SwitchView,
     /// Syrinscape's volume on its page, while it's being set.
     syrin_volume: Option<f64>,
+    /// The page as it was when it was opened (for "Undo changes on this page").
+    page_start: Option<(Section, Config)>,
+    /// What the next change saved is called in Undo, when it isn't the usual.
+    next_label: Option<String>,
+    /// The part of a page its section shows (More › Control's Phone remote,
+    /// Stream Deck, OSC and MIDI; More › App's Shows and General).
+    part_only: Option<&'static str>,
+    /// Replacing every setting (importing them, resetting them), waiting
+    /// for a yes: the settings, the Undo step's name, the question.
+    confirm_replace: Option<(Box<Config>, String, String)>,
+    /// More › App › Diagnostics › Test encoders: what was found, while it looks.
+    encoder_test: Arc<Mutex<Option<Vec<String>>>>,
+    encoder_testing: bool,
+    /// The remembered segment and macro were picked (once).
+    tools_picked: bool,
 }
 
 const RESOLUTIONS: &[(u32, u32, &str)] = &[
@@ -486,7 +505,6 @@ impl SettingsUi {
                 (list(Codec::H264), list(Codec::H265))
             }))),
             confirm_discard: false,
-            confirm_reset: false,
             confirm_remove: None,
             message: None,
             failed: None,
@@ -528,6 +546,13 @@ impl SettingsUi {
             mix_view: MixView::Mixer,
             switch_view: SwitchView::Transition,
             syrin_volume: None,
+            page_start: None,
+            next_label: None,
+            part_only: None,
+            confirm_replace: None,
+            encoder_test: Arc::new(Mutex::new(None)),
+            encoder_testing: false,
+            tools_picked: false,
         }
     }
 
@@ -598,6 +623,27 @@ impl SettingsUi {
         }
     }
 
+    /// The rundown segment and the macro picked on More › Show tools, by
+    /// name (remembered on this computer, as the source is).
+    pub fn tool_picks(&self) -> (Option<String>, Option<String>) {
+        (self.draft.rundown.segments.get(self.sel_segment).map(|s| s.name.clone()), self.draft.macros.get(self.sel_macro).map(|m| m.name.clone()))
+    }
+
+    /// Pick the segment and macro remembered from last time, once. By
+    /// name; gone: the first.
+    pub fn restore_tool_picks(&mut self, segment: Option<&str>, mac: Option<&str>) {
+        if self.tools_picked {
+            return;
+        }
+        self.tools_picked = true;
+        if let Some(i) = segment.and_then(|n| self.draft.rundown.segments.iter().position(|s| s.name == n)) {
+            self.sel_segment = i;
+        }
+        if let Some(i) = mac.and_then(|n| self.draft.macros.iter().position(|m| m.name == n)) {
+            self.sel_macro = i;
+        }
+    }
+
     /// The input picked on Sound › Inputs, by name (remembered on this
     /// computer, as the source is).
     pub fn input_name(&self) -> Option<String> {
@@ -627,6 +673,12 @@ impl SettingsUi {
     }
 
     /// Which part of the sources the page shows (the Sources area's tab).
+    /// The part of More › Control or More › App's General page its
+    /// section shows ("remote", "streamdeck", "osc"; "shows"), or all.
+    pub fn set_part_only(&mut self, part: Option<&'static str>) {
+        self.part_only = part;
+    }
+
     pub fn set_sources_view(&mut self, v: SourcesView) {
         self.view = v;
     }
@@ -741,8 +793,7 @@ impl SettingsUi {
         });
         let top = ui.cursor().top();
         ui.separator();
-        let bar = if live::is_live(self.section) { self.live_bar(ui, info) } else { self.bottom_bar(ui, info) };
-        if let Some(a) = bar {
+        if let Some(a) = self.live_bar(ui, info) {
             action = a;
         }
         if matches!(action, SettingsAction::None) {
@@ -771,7 +822,7 @@ impl SettingsUi {
 
     /// Waiting for an answer or a key: the show's keys stay off meanwhile.
     pub fn busy(&self) -> bool {
-        self.key_capture.is_some() || self.confirm_discard || self.confirm_reset || self.confirm_remove.is_some()
+        self.key_capture.is_some() || self.confirm_discard || self.confirm_replace.is_some() || self.confirm_remove.is_some()
     }
 
     /// Open one of the page's folded parts (by the id it's drawn with).
@@ -818,83 +869,8 @@ impl SettingsUi {
         ui.add_space(12.0);
     }
 
-    /// Revert, what's going on, then Cancel / Apply / OK. Returns what to do.
-    fn bottom_bar(&mut self, ui: &mut egui::Ui, info: &SettingsContext) -> Option<SettingsAction> {
-        let mut action = None;
-        let valid = self.draft.check();
-        let restart = self.original.needs_restart(&self.draft);
-        let live = info.recording || info.streaming;
-        let blocked = restart && live;
-        let lineup = !restart && self.original.lineup_changed(&self.draft);
-        let failed = match (&self.message, &self.failed) {
-            (Some((m, true)), Some(f)) if **f == self.draft => Some(m.clone()),
-            _ => None,
-        };
-        ui.horizontal(|ui| {
-            // Revert on its own at the left, away from OK.
-            if ui.add_enabled(self.dirty(), egui::Button::new("Revert")).on_hover_text("Undo every change since the last save").clicked() {
-                self.draft = self.original.clone();
-                self.scene_rename = None;
-            }
-            if let Err(e) = &valid {
-                let r = ui.add(egui::Label::new(RichText::new(format!("⚠ {}", e.message)).color(AMBER)).sense(egui::Sense::click()));
-                let r = r.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Click to go there");
-                if r.clicked() {
-                    use crate::config::ProblemAt;
-                    match e.at {
-                        ProblemAt::Program => self.section = Section::Program,
-                        ProblemAt::Source(i) => {
-                            self.section = Section::Sources;
-                            self.sel_source = i;
-                        }
-                        ProblemAt::Audio(i) => {
-                            self.section = Section::Audio;
-                            self.sel_audio = i;
-                        }
-                        ProblemAt::Recording => self.section = Section::Recording,
-                        ProblemAt::Streaming => self.section = Section::Streaming,
-                        ProblemAt::Control => self.section = Section::Control,
-                    }
-                }
-            } else if blocked {
-                ui.label(RichText::new("Stop recording and streaming to change the program's size or frame rate.").color(AMBER));
-            } else if let Some(m) = &failed {
-                // Why the last Apply didn't work, until something's changed.
-                ui.label(RichText::new(m).color(ERROR));
-            } else if restart {
-                ui.label(RichText::new("Applying restarts the video engine (previews blink for a moment).").color(TEXT_DIM));
-            } else if lineup && live {
-                ui.label(RichText::new("Unsaved changes. Sources you added, removed or changed update on Apply; the show carries on.").color(TEXT_DIM));
-            } else if lineup {
-                ui.label(RichText::new("Unsaved changes. Sources you added, removed or changed update on Apply; the rest carries on.").color(TEXT_DIM));
-            } else if self.dirty() {
-                ui.label(RichText::new("Unsaved changes. These apply without interrupting anything.").color(TEXT_DIM));
-            } else if let Some((m, err)) = &self.message {
-                ui.label(RichText::new(m).color(if *err { ERROR } else { GREEN }));
-            }
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let can_apply = self.dirty() && valid.is_ok() && !blocked;
-                // Nothing changed: nothing to apply (Cancel or ✕ closes).
-                if ui.add_enabled(can_apply, egui::Button::new("OK").min_size(vec2(72.0, 28.0))).on_disabled_hover_text(if self.dirty() { "Fix what's marked first" } else { "Nothing has changed" }).clicked() {
-                    action = Some(self.apply(true, info));
-                }
-                if ui.add_enabled(can_apply, egui::Button::new("Apply").min_size(vec2(72.0, 28.0))).clicked() {
-                    action = Some(self.apply(false, info));
-                }
-                if ui.button("Cancel").clicked() {
-                    if self.dirty() {
-                        self.confirm_discard = true;
-                    } else {
-                        action = Some(SettingsAction::Close);
-                    }
-                }
-            });
-        });
-        action
-    }
-
     /// After the page: what it asked for, the "are you sure?" boxes, and
-    /// closing (`close`: asked to close, by ✕, Esc or leaving the page).
+    /// closing (`close`: asked to close, by Esc or leaving the page).
     fn after(&mut self, ctx: &egui::Context, close: bool) -> Option<SettingsAction> {
         let mut action = None;
         if let Some(a) = self.pending.take() {
@@ -903,7 +879,7 @@ impl SettingsUi {
         if let Some(a) = self.confirm_remove_window(ctx) {
             action = Some(a);
         }
-        if close && !self.confirm_discard && !self.confirm_reset && self.confirm_remove.is_none() {
+        if close && !self.confirm_discard && self.confirm_replace.is_none() && self.confirm_remove.is_none() {
             if self.dirty() {
                 self.confirm_discard = true;
             } else {
@@ -914,11 +890,7 @@ impl SettingsUi {
             let r = egui::Modal::new(egui::Id::unique("discard_settings")).show(ctx, |ui| {
                 ui.set_width(340.0);
                 ui.heading("Discard your changes?");
-                ui.label(if live::is_live(self.section) {
-                    "Some changes here wait for Apply because they open, close or restart sources. Everything else is already saved."
-                } else {
-                    "Your edits to the settings haven't been applied."
-                });
+                ui.label("Some changes here wait for Apply because they open, close or restart sources. Everything else is already saved.");
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if ui.button("Discard").clicked() {
@@ -934,26 +906,25 @@ impl SettingsUi {
                 self.confirm_discard = false;
             }
         }
-        if self.confirm_reset {
-            let r = egui::Modal::new(egui::Id::unique("reset_settings")).show(ctx, |ui| {
-                ui.set_width(380.0);
-                ui.heading("Reset everything?");
-                ui.label("All settings go back to defaults, including sources, audio inputs, scenes and stream destinations. You can still Revert before applying.");
+        if let Some((cfg, label, question)) = self.confirm_replace.clone() {
+            let mut done = false;
+            let r = egui::Modal::new(egui::Id::unique("replace_settings")).show(ctx, |ui| {
+                ui.set_width(400.0);
+                ui.heading(question);
+                ui.label("Sources, inputs, scenes, graphics and stream destinations all change at once, and the cameras restart. ↶ Undo puts everything back.");
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Reset").clicked() {
-                        let mut fresh = Config::default();
-                        fresh.output.folder = self.draft.output.folder.clone();
-                        self.draft = fresh;
-                        self.confirm_reset = false;
+                    if ui.button(RichText::new(&label).color(ERROR)).clicked() {
+                        action = Some(SettingsAction::Replace { cfg, label: label.clone() });
+                        done = true;
                     }
-                    if ui.button("Cancel").clicked() {
-                        self.confirm_reset = false;
+                    if ui.button("Keep these settings").clicked() {
+                        done = true;
                     }
                 });
             });
-            if r.should_close() {
-                self.confirm_reset = false;
+            if done || r.should_close() {
+                self.confirm_replace = None;
             }
         }
         action
@@ -961,18 +932,18 @@ impl SettingsUi {
 
     /// Apply the draft, unless that takes sources or inputs out of a show
     /// that's recording or live, or restarts one: then ask first.
-    fn apply(&mut self, close: bool, info: &SettingsContext) -> SettingsAction {
+    fn apply(&mut self, info: &SettingsContext) -> SettingsAction {
         // A scene's name still being typed counts.
         self.commit_scene_rename();
         if info.recording || info.streaming {
             let (names, on_air) = self.leaving(&info.on_air);
             let restarting = self.restarting();
             if !names.is_empty() || !restarting.is_empty() {
-                self.confirm_remove = Some(RemoveCheck { names, on_air, restarting, recording: info.recording, streaming: info.streaming, close });
+                self.confirm_remove = Some(RemoveCheck { names, on_air, restarting, recording: info.recording, streaming: info.streaming });
                 return SettingsAction::None;
             }
         }
-        SettingsAction::Apply { cfg: self.draft.clone(), base: Box::new(self.original.clone()), close }
+        SettingsAction::Apply { cfg: self.draft.clone(), base: Box::new(self.original.clone()) }
     }
 
     /// The sources that stay but reopen when applied (what the engine's
@@ -1064,7 +1035,7 @@ impl SettingsUi {
             ui.horizontal(|ui| {
                 let go = if check.names.is_empty() { "Restart and apply" } else { "Remove and apply" };
                 if ui.button(RichText::new(go).color(ERROR)).clicked() {
-                    action = Some(SettingsAction::Apply { cfg: self.draft.clone(), base: Box::new(self.original.clone()), close: check.close });
+                    action = Some(SettingsAction::Apply { cfg: self.draft.clone(), base: Box::new(self.original.clone()) });
                     done = true;
                 }
                 if ui.button("Keep editing").clicked() {
@@ -1078,44 +1049,23 @@ impl SettingsUi {
         action
     }
 
-    /// Changes not applied yet on this page.
+    /// Changes not applied yet on this page (held for its Apply).
     pub fn section_dirty(&self, s: Section) -> bool {
-        if live::is_live(s) {
-            return self.held(s);
-        }
-        let (a, b) = (&self.draft, &self.original);
-        match s {
-            Section::General => a.ui != b.ui,
-            Section::Sources => a.sources != b.sources,
-            Section::Audio => a.audio != b.audio,
-            Section::Mixing => a.mix != b.mix,
-            Section::Pads => a.pads != b.pads,
-            Section::Syrinscape => a.syrinscape != b.syrinscape,
-            Section::Rundown => a.rundown != b.rundown,
-            Section::Scenes => a.scenes != b.scenes,
-            Section::Macros => a.macros != b.macros,
-            Section::Prompter => a.prompter != b.prompter,
-            Section::Comments => a.comments != b.comments,
-            Section::Guests => a.guests != b.guests,
-            Section::Program => a.program != b.program || a.style != b.style,
-            Section::Switching => a.transition != b.transition || a.auto_switch != b.auto_switch || a.replay != b.replay,
-            Section::Graphics => a.graphics != b.graphics || a.rotations != b.rotations,
-            Section::Captions => a.captions != b.captions,
-            Section::Recording => a.output != b.output || a.podcast != b.podcast,
-            Section::Streaming => a.streaming != b.streaming || a.schedule != b.schedule,
-            Section::Vertical => a.vertical != b.vertical,
-            Section::Upload => a.upload != b.upload,
-            Section::Outputs => a.display != b.display || a.ndi_out != b.ndi_out,
-            Section::Control => a.remote != b.remote || a.midi != b.midi || a.osc != b.osc,
-            Section::Shortcuts => a.keys != b.keys,
-            _ => false,
-        }
+        self.held(s)
     }
 
     // ---- General ------------------------------------------------------------------
 
+    /// More › App › General (the app's own settings), or More › App › Shows
+    /// (`part_only` "shows": saved shows, and the settings file).
     fn general(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
-        title(ui, "General & shows", "The window, safety checks, and saved shows.");
+        if self.part_only == Some("shows") {
+            self.shows(ui, info);
+            ui.add_space(14.0);
+            self.settings_file(ui, info);
+            return;
+        }
+        title(ui, "General", "The window, safety checks and updates.");
         egui::Grid::new("general").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
             label(ui, "Interface size");
             ui.add(egui::Slider::new(&mut self.draft.ui.scale, 0.75..=2.0).step_by(0.05).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
@@ -1136,38 +1086,40 @@ impl SettingsUi {
             });
             ui.end_row();
         });
-        ui.add_space(14.0);
-        self.shows(ui, info);
-        ui.add_space(14.0);
-        subtitle(ui, "Settings file");
-        if let Some(p) = &info.config_path {
-            ui.label(RichText::new(p.display().to_string()).monospace().color(TEXT_DIM));
-        } else {
+    }
+
+    /// Exporting, importing or resetting all the settings (More › App ›
+    /// Shows; where the file is: Diagnostics).
+    fn settings_file(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
+        subtitle(ui, "All the settings");
+        if info.config_path.is_none() {
             hint(ui, "Demo mode: settings aren't saved.");
         }
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            if ui.button("Export settings…").clicked() {
+            if ui.button("Export settings…").on_hover_text("A copy of these settings, without stream keys and passwords").clicked() {
                 if let Some(path) = rfd::FileDialog::new().add_filter("Cutaway settings", &["toml"]).set_file_name("cutaway.toml").save_file() {
-                    self.message = Some(match self.draft.save_without_secrets(&path) {
+                    self.message = Some(match self.live_part().save_without_secrets(&path) {
                         Ok(()) => (format!("Exported to {} (without stream keys and passwords)", path.display()), false),
                         Err(e) => (format!("Export failed: {e:#}"), true),
                     });
                 }
             }
-            if ui.button("Import settings…").on_hover_text("Loads into this window; nothing changes until you apply").clicked() {
+            if ui.button("Import settings…").on_hover_text("Replaces these settings with a file's, after asking; ↶ Undo puts them back").clicked() {
                 if let Some(path) = rfd::FileDialog::new().add_filter("Cutaway settings", &["toml"]).pick_file() {
-                    self.message = Some(match Config::load(&path) {
+                    match Config::load(&path) {
                         Ok(cfg) => {
-                            self.draft = cfg;
-                            (format!("Imported {} — review and apply", path.display()), false)
+                            let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                            self.confirm_replace = Some((Box::new(cfg), "Import settings".into(), format!("Use the settings in {name}?")));
                         }
-                        Err(e) => (format!("Couldn't import: {e:#}"), true),
-                    });
+                        Err(e) => self.message = Some((format!("Couldn't import: {e:#}"), true)),
+                    }
                 }
             }
-            if ui.button("Reset to defaults…").clicked() {
-                self.confirm_reset = true;
+            if ui.button("Reset to defaults…").on_hover_text("Every setting back to how it was the first time, after asking; ↶ Undo puts them back").clicked() {
+                let mut fresh = Config::default();
+                fresh.output.folder = self.draft.output.folder.clone();
+                self.confirm_replace = Some((Box::new(fresh), "Reset to defaults".into(), "Reset everything?".into()));
             }
         });
     }
@@ -1982,10 +1934,21 @@ impl SettingsUi {
     }
 
     fn diagnostics(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
-        title(ui, "Diagnostics", "What the engine is using, connected devices, and the log.");
+        title(ui, "Diagnostics", "What the engine is using, connected devices and encoders, and the log.");
         egui::Grid::new("facts").num_columns(2).spacing(TABLE_GAP).show(ui, |ui| {
             label(ui, "Version");
             ui.label(format!("Cutaway {}", env!("CARGO_PKG_VERSION")));
+            ui.end_row();
+            label(ui, "Settings file");
+            ui.horizontal(|ui| match &info.config_path {
+                Some(p) => {
+                    ui.label(RichText::new(p.display().to_string()).monospace().color(TEXT_DIM));
+                    if ui.small_button("Show").clicked() {
+                        crate::logging::reveal_file(p);
+                    }
+                }
+                None => hint(ui, "Demo mode: settings aren't saved."),
+            });
             ui.end_row();
             label(ui, "Log file");
             ui.horizontal(|ui| {
@@ -2010,11 +1973,17 @@ impl SettingsUi {
             }
         });
         ui.add_space(12.0);
+        // What the command line's --list-devices and --probe-encoders print, as buttons.
         ui.horizontal(|ui| {
             subtitle(ui, "Devices");
-            if ui.small_button("Rescan").clicked() {
+            if ui.small_button("List devices again").on_hover_text("Look for cameras, capture cards and audio inputs plugged in since (as --list-devices does)").clicked() {
                 self.video = devices::list(Kind::Video);
                 self.audio = devices::list(Kind::Audio);
+            }
+            let all: Vec<String> = self.video.iter().map(|d| format!("Video: {} {}", d.name, d.summary)).chain(self.audio.iter().map(|d| format!("Audio: {} {}", d.name, d.summary))).collect();
+            if ui.small_button("Copy").clicked() {
+                ui.ctx().copy_text(all.join("\n"));
+                self.message = Some(("Devices copied to the clipboard".into(), false));
             }
         });
         for (title_text, list) in [("Video", &self.video), ("Audio", &self.audio)] {
@@ -2029,6 +1998,30 @@ impl SettingsUi {
                 }
             }
             ui.add_space(4.0);
+        }
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            subtitle(ui, "Encoders");
+            let testing = self.encoder_testing && self.encoder_test.lock_ok().is_none();
+            if ui.add_enabled(!testing, egui::Button::new(if testing { "Testing…" } else { "Test encoders" }).small()).on_hover_text("Which video and audio encoders this computer can use, NDI and the graphics card (as --probe-encoders does)").clicked() {
+                *self.encoder_test.lock_ok() = None;
+                self.encoder_testing = true;
+                let out = self.encoder_test.clone();
+                let ctx = ui.ctx().clone();
+                std::thread::spawn(move || {
+                    *out.lock_ok() = Some(crate::engine::encode::probe_report());
+                    ctx.request_repaint();
+                });
+            }
+        });
+        match self.encoder_test.lock_ok().clone() {
+            Some(lines) => {
+                for l in lines {
+                    ui.label(RichText::new(l).size(TEXT_BODY));
+                }
+            }
+            None if self.encoder_testing => hint(ui, "Looking (it takes a few seconds)…"),
+            None => hint(ui, "Press Test encoders to see what recording and streaming can use on this computer."),
         }
         ui.add_space(12.0);
         ui.horizontal(|ui| {
@@ -2754,6 +2747,7 @@ mod tests {
             input_meters: Vec::new(),
             input_on: Vec::new(),
             talkback_key: String::new(),
+            undo_key: String::new(),
             syrin: Default::default(),
             stinger: None,
             guest_reach: Default::default(),
@@ -2790,7 +2784,7 @@ mod tests {
         // On the desk, while Settings is open.
         live.audio[0].gain_db = -18.0;
         live.transition.duration_ms = 1200;
-        let SettingsAction::Apply { cfg, base, .. } = win.apply(false, &ctx(false)) else { panic!("applies") };
+        let SettingsAction::Apply { cfg, base, .. } = win.apply(&ctx(false)) else { panic!("applies") };
         let now = live.with_edits(&base, &cfg);
         assert_eq!(now.audio[0].gain_db, -18.0, "the fader moved on the desk stays");
         assert_eq!(now.transition.duration_ms, 1200);
@@ -2800,7 +2794,7 @@ mod tests {
         // A level changed in Settings applies too, and the desk's other
         // change from before isn't undone by it.
         win.draft.audio[1].gain_db = -6.0;
-        let SettingsAction::Apply { cfg, base, .. } = win.apply(false, &ctx(false)) else { panic!("applies") };
+        let SettingsAction::Apply { cfg, base, .. } = win.apply(&ctx(false)) else { panic!("applies") };
         let next = now.with_edits(&base, &cfg);
         assert_eq!((next.audio[0].gain_db, next.audio[1].gain_db), (-18.0, -6.0));
         assert_eq!(next.transition.duration_ms, 1200);
@@ -2838,16 +2832,16 @@ mod tests {
         win.draft.audio.clear();
         let mut info = ctx(true);
         info.on_air = vec![close_uid];
-        assert!(matches!(win.apply(false, &info), SettingsAction::None));
+        assert!(matches!(win.apply(&info), SettingsAction::None));
         let check = win.confirm_remove.take().expect("asks");
         assert!(check.names.contains(&"Close".to_string()), "{:?}", check.names);
         assert_eq!(check.on_air, vec!["Close".to_string()]);
-        assert!(matches!(win.apply(false, &ctx(false)), SettingsAction::Apply { .. }));
+        assert!(matches!(win.apply(&ctx(false)), SettingsAction::Apply { .. }));
         assert!(win.confirm_remove.is_none());
         // Adding one while recording just applies.
         let mut win = SettingsUi::new(cfg.clone());
         win.draft.sources.push(SourceConfig { name: "New".into(), device: "test:smpte".into(), ..Default::default() });
-        assert!(matches!(win.apply(false, &ctx(true)), SettingsAction::Apply { .. }));
+        assert!(matches!(win.apply(&ctx(true)), SettingsAction::Apply { .. }));
     }
 
     /// Splitting a camera makes a close-up per person, side by side, cut
@@ -2945,14 +2939,14 @@ mod tests {
         let mut win = SettingsUi::new(cfg.clone());
         win.draft.sources[1].person = "Alex Smith".into();
         win.draft.sources[1].role = "Host".into();
-        assert!(matches!(win.apply(false, &ctx(true)), SettingsAction::Apply { .. }));
+        assert!(matches!(win.apply(&ctx(true)), SettingsAction::Apply { .. }));
         let mut win = SettingsUi::new(cfg.clone());
         win.draft.sources[0].delay_ms = 80;
-        assert!(matches!(win.apply(false, &ctx(true)), SettingsAction::None));
+        assert!(matches!(win.apply(&ctx(true)), SettingsAction::None));
         let check = win.confirm_remove.take().expect("asks");
         assert!(check.names.is_empty());
         assert_eq!(check.restarting, vec!["Wide".to_string(), "Alex".to_string()]);
-        assert!(matches!(win.apply(false, &ctx(false)), SettingsAction::Apply { .. }));
+        assert!(matches!(win.apply(&ctx(false)), SettingsAction::Apply { .. }));
     }
 
     /// After applying, a source added in the window keeps the identity it

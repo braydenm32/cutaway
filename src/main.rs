@@ -268,24 +268,8 @@ fn run() -> Result<()> {
     }
 
     if args.probe_encoders {
-        use crate::media::VideoCodec;
-        for codec in [VideoCodec::H264, VideoCodec::Hevc] {
-            let list = engine::encode::video_backends(codec);
-            let names: Vec<&str> = list.iter().map(|b| engine::encode::describe_backend(b)).collect();
-            println!("{}: {}", engine::encode::codec_name(codec), if names.is_empty() { "not available".into() } else { names.join(", ") });
-        }
-        match engine::encode::codec_problem(config::Codec::Prores.video_codec()) {
-            None => println!("ProRes: available"),
-            Some(why) => println!("ProRes: {why}"),
-        }
-        match engine::encode::create_aac(48_000, 2, 192) {
-            Ok(_) => println!("AAC: available"),
-            Err(e) => println!("AAC: {e:#}"),
-        }
-        println!("NDI: {}", if engine::ndi::available() { "installed" } else { "not installed (optional: NDI Tools from ndi.video)" });
-        match engine::compositor::create_device() {
-            Ok((_, _, name)) => println!("Compositor GPU: {name}"),
-            Err(e) => println!("Compositor GPU: {e:#}"),
+        for line in engine::encode::probe_report() {
+            println!("{line}");
         }
         return Ok(());
     }

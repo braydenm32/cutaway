@@ -83,6 +83,33 @@ pub fn is_hardware(backend: &str) -> bool {
     !matches!(backend, "openh264" | "mf-sw")
 }
 
+/// What `--probe-encoders` prints, a line each: the H.264 and HEVC
+/// encoders this computer will use, ProRes, AAC, NDI and the GPU the
+/// compositor draws with. (More › App › Diagnostics › Test encoders
+/// shows the same.) It opens a GPU device, so it's slow-ish: not on the
+/// UI thread.
+pub fn probe_report() -> Vec<String> {
+    let mut out = Vec::new();
+    for codec in [VideoCodec::H264, VideoCodec::Hevc] {
+        let names: Vec<&str> = video_backends(codec).iter().map(|b| describe_backend(b)).collect();
+        out.push(format!("{}: {}", codec_name(codec), if names.is_empty() { "not available".into() } else { names.join(", ") }));
+    }
+    out.push(match codec_problem(crate::config::Codec::Prores.video_codec()) {
+        None => "ProRes: available".into(),
+        Some(why) => format!("ProRes: {why}"),
+    });
+    out.push(match create_aac(48_000, 2, 192) {
+        Ok(_) => "AAC: available".into(),
+        Err(e) => format!("AAC: {e:#}"),
+    });
+    out.push(format!("NDI: {}", if super::ndi::available() { "installed" } else { "not installed (optional: NDI Tools from ndi.video)" }));
+    out.push(match super::compositor::create_device() {
+        Ok((_, _, name)) => format!("Compositor GPU: {name}"),
+        Err(e) => format!("Compositor GPU: {e:#}"),
+    });
+    out
+}
+
 pub fn describe_backend(backend: &str) -> &'static str {
     match backend {
         "videotoolbox" => "VideoToolbox (hardware)",

@@ -18,7 +18,7 @@ impl SettingsUi {
                 Ok((refresh, account, granted)) => {
                     let u = &mut self.draft.upload;
                     (u.refresh_token, u.account, u.granted) = (refresh, account.clone(), granted);
-                    self.message = Some((format!("Signed in as {account}. Apply to keep it."), false));
+                    self.message = Some((format!("Signed in as {account}."), false));
                 }
                 Err(e) => self.message = Some((format!("Not signed in: {e}"), true)),
             }

@@ -4,9 +4,10 @@
 //! drive, the clock, REC and LIVE).
 //!
 //! Everything about where things are is read from nav.rs. Show is the live
-//! desk; the other areas open the Settings pages that hold their settings,
-//! drawn inside the window (the Settings window's own sidebar and title
-//! bar aren't used), until each area gets pages of its own.
+//! desk; the other areas' sections show the settings pages that hold their
+//! settings (each saving as you go, settings/live.rs), or pages the app
+//! draws itself (Takes, People & names, About, Help). There's no Settings
+//! window any more.
 
 use super::nav::{self, Icon, AREAS};
 use super::theme::*;
@@ -156,6 +157,7 @@ pub(super) fn target(area: &str, tab: &str, sect: &str) -> Option<Target> {
         ("more", "control", "streamdeck") => Some("streamdeck"),
         ("more", "control", "oscmidi") => Some("osc"),
         ("more", "tools", "replay") => Some("replay"),
+        ("more", "app", "shows") => Some("shows"),
         _ => None,
     };
     let s = nav::area(area)?.tabs.iter().find(|t| t.id == tab)?.sections.iter().find(|s| s.id == sect)?;
@@ -1045,7 +1047,31 @@ impl App {
                 ui.close();
             }
         });
+        self.clip_row(ui);
         self.replay_row(ui);
+    }
+
+    /// While recording: a clip of the last 10, 30 or 60 seconds (as
+    /// `clip:N` does; ✂ Clip saves the length set in Record › Recording).
+    fn clip_row(&mut self, ui: &mut egui::Ui) {
+        if !self.engine.as_ref().is_some_and(|e| e.is_recording()) {
+            return;
+        }
+        let mut pick = None;
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("✂ Clip the last").color(TEXT_DIM));
+            for secs in [10, 30, 60] {
+                if ui.small_button(format!("{secs} s")).on_hover_text(format!("Save the last {secs} seconds as a clip")).clicked() {
+                    pick = Some(secs);
+                }
+            }
+        });
+        if let Some(secs) = pick {
+            match self.run_action(Action::Clip(Some(secs))) {
+                Ok(m) => self.toast(m, false),
+                Err(e) => self.toast(e, true),
+            }
+        }
     }
 
     /// Instant replay (while recording): play the last seconds again, on
@@ -1056,38 +1082,70 @@ impl App {
         if !recording && !replaying {
             return;
         }
-        let angles: Vec<String> = self.engine.as_ref().map(|e| e.sources.iter().filter(|s| s.record).map(|s| s.name.clone()).collect()).unwrap_or_default();
-        let mut play: Option<Option<control::ReplayAngle>> = None;
-        let mut stop = false;
-        ui.horizontal_wrapped(|ui| {
-            if replaying {
-                if ui.add(egui::Button::new(RichText::new("⟲ Stop the replay").color(Color32::WHITE)).fill(ON_AIR_DIM)).clicked() {
-                    stop = true;
-                }
-                return;
-            }
-            if ui.button("⟲ Replay").on_hover_text(format!("Play the last {:.0} seconds again, on air", self.cfg.replay.seconds)).clicked() {
-                play = Some(None);
-            }
-            ui.checkbox(&mut self.replay_slow, "Slow");
-            ui.label(RichText::new("from").color(TEXT_DIM));
-            if ui.small_button("Program").clicked() {
-                play = Some(Some(control::ReplayAngle::Program));
-            }
-            for a in &angles {
-                if ui.small_button(a).clicked() {
-                    play = Some(Some(control::ReplayAngle::Source(control::Target::Name(a.clone()))));
-                }
-            }
-            if angles.len() >= 2 && ui.small_button(format!("Every angle ({})", angles.len().min(4))).clicked() {
-                play = Some(Some(control::ReplayAngle::Quad));
-            }
-        });
-        let cmd = if stop {
-            Some(control::ReplayCmd::Stop)
+        let cmd = ui.horizontal_wrapped(|ui| self.replay_picks(ui, false)).inner;
+        self.run_replay_pick(cmd);
+    }
+
+    /// The bank's ⋯ › Replay: the same, plus how many seconds (as
+    /// `replay:N` does) and a link to its settings.
+    pub(super) fn replay_menu(&mut self, ui: &mut egui::Ui) {
+        let recording = self.engine.as_ref().is_some_and(|e| e.is_recording());
+        let replaying = self.engine.as_ref().is_some_and(|e| e.replay.playing());
+        let mut cmd = None;
+        if recording || replaying {
+            cmd = self.replay_picks(ui, true);
         } else {
-            play.map(|angle| control::ReplayCmd::Play { seconds: None, slow: self.replay_slow, angle })
-        };
+            ui.label(RichText::new("Replay plays the last seconds again, on air, while you're recording.").size(TEXT_SMALL).color(TEXT_DIM));
+        }
+        ui.separator();
+        if ui.button("Replay settings ›").on_hover_text("More › Show tools › Replay: how long, which angle, slow motion").clicked() {
+            self.go("more/tools/replay");
+            ui.close();
+        }
+        if cmd.is_some() {
+            ui.close();
+        }
+        self.run_replay_pick(cmd);
+    }
+
+    /// Replay's buttons: Replay (or Stop), Slow, which angle, and with
+    /// `lengths` the last 5 / 10 / 20 / 30 seconds.
+    fn replay_picks(&mut self, ui: &mut egui::Ui, lengths: bool) -> Option<control::ReplayCmd> {
+        let replaying = self.engine.as_ref().is_some_and(|e| e.replay.playing());
+        if replaying {
+            let stop = ui.add(egui::Button::new(RichText::new("⟲ Stop the replay").color(Color32::WHITE)).fill(ON_AIR_DIM)).clicked();
+            return stop.then_some(control::ReplayCmd::Stop);
+        }
+        let angles: Vec<String> = self.engine.as_ref().map(|e| e.sources.iter().filter(|s| s.record).map(|s| s.name.clone()).collect()).unwrap_or_default();
+        let mut play: Option<(Option<u32>, Option<control::ReplayAngle>)> = None;
+        if ui.button("⟲ Replay").on_hover_text(format!("Play the last {:.0} seconds again, on air", self.cfg.replay.seconds)).clicked() {
+            play = Some((None, None));
+        }
+        ui.checkbox(&mut self.replay_slow, "Slow");
+        ui.label(RichText::new("from").color(TEXT_DIM));
+        if ui.small_button("Program").clicked() {
+            play = Some((None, Some(control::ReplayAngle::Program)));
+        }
+        for a in &angles {
+            if ui.small_button(a).clicked() {
+                play = Some((None, Some(control::ReplayAngle::Source(control::Target::Name(a.clone())))));
+            }
+        }
+        if angles.len() >= 2 && ui.small_button(format!("Every angle ({})", angles.len().min(4))).clicked() {
+            play = Some((None, Some(control::ReplayAngle::Quad)));
+        }
+        if lengths {
+            ui.label(RichText::new("the last").color(TEXT_DIM));
+            for secs in [5, 10, 20, 30] {
+                if ui.small_button(format!("{secs} s")).clicked() {
+                    play = Some((Some(secs), None));
+                }
+            }
+        }
+        play.map(|(seconds, angle)| control::ReplayCmd::Play { seconds: seconds.map(|s: u32| s as f32), slow: self.replay_slow, angle })
+    }
+
+    fn run_replay_pick(&mut self, cmd: Option<control::ReplayCmd>) {
         if let Some(cmd) = cmd {
             if let Err(e) = self.run_action(Action::Replay(cmd)) {
                 self.toast(e, true);
@@ -1123,7 +1181,7 @@ impl App {
             ui.separator();
         }
         match here {
-            Some(Target::Page(page, _)) => {
+            Some(Target::Page(page, part)) => {
                 if self.settings.is_none() {
                     self.settings = Some(self.new_settings().open_at(page));
                     self.shell.shown_section = Some(page);
@@ -1133,6 +1191,11 @@ impl App {
                 }
                 if AREAS[a].tabs[t].id == "screens" {
                     self.second_screen_now(ui);
+                }
+                if matches!(page, Section::General | Section::Control) {
+                    if let Some(win) = self.settings.as_mut() {
+                        win.set_part_only(part);
+                    }
                 }
                 if page == Section::Sources {
                     let view = match AREAS[a].tabs[t].id {
@@ -1180,6 +1243,12 @@ impl App {
                     };
                     if let Some(win) = self.settings.as_mut() {
                         win.set_switch_view(view);
+                    }
+                }
+                if matches!(page, Section::Rundown | Section::Macros) {
+                    let (seg, mac) = (self.shell.picked.get("segment").cloned(), self.shell.picked.get("macro").cloned());
+                    if let Some(win) = self.settings.as_mut() {
+                        win.restore_tool_picks(seg.as_deref(), mac.as_deref());
                     }
                 }
                 if page == Section::Audio {
@@ -1267,13 +1336,11 @@ impl App {
     /// The Settings page in the area page, and what it asked for.
     fn settings_page(&mut self, ui: &mut egui::Ui) {
         let info = self.settings_info(ui.ctx());
-        let now = self.settings.as_ref().filter(|w| crate::settings::is_live(w.section())).map(|_| self.live_settings());
+        let now = self.live_settings();
         let Some(win) = self.settings.as_mut() else { return };
-        // A page that saves as you go shows the settings in effect, with
-        // what's being edited on top.
-        if let Some(now) = &now {
-            win.rebase(now);
-        }
+        // The page shows the settings in effect, with what's being edited
+        // on top.
+        win.rebase(&now);
         let action = win.show_page(ui, &info);
         self.settings_page = Some(win.section());
         if win.section() == Section::Sources {
@@ -1286,15 +1353,23 @@ impl App {
                 self.shell.picked.insert("graphics".into(), name);
             }
         }
+        if matches!(win.section(), Section::Rundown | Section::Macros) {
+            let (seg, mac) = win.tool_picks();
+            for (key, name) in [("segment", seg), ("macro", mac)] {
+                if let Some(n) = name {
+                    self.shell.picked.insert(key.into(), n);
+                }
+            }
+        }
         if win.section() == Section::Audio {
             if let Some(name) = win.input_name() {
                 self.shell.picked.insert("inputs".into(), name);
             }
         }
-        let closing = matches!(action, SettingsAction::Close | SettingsAction::Apply { close: true, .. });
+        let closing = matches!(action, SettingsAction::Close);
         self.settings_action(action, ui.ctx());
         if closing && self.settings.is_none() {
-            // OK, Cancel or Discard: back to Show.
+            // Discard (leaving with changes waiting for Apply): back to Show.
             self.shell.area = 0;
             self.shell.shown_section = None;
         }
