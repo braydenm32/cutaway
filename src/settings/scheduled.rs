@@ -32,8 +32,8 @@ impl ScheduleJob {
     }
 }
 
-/// "Friday 30 October, 7:30 pm (in 2 days)".
-pub(crate) fn describe_start(at: chrono::DateTime<chrono::Local>) -> String {
+/// "Friday 30 October, 7:30 PM (in 2 days)", in the show's clock format.
+pub(crate) fn describe_start(at: chrono::DateTime<chrono::Local>, twelve: bool) -> String {
     let now = chrono::Local::now();
     let left = at - now;
     let when = if left.num_seconds() < 0 {
@@ -45,7 +45,12 @@ pub(crate) fn describe_start(at: chrono::DateTime<chrono::Local>) -> String {
     } else {
         format!("in {} days", left.num_days())
     };
-    format!("{} ({when})", at.format("%A %-d %B, %H:%M"))
+    let day = match (at.date_naive() - now.date_naive()).num_days() {
+        0 => "Today".to_string(),
+        1 => "Tomorrow".to_string(),
+        _ => at.format("%A %-d %B").to_string(),
+    };
+    format!("{day}, {} ({when})", at.format(crate::engine::timers::time_format(twelve, false)))
 }
 
 impl SettingsUi {
@@ -56,7 +61,7 @@ impl SettingsUi {
         let state = match (&start, self.draft.schedule.youtube_id.is_empty(), self.draft.schedule.go_live) {
             (None, true, _) => "none".to_string(),
             (Some(t), yt, go) => {
-                let mut parts = vec![t.format("%a %-d %b %H:%M").to_string()];
+                let mut parts = vec![format!("{} {}", t.format("%a %-d %b"), t.format(crate::engine::timers::time_format(self.draft.ui.clock_12h, false)))];
                 if !yt {
                     parts.push("on YouTube".into());
                 }
@@ -91,7 +96,7 @@ impl SettingsUi {
                         }
                     });
                     match s.start_time() {
-                        Some(t) => hint(ui, &describe_start(t)),
+                        Some(t) => hint(ui, &describe_start(t, self.draft.ui.clock_12h)),
                         None if s.start.trim().is_empty() => hint(ui, "Year-month-day and the time, on this computer's clock."),
                         None => {
                             ui.label(RichText::new("⚠ Write it like 2026-10-30 19:30").color(AMBER));
