@@ -160,9 +160,9 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
     let text = match (page, name) {
         // ---- General & shows
         (General, "Interface size") => "Makes everything in Cutaway's window bigger or smaller: text, buttons and monitors. Handy on a big screen across the room, or a small laptop.",
-        (General, "Ask before") => "Asks you to confirm before the stream ends, so a stray click or key can't end the show. A recording is always protected: hold the REC button for a second to stop it, and its key (Cmd/Ctrl+R) asks first. On the phone remote and the Stream Deck, stopping or ending takes a one-second hold (on the phone, so do going live, fade to black and turning a mic off).",
-        (General, "Pre-show check") => "Before you record or go live, Cutaway checks that every source has a picture, the inputs have sound, the disk has room and the stream servers answer. Anything wrong is listed, and you can still go ahead. Starting from the phone remote, the Stream Deck, MIDI or OSC runs it too; the phone shows that it's waiting on the desk and what the check found.",
-        (General, "Updates") => "When Cutaway starts, it asks GitHub whether there's a newer release and tells you if there is (nothing about you or your show is sent); Update now in that notice downloads and puts it in. With the second box ticked, Cutaway downloads it by itself and puts it in the next time you close Cutaway, keeping your settings and shows.",
+        (General, "Ask before") => "Asks you to confirm before the stream ends, so a stray click or key can't end the show. A recording is always protected: hold the REC pill (top right; it says hold to stop under its time) for a second to stop it, and its key (Cmd/Ctrl+R) asks first. On the phone remote and the Stream Deck, stopping or ending takes a one-second hold (on the phone, so do going live, fade to black and turning a mic off).",
+        (General, "Pre-show check") => "Before you record or go live, Cutaway checks that every source has a picture, the inputs have sound, the disk has room and the stream servers answer. Anything wrong is listed, and you can still go ahead. Starting from the phone remote, the Stream Deck, MIDI or OSC runs it too; the phone shows that it's waiting on the desk and what the check found. Run it by hand from the status light (top right) or Record › Recording › Before you start.",
+        (General, "Updates") => "When Cutaway starts, it asks GitHub whether there's a newer release and tells you if there is, with a blue dot on More in the rail (nothing about you or your show is sent); Update now in More › App › Updates & about downloads and puts it in. With the second box ticked, Cutaway downloads it by itself and puts it in the next time you close Cutaway, keeping your settings and shows.",
 
         // ---- Video sources
         (Sources, "Name") => "What this source is called on its button, in the multiview and scenes, and in the name of its own file (ISO_01_Name).",
@@ -218,7 +218,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Audio, "Device") => "Where the sound comes from: an audio interface or loopback device, the sound of a media player or network source (\"Sound from …\"), another app's sound, the sound pads, or a test tone.",
         (Audio, "Channels to capture") => "How many of the device's channels to take in. Every one is recorded to the WAV; pick which ones feed the mix below.",
         (Audio, "Program left / right") => "Which captured channels make the left and right of the mix. Pick the same channel for both to put a mono mic in the middle.",
-        (Audio, "Gain") => "Level before everything else (processing, the fader and the mixes). Set it so speech peaks well below 0 dB on the meter.",
+        (Audio, "Gain") => "Level before everything else (processing, the fader and the mixes). Set it so speech peaks well below 0 dB on the meter. Apply changes it only if you moved it here, so a fader moved on the desk meanwhile keeps its level.",
         (Audio, "On") => "Whether this input is heard in the mixes at all, the same as its ON button. Its WAV records either way.",
         (Audio, "Heard in") => "Which mixes it goes into. Leave music out of the recording to add it in the edit, or keep a talkback mic out of the stream.",
         (Audio, "Auto-mix") => "Makes this mic one of the ones the automatic mixer shares out: up while this person talks, down while someone else does. Turn automatic mixing on in Mixing & headphones.",
@@ -327,8 +327,8 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Captions, "Transcript") => "Saves what was said with every take: Transcript.txt, and Captions.srt and Captions.vtt for an editor or YouTube.",
 
         // ---- Switching
-        (Switching, "Transition") => "How scenes change. Cut is instant; Mix glides frames to their new places and cross-fades; Wipe and Push bring the new picture in from a side; Dip goes through a colour; Stinger plays a video over the change. T switches between Cut and this.",
-        (Switching, "Length") => "How long a transition takes.",
+        (Switching, "Transition") => "How scenes change. Cut is instant; Mix glides frames to their new places and cross-fades; Wipe and Push bring the new picture in from a side; Dip goes through a colour; Stinger plays a video over the change. In the main window CUT and MIX sit beside the scenes and the others are under ⋯. T switches between Cut and this.",
+        (Switching, "Length") => "How long a transition takes (Mix, Wipe, Push and Dip). A cut is instant and a stinger lasts as long as its video, so the length beside the scenes is greyed for those.",
         (Switching, "Wipes and pushes go") => "Which way wipes and pushes move.",
         (Switching, "Dip through") => "The colour a Dip passes through between scenes.",
         (Switching, "Preview, then take") => "Pick the next scene in a preview monitor first, then send it to air with Take (Space) or Cut (Enter). Without it, clicking a scene takes it straight to air.",
@@ -336,13 +336,13 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Switching, "See-through parts") => "How the stinger's transparency is stored. Most stinger packs have a \"track matte\" version, with the picture and a black-and-white matte side by side or one above the other, which works on any computer. Automatic works it out.",
         (Switching, "Change scenes at") => "When, from the start of the stinger, the scenes change underneath: the moment the video covers the screen. 0 changes halfway.",
         (Switching, "Its sound") => "The stinger's volume. It plays through the Sound pads input.",
-        (Switching, "Fade length") => "How long Fade to black takes. FTB in the bottom bar (or ftb from the Stream Deck, MIDI or the remote) fades everything, graphics included; press it again to come back.",
+        (Switching, "Fade length") => "How long Fade to black takes. Fade to black at the end of the transitions (or ftb from the Stream Deck, MIDI or the remote) fades everything, graphics included; press it again to come back.",
         (Switching, "Sound fades too") => "The recording and the stream fade out with the picture. Headphones and callers keep hearing.",
-        (Switching, "Replay the last") => "How much of the program a replay plays again. Press ⟲ Replay in the header while recording (or replay from the Stream Deck, MIDI or the remote); it fades in over the live picture while the show's sound carries on.",
+        (Switching, "Replay the last") => "How much of the program a replay plays again. Press ⟲ Replay under the status light (top right) while recording (or replay from the Stream Deck, MIDI or the remote); it fades in over the live picture while the show's sound carries on.",
         (Switching, "Shows") => "What ⟲ Replay plays again: the program as it went out, one camera (from its own recording, so a moment the program missed), or up to four cameras at once in a grid. Right-click ⟲ Replay to pick another each time. Cameras need \"Record to its own file\" on, and files that aren't ProRes.",
         (Switching, "Slow motion") => "The speed of a slow-motion replay (right-click ⟲ Replay, or replay:slow).",
         (Switching, "Label") => "Shows REPLAY in the corner while a replay plays.",
-        (Switching, "At start") => "Whether automatic switching is on when Cutaway starts. The AUTO button and the A key turn it on and off.",
+        (Switching, "At start") => "Whether automatic switching is on when Cutaway starts. The AUTO button and the A key turn it on and off (AUTO is greyed until there are rules below).",
         (Switching, "Counts as talking above") => "How loud a mic has to be to count as talking. Set it just above the level each mic shows while that person is quiet (the live levels beside the rules help).",
         (Switching, "Talking for at least") => "How long someone has to talk before the shot changes to them, so a cough doesn't cut.",
         (Switching, "Shortest shot") => "The least time a shot stays up before it can change again.",
@@ -462,7 +462,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Upload, "When") => "Upload as each take is saved, or wait for you to press Upload. Uploads go one at a time in the background, and pick up again if the connection drops.",
 
         // ---- Screens & webcam
-        (Outputs, "Show") => "What the second-screen window shows: the program, the multiview or the teleprompter. It opens on the screen chosen below. Double-click it (or press F) to fill the screen; Esc leaves full screen, and Esc again (or its ✕) closes it. The header's Screen button turns it on and off.",
+        (Outputs, "Show") => "What the second-screen window shows: the program, the multiview or the teleprompter. It opens on the screen chosen below. Double-click it (or press F) to fill the screen; Esc leaves full screen, and Esc again (or its ✕) closes it. Second screen under the status light (top right) turns it on and off.",
         (Outputs, "Full screen") => "Opens it filling its screen. Never over Cutaway itself: on the screen Cutaway is on (or with only one screen) it opens in a window.",
         (Outputs, "Clocks") => "Shows the time and the rundown segment's time left, on this screen only: for presenters, not viewers.",
         (Outputs, "Program") => "Sends the program, with the recording mix, as an NDI source that other computers, OBS, vMix, NDI Studio Monitor and NDI recorders on the network can use.",

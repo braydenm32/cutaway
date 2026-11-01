@@ -32,11 +32,11 @@ impl Engine {
     pub fn local_checks(&self) -> Vec<CheckItem> {
         let mut out = Vec::new();
         let cfg = self.config();
-        let offline = self.status.lock_ok().offline.clone();
         // Pictures.
-        for s in &self.sources {
+        for (i, s) in self.sources.iter().enumerate() {
             let what = format!("Video: {}", s.name);
-            if offline.contains(&s.name) || !s.input.alive() {
+            // Offline as everywhere else; or nothing has come at all yet.
+            if self.source_offline(i) || s.preview.latest().is_none() {
                 let d = s.input.net.lock_ok().detail.clone();
                 out.push(item(Level::Fail, what, if d.is_empty() { "no picture".to_string() } else { format!("no picture ({d})") }));
                 continue;
@@ -53,9 +53,9 @@ impl Engine {
             }
         }
         // Sound.
-        for a in &self.audio {
+        for (i, a) in self.audio.iter().enumerate() {
             let what = format!("Audio: {}", a.name);
-            if !a.input.from_source() && (offline.contains(&a.name) || !a.input.alive()) {
+            if self.input_offline(i) {
                 out.push(item(Level::Fail, what, "no signal from the device"));
                 continue;
             }
@@ -81,8 +81,7 @@ impl Engine {
             Some(d) => match take::space_problem(&d) {
                 Some(p) => out.push(item(Level::Fail, "Recording drive", p)),
                 None => {
-                    let left = d.seconds_left().unwrap_or(f64::MAX);
-                    let level = if left < 3600.0 { Level::Warn } else { Level::Ok };
+                    let level = if d.low() { Level::Warn } else { Level::Ok };
                     out.push(item(level, "Recording drive", d.describe()));
                 }
             },

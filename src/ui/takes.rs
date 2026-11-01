@@ -18,8 +18,6 @@ pub struct Takes {
     recent: Vec<RecentTake>,
     /// The frame the menu was last drawn (a gap means it just opened).
     recent_frame: u64,
-    /// Open the menu (for screenshots).
-    pub open_menu: bool,
 }
 
 /// A take in the Recent takes menu, from its folder and Take.txt.
@@ -192,7 +190,7 @@ impl App {
                     }
                 }
                 (installed, _) => {
-                    self.settings = Some(self.new_settings().open_part_at(Section::Recording, "rec_editing"));
+                    self.open_page(Section::Recording, Some("rec_editing"));
                     let msg = if !installed {
                         "To open takes in Resolve: under For editing, press \"Install the Resolve script\" (and keep \"a project from each take\" on)."
                     } else {
@@ -212,6 +210,11 @@ impl App {
 
     /// Recent takes: the last ten in the recording folder, each with the
     /// card's buttons. Read again each time it opens.
+    /// The takes list reads the folder again next time it's drawn.
+    pub(super) fn look_for_takes_again(&mut self) {
+        self.takes.recent_frame = 0;
+    }
+
     pub(super) fn recent_takes_menu(&mut self, ui: &mut egui::Ui) {
         let frame = ui.ctx().cumulative_frame_nr();
         if frame > self.takes.recent_frame + 1 {

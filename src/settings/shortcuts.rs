@@ -151,8 +151,8 @@ impl SettingsUi {
             ("Shift + 1 – 9", "Cut straight to scene 1–9"),
             (if cfg!(target_os = "macos") { "Option + 1 – 9" } else { "Alt + 1 – 9" }, "Show / hide graphic 1–9"),
             ("F1 – F12", "Sound pads 1–12 (hold for \"while held\" pads)"),
-            ("Click a source", "Put that source full screen (Shift+click cuts)"),
-            ("Right-click a media tile", "Pick from the media player's playlist"),
+            ("Click a source", "Pick it, then Put on air (with Preview on: to preview). Shift+click cuts to it"),
+            ("⋯ on a tile, or right-click", "Playlist, who to follow, split into close-ups"),
             ("Esc", "Close Settings"),
             ("F / Esc", "On the second-screen window: full screen / leave full screen"),
         ];

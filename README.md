@@ -42,9 +42,10 @@ The apps aren't signed yet, so the first launch takes one extra step:
 - **Windows:** unzip anywhere and run **Cutaway.exe**. When Windows says it
   "protected your PC", choose **More info → Run anyway**.
 
-When a newer version comes out, Cutaway says so in its header (it asks
-GitHub once when it starts; turn that off in Settings → General & shows).
-From 0.8 on, **Update now** in that notice downloads it inside Cutaway,
+When a newer version comes out, Cutaway shows a blue dot on **More** in the
+rail and says so in **More › App › Updates & about** (it asks GitHub once
+when it starts; turn that off in More › App › General).
+From 0.8 on, **Update now** there downloads it inside Cutaway,
 checks it against the release's fingerprints and makes sure it starts; then
 **Restart to update** (once recording and streaming have stopped) or **When
 I quit** puts it in place. The previous version is kept until the new one
@@ -131,7 +132,7 @@ and [Install on Windows](#install-on-windows).
   pan, tilt and zoom around its picture, with presets it glides to. Frame
   the presets in Settings by dragging boxes on the wide picture; it starts
   on preset 1.
-- **Split a camera into close-ups:** right-click a camera's tile (or
+- **Split a camera into close-ups:** **⋯** on a camera's tile, or right-click it (or
   **Split…** in Settings → Video sources) and choose 2 or 3 close-ups. Each
   person gets a virtual PTZ camera of their own ("Cam 1 left", "Cam 1
   right"…), with a box on the wide picture to drag onto them and a name
@@ -229,8 +230,8 @@ and [Install on Windows](#install-on-windows).
   didn't finish). Its buttons: **Show in Finder** (Explorer on Windows),
   **Open in Resolve** (see [Editing your takes](#editing-your-takes)) and
   **Upload** (when uploads are set up). ✕ puts it away; the next recording
-  does too. The header keeps the last take and the free space in view.
-- **Recent takes:** the ▾ beside Record lists the last ten takes in the
+  does too. The time left on the drive stays in view at the top right.
+- **Recent takes:** **Record › Takes** lists the last ten takes in the
   recording folder (date, length, size, ⚠ if Take.txt notes a problem), each
   with the same buttons: Finder/Explorer, Resolve and Upload….
 
@@ -482,7 +483,8 @@ Takes start with the **Take name** from Settings → Recording. Leave it as
 - **MIDI controllers:** map pads, keys and faders with Learn; pads light up to
   show what's on air.
 - **Show profiles:** save complete setups (sources, scenes, audio, graphics,
-  streaming) per production and switch between them from the header. If
+  streaming) per production and switch between them from the show's name at
+  the top of the rail. If
   the setup you're on isn't a show yet, switching saves it as "My setup"
   first, so nothing is lost. Rename a show in place, and deleting or
   replacing one asks first. Takes are named after the show you're on (unless
@@ -554,7 +556,7 @@ this if you don't need it; everything else works without it.
    Install…**. Approve the extension in System Settings if asked (Privacy &
    Security on macOS 13–14; General → Login Items & Extensions on macOS 15
    and later).
-5. Press **Webcam** in the header. In the video-call app, choose the
+5. Press **Webcam** under the status light (top right). In the video-call app, choose the
    **Cutaway** camera, and your interface or a loopback device as the
    microphone.
 
@@ -584,8 +586,8 @@ Needs Windows 11 (64-bit, Intel or AMD) and a DirectX 12 graphics card.
 version, and GitHub's Windows machines run its tests and a test recording on
 every change, but it hasn't been used on a Windows PC with real cameras yet.
 Expect some tuning on first contact; the log
-(`%LOCALAPPDATA%\Cutaway\Logs\Cutaway.log`) and the Health window are the
-places to start.
+(`%LOCALAPPDATA%\Cutaway\Logs\Cutaway.log`) and the status light (top
+right) are the places to start.
 
 1. **Tools, once:** [Rust](https://rustup.rs) and the
    [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
@@ -647,27 +649,36 @@ Video Extensions** on some PCs.
   that camera for a moment). Your scenes turns on **Edit layout**, and Editing
   afterwards opens **Recording → For editing**, where the DaVinci Resolve,
   Premiere Pro and Final Cut projects are switched on. Open it again any time
-  with **?** at the top.
+  from **More › App › Help** (or **First-show guide** under the status light).
 - **Auto-setup:** on first launch Cutaway writes a settings file with every
   camera and capture card it finds, plus the first audio input, to
   `~/Library/Application Support/Cutaway/config.toml` (on Windows,
   `%APPDATA%\Cutaway\config.toml`).
-  Change anything in **Settings** (top right), or edit the file directly.
-  `cutaway.example.toml` explains every option.
-- **Settings** are in six groups (Inputs, Sound, Look, Show, Output and
-  General), each with its pages as tabs; less-used parts fold away, showing how
-  they're set. Hover a setting's name, or its ⓘ, for what it does. **Find a
-  setting…** at the top of the list matches setting names, their help and page
-  names; click a match to open its page, with the setting's name lit up (Esc
-  clears the box).
-- **The Settings window** can be dragged by its title and resized from its
-  corner, so it needn't cover the camera you're adjusting. It opens where you
-  left it on this computer; **Centre** at the top (or double-clicking the
-  title) puts it back. **Revert** sits on its own at the bottom left; **OK**
-  and **Apply** are only on when something has changed (Cancel, ✕ or Esc
-  closes). While it's open, click the
-  main window and your show's keys work again (it says **Show keys active**)
-  as long as the pointer's away from Settings; click in Settings to type there.
+  Change anything in the areas down the left of the window, or edit the
+  file directly. `cutaway.example.toml` explains every option.
+- **The rail down the left** has the areas: **Show** (the live desk),
+  **Sources**, **Scenes**, **Sound**, **Graphics**, **Record**, and **More**
+  at the bottom (⌘1–⌘7, or Ctrl+1–7 on Windows; **Esc** goes back to Show
+  when you're not typing). Clicking an area turns the top bar into its tabs;
+  the ones used least sit under **More ▾** at the end of the row, and so do
+  any that don't fit a narrow window. Each area opens where you left it on
+  this computer, and Cutaway always starts on Show. Below 1200 pixels wide
+  the rail shows icons only (hover for the name). The logo at the top opens
+  **Updates & about** (a blue dot on **More** means a new version is out),
+  and the show's name under it switches shows.
+- **The settings pages** open inside the window, in the area they belong to
+  (Video sources is Sources › Cameras, Recording is Record › Recording, and
+  so on); less-used parts fold away, showing how they're set. Hover a
+  setting's name, or its ⓘ, for what it does. **Find a setting…** at the top
+  right of the page matches setting names, their help and page names; click a
+  match to go there, with the setting's name lit up (Esc clears the box).
+  **Revert** sits on its own at the bottom left; **OK** and **Apply** are only
+  on when something has changed (OK and Cancel go back to Show). Changes not
+  applied yet show as an amber dot on their area in the rail, and going back
+  to Show asks before dropping them. Your show's keys keep working on these
+  pages, except while you type in a box. OK and Apply put on only what you
+  changed on the page, so a fader, ON/OFF, transition or anything else
+  changed on the desk meanwhile stays as it is.
 - **Starting up:** the window opens straight away; while the cameras come up,
   the monitors show a clapperboard with a line from the studio floor.
 - **Check your hardware:** `cutaway --probe-encoders` shows the encoders
@@ -679,23 +690,31 @@ Video Extensions** on some PCs.
 
 - **The log:** everything Cutaway reports, including the full details of any
   internal error, goes to `~/Library/Logs/Cutaway/Cutaway.log`. Find it under
-  **Settings → Diagnostics → Show**, or in Console.app under Log Reports.
-- **Messages and the Log button:** an error stays at the bottom of the
-  window until you click it, and several stack up rather than replacing each
-  other. Disk-space and backup-drive warnings show there too. Every error also
-  goes in the **Log** panel (the button in the header), which counts only the
-  warnings you haven't looked at yet, can show **Warnings only**, and has
-  **Copy** to paste them into a message. If a scene key does nothing, check
-  the header: "Typing: show keys off" means a box has the keyboard (Esc).
-- **Problem report:** **Settings → Diagnostics → Save a problem report…**
+  **More › App › Diagnostics → Show**, or in Console.app under Log Reports.
+- **The status light** at the top right says **All good**, or **2 to check**
+  in amber: problems now (a source with no signal or below its frame rate, a
+  file failing, a mic gone quiet, the drive low on space) plus warnings in
+  the log you haven't looked at yet. Click it: **Now** lists the problems and
+  everything at a glance, **Log** is everything Cutaway has noted this session
+  (**Warnings only**, and **Copy** to paste it into a message), and **Run
+  pre-show check** runs the check.
+- **Messages:** an error stays at the bottom of the window until you click
+  it, and several stack up rather than replacing each other. Disk-space and
+  backup-drive warnings show there too, and every error also goes in the Log.
+  If a scene key does nothing, check the top bar: **⌨ Typing** means a box has
+  the keyboard (Esc).
+- **Problem report:** **More › App › Diagnostics → Save a problem report…**
   saves one .zip to send: the log, the last take's note, your settings and
   the devices found. Stream keys, passwords and tokens are taken out, even
   where they appear in the log.
-- **Health:** the **Health** button shows each source's frame rate, each
-  file being recorded (frames written, repeated, dropped, queued), each
-  input's re-syncs and the drives. Like **Log (3)**, it turns amber with a count (**Health (2)**) when something needs a look.
-- **A device that misbehaves** doesn't stop the app. It's marked offline, the
-  reason is in the Log panel, and it's reopened when it comes back.
+- **Now, under the status light,** shows each source's frame rate
+  ("measuring…" for the first second after the cameras start, rather than a
+  false 0), each file being recorded (frames written, repeated, dropped,
+  queued: Repeated and Dropped turn amber for trouble in the last minute, not
+  for one bad moment hours ago), each input's re-syncs and the drives.
+- **A device that misbehaves** doesn't stop the app. It's marked offline (the
+  same meaning everywhere: the desk, the phone remote, OSC and the pre-show
+  check), the reason is in the Log, and it's reopened when it comes back.
 - **A source that drops while it's on air** (a camera unplugged, a network
   feed gone) puts a red chip on the program monitor ("Cam 2: no signal,
   reconnecting…"), one error message at the bottom, and a ⚠ on every scene
@@ -717,49 +736,54 @@ Video Extensions** on some PCs.
 | Action | How |
 |---|---|
 | Take scene 1–9 | Number keys, or click the scene button |
-| Scene buttons | Along the bottom. Each shows a live picture of its scene (its sources where its frames are), ♪ when it changes the sound, and ⚠ when a source in it has no signal; a long name ends in "…" and shows in full when you hover. When they don't all fit, the edge says how many more (**+3 ›**: click it, or scroll sideways). In a window at least 1000 pixels tall they take a second row instead |
+| Scene buttons | Along the bottom, every one in view. Each shows its key number (large), its name, **ON AIR** or **NEXT** (in preview), ♪ when it changes the sound and ⚠ when a source in it has no signal; a long name ends in "…" and shows in full when you hover. With room, each has a live picture of its scene (its sources where its frames are); in a narrower window (a 13" laptop) they become two rows of smaller buttons without pictures, so up to 12 scenes always fit. A bank longer than that scrolls sideways, and the edge says how many more (**+3 ›**: click it). In a window at least 1000 pixels tall they keep their pictures in two rows |
 | Cut straight to a scene | Shift + number, or Shift + click |
-| Back to the last scene | `Backspace` (or the `back` command): the scene on air before this one goes back on air with the current transition and its cues (in Preview mode too, without passing through preview). Press it again to go back the other way |
-| Put a source full screen | Click it in the multiview |
+| Back to the last scene | **⟲ Back** under the transitions, `Backspace` or the `back` command: the scene on air before this one goes back on air with the current transition and its cues (in Preview mode too, without passing through preview). Press it again to go back the other way |
+| Put a source full screen | With Preview off, click its tile in the multiview to pick it (a blue edge), then **Put on air** on the tile: so clicking a tile to look closer never switches the show. Shift+click a tile cuts to it at once. With Preview on, a click puts it in preview. Each tile shows the source's name and who's in it |
 | Preview, then take | Turn on **Preview**; scene keys then load the preview. Space = Take (with the transition), Enter = Cut |
-| Transition | The CUT / MIX / WIPE / PUSH / DIP buttons; `T` toggles between Cut and the last transition |
-| Automatic switching | **AUTO** or `A` |
+| Transition | **CUT** or **MIX** beside the scenes, with the length (it's greyed for Cut and Stinger, where it does nothing: a stinger lasts as long as its video). Wipe, Push, Dip and Stinger are under **⋯** (which then reads WIPE ▾ and so on). `T` toggles between Cut and the last transition |
+| Automatic switching | **AUTO** or `A`. Until it has rules (Settings → Switching) AUTO is greyed, and a click says so with a **Set up rules ›** link |
 | Captions on screen | **CC** or `C` |
-| Who an auto-framed source follows | Right-click its tile: follow and shot size |
-| Marker | `M`, or **◆ Marker** while recording |
-| Named marker | `Shift+M` while recording: the marker goes in at that moment and a box asks for its name (typing doesn't move it; Cancel keeps "Marker 3") |
+| Who an auto-framed source follows | **⋯** on its tile (or right-click it): follow and shot size |
+| Marker | `M`, or **◆ Marker** beside REC while recording (just **◆ 3** in a narrow window) |
+| Named marker | `Shift+M` while recording, or **▾ › Named marker…** beside ◆: the marker goes in at that moment and a box asks for its name (typing doesn't move it; Cancel keeps "Marker 3") |
 | This take's markers | **▾** beside **◆ Marker**: each marker's time, name and the scene on air. Change a name there, or ✕ to take one out, until the take stops (clips show with ✂ and stay as they are) |
-| Save a clip | `K`, or **✂ Clip** while recording (the last 30 seconds, or as set) |
-| Instant replay | **⟲ Replay** while recording (right-click it for slow motion or another camera) |
-| Fade to black | **FTB** under the transitions; again to come back |
+| Save a clip | `K`, or **✂ Clip** beside REC while recording (the last 30 seconds, or as set) |
+| Instant replay | **⟲ Replay** under the status light while recording: Slow, and from the program, one camera or every angle |
+| Fade to black | **Fade to black**, at the end of the transitions; it flashes while the program is black, and reads **Fade up**: click it again to come back |
 | Macros, PTZ, teleprompter, comments | Their panels on the right, the Stream Deck, the remote, MIDI or OSC |
 | Sound pads 1–12 | F1–F12, or the pad buttons in the sound panel (hold for "while held" pads) |
 | Talkback | Hold `B`, or hold **TALK** in the sound panel |
 | Next rundown segment | `N` (Shift+N goes back), or **Next ▶** in the rundown panel |
 | Timers | Right-click a countdown or stopwatch's graphic button: start, pause, reset |
 | Graphics 1–9 | Alt/Option + number, or the graphic buttons; ✎ edits a title's text live |
-| Media player | ⟲ ⏯ ⏭ on its tile; right-click the tile for the playlist |
-| Record / stop | ⌘R, or the record button. To stop, hold the **REC** button (the dark one with the pulsing red dot) for a second (a red fill grows across it; a quick click only says **Hold to stop**); ⌘R asks "Stop recording?" first, so a stray click or key can't split the take |
-| Go live / end stream | The **GO LIVE** button (until there's somewhere to stream to, the header has a small **Set up streaming** in its place). It has no key unless you give it one in Settings → Shortcuts, so a stray key can't start or end a broadcast (a key gets the same checks and "are you sure?" as the button) |
+| Media player | ⟲ ⏯ ⏭ on its tile; **⋯** (or right-click) for the playlist |
+| Record / stop | ⌘R, or **● Record** at the top right. While recording, the **REC** pill (dark, with a pulsing red dot) shows the time with **hold to stop** under it: hold it for a second to stop (a red fill grows across it; a quick click does nothing but light up the hint). ⌘R asks "Stop recording?" first, so a stray click or key can't split the take |
+| Go live / end stream | **◉ Go live** at the top right, once there's somewhere to stream to (set that up in **Record › Streaming**). It says **Going live…** until a destination is really on air, and the **LIVE** time counts from then, the same on the desk, the phone and OSC. It has no key unless you give it one in More › Control › Shortcuts, so a stray key can't start or end a broadcast (a key gets the same checks and "are you sure?" as the button) |
 | Put scenes in order | In **Edit layout**, drag a scene button along the bank (a bar shows where it goes). Only in Edit layout, so a slip during the show can't move one. Or ↑ ↓ in **Settings → Show → Scenes**, which also renames, duplicates, deletes (it asks first, and says what uses the scene) and starts new scenes |
 | New scene | **＋ New scene** in Edit layout (or Settings → Scenes): **Blank**, or from a layout (a source full screen, side by side, picture in picture, grid). It goes at the end of the bank, so no other scene's number changes. With Preview on it goes in preview to edit; otherwise take it to edit it |
 | Edit layout | `E`, or **Edit layout**. With **Preview** on you edit the scene in preview (click a scene to pick it; the one on air goes there if preview is empty): the program, and so the recording and stream, stays exactly as it is until you **Take** or **Cut** it. With Preview off you edit the scene on air, and changes show at once. The bar has two groups. **Frame**: **Add source**, **Remove**, **To front**, **Full frame**, **Fit/Fill** and **Zoom** for the selected frame. **Scene**: its name, **Audio** (inputs it turns on or off), **Cues**, **＋ New scene**, **Duplicate**, **Delete**. Drag frames, drag the corner to resize (Shift keeps shape), double-click a frame to fill it, scroll to zoom, Option/Alt-drag to move the picture. **Unsaved** shows until the scenes are written to disk: **Save scenes**, or a few seconds after **Done** |
 | Audio strip | Fader = level (double-click resets), **ON** = in the mixes, 🎧 = solo in the headphones |
 | Fold or move a panel on the right | Click its heading (▾) to fold it down to one line, again to open it. Drag a heading onto another panel's heading to move it above that one. Each show remembers its own |
 | Widen the column on the right | Drag its left edge (the three dots), up to about 60% of the window. Each show remembers its width |
-| Second screen | **Screen** in the header. On that window: double-click or `F` for full screen, Esc to leave full screen, Esc again (or ✕, or Cmd/Ctrl+W) to close |
-| Switch show | The show name next to the logo |
-| Time of day | The clock at the right of the header's status line (next to the disk space). Click it to switch between 24-hour and 12-hour time; Cutaway remembers which |
-| Settings | ⌘, |
+| Second screen | **Second screen** under the status light (set it up in Record › More ▾ › Screens & webcam). On that window: double-click or `F` for full screen, Esc to leave full screen, Esc again (or ✕, or Cmd/Ctrl+W) to close |
+| Webcam (virtual camera) | **Webcam** under the status light |
+| Switch show | The show's name at the top of the rail, under the logo |
+| Time left on the drive | Top right, beside the clock: **2 h 40 min left**, with **412 GB free** under it (hover for the drive and whether the time is from this take's real write rate or estimated). It turns amber under 30 minutes, the same limit as the status light and the pre-show check |
+| Time of day | The clock at the top right. Click it to switch between 24-hour and 12-hour time, or choose in **More › App › General** or under the status light; each show remembers which |
+| Areas | ⌘1–⌘7 (Ctrl+1–7 on Windows): Show, Sources, Scenes, Sound, Graphics, Record, More. **Esc** goes back to Show (not while typing) |
+| Settings pages | ⌘, opens the area you last had open (Sources the first time) |
+| Every key | **More › App › Help** lists them all as they're set now |
 
 The keys above are the built-in ones. Any of them (except the numbered
-scene, graphic and pad keys) can be moved or turned off in **Settings →
-General → Shortcuts**, where you can also add your own.
+scene, graphic and pad keys) can be moved or turned off in **More › Control
+› Shortcuts**, where you can also add your own. The hints on buttons (REC,
+TALK, Undo, the graphics) always show the key as it's set now.
 
 ## Going live
 
-1. **Add destinations:** open **Settings → Streaming** (or **Set up
-   streaming** in the header, or **Set up** in the Stream panel), click **＋ Add** and pick a service. Paste the stream key
+1. **Add destinations:** open **Record › Streaming** (or **Set up** in the
+   Stream panel), click **＋ Add** and pick a service. Paste the stream key
    from that platform's dashboard. Add as many destinations as you like and
    tick the ones to use.
 2. **Set the quality:** set the stream size, frame rate and bitrate. The
@@ -823,7 +847,7 @@ time.
   stream key at the event, so going live lands on that page.
 - **Go live by itself:** tick **At the start time** and Cutaway presses
   GO LIVE for you when it's time, as long as it's open (up to 10 minutes
-  late, if the computer was asleep). The header counts down the last hour.
+  late, if the computer was asleep). The top bar counts down the last hour.
   YouTube starts the event when your stream arrives, and ends it when you
   stop.
 - **The first time**, press **Allow Cutaway to schedule YouTube streams**:
@@ -1198,7 +1222,7 @@ close-up of the person on the left, cut from the same camera.*
 - **Auto-framing:** in **Settings → Video sources**, add a source of type
   **Auto-framed close-up** and pick the wide camera to cut it from, who to
   follow and the shot size (close-up, medium, wide). Add several for several
-  people. Right-click its tile during the show to change who it follows.
+  people. Use **⋯** on its tile (or right-click it) during the show to change who it follows.
   - Best from a 4K camera: a 1080p close-up cut from 4K stays sharp. **Zoom
     limit** caps how far a smaller picture is enlarged.
   - Small movements are ignored, so the shot holds steady; when someone
@@ -1276,7 +1300,7 @@ it: a project, the YouTube Data API and/or Google Drive API turned on, and a
   folder per take (inside a "Cutaway" folder).
 - An **Upload** button appears in the main window's Uploads panel (and on
   the Take saved card) when a take is saved (and its podcast made); send an
-  older take from **Recent takes** (▾ beside Record), or uploads start straight away if you choose. They go on in the
+  older take from **Record › Takes**, or uploads start straight away if you choose. They go on in the
   background, one at a time, with their progress, and pick up again if the
   connection drops.
 - **Quitting doesn't lose them.** The queue is kept in `uploads.json` beside
@@ -1337,7 +1361,7 @@ Cutaway only sees the Drive files it made.
   - The M-series Pro, Max and Ultra chips have more media engines than the
     base chips, and encode ProRes in hardware.
   - For lots of 4K, use H.265 or ProRes and moderate bitrates.
-  - If an encoder can't keep up, the Health window and the Log say so, and
+  - If an encoder can't keep up, the status light (Now and the Log) says so, and
     frames are repeated in that file rather than anything stalling.
 - **Compositor:** runs on the GPU (Metal). A 4K program is fine.
 - **USB bandwidth:** several 4K USB capture devices on one bus can run out of
@@ -1527,8 +1551,8 @@ delay.
 
 **Not yet run on a Mac:** the parts that only exist on macOS compile
 against the macOS frameworks for Apple Silicon but haven't been run on real
-hardware yet. Expect a little tuning on first contact; the Log and the
-Health window are the places to start:
+hardware yet. Expect a little tuning on first contact; the status light
+(Now and the Log) is the place to start:
 
 - ProRes recording and VideoToolbox decoding (network sources, the media
   player).
