@@ -123,10 +123,7 @@ impl StreamState {
         let destinations = on
             .iter()
             .map(|d| {
-                let mut text = crate::engine::streamer::describe(&d.state);
-                if d.attempts > 1 && matches!(d.state, DestState::Retrying { .. }) {
-                    text = format!("{text} (try {})", d.attempts + 1);
-                }
+                let text = crate::engine::streamer::describe_dest(d);
                 DestinationState {
                     name: d.name.clone(),
                     state: match d.state {

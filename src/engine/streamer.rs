@@ -86,14 +86,29 @@ impl StreamStatus {
     }
 }
 
+/// A destination's state as the desk, the phone and OSC show it: with the
+/// try it's on while it waits to try again ("Retrying in 4 s (try 2)").
+pub fn describe_dest(d: &DestStatus) -> String {
+    let text = describe(&d.state);
+    if d.attempts >= 1 && matches!(d.state, DestState::Retrying { .. }) {
+        format!("{text} (try {})", d.attempts + 1)
+    } else {
+        text
+    }
+}
+
 /// Readable name for a destination's state.
 pub fn describe(state: &DestState) -> String {
     match state {
         DestState::Connecting => "Connecting…".into(),
         DestState::Live => "Live".into(),
         DestState::Retrying { at } => {
-            let s = at.saturating_duration_since(Instant::now()).as_secs();
-            format!("Retrying in {s} s")
+            // Rounded up, so it never says 0 s while it's still waiting.
+            let left = at.saturating_duration_since(Instant::now());
+            match left.as_millis().div_ceil(1000) {
+                0 => "Retrying now…".into(),
+                s => format!("Retrying in {s} s"),
+            }
         }
         DestState::Failed => "Failed".into(),
         DestState::Off => "Off".into(),
@@ -843,6 +858,25 @@ mod tests {
         assert_eq!(connecting.live_seconds(), 0.0);
         let on_air = StreamStatus { on_air_since: Some(Instant::now() - std::time::Duration::from_secs(2)), ..connecting };
         assert!((on_air.live_seconds() - 2.0).abs() < 0.5);
+    }
+
+    /// "Retrying in 0 s" never shows, and the first retry says its try
+    /// number too (numbers audit #19).
+    #[test]
+    fn retry_countdown_and_try_number() {
+        let d = |secs_ms: u64, attempts| DestStatus {
+            name: "YouTube".into(),
+            service: Service::ALL[0],
+            state: DestState::Retrying { at: Instant::now() + std::time::Duration::from_millis(secs_ms) },
+            kbps: 0.0,
+            message: None,
+            attempts,
+            congested: false,
+        };
+        assert_eq!(describe_dest(&d(1_500, 1)), "Retrying in 2 s (try 2)");
+        assert_eq!(describe_dest(&d(300, 3)), "Retrying in 1 s (try 4)");
+        assert_eq!(describe(&DestState::Retrying { at: Instant::now() }), "Retrying now…");
+        assert_eq!(describe_dest(&DestStatus { state: DestState::Live, ..d(0, 2) }), "Live");
     }
 
     fn v(t: Ns) -> Pkt {

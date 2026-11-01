@@ -34,7 +34,7 @@ use super::*;
 use std::time::{Duration, Instant};
 
 /// The pages that save as you go.
-pub const LIVE: &[Section] = &[Section::Sources, Section::Guests];
+pub const LIVE: &[Section] = &[Section::Sources, Section::Guests, Section::Recording, Section::Streaming];
 
 /// Whether a page saves as you go.
 pub fn is_live(s: Section) -> bool {
