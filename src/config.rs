@@ -1452,7 +1452,9 @@ pub struct UiConfig {
     /// How wide the column on the right was dragged (0 = its usual width).
     #[serde(skip_serializing_if = "is_zero_f32")]
     pub column_width: f32,
-    /// The clock in the header shows 12-hour time (3:05 PM), not 24-hour.
+    /// Times of day show as 12-hour time (3:05 PM), not 24-hour: the one
+    /// setting for the top bar, clock graphics, the second screen and
+    /// scheduled times (numbers audit #8; `Config::sync_clock_format`).
     pub clock_12h: bool,
 }
 
@@ -2262,6 +2264,7 @@ impl Config {
         let mut cfg: Config =
             toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         cfg.validate()?;
+        cfg.adopt_clock_format();
         cfg.held_secrets = crate::secrets::reveal(cfg.secrets_mut());
         for (field, _) in &cfg.held_secrets {
             eprintln!("{}: the saved value for {field} is missing", path.display());
@@ -2338,6 +2341,27 @@ impl Config {
     /// The checks a settings file must pass to load and run. Settings asks
     /// for more (`check`) before Apply, so older files that Settings would
     /// now refuse still open.
+    /// Clock graphics show the time of day in the show's one format
+    /// (`ui.clock_12h`): each one's `clock_24h` is kept in step with it.
+    pub fn sync_clock_format(&mut self) {
+        for g in &mut self.graphics {
+            g.clock_24h = !self.ui.clock_12h;
+        }
+    }
+
+    /// A show from before there was one format: when its time-of-day clock
+    /// graphics all agree, the show takes their format, so what's on air
+    /// doesn't change; then everything follows it.
+    pub fn adopt_clock_format(&mut self) {
+        let clocks: Vec<bool> = self.graphics.iter().filter(|g| g.kind == GraphicKind::Clock && g.clock == ClockKind::Time).map(|g| g.clock_24h).collect();
+        if let Some(&first) = clocks.first() {
+            if clocks.iter().all(|&c| c == first) {
+                self.ui.clock_12h = !first;
+            }
+        }
+        self.sync_clock_format();
+    }
+
     pub fn validate(&self) -> Result<()> {
         self.check_with(false).map_err(Into::into)
     }
@@ -2580,6 +2604,27 @@ fn merge_lists(b: &[serde_json::Value], e: &[serde_json::Value], l: &[serde_json
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One 12/24-hour setting (numbers audit #8): an old show keeps what
+    /// its clock graphics showed on air, then every clock follows the show.
+    #[test]
+    fn one_clock_format() {
+        let mut c = Config::default();
+        assert!(!c.ui.clock_12h);
+        c.graphics.push(Graphic::clock("Clock", ClockKind::Time, ""));
+        c.graphics.push(Graphic::clock("Back in", ClockKind::Countdown, ""));
+        c.adopt_clock_format();
+        assert!(c.ui.clock_12h, "the on-air clock was 12-hour");
+        assert!(c.graphics.iter().all(|g| !g.clock_24h));
+        c.ui.clock_12h = false;
+        c.sync_clock_format();
+        assert!(c.graphics.iter().all(|g| g.clock_24h));
+        // Clocks that disagree: the show's setting wins.
+        c.graphics[1] = Graphic { clock_24h: false, ..Graphic::clock("Two", ClockKind::Time, "") };
+        c.adopt_clock_format();
+        assert!(!c.ui.clock_12h);
+        assert!(c.graphics.iter().all(|g| g.clock_24h));
+    }
 
     /// Takes are named after the show unless you've named them yourself.
     #[test]

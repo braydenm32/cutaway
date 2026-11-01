@@ -481,7 +481,9 @@ impl App {
     }
 
     /// The presenters' clocks over the second screen's picture.
-    pub(super) fn draw_display_clocks(painter: &egui::Painter, area: Rect, segment: Option<(String, f64, f64)>, recording: Option<Duration>) {
+    /// The second screen's clocks: the time of day in the show's 12/24-hour
+    /// format and REC as the top bar shows it (numbers audit #8).
+    pub(super) fn draw_display_clocks(painter: &egui::Painter, area: Rect, segment: Option<(String, f64, f64)>, recording: Option<Duration>, twelve: bool) {
         let now = chrono::Local::now();
         let scale = (area.height() / 1080.0).clamp(0.7, 2.0);
         let big = FontId::monospace(54.0 * scale);
@@ -505,9 +507,9 @@ impl App {
                 y += gh;
             }
         };
-        let mut left = vec![(now.format("%-I:%M:%S %p").to_string(), big.clone(), Color32::WHITE)];
+        let mut left = vec![(now.format(crate::engine::timers::time_format(twelve, true)).to_string(), big.clone(), Color32::WHITE)];
         if let Some(r) = recording {
-            left.push((format!("● REC {}", crate::engine::timers::fmt_span(r, false)), small.clone(), REC_DOT));
+            left.push((format!("● REC {}", super::fmt_clock(r)), small.clone(), REC_DOT));
         }
         boxed(area.left_top() + vec2(pad, pad), Align2::LEFT_TOP, left);
         if let Some((name, elapsed, planned)) = segment {

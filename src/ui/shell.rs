@@ -680,10 +680,9 @@ impl App {
         ui.add_space(4.0);
         let clock = super::clock_text(chrono::Local::now().naive_local().time(), self.cfg.ui.clock_12h);
         let b = egui::Button::new(RichText::new(clock).size(TEXT_STATE).color(TEXT_DIM)).frame(false);
-        let tip = if self.cfg.ui.clock_12h { "The time here. Click for 24-hour time" } else { "The time here. Click for 12-hour time" };
+        let tip = if self.cfg.ui.clock_12h { "The time here. Click for 24-hour time (clock graphics and the second screen follow)" } else { "The time here. Click for 12-hour time (clock graphics and the second screen follow)" };
         if ui.add(b).on_hover_text(tip).clicked() {
-            self.cfg.ui.clock_12h = !self.cfg.ui.clock_12h;
-            self.cfg_dirty = true;
+            self.set_clock_12h(!self.cfg.ui.clock_12h);
         }
 
         // ---- the time left on the drive
@@ -999,8 +998,7 @@ impl App {
             }
             let mut twelve = self.cfg.ui.clock_12h;
             if ui.checkbox(&mut twelve, "12-hour clock").changed() {
-                self.cfg.ui.clock_12h = twelve;
-                self.cfg_dirty = true;
+                self.set_clock_12h(twelve);
             }
             if ui.button("First-show guide").clicked() {
                 self.guide_open = true;
@@ -1090,7 +1088,7 @@ impl App {
                     self.settings = Some(self.new_settings().open_at(page));
                     self.shell.shown_section = Some(page);
                 }
-                if AREAS[a].tabs[t].sections[s].id == "general" {
+                if AREAS[a].tabs[t].sections[s].id == "general" || (page == Section::Graphics && AREAS[a].tabs[t].id == "timers") {
                     self.clock_choice(ui);
                 }
                 if AREAS[a].tabs[t].id == "screens" {
@@ -1108,6 +1106,21 @@ impl App {
                         win.set_sources_view(view);
                         if let Some(name) = remembered {
                             win.restore_source(&name);
+                        }
+                    }
+                }
+                if page == Section::Graphics {
+                    let view = match AREAS[a].tabs[t].id {
+                        "timers" => crate::settings::GraphicsView::Timers,
+                        "turns" => crate::settings::GraphicsView::Turns,
+                        "web" => crate::settings::GraphicsView::Web,
+                        _ => crate::settings::GraphicsView::Titles,
+                    };
+                    let remembered = self.shell.picked.get("graphics").cloned();
+                    if let Some(win) = self.settings.as_mut() {
+                        win.set_graphics_view(view);
+                        if let Some(name) = remembered {
+                            win.restore_graphic(&name);
                         }
                     }
                 }
@@ -1134,19 +1147,31 @@ impl App {
         }
     }
 
-    /// The clock in the top bar, 12 or 24 hours (as clicking it does).
+    /// The show's one clock format, 12 or 24 hours (as clicking the clock
+    /// in the top bar does).
     fn clock_choice(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Clock in the top bar").color(TEXT_DIM));
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Times of day").color(TEXT_DIM));
             for (twelve, label) in [(false, "24-hour"), (true, "12-hour")] {
-                if ui.add(egui::Button::selectable(self.cfg.ui.clock_12h == twelve, label)).clicked() {
-                    self.cfg.ui.clock_12h = twelve;
-                    self.cfg_dirty = true;
+                if ui.add(egui::Button::selectable(self.cfg.ui.clock_12h == twelve, label)).clicked() && self.cfg.ui.clock_12h != twelve {
+                    self.remember(super::undo::Kind::Settings, "Clock format");
+                    self.set_clock_12h(twelve);
                 }
             }
-            ui.label(RichText::new("(clicking the clock switches it too; kept with the show)").size(TEXT_SMALL).color(TEXT_DIM));
+            ui.label(RichText::new("the top bar, clock graphics, the second screen and scheduled times; clicking the clock switches it too").size(TEXT_SMALL).color(TEXT_DIM));
         });
         ui.separator();
+    }
+
+    /// The show's clock format, everywhere at once (numbers audit #8):
+    /// the top bar, the clock graphics on air, the second screen.
+    pub(super) fn set_clock_12h(&mut self, twelve: bool) {
+        self.cfg.ui.clock_12h = twelve;
+        self.cfg.sync_clock_format();
+        if let Some(e) = &self.engine {
+            e.graphics.update(&self.cfg.graphics);
+        }
+        self.cfg_dirty = true;
     }
 
     /// The second screen as it is now, with what its window's own corner
@@ -1202,6 +1227,11 @@ impl App {
         if win.section() == Section::Sources {
             if let Some(name) = win.source_name() {
                 self.shell.picked.insert("sources".into(), name);
+            }
+        }
+        if win.section() == Section::Graphics {
+            if let Some(name) = win.graphic_name() {
+                self.shell.picked.insert("graphics".into(), name);
             }
         }
         if win.section() == Section::Audio {

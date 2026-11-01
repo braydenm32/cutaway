@@ -36,6 +36,7 @@ use crate::engine::{LogLevel, LogLine};
 use crate::ui::theme::*;
 use eframe::egui::{self, vec2, Align, Color32, Layout, RichText};
 pub use live::is_live;
+pub use graphics::GraphicsView;
 pub use mixing::MixView;
 pub use sources::SourcesView;
 use std::collections::HashSet;
@@ -240,6 +241,23 @@ pub enum SettingsAction {
     Go(&'static str),
     /// Do something on the show now (a media player's next, say).
     Run(crate::control::Action),
+    /// Make a name title that follows who's on air (the desk's one-click
+    /// way, with its Undo and its note about names).
+    MakeNameTitle,
+    /// Load a web graphic's page again (by name).
+    ReloadGraphic(String),
+}
+
+/// A graphic as it is on the program now, for the Graphics pages.
+#[derive(Clone, Debug, Default)]
+pub struct GraphicNow {
+    pub name: String,
+    pub on: bool,
+    pub problem: Option<String>,
+    /// A clock's text now.
+    pub clock: Option<String>,
+    /// A timer that's counting.
+    pub running: bool,
 }
 
 /// Read-only facts the window shows (engine state, log, ...).
@@ -296,6 +314,10 @@ pub struct SettingsContext {
     pub pictures: Vec<preview::Picture>,
     /// Virtual PTZ cameras (by uid), for the shot they're on.
     pub virtual_ptz: Vec<(u64, Arc<crate::engine::ptz::VirtualPtz>)>,
+    /// The graphics as they are on the program now.
+    pub graphics_now: Vec<GraphicNow>,
+    /// Graphics taking turns, by name: whether each is running.
+    pub rotations_now: Vec<(String, bool)>,
 }
 
 pub use preview::Picture;
@@ -339,6 +361,11 @@ pub struct SettingsUi {
     failed: Option<Box<Config>>,
     outputs: Vec<DeviceInfo>,
     sel_graphic: usize,
+    /// A graphic was picked here (or asked for): a remembered one doesn't
+    /// replace it.
+    graphic_picked: bool,
+    /// Which graphics a Graphics tab shows.
+    gview: GraphicsView,
     profile_name: String,
     /// The show being renamed, and its new name so far.
     renaming: Option<(String, String)>,
@@ -457,6 +484,8 @@ impl SettingsUi {
             failed: None,
             outputs: crate::platform::list_output_devices(),
             sel_graphic: 0,
+            graphic_picked: false,
+            gview: GraphicsView::Titles,
             profile_name: String::new(),
             renaming: None,
             deleting: None,
@@ -530,6 +559,33 @@ impl SettingsUi {
             if let Some(i) = self.draft.sources.iter().position(|s| s.name == name) {
                 self.sel_source = i;
             }
+        }
+    }
+
+    /// Which graphics the page shows (the Graphics area's tab).
+    pub fn set_graphics_view(&mut self, v: GraphicsView) {
+        self.gview = v;
+    }
+
+    /// The graphic picked on the Graphics pages, by name (remembered on
+    /// this computer, so going back lands on it).
+    pub fn graphic_name(&self) -> Option<String> {
+        self.draft.graphics.get(self.sel_graphic).map(|g| g.name.clone())
+    }
+
+    /// Pick the graphic remembered from last time, unless one was picked
+    /// already. By name; gone: the first.
+    pub fn restore_graphic(&mut self, name: &str) {
+        if !self.graphic_picked {
+            self.pick_graphic(name);
+        }
+    }
+
+    /// Show this graphic (by name) on the Graphics pages.
+    pub fn pick_graphic(&mut self, name: &str) {
+        self.graphic_picked = true;
+        if let Some(i) = self.draft.graphics.iter().position(|g| g.name.eq_ignore_ascii_case(name)) {
+            self.sel_graphic = i;
         }
     }
 
@@ -726,7 +782,7 @@ impl SettingsUi {
             Section::Syrinscape => self.syrinscape(ui, info),
             Section::Program => self.program(ui),
             Section::Switching => self.switching(ui, info),
-            Section::Graphics => self.graphics(ui),
+            Section::Graphics => self.graphics(ui, info),
             Section::Rundown => self.rundown(ui),
             Section::Scenes => self.scenes(ui),
             Section::Macros => self.macros(ui),
@@ -2694,6 +2750,8 @@ mod tests {
             redo: None,
             pictures: Vec::new(),
             virtual_ptz: Vec::new(),
+            graphics_now: Vec::new(),
+            rotations_now: Vec::new(),
         }
     }
 

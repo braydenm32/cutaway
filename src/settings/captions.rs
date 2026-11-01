@@ -27,7 +27,7 @@ impl SettingsUi {
                 match &info.captions_status {
                     Some(s) if s == "listening" => ui.label(RichText::new("● listening").color(GREEN)),
                     Some(s) => ui.label(RichText::new(s).color(AMBER)),
-                    None => ui.label(RichText::new("starts when you press Apply").color(TEXT_DIM)),
+                    None => ui.label(RichText::new("starting…").color(TEXT_DIM)),
                 };
                 ui.end_row();
             }

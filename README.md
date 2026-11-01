@@ -325,10 +325,12 @@ Takes start with the **Take name** from Settings → Recording. Leave it as
 - **Names that follow people:** give each source the name and role of
   whoever is in it (**Sources › People & names**, the one place names are
   changed, which also offers **＋ Make a name title** when there's none; a guest spot
-  uses the name the guest types), and add **Names of whoever's on air** (the
-  recommended button; **Fixed title** is for typed text) in
-  Settings → Graphics, or with **＋ Make a name title** in the Graphics panel
-  while a show has no graphics yet (the panel is always there). It names whoever fills the program, changing at each
+  uses the name the guest types), and make a name title: **＋ Make a name
+  title** on **Graphics › Titles & overlays** (the first thing it offers
+  while a show has no graphics yet, with one line saying how your name
+  titles stand once it has one), or **＋ Name title** there, or the same
+  button in the Graphics panel on the desk (the panel is always there;
+  **Fixed title** is for typed text). It names whoever fills the program, changing at each
   cut, and can come on by itself for a few seconds when someone new is on
   air (not again for the same person for 10 minutes, or as you set). Its
   button keeps it on for as long as you like. For two people on one camera,
@@ -339,7 +341,8 @@ Takes start with the **Take name** from Settings → Recording. Leave it as
   comes on for as long as you set, then goes off. It starts and stops by
   itself when you go live (or record), or from its **⟳** button, a key, the
   remote, the Stream Deck or MIDI (`rotation:Sponsors`). Set it up in
-  **Settings → Graphics → Taking turns**.
+  **Graphics › More ▾ › Taking turns**, where **Start now** / **Stop**
+  start or stop it straight away.
 - **Time on screen:** hover a graphic's button to see how many times and how
   long it's been on since you went live, and every take's folder gets
   **Graphics on air.csv** (each graphic, how often, for how long, and when),
@@ -351,8 +354,24 @@ Takes start with the **Take name** from Settings → Recording. Leave it as
 - **Clocks and countdowns:** clock graphics show the time of day, a
   countdown to a time ("Starting in 4:59"), a countdown or stopwatch you
   start from a button, key or cue, or the time left in the rundown segment
-  (red when it runs over). The second screen can also show the time and the
-  segment clock just for the presenters.
+  (red when it runs over). They're in **Graphics › More ▾ › Clocks &
+  timers**, where each timer has **▶ Start** and **⟲** too. A countdown to a
+  time that has gone by counts to the same time the next day, so one to
+  00:30 set at 23:50 shows 40:00 (for an hour after its time it rests at
+  0:00). The second screen can also show the time and the segment clock
+  just for the presenters.
+- **One clock format:** 24-hour or 12-hour is one setting for the whole
+  show: the top bar's clock, clock graphics, the second screen and
+  scheduled times all follow it. Click the clock in the top bar, or choose
+  at the top of **Graphics › More ▾ › Clocks & timers** or in **More › App ›
+  General**. (A show from before this keeps the format its on-air clock
+  had.)
+- **The Graphics area:** **Titles & overlays** lists every graphic in the
+  order of their Alt (⌥) keys, with a preview of the one you pick beside
+  **Show** / **Take off**; **More ▾** has **Clocks & timers**, **Captions**,
+  **Taking turns** and **Tickers & web overlays**. Changes save as you make
+  them, with Undo, and the graphic you picked is still picked when you come
+  back.
 - **Rundown:** the show's running order — each segment with a planned
   length, a scene and cues (graphics, pads, Syrinscape moods, timers) — that
   you step through with **Next** (`N`), the Stream Deck or the remote. It
@@ -665,7 +684,7 @@ Settings are in `%APPDATA%\Cutaway\config.toml`, recordings go to
 | Encoding | VideoToolbox: H.264, HEVC, ProRes | The graphics card's H.264/HEVC encoder (NVIDIA, AMD, Intel), or Microsoft's software H.264. No ProRes |
 | Decoding (players, network sources, replays, MJPEG webcams) | VideoToolbox | Media Foundation on the graphics card, or in software if the card can't (set `CUTAWAY_SOFTWARE_DECODE=1` to always use software) |
 | Audio | CoreAudio | Windows audio (WASAPI) and **ASIO** (interfaces show as "ASIO: …", every channel) |
-| Live captions | Apple's speech recognition | **Whisper**, on the PC: the speech model downloads once from Settings → Captions (57 MB Fast, 181 MB Accurate) |
+| Live captions | Apple's speech recognition | **Whisper**, on the PC: the speech model downloads once from Graphics › More ▾ › Captions (57 MB Fast, 181 MB Accurate) |
 | Auto-framing, background removal | Apple's Vision | Open models (YuNet, PP-HumanSeg) on the graphics card through ONNX Runtime and DirectML |
 | Virtual webcam | Camera extension (one-time signing step) | Windows 11's virtual camera: **Settings → Screens & webcam → Install…** asks for administrator rights once |
 | Log | `~/Library/Logs/Cutaway` | `%LOCALAPPDATA%\Cutaway\Logs` |
@@ -728,7 +747,7 @@ Video Extensions** on some PCs.
   lights up for a moment. A desk button is shown, never pressed, so nothing
   goes on air from search. ⌘K works even while you're typing in a box; Esc
   (or ⌘K again) closes it, and what you typed is still there next time.
-- **Changes save as you go** in Sources, Sound, and Record › Recording and Streaming (the other areas follow): what you
+- **Changes save as you go** in Sources, Sound, Graphics (Captions too), and Record › Recording and Streaming (the other areas follow): what you
   change applies straight away and is saved, a box when you press Enter or
   click elsewhere. **↶ Undo** and **↷ Redo** at the bottom of the page (or ⌘Z
   when you're not typing in a box) take it back. Changes that would add,
@@ -835,7 +854,7 @@ Video Extensions** on some PCs.
 | Webcam (virtual camera) | **Webcam** under the status light |
 | Switch show | The show's name at the top of the rail, under the logo |
 | Time left on the drive | Top right, beside the clock: **2 h 40 min left**, with **412 GB free** under it (hover for the drive and whether the time is from this take's real write rate or estimated). It turns amber under 30 minutes, the same limit as the status light and the pre-show check |
-| Time of day | The clock at the top right. Click it to switch between 24-hour and 12-hour time, or choose in **More › App › General** or under the status light; each show remembers which |
+| Time of day | The clock at the top right. Click it to switch between 24-hour and 12-hour time, or choose in **More › App › General**, **Graphics › Clocks & timers** or under the status light; each show remembers which, and clock graphics, the second screen and scheduled times follow it |
 | Areas | ⌘1–⌘7 (Ctrl+1–7 on Windows): Show, Sources, Scenes, Sound, Graphics, Record, More. **Esc** goes back to Show (not while typing) |
 | Settings pages | ⌘, opens the area you last had open (Sources the first time) |
 | Search | ⌘K (Ctrl+K on Windows), or the magnifier in the top bar: settings, pages and desk buttons by name. ↑ ↓ and Enter to go, Esc to close |
@@ -1219,12 +1238,12 @@ the camera stopping (a new close-up starts once you press Apply).
 - **Macros:** **Settings → Macros:** a name, a colour and a list of commands
   (any from the table above, with `wait:` between). They're buttons in the
   main window, Stream Deck keys and remote buttons, and can be cues.
-- **Scrolling ticker:** **Settings → Graphics → ＋ Scrolling ticker:** the text, a label
+- **Scrolling ticker:** **Graphics › More ▾ › Tickers & web overlays → ＋ Scrolling ticker:** the text, a label
   and the speed. ✎ on its button changes the text live.
-- **Web page overlays:** **Settings → Graphics → ＋ Web page:** an address
+- **Web page overlays:** **Graphics › More ▾ › Tickers & web overlays → ＋ Web page:** an address
   (or **Choose file…** for an HTML file) and the size the page is laid out
   at (the program's size by default). Its button shows and hides it like
-  any graphic; **⟳** beside it loads the page again. Pages are drawn by
+  any graphic; **⟳** beside it (or **⟳ Load again** on its page) loads the page again. Pages are drawn by
   Google Chrome or Microsoft Edge (or Brave, Chromium or Vivaldi), run
   hidden in the background, so one of them needs to be installed: every
   Windows PC has Edge. A page's sound isn't heard.
@@ -1318,7 +1337,8 @@ close-up of the person on the left, cut from the same camera.*
 
 ## Captions, transcripts and the podcast
 
-- **Captions:** turn them on in **Settings → Captions** and pick what to
+- **Captions:** turn them on in **Graphics › More ▾ › Captions** (it saves as
+  you go) and pick what to
   listen to (the mix, or one input) and the language. The first time, macOS
   asks for **Speech Recognition** permission; on Windows, press
   **Download** for the speech model (once). Captions appear on the stream,
