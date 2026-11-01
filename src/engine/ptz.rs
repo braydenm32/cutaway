@@ -333,6 +333,13 @@ impl VirtualPtz {
         self.st.lock_ok().pos
     }
 
+    /// Glide back to a shot it had (the desk's Undo after Home).
+    pub fn go_to(&self, s: Shot) {
+        let mut st = self.st.lock_ok();
+        st.drive = [0.0; 3];
+        st.goal = Some(s);
+    }
+
     fn apply(&self, m: Move) {
         let mut st = self.st.lock_ok();
         match m {

@@ -251,7 +251,7 @@ pub const VISIBLE: &[(&str, &str)] = &[
     ("cmd.macro", "show/switch/column"), ("cmd.wait", "more/tools/macros"), ("cmd.ptz", "show/switch/column"),
     ("cmd.prompter", "show/switch/column"), ("cmd.comment", "show/switch/column"), ("cmd.guest", "show/switch/column"),
     // right-click and hover
-    ("ctx.replay", "show/switch/bank"), ("ctx.clock", "graphics/timers"), ("ctx.ptz.preset", "sources/closeups"),
+    ("ctx.replay", "show/switch/bank"), ("ctx.clock", "show/switch/column"), ("ctx.ptz.preset", "show/switch/column"),
     // (the tile's ⋯ offers what its right-click does)
     ("ctx.mv.split", "show/switch/multiview"), ("ctx.mv.framing", "show/switch/multiview"), ("ctx.mv.playlist", "show/switch/multiview"),
     ("mv.guest_warn", "status"),

@@ -127,7 +127,10 @@ and [Install on Windows](#install-on-windows).
   [Phone cameras](#phone-cameras).
 - **PTZ cameras:** pan, tilt, zoom and presets for cameras that speak VISCA
   (over IP, TCP or UDP) or NDI, from a joystick in the PTZ panel, the
-  phone remote, the Stream Deck, MIDI and OSC.
+  phone remote, the Stream Deck, MIDI and OSC. In the panel, **Save here ▾**
+  keeps the current shot as a preset, and **⌂ Home** sits on its own row,
+  away from Zoom out: while that camera is on air it takes a one-second
+  hold, and a virtual camera's **↶ Undo Home** glides back to the shot it had.
 - **Virtual PTZ:** a camera operator inside one wide (ideally 4K) camera:
   pan, tilt and zoom around its picture, with presets it glides to. Frame
   the presets in Settings by dragging boxes on the wide picture; it starts
@@ -307,7 +310,8 @@ Takes start with the **Take name** from Settings → Recording. Leave it as
   whoever is in it (**Settings → Video sources → Name title**; a guest spot
   uses the name the guest types), and add **Names of whoever's on air** (the
   recommended button; **Fixed title** is for typed text) in
-  Settings → Graphics. It names whoever fills the program, changing at each
+  Settings → Graphics, or with **＋ Make a name title** in the Graphics panel
+  while a show has no graphics yet (the panel is always there). It names whoever fills the program, changing at each
   cut, and can come on by itself for a few seconds when someone new is on
   air (not again for the same person for 10 minutes, or as you set). Its
   button keeps it on for as long as you like. For two people on one camera,
@@ -380,7 +384,8 @@ Takes start with the **Take name** from Settings → Recording. Leave it as
 - **Two mixes:** the recording mix and the stream mix. Each input can go to
   both or just one (e.g. a talkback mic that's recorded but never streamed).
 - **Loudness:** LUFS meters (momentary, short-term and integrated) for both
-  mixes, a safety limiter, and optional **stream levelling** that slowly
+  mixes (integrated, "I", counts from the start of each take, or from going
+  live for the stream, and shows — until then), a safety limiter, and optional **stream levelling** that slowly
   brings the stream to −14 LUFS without pumping.
 - **Scene audio:** scenes can turn inputs on or off when they're taken (a
   break scene that mutes the mics and brings up the music), in sync with the
@@ -762,7 +767,7 @@ Video Extensions** on some PCs.
 | Sound pads 1–12 | F1–F12, or the pad buttons in the sound panel (hold for "while held" pads) |
 | Talkback | Hold `B`, or hold **TALK** in the sound panel |
 | Next rundown segment | `N` (Shift+N goes back), or **Next ▶** in the rundown panel |
-| Timers | Right-click a countdown or stopwatch's graphic button: start, pause, reset |
+| Timers | **▶ / ⏸** and **⟲** beside a countdown or stopwatch's graphic button: start, pause, back to the start (right-click it for Stop and reset too) |
 | Graphics 1–9 | Alt/Option + number, or the graphic buttons; ✎ edits a title's text live |
 | Media player | ⟲ ⏯ ⏭ on its tile; **⋯** (or right-click) for the playlist |
 | Record / stop | ⌘R, or **● Record** at the top right. While recording, the **REC** pill (dark, with a pulsing red dot) shows the time with **hold to stop** under it: hold it for a second to stop (a red fill grows across it; a quick click does nothing but light up the hint). ⌘R asks "Stop recording?" first, so a stray click or key can't split the take |
@@ -770,8 +775,8 @@ Video Extensions** on some PCs.
 | Put scenes in order | In **Edit layout**, drag a scene button along the bank (a bar shows where it goes). Only in Edit layout, so a slip during the show can't move one. Or ↑ ↓ in **Settings → Show → Scenes**, which also renames, duplicates, deletes (it asks first, and says what uses the scene) and starts new scenes |
 | New scene | **＋ New scene** in Edit layout (or Settings → Scenes): **Blank**, or from a layout (a source full screen, side by side, picture in picture, grid). It goes at the end of the bank, so no other scene's number changes. With Preview on it goes in preview to edit; otherwise take it to edit it |
 | Edit layout | `E`, or **Edit layout**. With **Preview** on you edit the scene in preview (click a scene to pick it; the one on air goes there if preview is empty): the program, and so the recording and stream, stays exactly as it is until you **Take** or **Cut** it. With Preview off you edit the scene on air, and changes show at once. The bar has two groups. **Frame**: **Add source**, **Remove**, **To front**, **Full frame**, **Fit/Fill** and **Zoom** for the selected frame. **Scene**: its name, **Audio** (inputs it turns on or off), **Cues**, **＋ New scene**, **Duplicate**, **Delete**. Drag frames, drag the corner to resize (Shift keeps shape), double-click a frame to fill it, scroll to zoom, Option/Alt-drag to move the picture. **Unsaved** shows until the scenes are written to disk: **Save scenes**, or a few seconds after **Done** |
-| Audio strip | Fader = level (double-click resets), **ON** = in the mixes, 🎧 = solo in the headphones |
-| Fold or move a panel on the right | Click its heading (▾) to fold it down to one line, again to open it. Drag a heading onto another panel's heading to move it above that one. Each show remembers its own |
+| Audio strip | Always at the bottom of the column, under a fixed AUDIO heading, with room kept for it. Fader beside each meter = level, −60 to +12 dB (double-click resets), **ON** = in the mixes, 🎧 = solo in the headphones |
+| Fold or move a panel on the right | Click its heading (▾) to fold it down to one line, again to open it. Drag a heading by its ⠿ dots onto another panel's heading to move it above that one, or use **⋯ › Arrange panels…** at the top of the column (↑ ↓, Open, and **Reset order, folds and width**). Hovering a heading shows **Set up ›** for that panel; ⋯ lists them all. When panels go on below what fits, a line at the bottom says which (click it to scroll). Each show remembers its own |
 | Widen the column on the right | Drag its left edge (the three dots), up to about 60% of the window. Each show remembers its width |
 | Second screen | **Second screen** under the status light (set it up in Record › More ▾ › Screens & webcam). On that window: double-click or `F` for full screen, Esc to leave full screen, Esc again (or ✕, or Cmd/Ctrl+W) to close |
 | Webcam (virtual camera) | **Webcam** under the status light |
@@ -790,8 +795,9 @@ TALK, Undo, the graphics) always show the key as it's set now.
 
 ## Going live
 
-1. **Add destinations:** open **Record › Streaming** (or **Set up** in the
-   Stream panel), click **＋ Add** and pick a service. Paste the stream key
+1. **Add destinations:** open **Record › Streaming** (or **⋯ › Stream ›** at
+   the top of the column of panels; the Stream panel appears once you have a
+   destination), click **＋ Add** and pick a service. Paste the stream key
    from that platform's dashboard. Add as many destinations as you like and
    tick the ones to use.
 2. **Set the quality:** set the stream size, frame rate and bitrate. The
