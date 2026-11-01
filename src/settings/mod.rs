@@ -1583,7 +1583,7 @@ impl SettingsUi {
                                 Ok(p) => {
                                     // The script builds from what each take saves.
                                     o.resolve_project = true;
-                                    (format!("Installed in {}. Takes from now on can be built in Resolve: Workspace → Scripts → Cutaway - Build project from a take.", p.display()), false)
+                                    (format!("Installed in {}. In Resolve: Workspace → Scripts → Cutaway - Build project from a take (Open in Resolve on a take also installs it, and the script then builds that take).", p.display()), false)
                                 }
                                 Err(e) => (format!("Couldn't install it: {e:#}"), true),
                             });
