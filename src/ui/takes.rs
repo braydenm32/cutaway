@@ -218,22 +218,44 @@ pub(super) fn backup_incomplete(cfg: &Config, folder: &Path) -> Option<PathBuf> 
     note.exists().then_some(note)
 }
 
-/// Whether the Resolve script is installed, and whether this take has the
-/// file it builds the project from.
-fn resolve_ready(folder: &Path) -> (bool, bool) {
-    let installed = crate::engine::sessions::resolve_scripts_dir().join(crate::engine::sessions::RESOLVE_SCRIPT_NAME).exists();
-    let has_take = std::fs::read_dir(folder).map(|rd| rd.flatten().any(|e| e.file_name().to_string_lossy().ends_with("(Resolve).lua"))).unwrap_or(false);
-    (installed, has_take)
+/// The menu item in Resolve that builds the take (the script's file name).
+pub(super) const RESOLVE_STEP: &str = "Workspace › Scripts › Cutaway - Build project from a take";
+
+/// What Open in Resolve says it did, in one line (`ready`: the script is
+/// installed and noted to build this take).
+fn resolve_message(opened: bool, ready: bool, timeline: bool) -> String {
+    match (opened, ready, timeline) {
+        (true, true, _) => format!("DaVinci Resolve is opening. One step left, in Resolve: {RESOLVE_STEP}. (If it shows the Project Manager, open any project first.)"),
+        (true, false, true) => "Opening DaVinci Resolve. Its script couldn't be set up, so bring the timeline in yourself: File › Import › Timeline… (its path is copied).".into(),
+        (true, false, false) => "Opening DaVinci Resolve. This take has no timeline (Record › Recording › Editing saves one), so its folder is copied.".into(),
+        (false, _, true) => "DaVinci Resolve wasn't found. The timeline's path is copied: in Resolve, File › Import › Timeline…".into(),
+        (false, _, false) => "DaVinci Resolve wasn't found. The take's folder is copied.".into(),
+    }
 }
 
-/// What Open in Resolve says it did, in one line.
-fn resolve_message(opened: bool, script: bool, timeline: bool) -> &'static str {
-    match (opened, script, timeline) {
-        (true, true, _) => "Opening DaVinci Resolve. For the whole project: Workspace › Scripts › Cutaway (it starts at this take).",
-        (true, false, true) => "Opening DaVinci Resolve with this take's timeline. If it doesn't appear: File › Import › Timeline… (its path is copied).",
-        (true, false, false) => "Opening DaVinci Resolve. This take has no timeline (Record › Recording › Editing saves one), so its folder is copied.",
-        (false, _, true) => "DaVinci Resolve wasn't found. The timeline's path is copied: in Resolve, File › Import › Timeline…",
-        (false, _, false) => "DaVinci Resolve wasn't found. The take's folder is copied.",
+/// Gets Resolve ready to build `folder`: installs (or updates) the script,
+/// makes sure the take has its cut list, and leaves the script a note to
+/// build this take straight away. False when the script couldn't be set up.
+fn ready_resolve(folder: &Path, log: &mut Vec<String>) -> bool {
+    use crate::engine::sessions;
+    if !sessions::resolve_present() {
+        return false;
+    }
+    if let Err(e) = sessions::install_resolve_script() {
+        log.push(format!("installing the Resolve script: {e:#}"));
+        return false;
+    }
+    // Without it the script still imports the take's files and .fcpxml.
+    if let Err(e) = sessions::prepare_resolve_take(folder) {
+        log.push(format!("writing the take's Resolve file: {e:#}"));
+    }
+    let Some(dir) = crate::config::default_config_path().parent().map(Path::to_path_buf) else { return false };
+    match sessions::write_build_note(&dir, folder) {
+        Ok(()) => true,
+        Err(e) => {
+            log.push(format!("noting the take for Resolve: {e:#}"));
+            false
+        }
     }
 }
 
@@ -254,32 +276,30 @@ impl App {
         }
     }
 
-    /// Starts DaVinci Resolve with the take: its live-edit timeline (the
-    /// .fcpxml), or, with Cutaway's Resolve script set up, ready to build
-    /// the whole project from it. The timeline's path (or the folder) is
-    /// copied either way, for File › Import if Resolve needs it. Says what
-    /// happened.
+    /// Starts DaVinci Resolve ready to build the take: installs Cutaway's
+    /// Resolve script, leaves it a note to build this take, and says the
+    /// one step left (Workspace › Scripts). Free Resolve can't be driven
+    /// from outside, so that step is the user's. Without the script it
+    /// hands Resolve the .fcpxml; the timeline's path (or the folder) is
+    /// copied either way. Says what happened.
     fn open_in_resolve(&mut self, folder: &Path, ctx: &egui::Context) -> String {
-        let (installed, has_take) = resolve_ready(folder);
-        let script = installed && has_take;
-        if script {
-            // The script starts at the take noted here.
-            if let Some(dir) = crate::config::default_config_path().parent() {
-                let _ = std::fs::write(crate::engine::sessions::last_take_file(dir), folder.to_string_lossy().as_bytes());
-            }
-        }
+        let mut log = Vec::new();
+        let ready = ready_resolve(folder, &mut log);
         let timeline = crate::engine::sessions::take_timeline(folder);
         ctx.copy_text(timeline.as_deref().unwrap_or(folder).display().to_string());
-        let opened = match crate::engine::sessions::open_in_resolve(if script { None } else { timeline.as_deref() }) {
+        let opened = match crate::engine::sessions::open_in_resolve(if ready { None } else { timeline.as_deref() }) {
             Ok(()) => true,
             Err(e) => {
-                if let Some(engine) = &self.engine {
-                    engine.status.lock_ok().push(LogLevel::Info, format!("Open in Resolve: {e:#}"));
-                }
+                log.push(format!("{e:#}"));
                 false
             }
         };
-        resolve_message(opened, script, timeline.is_some()).to_string()
+        if let Some(engine) = &self.engine {
+            for l in log {
+                engine.status.lock_ok().push(LogLevel::Info, format!("Open in Resolve: {l}"));
+            }
+        }
+        resolve_message(opened, ready, timeline.is_some())
     }
 
     /// The takes list reads the folder again next time it's drawn.
@@ -364,7 +384,7 @@ impl App {
                         if ui.add(button(reveal_label())).clicked() {
                             action = Some(TakeAction::Reveal(t.folder.clone()));
                         }
-                        if ui.add(button("Open in Resolve")).on_hover_text("Start DaVinci Resolve with this take's timeline").clicked() {
+                        if ui.add(button("Open in Resolve")).on_hover_text("Start DaVinci Resolve and build a project from this take: every camera on its own track, with your live edit on top").clicked() {
                             action = Some(TakeAction::Resolve(t.folder.clone()));
                         }
                     });
@@ -490,7 +510,7 @@ impl App {
                     ui.add_space(8.0);
                     let button = |text: &str| egui::Button::new(text).fill(Color32::from_rgb(46, 51, 62)).min_size(vec2(0.0, 28.0));
                     ui.horizontal(|ui| {
-                        if ui.add(button("Open in Resolve")).on_hover_text("Start DaVinci Resolve with this take's timeline").clicked() {
+                        if ui.add(button("Open in Resolve")).on_hover_text("Start DaVinci Resolve and build a project from this take: every camera on its own track, with your live edit on top").clicked() {
                             action = Some(TakeAction::Resolve(r.folder.clone()));
                         }
                         if ui.add(button(reveal_label())).clicked() {
@@ -605,6 +625,8 @@ mod tests {
     fn resolve_messages() {
         assert!(resolve_message(true, false, true).contains("timeline"));
         assert!(resolve_message(true, true, true).contains("Workspace › Scripts › Cutaway"));
+        // The step names the menu item Resolve shows: the script's file name.
+        assert!(RESOLVE_STEP.ends_with(crate::engine::sessions::RESOLVE_SCRIPT_NAME.trim_end_matches(".lua")));
         assert!(resolve_message(false, false, true).starts_with("DaVinci Resolve wasn't found"));
         assert!(resolve_message(false, true, false).contains("folder is copied"));
         for m in [resolve_message(true, false, false), resolve_message(false, false, false)] {

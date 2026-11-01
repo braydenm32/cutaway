@@ -35,6 +35,7 @@ mod waiting;
 mod nav;
 mod routes;
 mod shell;
+mod hold;
 mod search;
 
 pub mod theme {
@@ -369,8 +370,7 @@ pub struct App {
     confirm: Option<Confirm>,
     /// The REC button: when the hold to stop began, whether this press
     /// already stopped the take, and until when "Hold to stop" shows.
-    rec_hold: Option<Instant>,
-    rec_hold_spent: bool,
+    rec_hold: hold::Hold,
     rec_hint_until: Option<Instant>,
     /// The self-test holds the REC button (for a screenshot).
     test_hold: bool,
@@ -610,8 +610,7 @@ impl App {
             pan_tool: false,
             settings: None,
             confirm: None,
-            rec_hold: None,
-            rec_hold_spent: false,
+            rec_hold: hold::Hold::default(),
             rec_hint_until: None,
             test_hold: false,
             test_drop: None,
@@ -2312,9 +2311,7 @@ impl App {
         if step >= 3 && std::env::var_os("CUTAWAY_UI_TEST_HOLD").is_some() {
             // Held part way: the fill shows, but it never gets to stop the take.
             self.test_hold = true;
-            if self.rec_hold.is_some_and(|h| h.elapsed() > Duration::from_millis(600)) {
-                self.rec_hold = Some(Instant::now() - Duration::from_millis(600));
-            }
+            self.rec_hold.hold_back(ctx.input(|i| i.time), 0.6);
         }
         let pip = self.scenes.iter().position(|s| s.name == "Picture in picture").unwrap_or(0);
         let next = match step {

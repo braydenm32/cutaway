@@ -672,7 +672,10 @@ impl SideFiles {
         // Editor timelines, only for files that were written.
         let written: HashSet<PathBuf> = report.files.iter().map(|f| f.0.clone()).collect();
         let mut timelines: Vec<(String, TakeExport)> = Vec::new();
-        if cfg.output.export_timelines {
+        // The live edit: for the editor timelines, and the cut list the
+        // Resolve script lays down (the same shots).
+        let mut live_edit: Option<TakeExport> = None;
+        if cfg.output.export_timelines || cfg.output.resolve_project {
             let mut efiles: Vec<ExportFile> = self.export_files.iter().filter(|f| written.contains(&f.path)).cloned().collect();
             if efiles.iter().any(|f| f.source.is_none()) {
                 // Video files only; timecode only when stamped.
@@ -686,9 +689,12 @@ impl SideFiles {
                 let cuts = export::cuts_from_switches(&self.first_scene, self.first_angle, events, t0, VIDEO_LATENCY, fps, frames, &recorded);
                 let markers = self.markers.iter().map(|m| ((m.at as i128 * fps as i128 / NS_PER_SEC as i128) as i64, m.name.clone())).collect();
                 let te = TakeExport { name: take_name.clone(), fps, width: canvas.0, height: canvas.1, frames, files: efiles, cuts, markers };
-                timelines.push((format!("{take_name}.fcpxml"), te.clone()));
-                timelines.push((format!("{take_name} (Premiere).xml"), te));
-                extra.push("Final Cut / Resolve and Premiere timelines".to_string());
+                if cfg.output.export_timelines {
+                    timelines.push((format!("{take_name}.fcpxml"), te.clone()));
+                    timelines.push((format!("{take_name} (Premiere).xml"), te.clone()));
+                    extra.push("Final Cut / Resolve and Premiere timelines".to_string());
+                }
+                live_edit = Some(te);
             }
         }
         files.push(("Take.txt".into(), take_info(setup, report, &self.markers, self.tc_seconds, recorded, cfg, !timelines.is_empty(), chapters.is_some())));
@@ -711,6 +717,9 @@ impl SideFiles {
         }
         let videos: Vec<String> = self.export_files.iter().filter(|f| written.contains(&f.path)).filter_map(|f| f.path.file_name().map(|n| n.to_string_lossy().to_string())).collect();
 
+        let have_mix = session.as_ref().is_some_and(|s| s.tracks.iter().any(|t| t.file == "Mix.wav"));
+        let resolve_edit = live_edit.as_ref().map(|te| super::sessions::ResolveEdit::from_export(te, have_mix)).unwrap_or_default();
+
         for dir in std::iter::once(&self.folder).chain(self.backup.iter()) {
             for (name, text) in &files {
                 let _ = std::fs::write(dir.join(name), text);
@@ -732,7 +741,7 @@ impl SideFiles {
                 }
                 if cfg.output.resolve_project {
                     let timeline = timelines.iter().find(|t| t.0.ends_with(".fcpxml")).map(|t| t.0.as_str());
-                    let _ = std::fs::write(dir.join(format!("{take_name} (Resolve).lua")), s.resolve_lua(dir, &videos, timeline, canvas));
+                    let _ = std::fs::write(dir.join(format!("{take_name} (Resolve).lua")), s.resolve_lua(dir, &videos, timeline, canvas, &resolve_edit));
                 }
             }
         }

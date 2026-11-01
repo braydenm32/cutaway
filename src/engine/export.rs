@@ -48,6 +48,20 @@ pub struct Cut {
     pub scene: String,
 }
 
+/// One shot of the live edit as an editor places it: program frames
+/// `start..end`, from frames `src_in..src_out` of `files[file]` (in that
+/// file's own frames). The Premiere timeline and the Resolve script's take
+/// file are both written from these, so they agree.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EditShot {
+    pub start: i64,
+    pub end: i64,
+    pub file: usize,
+    pub src_in: i64,
+    pub src_out: i64,
+    pub scene: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct TakeExport {
     pub name: String,
@@ -198,7 +212,7 @@ impl TakeExport {
 
     /// Length of a file in its own frames (the take's length, unless its
     /// source left early).
-    fn file_frames(&self, f: &ExportFile) -> i64 {
+    pub fn file_frames(&self, f: &ExportFile) -> i64 {
         let full = (self.frames * f.fps as i64 + self.fps as i64 / 2) / self.fps as i64;
         f.length.map_or(full, |ns| ns_to_frame(ns, f.fps).clamp(0, full))
     }
@@ -220,6 +234,28 @@ impl TakeExport {
             }
         }
         out
+    }
+
+    /// The live edit, shot by shot (see `EditShot`). A source that left
+    /// the show: its shot stops with its file (a gap till the next; the
+    /// program's sound carries on below).
+    pub fn edit(&self) -> Vec<EditShot> {
+        let in_file = |f: &ExportFile, seq_frame: i64| (seq_frame * f.fps as i64 + self.fps as i64 / 2) / self.fps as i64;
+        let mut out = Vec::new();
+        for (start, end, f, scene) in self.shots() {
+            let end = end.min(self.file_end(f));
+            if end <= start {
+                continue;
+            }
+            let file = self.files.iter().position(|g| std::ptr::eq(g, f)).unwrap_or(0);
+            out.push(EditShot { start, end, file, src_in: in_file(f, start), src_out: in_file(f, end), scene: scene.to_string() });
+        }
+        out
+    }
+
+    /// The file whose sound goes under the edit: the program's (the mix).
+    pub fn sound(&self) -> Option<&ExportFile> {
+        self.files.iter().find(|f| f.source.is_none() && f.has_audio).or_else(|| self.files.iter().find(|f| f.has_audio))
     }
 }
 
@@ -303,6 +339,25 @@ pub fn fcpxml(t: &TakeExport) -> String {
                 let _ = writeln!(x, "              <mc-source angleID=\"angle{angle}\" srcEnable=\"all\"/>");
             }
         }
+        // Every angle full length on its own lane above the edit (attached to
+        // the first shot, starting with the take), switched off like the
+        // Premiere timeline's tracks: in parallel and in sync, to swap shots.
+        if start == 0 {
+            for (i, g) in t.files.iter().enumerate() {
+                let (sn, sd) = asset_start(g);
+                let _ = writeln!(
+                    x,
+                    "              <asset-clip ref=\"a{}\" lane=\"{}\" name=\"{}\" offset=\"{}\" start=\"{}\" duration=\"{}\" format=\"{}\" tcFormat=\"NDF\" enabled=\"0\" srcEnable=\"video\"/>",
+                    i + 1,
+                    i + 1,
+                    esc(&g.name),
+                    rt(prog_tc, fps),
+                    rt(sn, sd),
+                    rt(t.file_frames(g), g.fps as i64),
+                    fmt_id(g.width, g.height, g.fps)
+                );
+            }
+        }
         for (m, title) in t.markers.iter().filter(|(m, _)| *m >= start && *m < end) {
             let _ = writeln!(x, "              <marker start=\"{}\" duration=\"{}\" value=\"{}\"/>", rt(prog_tc + m, fps), rt(1, fps), esc(title));
         }
@@ -362,26 +417,22 @@ pub fn premiere_xml(t: &TakeExport) -> String {
             f.height
         )
     };
-    let in_file = |f: &ExportFile, seq_frame: i64| (seq_frame * f.fps as i64 + t.fps as i64 / 2) / t.fps as i64;
     let mut clip_id = 0;
     // V1: the live edit.
     x += "        <track>\n";
-    for (start, end, f, scene) in t.shots() {
-        // A source that left the show: its shot stops with its file (a gap
-        // till the next; the program's sound carries on below).
-        let end = end.min(t.file_end(f));
-        if end <= start {
-            continue;
-        }
+    for e in t.edit() {
+        let f = &t.files[e.file];
         clip_id += 1;
         let _ = writeln!(
             x,
-            "          <clipitem id=\"clipitem-{clip_id}\"><name>{}</name><enabled>TRUE</enabled><duration>{}</duration>{}<start>{start}</start><end>{end}</end><in>{}</in><out>{}</out>{}</clipitem>",
-            esc(&format!("{} ({})", f.name, scene)),
+            "          <clipitem id=\"clipitem-{clip_id}\"><name>{}</name><enabled>TRUE</enabled><duration>{}</duration>{}<start>{}</start><end>{}</end><in>{}</in><out>{}</out>{}</clipitem>",
+            esc(&format!("{} ({})", f.name, e.scene)),
             t.file_frames(f),
             xm_rate(f.fps),
-            in_file(f, start),
-            in_file(f, end),
+            e.start,
+            e.end,
+            e.src_in,
+            e.src_out,
             file_el(f, &mut described)
         );
     }
@@ -401,7 +452,7 @@ pub fn premiere_xml(t: &TakeExport) -> String {
         );
     }
     x += "      </video>\n      <audio>\n        <numOutputChannels>2</numOutputChannels>\n";
-    if let Some(p) = t.files.iter().find(|f| f.source.is_none() && f.has_audio).or_else(|| t.files.iter().find(|f| f.has_audio)) {
+    if let Some(p) = t.sound() {
         for ch in 1..=2 {
             clip_id += 1;
             let _ = writeln!(
@@ -539,6 +590,14 @@ mod tests {
         assert!(x.contains("start=\"37230s\" duration=\"10s\" hasVideo=\"1\" format=\"f2\""), "{x}");
         assert_eq!(x.matches("<mc-clip ").count(), 3);
         assert!(x.contains("<marker start=\"37234s\" duration=\"1/30s\" value=\"Intro done\"/>"), "{x}");
+        // Every angle full length on its own lane, in sync with the edit.
+        let t = sample();
+        assert_eq!(x.matches(" lane=\"").count(), t.files.len(), "{x}");
+        for (i, f) in t.files.iter().enumerate() {
+            assert!(x.contains(&format!("<asset-clip ref=\"a{}\" lane=\"{}\" name=\"{}\" offset=\"37230s\"", i + 1, i + 1, esc(&f.name))), "{x}");
+        }
+        let first = &x[x.find("<mc-clip ").unwrap()..x.find("</mc-clip>").unwrap()];
+        assert_eq!(first.matches(" lane=\"").count(), t.files.len(), "the lanes hang off the first shot");
         assert_eq!(x.matches('<').count(), x.matches('>').count());
         xml_balanced(&x);
     }

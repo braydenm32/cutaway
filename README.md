@@ -199,42 +199,12 @@ and [Install on Windows](#install-on-windows).
 - **Audio sessions:** every take also comes with a **REAPER** session and a
   **DAWproject** (opens in **Fender Studio Pro**/Studio One, Bitwig and
   Cubase) with every WAV on its own track, lined up, with the markers.
-- **DaVinci Resolve project in one click:** install Cutaway's Resolve script
-  (Record › Recording › Editing) and run **Workspace → Scripts → Cutaway - Build
-  project from a take**: a new project at the take's frame rate and size, with bins
-  for the cameras and the audio, proxies linked and the live edit as a
-  timeline.
-- **Podcast episode:** optionally, each take also gives an M4A of the mix,
-  levelled to −16 LUFS (or your target) with a look-ahead limiter, tagged,
-  with the markers as chapters — ready to upload.
-- **Guest backup recordings:** optionally, each remote guest's browser also
-  records them (as their camera and mic capture them, before the internet
-  gets at it) and uploads it into the take's `Guests` folder as it goes, so
-  a bad connection doesn't spoil the recording.
-- **The program without graphics:** optionally record the show a second
-  time without titles, logos, tickers, captions or web pages
-  (`Program_Clean`, Record › Recording › Editing), cut for cut with
-  the Program file. In the editor timelines and the Resolve project, shots
-  of more than one camera use it, so the whole edit is free of graphics
-  (like the cameras' own files) and a misspelt name can be fixed with a new
-  title.
-- **The vertical version:** optionally record a 9:16 version of the show
-  alongside the program (see [The vertical version](#the-vertical-version)).
-- **Upload after the show:** send each take to **YouTube** (with the markers
-  as chapters) and/or **Google Drive**, signed in with your own Google
-  account (see [Upload after the show](#upload-after-the-show)).
-- **Transcripts:** with captions on, each take gets `Transcript.txt`
-  (time-stamped) and `Captions.srt` / `.vtt` subtitle files.
-- **Editor timelines:** every take includes a Final Cut Pro / DaVinci Resolve
-  timeline (`.fcpxml`) and a Premiere Pro timeline (`.xml`) of the live edit,
-  with every camera angle on hand to change any cut.
-- **Disk health:** shows the space left in hours and minutes, warns at 30 and
-  10 minutes, and finishes the files cleanly before the drive is full.
-- **Crash-safe.** Video files are written in one-second pieces. After a crash
-  or power cut, the next start turns them back into normal files and repairs
-  the WAVs, so you keep everything up to the last second. A card shows which
-  file it's mending while you carry on setting up, then says the take is safe
-  with a button to show the folder.
+- **DaVinci Resolve project in two clicks:** press **Open in Resolve** on a
+  take, then in Resolve **Workspace → Scripts → Cutaway - Build project from
+  a take**: a new project at the take's frame rate and size, with bins for
+  the cameras and the audio, proxies linked, and a timeline with your live
+  edit on V1, every camera (and the program) full length on its own track
+  above it, in sync, and the mix underneath.
 - **Saving files** after you stop shows what it's finishing (each video, the
   sound, the timeline) and how far along it is, on the Record button.
 - **Take saved:** once it's done, a card under the Record button says how
@@ -276,7 +246,7 @@ Take_2026-10-16_19-30-02/
   Take_2026-10-16_19-30-02.fcpxml    the live edit for Final Cut Pro / Resolve
   Take_2026-10-16_19-30-02.rpp       REAPER session (every WAV on a track)
   Take_2026-10-16_19-30-02.dawproject  Fender Studio Pro, Bitwig, Cubase
-  Take_… (Resolve).lua               what the Resolve script builds the project from
+  Take_… (Resolve).lua               what the Resolve script builds the project from (its cut list)
   Take_2026-10-16_19-30-02 (Premiere).xml
   Chapters.txt                       markers as a YouTube chapter list
   Switches.csv                       timecode, scene, transition for every switch
@@ -1456,25 +1426,34 @@ Cutaway only sees the Drive files it made.
 
 - **Final Cut Pro:** File → Import → XML, and pick the `.fcpxml`. You get a
   multicam clip of every recorded angle (and the program), and a project cut
-  as you switched it live, with the markers. Switch angles in the angle
-  viewer to change any cut.
-- **DaVinci Resolve:** File → Import → Timeline, and pick the `.fcpxml`. Or,
-  for the whole project in one go, press **Install the Resolve script** in
-  Record › Recording once (it also turns on **a project from each take**,
-  which saves what the script needs with every take from then on), then in
-  Resolve choose **Workspace → Scripts → Cutaway - Build project from a
-  take** and pick the take: you get a project named after it, at its frame
+  as you switched it live, with the markers, and every angle full length on
+  its own lane above it (switched off; turn one on, or blade it, to use it).
+  Switch angles in the angle viewer to change any cut.
+- **DaVinci Resolve:** press **Open in Resolve** (on the Take saved card or
+  in Record › Takes). Cutaway installs (or updates) its Resolve script,
+  notes the take for it and starts Resolve, and the card shows the one step
+  left: in Resolve, **Workspace → Scripts → Cutaway - Build project from a
+  take** (if Resolve shows its Project Manager, open any project first).
+  Within 15 minutes of Open in Resolve the script builds that take straight
+  away; later (or run on its own) it asks for the take's folder, starting
+  at the latest take. You get a project named after the take, at its frame
   rate and picture size, with bins for the cameras and the audio, proxies
-  linked and the live edit as a timeline with the markers. A take moved or
-  copied to another drive still works: pick it where it is now.
-  **Open in Resolve** (on the Take saved card and in Record › Takes) starts
-  DaVinci Resolve with the take's `.fcpxml` timeline and copies the
-  timeline's path, so if Resolve doesn't bring it in by itself it's
-  File → Import → Timeline and paste. With the script installed, it starts
-  Resolve instead and the script starts at that take. If Resolve isn't
-  installed in the usual place (`/Applications` on a Mac,
-  `Program Files\Blackmagic Design` on Windows), the path is still copied
-  and a line says so.
+  linked, and the timeline **… (live edit)**: your cuts on V1, every camera
+  and the program full length on its own track above (V2 and up, named
+  after the camera, switched off so the live edit plays; turn one on to
+  use it), the mix on A1 and the markers. The script lays the timeline down
+  clip by clip itself, so it doesn't depend on Resolve's XML import; if
+  that doesn't work in your Resolve it imports the `.fcpxml` instead. Older
+  takes work too (Open in Resolve adds the cut list from the take's
+  Premiere timeline), and a take moved or copied to another drive still
+  works: pick it where it is now. Why the one step: the free DaVinci
+  Resolve only runs scripts from its own menu, and Resolve's project files
+  (`.drp`) are a closed format, so Cutaway can't hand it a finished project.
+  If Resolve isn't installed in the usual place (`/Applications` on a Mac,
+  `Program Files\Blackmagic Design` on Windows), the `.fcpxml`'s path is
+  copied (File → Import → Timeline, and paste) and a line says so. The
+  script can also be installed from Record › Recording › Editing, where **a
+  project from each take** saves its take file with every take.
 - **REAPER:** open the take's `.rpp`: every WAV is on its own track, lined
   up, with the markers.
 - **Fender Studio Pro (Studio One), Bitwig, Cubase:** open (or import) the
@@ -1667,7 +1646,9 @@ and a software GPU:
   connection backs up and clears, and the encoder takes a new bitrate
   mid-stream.
 - **Session files:** the DAWproject checked against the official schema;
-  the Resolve script run against a stand-in for Resolve's scripting API.
+  the Resolve script run (in LuaJIT, as in Resolve) against a stand-in for
+  Resolve's scripting API: the clips it lays down, track by track, checked
+  against a real take's switch log; Resolve itself couldn't be run.
 - **Finding people with ONNX Runtime** (the Windows way), on Linux with ONNX
   Runtime 1.31: faces found in photos, and a person cut out over slides
   through the whole app.
