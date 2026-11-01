@@ -669,9 +669,16 @@ Video Extensions** on some PCs.
 - **The settings pages** open inside the window, in the area they belong to
   (Video sources is Sources › Cameras, Recording is Record › Recording, and
   so on); less-used parts fold away, showing how they're set. Hover a
-  setting's name, or its ⓘ, for what it does. **Find a setting…** at the top
-  right of the page matches setting names, their help and page names; click a
-  match to go there, with the setting's name lit up (Esc clears the box).
+  setting's name, or its ⓘ, for what it does.
+- **Search (⌘K, Ctrl+K on Windows, or the magnifier in the top bar)** opens
+  one box over whatever's open. It finds any setting by its name or by what
+  its help says, any area, tab or page (the old Settings page names like
+  "Remote & MIDI" still work), and the desk's own buttons and controls
+  ("fade to black", "named marker", "12-hour clock"). ↑ ↓ choose, Enter goes
+  there: the area and tab open, a folded part unfolds, and the setting's name
+  lights up for a moment. A desk button is shown, never pressed, so nothing
+  goes on air from search. ⌘K works even while you're typing in a box; Esc
+  (or ⌘K again) closes it, and what you typed is still there next time.
   **Revert** sits on its own at the bottom left; **OK** and **Apply** are only
   on when something has changed (OK and Cancel go back to Show). Changes not
   applied yet show as an amber dot on their area in the rail, and going back
@@ -773,6 +780,7 @@ Video Extensions** on some PCs.
 | Time of day | The clock at the top right. Click it to switch between 24-hour and 12-hour time, or choose in **More › App › General** or under the status light; each show remembers which |
 | Areas | ⌘1–⌘7 (Ctrl+1–7 on Windows): Show, Sources, Scenes, Sound, Graphics, Record, More. **Esc** goes back to Show (not while typing) |
 | Settings pages | ⌘, opens the area you last had open (Sources the first time) |
+| Search | ⌘K (Ctrl+K on Windows), or the magnifier in the top bar: settings, pages and desk buttons by name. ↑ ↓ and Enter to go, Esc to close |
 | Every key | **More › App › Help** lists them all as they're set now |
 
 The keys above are the built-in ones. Any of them (except the numbered

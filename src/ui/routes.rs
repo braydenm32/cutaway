@@ -12,7 +12,7 @@
 //! `legacy: true`: still drawn in its 0.9.7 place (the old header, the
 //! Settings window...). Each redesign PR flips its routes to `false` once
 //! the new home in nav.rs is drawn and every `was` still reaches it.
-// (Only the tests read it so far; ⌘K search will read the labels.)
+// (⌘K search reads the labels; the rest is read by the tests.)
 #![allow(dead_code)]
 
 /// A way in.
@@ -184,7 +184,7 @@ pub const ROUTES: &[Route] = &[
     r("win.guide", "First-show guide", &[Mouse]),
     // ---- the Settings window
     m("set.frame.titlebar", "Settings title bar", &[Mouse]),
-    r("set.frame.find", "Find a setting", &[Mouse]),
+    m("set.frame.find", "Find a setting", &[Mouse]),
     r("set.frame.revert", "Revert", &[Mouse]),
     r("set.frame.problem", "Go to the problem", &[Mouse]),
     r("set.frame.ok", "OK", &[Mouse]),

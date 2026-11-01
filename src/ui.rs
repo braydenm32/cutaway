@@ -33,6 +33,7 @@ mod waiting;
 mod nav;
 mod routes;
 mod shell;
+mod search;
 
 pub mod theme {
     use eframe::egui::Color32;
@@ -356,6 +357,8 @@ pub struct App {
     quit_ok: bool,
     /// The first-show guide is showing.
     guide_open: bool,
+    /// ⌘K search (ui/search.rs).
+    search: search::Search,
     /// No remembered window yet: fit the first one to the screen.
     fit_window: bool,
     /// A recording was started (the guide's last step).
@@ -569,6 +572,7 @@ impl App {
             test_marker_list: false,
             quit_ok: false,
             guide_open: false,
+            search: search::Search::default(),
             fit_window: false,
             guide_recorded: false,
             settings_page: None,
@@ -1946,11 +1950,13 @@ impl App {
         // pointer's away from it.)
         // (An area page's settings let them through, except while one of
         // its questions is up or it's waiting for a key.)
-        if ctx.egui_wants_keyboard_input() || self.settings.as_ref().is_some_and(|s| s.busy()) || self.title_edit.is_some() || self.marker_name.is_some() || self.confirm.is_some() || self.precheck.is_some() || self.sync.is_some() {
-            return;
-        }
         if self.keymap.as_ref().is_none_or(|(c, _)| *c != self.cfg.keys) {
             self.keymap = Some((self.cfg.keys.clone(), Keymap::new(&self.cfg.keys)));
+        }
+        // ⌘K works even while typing; the search box keeps the rest.
+        self.search_key(ctx);
+        if ctx.egui_wants_keyboard_input() || self.search_open() || self.settings.as_ref().is_some_and(|s| s.busy()) || self.title_edit.is_some() || self.marker_name.is_some() || self.confirm.is_some() || self.precheck.is_some() || self.sync.is_some() {
+            return;
         }
         let downs: Vec<(KeyCombo, bool)> = ctx.input(|i| {
             i.events
@@ -2057,6 +2063,7 @@ impl App {
     fn run_builtin(&mut self, ctx: &egui::Context, b: Builtin, key: Key) {
         match b {
             Builtin::Settings => self.open_settings(),
+            Builtin::Search => self.toggle_search(),
             Builtin::Undo => self.undo(ctx),
             Builtin::Redo => self.redo(ctx),
             Builtin::Record => self.toggle_record(),
@@ -2357,10 +2364,12 @@ impl App {
                 if let Some(n) = std::env::var("CUTAWAY_UI_TEST_SCENE").ok().and_then(|v| v.parse::<usize>().ok()) {
                     win = win.select_scene(n, std::env::var_os("CUTAWAY_UI_TEST_SCENE_DELETE").is_some());
                 }
-                if let Ok(q) = std::env::var("CUTAWAY_UI_TEST_FIND") {
-                    win = win.with_find(&q, std::env::var_os("CUTAWAY_UI_TEST_FINDGO").is_some());
-                }
                 self.settings = Some(win);
+                // FIND=query: ⌘K search open with it typed (FINDGO: gone to its first result).
+                if let Ok(q) = std::env::var("CUTAWAY_UI_TEST_FIND") {
+                    self.sync_shell();
+                    self.search_for(&q, std::env::var_os("CUTAWAY_UI_TEST_FINDGO").is_some());
+                }
                 4
             }
             // Stop, to show the "Take saved" card.
@@ -5448,6 +5457,7 @@ impl App {
     fn over_the_window(&mut self, ctx: &egui::Context) {
         self.display_window(ctx);
         self.guide_window(ctx);
+        self.search_window(ctx);
         self.confirm_dialog(ctx);
         self.title_dialog(ctx);
         self.marker_name_dialog(ctx);
