@@ -1,4 +1,4 @@
-//! Settings → Video sources: the source's picture above its settings, from
+//! Sources › Cameras: the source's picture above its settings, from
 //! the multiview's own pictures (nothing is opened twice). A virtual PTZ
 //! camera shows its wide camera with the shot and each preset as boxes to
 //! drag and zoom; a cropped or mirrored source shows what it'll look like.
@@ -52,7 +52,7 @@ impl SettingsUi {
             });
             match wide {
                 Some(pic) => self.ptz_picture(ui, info, &src, &pic),
-                None => placeholder(ui, &format!("The picture from {} shows here once it's running (press Apply).", parent.as_ref().map(|p| p.name.as_str()).unwrap_or("the wide camera"))),
+                None => placeholder(ui, &format!("The picture from {} shows here once it's running (Apply on the bar below).", parent.as_ref().map(|p| p.name.as_str()).unwrap_or("the wide camera"))),
             }
             return;
         }
@@ -63,13 +63,13 @@ impl SettingsUi {
                     let (r, _) = draw_picture(ui, &pic, WIDE, Sense::hover());
                     caption(ui, r, "What it shows now: it follows the people by itself");
                 }
-                None => placeholder(ui, "Not running yet: press Apply to see it."),
+                None => placeholder(ui, "Not running yet: Apply on the bar below to see it."),
             }
             return;
         }
         match own {
             Some(pic) => look_picture(ui, &pic, &src.look),
-            None if !unchanged => placeholder(ui, "Not running yet: press Apply to see it."),
+            None if !unchanged => placeholder(ui, "Not running yet: Apply on the bar below to see it."),
             None => placeholder(ui, "No picture from it right now."),
         }
     }

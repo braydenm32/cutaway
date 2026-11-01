@@ -5,7 +5,7 @@ dials and the Stream Deck app's virtual decks).
 
 ## Install
 
-1. In Cutaway: **Settings → Remote & MIDI**, turn on **Remote control** and
+1. In Cutaway: **More › Control**, turn on **Remote control** and
    note the port (8790) and PIN.
 2. Double-click **Cutaway.streamDeckPlugin** (or press **Install the Stream
    Deck plugin…** on that settings page). The Stream Deck app asks to
@@ -23,7 +23,7 @@ dials and the Stream Deck app's virtual decks).
 | Take / Cut | preview to program | lit while something is in preview |
 | Transition | cut, mix, wipe, push, dip, stinger | lit when it's the current one |
 | Record | start; hold a second to stop | red with the running time |
-| Go Live | hold to go live, hold to end | red with the running time; holds can be turned off |
+| Go Live | hold to go live, hold to end | GOING LIVE… (amber) while it connects, then red with the running time; "LIVE 1 of 2" with an amber edge while a destination isn't live, as on the phone; holds can be turned off |
 | Marker | drop a marker (optional label) | |
 | Graphic | show/hide a logo, title or lower third | lit while on |
 | Audio Input | on/off, with a level meter | on a Stream Deck+ dial: turn for level, press or tap for on/off |

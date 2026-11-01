@@ -231,6 +231,10 @@ pub fn state_messages(s: &ShowState) -> Vec<Message> {
         msg("/cutaway/transition".into(), Arg::Str(s.transition.clone())),
         msg("/cutaway/rec_time".into(), Arg::Str(if s.recording { clock(s.rec_seconds) } else { String::new() })),
         msg("/cutaway/live_time".into(), Arg::Str(if s.live { clock(s.live_seconds) } else { String::new() })),
+        // As the phone and Stream Deck say it (live is on from Go live):
+        // "off", "connecting", "live", "trouble" or "ending", and "1 of 2".
+        msg("/cutaway/stream".into(), Arg::Str(s.stream.state.clone())),
+        msg("/cutaway/stream/live".into(), Arg::Str(if s.stream.total > 0 { format!("{} of {}", s.stream.live_count, s.stream.total) } else { String::new() })),
     ];
     for t in ["cut", "mix", "wipe", "push", "dip"] {
         v.push(msg(format!("/cutaway/transition/{t}"), f(s.transition == t)));

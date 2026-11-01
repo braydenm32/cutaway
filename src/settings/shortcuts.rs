@@ -1,4 +1,4 @@
-//! Settings → Shortcuts: move a built-in shortcut, turn one off, or add
+//! More › Control › Shortcuts: move a built-in shortcut, turn one off, or add
 //! your own key for any command.
 
 use super::*;
@@ -153,7 +153,7 @@ impl SettingsUi {
             ("F1 – F12", "Sound pads 1–12 (hold for \"while held\" pads)"),
             ("Click a source", "Pick it, then Put on air (with Preview on: to preview). Shift+click cuts to it"),
             ("⋯ on a tile, or right-click", "Playlist, who to follow, split into close-ups"),
-            ("Esc", "Close Settings"),
+            ("Esc", "Leave a page, back to Show"),
             ("F / Esc", "On the second-screen window: full screen / leave full screen"),
         ];
         egui::Grid::new("fixed_keys").num_columns(2).spacing(FORM_GAP).striped(true).show(ui, |ui| {

@@ -50,11 +50,11 @@ checks it against the release's fingerprints and makes sure it starts; then
 **Restart to update** (once recording and streaming have stopped) or **When
 I quit** puts it in place. The previous version is kept until the new one
 has run for a few seconds, and comes back by itself if the new one doesn't
-start. Tick **download it by itself, and put it in when I quit** (Settings →
-General & shows → Updates) to have every update arrive that way. If Cutaway
+start. Tick **download it by itself, and put it in when I quit** (More › App ›
+General › Updates) to have every update arrive that way. If Cutaway
 can't change its own folder (an account without administrator rights on a
 Mac, say), the notice takes you to the download page instead. On Windows, an
-update that changes the virtual camera asks you to reinstall it (Settings →
+update that changes the virtual camera asks you to reinstall it (Record ›
 Screens & webcam), which needs administrator rights once.
 Your settings, shows and recordings stay as they are when you update.
 To see which version you have, click the logo at the top left (**About
@@ -133,11 +133,12 @@ and [Install on Windows](#install-on-windows).
   hold, and a virtual camera's **↶ Undo Home** glides back to the shot it had.
 - **Virtual PTZ:** a camera operator inside one wide (ideally 4K) camera:
   pan, tilt and zoom around its picture, with presets it glides to. Frame
-  the presets in Settings by dragging boxes on the wide picture; it starts
+  the presets in Sources › Close-ups & PTZ by dragging boxes on the wide picture; it starts
   on preset 1.
 - **Split a camera into close-ups:** **Sources › Close-ups & PTZ** walks you
   through it: pick the camera and **＋ 2 close-ups** or **＋ 3 close-ups**, drag
-  each box onto a person, then **Apply**. (**⋯** on a camera's tile, right-click
+  each box onto a person, then **Apply (restarts cameras)** on the bar at the
+  bottom. (**⋯** on a camera's tile, right-click
   it, or **Split…** under the list in Sources › Cameras do the same.) Each
   person gets a virtual PTZ camera of their own ("Cam 1 left", "Cam 1
   right"…), with a box on the wide picture to drag onto them and a name
@@ -153,7 +154,8 @@ and [Install on Windows](#install-on-windows).
 - **See it as you change it:** in **Sources** each source shows its picture
   above its settings (the multiview's own, so nothing is opened twice). Crop,
   mirror and colour show as you change them; a source you've only just added,
-  or changed in a way that restarts it, shows once you press Apply.
+  or changed in a way that restarts it, shows once you press **Apply
+  (restarts cameras)** on the bar at the bottom.
 - **The Sources area** has tabs: **Cameras** (every source, with **If it drops
   while on air** first), **Close-ups & PTZ** (close-ups cut from a camera,
   auto-framing and PTZ cameras), **People & names**, and under **More ▾**
@@ -211,7 +213,7 @@ and [Install on Windows](#install-on-windows).
   a bad connection doesn't spoil the recording.
 - **The program without graphics:** optionally record the show a second
   time without titles, logos, tickers, captions or web pages
-  (`Program_Clean`, Settings → Recording → For editing), cut for cut with
+  (`Program_Clean`, Record › Recording › Editing), cut for cut with
   the Program file. In the editor timelines and the Resolve project, shots
   of more than one camera use it, so the whole edit is free of graphics
   (like the cameras' own files) and a misspelt name can be fixed with a new
@@ -282,7 +284,7 @@ Take_2026-10-16_19-30-02/
   Take.txt                           devices, encoders, settings, markers, files
 ```
 
-Takes start with the **Take name** from Settings → Recording. Leave it as
+Takes start with the **Take name** from Record › Recording. Leave it as
 "Take" and, once you've chosen a show, takes are named after the show instead
 (`My_Show_2026-10-16_19-30-02`), and so is the Resolve project the script makes.
 
@@ -417,7 +419,7 @@ Takes start with the **Take name** from Settings → Recording. Leave it as
 - **Sound › Mixer** lists every input with its meter, its fader (−60 to
   +12 dB, the same range as the desk, MIDI and the `gain` command) and ON,
   above the limiter, stream loudness, automatic mic mixing and ducking.
-  **Settings ›** on a row opens that input in **Sound › Inputs**.
+  **Set up ›** on a row opens that input in **Sound › Inputs**.
 - **One meter per input:** the level an input shows is the same everywhere:
   its strip on the desk, Sound › Mixer and Sound › Inputs, the phone, OSC
   `/cutaway/level`, the pre-show check and the first-show guide all read the
@@ -516,13 +518,13 @@ Takes start with the **Take name** from Settings → Recording. Leave it as
 - **Keyboard** shortcuts for everything you do during a show. Move any of
   them to another key or turn one off, and add your own keys for any
   command (a scene, a graphic, a pad, a macro, a camera move) in
-  **Settings → General → Shortcuts**. A key you pick wins over a built-in
+  **More › Control › Shortcuts**. A key you pick wins over a built-in
   one, mistakes like a key given two jobs are flagged as you go, and
   **Print a cheat sheet** opens a page of every key to keep by the keyboard.
 - **Undo and redo** (Cmd/Ctrl+Z, Cmd/Ctrl+Shift+Z, or the buttons in Edit
   layout) for what you build: moving, resizing, filling and zooming frames,
   adding, renaming, duplicating and deleting scenes, a title's text, and
-  changes applied in Settings or by switching shows. The show itself (taking
+  changes made on the settings pages or by switching shows. The show itself (taking
   scenes, recording, going live) is never undone. While recording or live,
   an undo that would take out or restart sources, or switch shows, says so
   and waits until you've stopped.
@@ -534,7 +536,7 @@ Takes start with the **Take name** from Settings → Recording. Leave it as
   moves, the teleprompter, viewer comments (read them before one goes on
   air), timers, the rundown, sound pads, mics with faders and the media
   player, plus **tally pages** for phones mounted on cameras and a **prompter
-  page** for a tablet. **Settings → Remote & MIDI**
+  page** for a tablet. **More › Control**
   shows a QR code for the remote's address with the PIN in it: scan it with
   the phone's camera and the remote opens already signed in.
 - **Stream Deck plugin:** keys with live pictures of every scene and source,
@@ -620,7 +622,7 @@ this if you don't need it; everything else works without it.
    ./macos/virtualcam/build.sh "Developer ID Application: Your Name (TEAMID)" TEAMID ~/Downloads/Cutaway.provisionprofile
    ```
 4. Copy `target/Cutaway.app` to `/Applications` (camera extensions only load
-   from there), open it, and choose **Settings → Screens & webcam →
+   from there), open it, and choose **Record › Screens & webcam ›
    Install…**. Approve the extension in System Settings if asked (Privacy &
    Security on macOS 13–14; General → Login Items & Extensions on macOS 15
    and later).
@@ -633,7 +635,7 @@ this if you don't need it; everything else works without it.
 NDI is optional, and Cutaway doesn't include it. Choose **NDI** as a
 source's type in **Sources › Network & phone feeds** and pick from the senders it
 finds. To send the program (and, if you like, every source) to the network
-as NDI, turn it on in **Settings → Screens & webcam → NDI output**; it shows
+as NDI, turn it on in **Record › Screens & webcam › NDI output**; it shows
 how many receivers are watching. PTZ cameras on NDI can be steered from
 Cutaway (see [PTZ cameras](#ptz-cameras)).
 
@@ -678,7 +680,7 @@ right) are the places to start.
    yourself, as above, for ASIO.
 4. **First launch:** an unsigned app makes Windows say it "protected your
    PC": choose **More info → Run anyway** (once). If cameras or microphones
-   don't show, turn on **Settings → Privacy & security → Camera** (and
+   don't show, turn on **Windows Settings → Privacy & security → Camera** (and
    **Microphone**) → **Let desktop apps access…**.
 
 Settings are in `%APPDATA%\Cutaway\config.toml`, recordings go to
@@ -695,7 +697,7 @@ Settings are in `%APPDATA%\Cutaway\config.toml`, recordings go to
 | Audio | CoreAudio | Windows audio (WASAPI) and **ASIO** (interfaces show as "ASIO: …", every channel) |
 | Live captions | Apple's speech recognition | **Whisper**, on the PC: the speech model downloads once from Graphics › More ▾ › Captions (57 MB Fast, 181 MB Accurate) |
 | Auto-framing, background removal | Apple's Vision | Open models (YuNet, PP-HumanSeg) on the graphics card through ONNX Runtime and DirectML |
-| Virtual webcam | Camera extension (one-time signing step) | Windows 11's virtual camera: **Settings → Screens & webcam → Install…** asks for administrator rights once |
+| Virtual webcam | Camera extension (one-time signing step) | Windows 11's virtual camera: **Record › Screens & webcam › Install…** asks for administrator rights once |
 | Log | `~/Library/Logs/Cutaway` | `%LOCALAPPDATA%\Cutaway\Logs` |
 
 Everything else (switching, graphics, the mixer, recording formats,
@@ -722,9 +724,14 @@ Video Extensions** on some PCs.
   click elsewhere (it restarts that camera for a moment, so it waits while
   you're recording or live). The step also offers **＋ Make a name title** and
   **Close-ups…** (a close-up of each person from one camera). Your scenes turns on **Edit layout**, and Editing
-  afterwards opens **Recording → For editing**, where the DaVinci Resolve,
-  Premiere Pro and Final Cut projects are switched on. Open it again any time
-  from **More › App › Help** (or **First-show guide** under the status light).
+  afterwards opens **Record › Recording › Editing**, where the DaVinci Resolve,
+  Premiere Pro and Final Cut projects are switched on. A step's button folds
+  the guide down to a small **Guide 3 of 7** button on the left, just above
+  More, so the page it opened can be used; click it to carry on. Open
+  it again any time from **More › App › Help** (or **First-show guide** under
+  the status light). What it has ticked off (the mic heard you, the check
+  was run, a test recorded) is remembered between launches, and if you quit
+  with the guide open it opens again next time.
 - **Auto-setup:** on first launch Cutaway writes a settings file with every
   camera and capture card it finds, plus your microphone (a USB mic or
   interface before the computer's own; a loopback or a phone nearby only if
@@ -890,7 +897,7 @@ TALK, Undo, the graphics) always show the key as it's set now.
    shows what's really sent). Keep the total under about 70% of your measured
    upload speed.
 3. **Go live:** press **◉ GO LIVE**. With **Pre-show check** turned on in
-   Settings → General & shows, the check runs first and only stops you if
+   More › App › General, the check runs first and only stops you if
    something looks wrong.
    - The button pulses **GOING LIVE…** while it connects (the line beside
      it names where to), turns pink with a timer once you're live, and
@@ -915,7 +922,7 @@ TALK, Undo, the graphics) always show the key as it's set now.
   seconds and a steady bitrate, which is what these services expect.
 - **A slow connection** drops its own frames and picks up again at the next
   keyframe; it never holds up the other destinations or the recording. With
-  **adaptive bitrate** (Settings → Streaming, on by default) the bitrate also
+  **adaptive bitrate** (Record › Streaming, on by default) the bitrate also
   eases off while a connection struggles, and the Stream panel says so.
 - **Vertical destinations:** set a destination to send **the vertical
   version (9:16)** and it gets that instead of the program (see
@@ -931,7 +938,7 @@ TALK, Undo, the graphics) always show the key as it's set now.
 
 ### Scheduling a stream
 
-**Settings → Streaming → Scheduled stream** sets up your next show ahead of
+**Record › Scheduled** sets up your next show ahead of
 time.
 
 - **Title, description and picture:** what viewers see on the YouTube page.
@@ -980,7 +987,7 @@ raise it for Wi-Fi or the internet.
 
 ## Remote control, Stream Deck and MIDI
 
-Turn on **Settings → Remote & MIDI → Remote control**. Open the address it
+Turn on **More › Control › Phone remote › Remote control**. Open the address it
 shows (e.g. `http://192.168.1.20:8790`) on a phone or tablet on the same
 network and type the PIN. The remote always has one (Cutaway makes a
 four-digit PIN if you don't set your own), and a device that gets it wrong
@@ -1012,7 +1019,7 @@ Taps you can't take back need a one-second hold (a fill grows across the
 button, and letting go sooner only says **Hold to…**): stopping the recording,
 going live and ending the stream, fade to black, and turning a mic off.
 Starting a recording, turning a mic on and coming back from black are one tap.
-When the pre-show check is turned on (Settings → General → **Pre-show
+When the pre-show check is turned on (More › App › General → **Pre-show
 check**), starting from the phone, the Stream Deck, MIDI or OSC runs the check
 on the desk first, the same as the Record button; the phone shows that it's
 waiting on the desk, what the check found, and whether it started.
@@ -1041,7 +1048,7 @@ The remote keeps updating while the Cutaway window is minimised or hidden.
 ### Stream Deck
 
 Double-click `streamdeck/Cutaway.streamDeckPlugin` (or press **Install the
-Stream Deck plugin…** in Settings → Remote & MIDI; the Mac app carries it
+Stream Deck plugin…** in More › Control; the Mac app carries it
 inside). Drag Cutaway actions onto keys, and in any key's settings enter the
 address (`127.0.0.1:8790` on the same computer) and the PIN. Needs Stream
 Deck 6.5 or later, on macOS or Windows. See [streamdeck/README.md](streamdeck/README.md).
@@ -1049,11 +1056,13 @@ Deck 6.5 or later, on macOS or Windows. See [streamdeck/README.md](streamdeck/RE
 ![Stream Deck keys](docs/streamdeck.png)
 
 *Scene and source keys show live pictures (red on air); record shows its
-running time; graphics, transitions and captions light up when on.*
+running time; Go Live says GOING LIVE… while it connects and "LIVE 1 of 2"
+while a destination isn't live, as the phone does; graphics, transitions
+and captions light up when on.*
 
 ### OSC
 
-Turn on **OSC** in Settings → Remote & MIDI (UDP port 8791). Addresses
+Turn on **OSC** in More › Control (UDP port 8791). Addresses
 follow the commands (the `/cutaway` prefix is optional):
 
 | Address | Does |
@@ -1068,7 +1077,9 @@ follow the commands (the `/cutaway` prefix is optional):
 Set **Send state to** and Cutaway sends `/cutaway/program`, `/preview`,
 `/record`, `/live`, `/tally/N`, `/scene/N`, `/graphic/N`, `/audio/N`,
 `/level/N` and the clocks as they change (and everything every 5 seconds),
-for button feedback.
+for button feedback. `/live` is on from Go live; `/stream` says how it's
+really going, as the phone does (`connecting`, `live`, `trouble` while some
+destinations aren't live, `ending` or `off`), with `/stream/live` as "1 of 2".
 
 | Command | Does |
 |---|---|
@@ -1121,7 +1132,7 @@ goes by name too. A deleted scene's references are left as they were
 (Scenes › Scenes and Edit layout list them before you delete).
 
 Scenes and rundown segments can run commands as **cues** when they start
-(Edit layout → Cues; Settings → Rundown), e.g. a break scene that
+(Edit layout → Cues; More › Show tools › Rundown), e.g. a break scene that
 starts a Syrinscape mood and a "Back in" countdown.
 
 **MIDI** (macOS and Windows): pick the controller, then **＋ Add a mapping**, press
@@ -1132,10 +1143,10 @@ one in preview, recording, live, auto, graphics and inputs that are on.
 
 ## Remote guests
 
-1. **Settings → Remote guests:** tick **let guests join by link** and press
+1. **Sources › Guests:** tick **let guests join by link** and press
    **＋ Guest spot** for each guest. A spot is a video source and an audio
    input of the same name, so it can go in scenes, be recorded and be mixed
-   like any camera and mic. Apply.
+   like any camera and mic. Press **Apply** on the bar at the bottom.
 2. **Send the link:** the guests panel (and the settings) show each spot's
    link — **Copy link** and send it by message or email. The first time,
    Cutaway downloads Cloudflare's small tunnel program (or uses `cloudflared`
@@ -1196,8 +1207,8 @@ one in preview, recording, live, auto, graphics and inputs that are on.
 
 ## Phone cameras
 
-1. **Settings → Remote guests → ＋ Phone camera** (or a video source of type
-   **Phone camera**). Apply. Remote guests turn on with it, for the page the
+1. **Sources › Guests › ＋ Phone camera** (or a video source of type
+   **Phone camera**), then **Apply** on the bar at the bottom. Remote guests turn on with it, for the page the
    phone opens.
 2. **Scan the QR code** (in those settings, or **QR** in the main window's
    guests panel) with the phone's camera app, and allow the camera. The phone
@@ -1244,7 +1255,7 @@ the camera stopping (a new close-up starts once you press Apply).
     the replay settings sets what a plain click plays. It uses each camera's
     own file, so the camera needs **Record to its own file** on (and files
     that aren't ProRes, which are too big to keep in memory).
-- **Macros:** **Settings → Macros:** a name, a colour and a list of commands
+- **Macros:** **More › Show tools › Macros:** a name, a colour and a list of commands
   (any from the table above, with `wait:` between). They're buttons in the
   main window, Stream Deck keys and remote buttons, and can be cues.
 - **Scrolling ticker:** **Graphics › More ▾ › Tickers & web overlays → ＋ Scrolling ticker:** the text, a label
@@ -1256,16 +1267,16 @@ the camera stopping (a new close-up starts once you press Apply).
   Google Chrome or Microsoft Edge (or Brave, Chromium or Vivaldi), run
   hidden in the background, so one of them needs to be installed: every
   Windows PC has Edge. A page's sound isn't heard.
-- **Viewer comments:** **Settings → Viewer comments:** your Twitch channel
+- **Viewer comments:** **More › Show tools › Viewer comments:** your Twitch channel
   (no sign-in needed) and/or a YouTube live video with a YouTube API key.
   Comments appear in the main window's **Comments** panel; click one to put
   it on screen (styled in those settings), or **Show next**. The page shows
   under **Show** once you've added a stream destination (a show that only
   records doesn't need it), and stays once it's set up.
-- **Teleprompter:** **Settings → Teleprompter:** type or paste the script, or
+- **Teleprompter:** **More › Show tools › Teleprompter:** type or paste the script, or
   use the rundown's segment notes (it then jumps to each segment as the
-  rundown moves on). Show it on the second screen (**Settings → Screens &
-  webcam → The teleprompter**), or open `http://<address>:8790/prompter` on
+  rundown moves on). Show it on the second screen (**Record › Screens &
+  webcam › The teleprompter**), or open `http://<address>:8790/prompter` on
   a tablet, which needs the remote control on. Mirror it for a glass
   prompter. Roll, pause, speed and jumps work from the Teleprompter panel,
   the Stream Deck, the remote, MIDI, or a keyboard on the tablet (space,
@@ -1358,16 +1369,16 @@ close-up of the person on the left, cut from the same camera.*
     → Keyboard, which downloads it.
   - Each take gets `Transcript.txt`, `Captions.srt` and `Captions.vtt` (for
     YouTube and editors), timed to the recording.
-- **Input tracks:** **Settings → Recording → Audio tracks** puts every input
+- **Input tracks:** **Record › Recording › Audio tracks** puts every input
   on its own track in the Program file, before or after the fader.
-- **Podcast:** **Settings → Recording → Podcast** makes an M4A of the mix
+- **Podcast:** **Record › Recording › Podcast** makes an M4A of the mix
   after each take: measured, levelled to the target loudness (−16 LUFS for
   Apple Podcasts and Spotify), peaks limited to −1.5 dB, optionally mono,
   tagged with the title, show and author, with the markers as chapters.
 
 ## The vertical version
 
-**Settings → Vertical version** makes a 9:16 version of the show (1080×1920
+**Record › Vertical version** makes a 9:16 version of the show (1080×1920
 or 720×1280) alongside the program, from the same sources. It appears as a
 tall monitor beside the program; click it to change its settings.
 
@@ -1382,14 +1393,14 @@ tall monitor beside the program; click it to change its settings.
   its width: ones at the top stay near the top, the rest sit low down. Turn
   them off if you'd rather not.
 - **Record** it in each take as `Program_Vertical`, with the recording mix,
-  and/or **stream** it: in Settings → Streaming, set a destination to send
+  and/or **stream** it: in Record › Streaming, set a destination to send
   the vertical version.
 - Wipes, pushes and dips become mixes in the tall picture; fade to black,
   replays and stingers come along.
 
 ## Upload after the show
 
-**Settings → Upload** sends each take to **YouTube** and/or **Google Drive**
+**Record › Upload** sends each take to **YouTube** and/or **Google Drive**
 once it's saved. It signs in with your own Google account, through an
 OAuth client you make once in Google Cloud (the settings walk you through
 it: a project, the YouTube Data API and/or Google Drive API turned on, and a
@@ -1430,7 +1441,7 @@ Cutaway only sees the Drive files it made.
   viewer to change any cut.
 - **DaVinci Resolve:** File → Import → Timeline, and pick the `.fcpxml`. Or,
   for the whole project in one go, press **Install the Resolve script** in
-  Settings → Recording once (it also turns on **a project from each take**,
+  Record › Recording once (it also turns on **a project from each take**,
   which saves what the script needs with every take from then on), then in
   Resolve choose **Workspace → Scripts → Cutaway - Build project from a
   take** and pick the take: you get a project named after it, at its frame

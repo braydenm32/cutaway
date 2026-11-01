@@ -266,14 +266,14 @@ impl StreamSession {
     pub fn start(cfg: &StreamingConfig, ctx: Context) -> Result<StreamSession> {
         let enabled: Vec<&StreamDestination> = cfg.destinations.iter().filter(|d| d.enabled).collect();
         if enabled.is_empty() {
-            bail!("no stream destinations are turned on (Settings → Streaming)");
+            bail!("no stream destinations are turned on (Record › Streaming)");
         }
         for d in &enabled {
             if let Some(p) = d.problem() {
                 bail!("{}: {p}", d.name);
             }
             if d.vertical && ctx.vertical.is_none() {
-                bail!("{} is set to get the vertical version, which is off (Settings → Vertical version)", d.name);
+                bail!("{} is set to get the vertical version, which is off (Record › Vertical version)", d.name);
             }
         }
         let backend = encode::resolve_backend(VideoCodec::H264, &cfg.encoder)?;

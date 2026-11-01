@@ -1,4 +1,4 @@
-//! Settings → Captions: live captions from speech recognition, and
+//! Graphics › Captions: live captions from speech recognition, and
 //! transcripts with each take.
 
 use super::*;

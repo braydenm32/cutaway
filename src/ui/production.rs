@@ -138,7 +138,7 @@ impl App {
                 let busy = running.contains(&m.name);
                 let fill = color_of(&m.color, 0x6a4fc9);
                 let text = RichText::new(if busy { format!("{} …", m.name) } else { m.name.clone() }).strong().size(TEXT_BODY).color(Color32::WHITE);
-                let tip = if m.commands.is_empty() { "No steps yet (Settings → Macros)".to_string() } else { m.commands.join("\n") };
+                let tip = if m.commands.is_empty() { "No steps yet (More › Show tools › Macros)".to_string() } else { m.commands.join("\n") };
                 if ui.add(egui::Button::new(text).fill(if busy { fill } else { fill.gamma_multiply(0.75) }).min_size(vec2(64.0, 28.0))).on_hover_text(tip).clicked() {
                     run = Some(i);
                 }
@@ -156,7 +156,7 @@ impl App {
         let i = m.find(&names).ok_or("there's no such macro")?;
         let mac = self.cfg.macros[i].clone();
         if mac.commands.is_empty() {
-            return Err(format!("{} has no commands yet (Settings → Macros)", mac.name));
+            return Err(format!("{} has no commands yet (More › Show tools › Macros)", mac.name));
         }
         self.run_sequence_in(&mac.name, &mac.commands, false, vec![i]);
         Ok(format!("Running {}", mac.name))
@@ -423,13 +423,13 @@ impl App {
                 Ok("Comment hidden".into())
             }
             CommentCmd::Show(id) => {
-                let chat = self.chat.as_ref().ok_or("no live chat is set up (Settings → Viewer comments)")?;
+                let chat = self.chat.as_ref().ok_or("no live chat is set up (More › Show tools › Viewer comments)")?;
                 let m = chat.messages().into_iter().find(|m| m.id == id).ok_or("that comment has scrolled away")?;
                 self.show_comment(&m);
                 Ok(format!("Showing {}'s comment", m.author))
             }
             CommentCmd::Next | CommentCmd::Toggle => {
-                let chat = self.chat.as_ref().ok_or("no live chat is set up (Settings → Viewer comments)")?;
+                let chat = self.chat.as_ref().ok_or("no live chat is set up (More › Show tools › Viewer comments)")?;
                 let next = chat.messages().into_iter().find(|m| m.id > self.comment_cursor).ok_or("no new comments yet")?;
                 self.show_comment(&next);
                 Ok(format!("Showing {}'s comment", next.author))
@@ -652,7 +652,7 @@ impl App {
 
     pub(super) fn run_prompter(&mut self, cmd: PrompterCmd) -> Result<String, String> {
         if self.prompter.script.trim().is_empty() {
-            return Err("the teleprompter has no script yet (Settings → Teleprompter)".into());
+            return Err("the teleprompter has no script yet (More › Show tools › Teleprompter)".into());
         }
         let p = &mut self.prompter;
         let marks = {
@@ -745,7 +745,7 @@ pub(super) fn draw_prompter(ui: &egui::Ui, area: egui::Rect, cfg: &crate::config
     let fg = color_of(&cfg.text_color, 0xffffff);
     painter.rect_filled(area, 0.0, bg);
     if text.trim().is_empty() {
-        painter.text(area.center(), egui::Align2::CENTER_CENTER, "No script (Settings → Teleprompter)", egui::FontId::proportional(TEXT_TITLE), Color32::from_gray(120));
+        painter.text(area.center(), egui::Align2::CENTER_CENTER, "No script (More › Show tools › Teleprompter)", egui::FontId::proportional(TEXT_TITLE), Color32::from_gray(120));
         return;
     }
     let size = (area.height() * cfg.text_size.clamp(0.02, 0.2)).max(10.0);

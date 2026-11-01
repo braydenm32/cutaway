@@ -1,4 +1,4 @@
-//! Settings → Rundown: the show's running order.
+//! More › Show tools › Rundown: the show's running order.
 
 use super::*;
 use crate::config::Segment;

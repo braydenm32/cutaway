@@ -6,7 +6,7 @@
 //!   Cubase: the open DAWproject format, referring to the WAVs next to it.
 //! * `<take> (Resolve).lua`: what Cutaway's DaVinci Resolve script reads to
 //!   build a project (bins, media, proxies, the live edit). The script
-//!   itself is installed once from Settings → Recording.
+//!   itself is installed once from Record › Recording.
 //!
 //! Every file starts at the same instant, so every track starts at zero.
 

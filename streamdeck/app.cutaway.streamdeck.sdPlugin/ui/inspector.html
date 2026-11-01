@@ -77,18 +77,18 @@
   </div>
   <div data-for="pad">
     <div class="row"><label for="pad">Pad</label><div class="field"><select id="pad" data-setting="pad" data-list="pads"></select></div></div>
-    <div class="hint">Press to play, press again to stop. "While held" pads play while the key is held. Set up pads in Cutaway: Settings → Sound pads.</div>
+    <div class="hint">Press to play, press again to stop. "While held" pads play while the key is held. Set up pads in Cutaway: Sound › Pads.</div>
   </div>
   <div data-for="syrinscape">
     <div class="row"><label for="sbutton">Button</label><div class="field"><select id="sbutton" data-setting="button" data-list="syrinscape"></select></div></div>
-    <div class="hint">One of the Syrinscape buttons set up in Cutaway (Settings → Syrinscape). Lit while it's playing.</div>
+    <div class="hint">One of the Syrinscape buttons set up in Cutaway (Sound › Syrinscape). Lit while it's playing.</div>
   </div>
   <div data-for="talkback">
     <div class="row"><label for="tmode">Key</label><div class="field"><select id="tmode" data-setting="mode">
       <option value="hold">Talk while held</option>
       <option value="toggle">Press on, press off</option>
     </select></div></div>
-    <div class="hint">Your talkback mic goes to the presenters' headphones and guests, never the recording or stream (Settings → Mixing &amp; headphones).</div>
+    <div class="hint">Your talkback mic goes to the presenters' headphones and guests, never the recording or stream (Sound › Headphones &amp; talkback).</div>
   </div>
   <div data-for="clip">
     <div class="row"><label for="cseconds">Length</label><div class="field"><input type="text" id="cseconds" data-setting="seconds" placeholder="as set in Cutaway (e.g. 30)"></div></div>
@@ -99,7 +99,7 @@
     <div class="row"><label for="tbutton">Button</label><div class="field"><select id="tbutton" data-setting="button">
       <option value="toggle">Start / pause</option><option value="reset">Back to the start</option><option value="start">Start</option><option value="pause">Pause</option><option value="stop">Stop and reset</option>
     </select></div></div>
-    <div class="hint">A countdown or stopwatch clock graphic (Settings → Graphics). The key shows its time.</div>
+    <div class="hint">A countdown or stopwatch clock graphic (Graphics › Titles &amp; overlays). The key shows its time.</div>
   </div>
   <div data-for="rundown">
     <div class="row"><label for="rbutton">Button</label><div class="field"><select id="rbutton" data-setting="button">
@@ -115,16 +115,16 @@
     <div class="hint">Green when the guest is on, with the name they gave; the border shows the tally.</div>
   </div>
   <div data-for="ftb">
-    <div class="hint">Fades the program's picture and sound to black, and back up (Settings → Switching sets how long). Red while black.</div>
+    <div class="hint">Fades the program's picture and sound to black, and back up (Scenes › Stinger &amp; fade to black sets how long). Red while black.</div>
   </div>
   <div data-for="replay">
     <div class="row"><label for="rslow">Slow motion</label><div class="field"><input type="checkbox" id="rslow" data-setting="slow" data-default="false"></div></div>
     <div class="row"><label for="rangle">From</label><div class="field"><input type="text" id="rangle" data-setting="angle" placeholder="as set in Cutaway"></div></div>
-    <div class="hint">Plays the last few seconds again, over the program, while recording (Settings → Switching sets how long). From: a camera's name for that camera's own recording, "quad" for every angle at once, or "program". Press again to stop.</div>
+    <div class="hint">Plays the last few seconds again, over the program, while recording (More › Show tools › Replay sets how long). From: a camera's name for that camera's own recording, "quad" for every angle at once, or "program". Press again to stop.</div>
   </div>
   <div data-for="macro">
     <div class="row"><label for="mmacro">Macro</label><div class="field"><select id="mmacro" data-setting="macro" data-list="macros"></select></div></div>
-    <div class="hint">Macros are made in Cutaway (Settings → Macros): several commands, with waits between, from one press.</div>
+    <div class="hint">Macros are made in Cutaway (More › Show tools › Macros): several commands, with waits between, from one press.</div>
   </div>
   <div data-for="ptz">
     <div class="row"><label for="pcam">Camera</label><div class="field"><select id="pcam" data-setting="camera" data-list="ptz"></select></div></div>
@@ -136,7 +136,7 @@
     <div class="row"><label for="pspeed">Speed</label><div class="field"><select id="pspeed" data-setting="speed">
       <option value="0.25">Slow</option><option value="0.5" selected>Medium</option><option value="1">Fast</option>
     </select></div></div>
-    <div class="hint">A PTZ camera or a virtual one (Settings → Video sources). The border shows the camera's tally.</div>
+    <div class="hint">A PTZ camera or a virtual one (Sources › Close-ups &amp; PTZ). The border shows the camera's tally.</div>
   </div>
   <div data-for="prompter">
     <div class="row"><label for="prbutton">Button</label><div class="field"><select id="prbutton" data-setting="button">
@@ -147,7 +147,7 @@
     <div class="row"><label for="cbutton">Button</label><div class="field"><select id="cbutton" data-setting="button">
       <option value="toggle">Show the next / hide</option><option value="next">Show the next</option><option value="hide">Hide</option>
     </select></div></div>
-    <div class="hint">Comments from your Twitch or YouTube chat (Settings → Viewer comments), oldest first.</div>
+    <div class="hint">Comments from your Twitch or YouTube chat (More › Show tools › Viewer comments), oldest first.</div>
   </div>
   <div data-for="command">
     <div class="row"><label for="command">Command</label><div class="field"><input type="text" id="command" data-setting="command" placeholder="e.g. preview:2"></div></div>
@@ -166,7 +166,7 @@
     <option value="off">Off (names only)</option>
   </select></div></div>
   <div class="status" id="status">Connecting…</div>
-  <div class="hint">In Cutaway: Settings → Remote &amp; MIDI → turn on remote control. Use 127.0.0.1 on the same computer, or that computer's address from another one.</div>
+  <div class="hint">In Cutaway: More › Control › Phone remote, turn on remote control. Use 127.0.0.1 on the same computer, or that computer's address from another one.</div>
 
 <script>
   let ws = null, uuid = null, action = null, settings = {}, global = {}, lists = null;

@@ -78,7 +78,7 @@ function connect() {
     const m = JSON.parse(ev.data);
     if (m.type !== "state") return;
     const p = m.state.prompter;
-    if (!p) { $("msg").textContent = "No script (Settings → Teleprompter)"; st = null; return; }
+    if (!p) { $("msg").textContent = "No script (More › Show tools › Teleprompter)"; st = null; return; }
     $("msg").textContent = "";
     st = p; stAt = performance.now();
     if (p.version !== version) loadScript();

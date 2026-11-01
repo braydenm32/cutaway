@@ -187,7 +187,7 @@ fn system_env(_name: &str) -> Option<String> {
 }
 
 /// What to say when the runtime isn't there.
-pub const NOT_INSTALLED: &str = "NDI isn't installed on this computer (Settings offers to install it where you choose NDI)";
+pub const NOT_INSTALLED: &str = "NDI isn't installed on this computer (Cutaway offers to install it where you choose NDI)";
 
 fn load() -> Result<Api, String> {
     for path in candidates() {
