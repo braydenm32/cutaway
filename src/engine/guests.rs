@@ -157,9 +157,9 @@ pub fn judge(r: &LinkReport) -> (LinkQuality, String) {
     }
     if let Some(t) = r.rtt_ms {
         if t >= 700.0 {
-            note(LinkQuality::Poor, format!("{t:.0} ms behind"));
+            note(LinkQuality::Poor, format!("slow to answer ({t:.0} ms round trip)"));
         } else if t >= 300.0 {
-            note(LinkQuality::Weak, format!("{t:.0} ms behind"));
+            note(LinkQuality::Weak, format!("slow to answer ({t:.0} ms round trip)"));
         }
     }
     if let (true, Some(f)) = (r.camera_on, r.fps) {
@@ -171,7 +171,7 @@ pub fn judge(r: &LinkReport) -> (LinkQuality, String) {
     }
     if r.bandwidth_limited {
         let why = match r.kbps {
-            Some(k) => format!("slow upload ({k:.0} kbit/s)"),
+            Some(k) => format!("slow upload ({:.1} Mbps)", k / 1000.0),
             None => "slow upload".to_string(),
         };
         note(if r.kbps.is_some_and(|k| k < 250.0) { LinkQuality::Poor } else { LinkQuality::Weak }, why);
@@ -1885,12 +1885,12 @@ mod tests {
         let r = LinkReport { loss_pct: Some(3.0), ..good.clone() };
         assert_eq!(judge(&r), (LinkQuality::Weak, "losing 3% of the picture".into()));
         let r = LinkReport { rtt_ms: Some(900.0), loss_pct: Some(3.0), ..good.clone() };
-        assert_eq!(judge(&r), (LinkQuality::Poor, "900 ms behind".into()), "the worst reason wins");
+        assert_eq!(judge(&r), (LinkQuality::Poor, "slow to answer (900 ms round trip)".into()), "the worst reason wins");
         let r = LinkReport { fps: Some(5.0), ..good.clone() };
         assert_eq!(judge(&r).0, LinkQuality::Poor);
         assert_eq!(judge(&LinkReport { camera_on: false, ..r }).0, LinkQuality::Good, "a camera that's off sends few frames, and that's fine");
         let r = LinkReport { bandwidth_limited: true, kbps: Some(400.0), ..good.clone() };
-        assert_eq!(judge(&r), (LinkQuality::Weak, "slow upload (400 kbit/s)".into()));
+        assert_eq!(judge(&r), (LinkQuality::Weak, "slow upload (0.4 Mbps)".into()));
         assert_eq!(judge(&LinkReport::default()).0, LinkQuality::Good, "nothing known yet");
         let v = serde_json::json!({ "rtt": 120.5, "loss": 250, "fps": -1, "limited": "bandwidth", "camera": false });
         let r = LinkReport::from_json(&v);

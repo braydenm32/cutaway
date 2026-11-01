@@ -22,6 +22,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 mod panels;
+mod column;
 mod guide;
 mod production;
 mod starting;
@@ -328,6 +329,8 @@ pub struct App {
     textures: HashMap<String, (u64, egui::TextureHandle)>,
     /// The right-hand column's edge is being dragged.
     column_dragged: bool,
+    /// The right-hand column: Arrange panels, the audio strip's height.
+    column: column::ColumnState,
     waker: Waker,
     edit_mode: bool,
     selected_layer: Option<usize>,
@@ -391,6 +394,11 @@ pub struct App {
     ptz_cam: usize,
     ptz_drive: Option<[f32; 2]>,
     ptz_zoom: Option<f32>,
+    /// ⌂ Home held while the camera's on air: since when, and whether it
+    /// went home already (so a long hold sends it once).
+    ptz_home_hold: Option<(Instant, bool)>,
+    /// A virtual camera's shot before Home, for Undo: (camera, shot, when).
+    ptz_home_undo: Option<(usize, crate::engine::ptz::Shot, Instant)>,
     /// The last replay problem shown.
     replay_problem: Option<String>,
     /// The scene bank: scenes that don't fit in one row (last frame), how
@@ -502,6 +510,8 @@ impl App {
             ptz_cam: 0,
             ptz_drive: None,
             ptz_zoom: None,
+            ptz_home_hold: None,
+            ptz_home_undo: None,
             replay_problem: None,
             bank_overflows: false,
             bank_rows: 1,
@@ -552,6 +562,7 @@ impl App {
             dirty_since: None,
             textures: HashMap::new(),
             column_dragged: false,
+            column: Default::default(),
             waker,
             edit_mode: false,
             bank_move: None,
@@ -2322,6 +2333,9 @@ impl App {
                     }
                     self.chat = Some(chat);
                 }
+                if std::env::var_os("CUTAWAY_UI_TEST_ARRANGE").is_some() {
+                    self.column.arrange = true;
+                }
                 if std::env::var_os("CUTAWAY_UI_TEST_SYNC").is_some() {
                     let job = self.engine.as_ref().map(|e| e.measure_sync(3.0));
                     self.sync = Some(SyncWizard { job, apply: Vec::new() });
@@ -4025,7 +4039,12 @@ impl App {
         }
     }
 
+    /// Only once there's somewhere to stream to (Record › Streaming sets
+    /// that up; the column's ⋯ links there too).
     fn stream_panel(&mut self, ui: &mut egui::Ui) {
+        if !self.panel_present("stream") {
+            return;
+        }
         ui.add_space(6.0);
         if !self.section_heading(ui, "stream", "STREAM", Section::Streaming) {
             return;
@@ -4099,20 +4118,23 @@ impl App {
         }
     }
 
+    /// Always there (titles are why most people open Cutaway): with no
+    /// graphics yet it offers to make a name title in one click.
     fn graphics_panel(&mut self, ui: &mut egui::Ui) {
-        let Some(engine) = &self.engine else { return };
-        let list = engine.graphics.list();
-        if list.is_empty() {
-            return;
-        }
+        let list = self.engine.as_ref().map(|e| e.graphics.list()).unwrap_or_default();
         ui.add_space(4.0);
         if !self.section_heading(ui, "graphics", "GRAPHICS", Section::Graphics) {
+            return;
+        }
+        if list.is_empty() {
+            self.graphics_empty(ui);
             return;
         }
         let Some(engine) = &self.engine else { return };
         let mut toggle = None;
         let mut edit = None;
         let mut clock_menus = Vec::new();
+        let mut timer = None;
         let mut ticking = false;
         // Time on screen since going live (or since the recording started).
         let since = engine.stream_started_at().map(|t| (t, "since you went live")).or_else(|| match &engine.status.lock_ok().rec {
@@ -4153,7 +4175,7 @@ impl App {
                 });
                 r = r.on_hover_text(match problem {
                     Some(p) => format!("⚠ {p}"),
-                    None if is_timer => "Show / hide. Right-click to start, pause or reset it.".into(),
+                    None if is_timer => "Show / hide. ▶ starts it and ⟲ puts it back to the start (right-click for more).".into(),
                     None if i < 9 => format!("Show / hide ({})", shortcuts::KeyCombo { alt: true, ..shortcuts::KeyCombo::plain(shortcuts::DIGITS[i]) }.label()),
                     None => "Show / hide".into(),
                 } + &shown.unwrap_or_default());
@@ -4162,6 +4184,17 @@ impl App {
                 }
                 if is_timer {
                     clock_menus.push((r.clone(), i));
+                    // Start / pause and back to the start, on show (right-click still works).
+                    let running = self.engine.as_ref().is_some_and(|e| e.graphics.timers.running(name));
+                    let gap = ui.spacing().item_spacing.x;
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    if ui.small_button(if running { "⏸" } else { "▶" }).on_hover_text(if running { "Pause the timer" } else { "Start the timer" }).clicked() {
+                        timer = Some((i, if running { control::TimerCmd::Pause } else { control::TimerCmd::Start }));
+                    }
+                    if ui.small_button("⟲").on_hover_text("Back to the start (right-click the timer for more)").clicked() {
+                        timer = Some((i, control::TimerCmd::Reset));
+                    }
+                    ui.spacing_mut().item_spacing.x = gap;
                 }
                 let is_title = self.cfg.graphics.get(i).is_some_and(|g| matches!(g.kind, crate::config::GraphicKind::Title | crate::config::GraphicKind::Ticker) && !g.follow);
                 if is_title && ui.small_button("✎").on_hover_text("Change the text now").clicked() {
@@ -4184,7 +4217,7 @@ impl App {
                         s => format!("Starts by itself {}, or click to start it now.", s.label().replace("I'm", "you're")),
                     }),
                     (Some(g), _) => format!("{g} is on now."),
-                    (None, Some(d)) => format!("Next one in {}.", crate::engine::fmt_duration(d).trim_start_matches("00:")),
+                    (None, Some(d)) => format!("Next one in {}.", crate::engine::timers::fmt_span(d, true)),
                     (None, None) => "Running.".into(),
                 };
                 let tip = format!("Takes turns: {}.\nOne every {} for {} s.\n{state}", cfg.graphics.join(", "), minutes(cfg.every_minutes), cfg.show_seconds);
@@ -4201,6 +4234,9 @@ impl App {
         }
         for (r, i) in clock_menus {
             self.clock_menu(&r, i);
+        }
+        if let Some((i, c)) = timer {
+            self.act(Action::Timer(control::Target::Index(i), c));
         }
         if ticking {
             ui.ctx().request_repaint_after(Duration::from_millis(500));
@@ -4362,10 +4398,12 @@ impl App {
         }
     }
 
-    fn audio_panel(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(6.0);
-        ui.label(RichText::new("AUDIO").color(TEXT_DIM).size(TEXT_SMALL));
-        let Some(engine) = &self.engine else { return };
+    /// The audio strip under the panels: each input's meter with its fader
+    /// beside it, its level, ON and tags, then the two mixes. Returns the
+    /// meters' height (so the column knows what the rest takes).
+    fn audio_panel(&mut self, ui: &mut egui::Ui) -> Option<f32> {
+        self.audio_heading(ui);
+        let engine = self.engine.as_ref()?;
         let (meters, offline, loud) = {
             let st = engine.status.lock_ok();
             (st.meters.clone(), st.offline.clone(), st.loudness.clone())
@@ -4374,47 +4412,61 @@ impl App {
         let automix: Vec<Option<f32>> = engine.audio.iter().map(|a| a.shared.automix_db()).collect();
         let monitoring = !self.cfg.mix.monitor_device.is_empty();
         let ducking = engine.mix.ducking_db();
+        let recording = engine.is_recording();
+        let live = engine.is_streaming();
+        let take_since = match &engine.status.lock_ok().rec {
+            RecState::Recording { since, .. } => Some(since.elapsed()),
+            _ => None,
+        };
         if strips.is_empty() {
-            ui.add_space(10.0);
-            ui.label(RichText::new("No audio inputs.\nAdd your interface in Settings → Audio inputs.").color(TEXT_DIM));
-            return;
+            ui.add_space(6.0);
+            ui.label(RichText::new("No microphones or other inputs yet.").color(TEXT_DIM));
+            if ui.add(egui::Button::new(RichText::new("Add one in Sound › Inputs ›").size(TEXT_BODY).color(ACCENT)).frame(false)).clicked() {
+                self.open_page(Section::Audio, None);
+            }
+            return None;
         }
         let mut gain_changes = Vec::new();
         let mut on_changes = Vec::new();
         let mut solo: Option<String> = None;
-        ui.add_space(4.0);
-        // The meters take the height the column has left (under the name,
-        // fader, level, ON and tags, and the headphone line).
-        let below = 250.0 + if monitoring { 30.0 } else { 0.0 };
-        let meter_h = (ui.available_height() - below).clamp(170.0, 560.0);
-        egui::ScrollArea::horizontal().id_salt("strips").show(ui, |ui| {
+        ui.add_space(2.0);
+        // The meters (and the faders beside them) take the height the column
+        // has left under the names, levels, ON buttons, tags and the
+        // headphone line, which always fit.
+        let rest = self.column.audio_rest.unwrap_or(130.0);
+        let meter_h = (ui.available_height() - rest).clamp(column::METER_MIN, 560.0);
+        egui::ScrollArea::horizontal().id_salt("strips").auto_shrink([true, true]).show(ui, |ui| {
             ui.horizontal_top(|ui| {
                 for (i, (name, desc, on, reduction)) in strips.iter().enumerate() {
                     let key = format!("a{i}");
                     ui.vertical(|ui| {
-                        ui.set_width(64.0);
-                        ui.label(RichText::new(name).strong().size(TEXT_BODY)).on_hover_text(desc);
+                        ui.set_width(68.0);
+                        ui.add(egui::Label::new(RichText::new(name).strong().size(TEXT_BODY)).truncate()).on_hover_text(desc);
                         let m = meters.get(&key).cloned().unwrap_or_default();
                         let hold = self.peak_hold_for(&key, &m.peak_db);
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 2.0;
-                            draw_meter(ui, vec2(36.0, meter_h), &m.peak_db, &m.rms_db, &hold, offline.contains(name), !*on);
+                            draw_meter(ui, vec2(32.0, meter_h), &m.peak_db, &m.rms_db, &hold, offline.contains(name), !*on);
                             // Compressor gain reduction.
                             if let Some(ac) = self.cfg.audio.get(i) {
                                 if ac.processing.enabled && ac.processing.compressor {
                                     draw_reduction(ui, vec2(5.0, meter_h), *reduction);
                                 }
                             }
+                            // The fader beside it, as tall as the meter.
+                            if let Some(ac) = self.cfg.audio.get_mut(i) {
+                                ui.spacing_mut().slider_width = meter_h;
+                                let mut g = ac.gain_db as f32;
+                                if ui.add(egui::Slider::new(&mut g, -60.0..=12.0).vertical().show_value(false)).on_hover_text(format!("Level {g:+.1} dB (double-click resets)")).double_clicked() {
+                                    g = 0.0;
+                                }
+                                if (g as f64 - ac.gain_db).abs() > 1e-3 {
+                                    ac.gain_db = g as f64;
+                                    gain_changes.push((i, ac.gain_db));
+                                }
+                            }
                         });
                         if let Some(ac) = self.cfg.audio.get_mut(i) {
-                            let mut g = ac.gain_db as f32;
-                            if ui.add(egui::Slider::new(&mut g, -60.0..=12.0).vertical().show_value(false)).on_hover_text(format!("Level {g:+.1} dB (double-click resets)")).double_clicked() {
-                                g = 0.0;
-                            }
-                            if (g as f64 - ac.gain_db).abs() > 1e-3 {
-                                ac.gain_db = g as f64;
-                                gain_changes.push((i, ac.gain_db));
-                            }
                             ui.label(RichText::new(format!("{:+.1} dB", ac.gain_db)).size(TEXT_BODY).color(TEXT_DIM));
                             let btn = egui::Button::new(RichText::new(if *on { "ON" } else { "OFF" }).strong().size(TEXT_BODY).color(if *on { Color32::BLACK } else { Color32::WHITE }))
                                 .fill(if *on { GREEN } else { OFF })
@@ -4457,7 +4509,10 @@ impl App {
                         }
                     });
                 }
-                ui.separator();
+                // A line between the inputs and the mixes, as tall as the meters
+                // (a plain separator would take the whole column's height).
+                let (line, _) = ui.allocate_exact_size(vec2(9.0, meter_h + 20.0), Sense::hover());
+                ui.painter().vline(line.center().x, line.y_range(), Stroke::new(1.0, LINE));
                 for (key, label_text, l) in [("mix", "REC MIX", &loud.recording), ("stream", "STREAM", &loud.stream)] {
                     ui.vertical(|ui| {
                         ui.set_width(70.0);
@@ -4468,8 +4523,22 @@ impl App {
                         let fmt = |v: f32| if v < -99.0 { "—".to_string() } else { format!("{v:.0}") };
                         ui.label(RichText::new(format!("{} LUFS", fmt(l.short_term))).monospace().size(TEXT_BODY))
                             .on_hover_text(format!("Short-term loudness (3 s). Momentary (0.4 s): {} LUFS", fmt(l.momentary)));
-                        ui.label(RichText::new(format!("I {}", fmt(l.integrated))).monospace().size(TEXT_BODY).color(TEXT_DIM))
-                            .on_hover_text("Integrated loudness since the take / stream started");
+                        // Integrated loudness counts from the start of each take (or
+                        // going live): shown only while there's one to count.
+                        let counting = if key == "mix" { recording } else { live };
+                        let since = if key == "mix" {
+                            take_since.map(|d| format!("this take, since REC started {} ago", crate::engine::timers::fmt_span(d, false))).unwrap_or_else(|| "this take".into())
+                        } else {
+                            "since you went live".into()
+                        };
+                        let integrated = if counting { fmt(l.integrated) } else { "—".into() };
+                        ui.label(RichText::new(format!("I {integrated}")).monospace().size(TEXT_BODY).color(TEXT_DIM)).on_hover_text(if counting {
+                            format!("Integrated loudness of {since}")
+                        } else if key == "mix" {
+                            "Integrated loudness: starts counting when you record".to_string()
+                        } else {
+                            "Integrated loudness: starts counting when you go live".to_string()
+                        });
                         if l.limiting > 0.5 {
                             ui.label(RichText::new(format!("lim −{:.0}", l.limiting)).size(TEXT_BODY).color(AMBER));
                         }
@@ -4521,6 +4590,7 @@ impl App {
                 e.apply_monitor(&self.cfg.mix);
             }
         }
+        Some(meter_h)
     }
 
     fn peak_hold_for(&mut self, key: &str, peaks: &[f32]) -> Vec<f32> {
@@ -5540,41 +5610,15 @@ impl eframe::App for App {
         egui::Panel::bottom("bank").exact_size(bank_height).frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(14, 6))).show(ui, |ui| self.scene_bank(ui));
         // The column on the right: drag its edge to make it wider (kept with the show).
         let widest = (ui.available_width() * 0.6).max(COLUMN_WIDTH);
-        let width = if self.cfg.ui.column_width > 0.0 { self.cfg.ui.column_width } else { COLUMN_WIDTH };
-        let column = egui::Panel::right("audio")
+        // Its usual width leaves the program room on a small screen.
+        let usual = COLUMN_WIDTH.min((ui.available_width() * 0.38).max(300.0));
+        let width = if self.cfg.ui.column_width > 0.0 { self.cfg.ui.column_width } else { usual };
+        let column = egui::Panel::right(("column", self.column.resets))
             .resizable(true)
             .default_size(width.clamp(280.0, widest))
             .size_range(280.0..=widest)
-            .frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(12, 8)))
-            .show(ui, |ui| {
-            ui.set_min_width(280.0);
-            // Leave the audio strips at least half the height.
-            let max_top = (ui.available_height() - 260.0).max(200.0);
-            egui::ScrollArea::vertical().id_salt("right_top").max_height(max_top).show(ui, |ui| {
-                // In the order chosen by dragging their headings.
-                for panel in self.cfg.ui.panel_order() {
-                    match panel {
-                        "stream" => {
-                            self.stream_panel(ui);
-                            if !self.cfg.ui.is_folded("stream") {
-                                ui.add_space(4.0);
-                                ui.separator();
-                            }
-                        }
-                        "uploads" => self.uploads_panel(ui),
-                        "rundown" => self.rundown_panel(ui),
-                        "guests" => self.guests_panel(ui),
-                        "ptz" => self.ptz_panel(ui),
-                        "comments" => self.comments_panel(ui),
-                        "prompter" => self.prompter_panel(ui),
-                        "macros" => self.macros_panel(ui),
-                        "graphics" => self.graphics_panel(ui),
-                        _ => self.sound_panel(ui),
-                    }
-                }
-            });
-            self.audio_panel(ui);
-        });
+            .frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin::symmetric(12, 6)))
+            .show(ui, |ui| self.right_column(ui));
         self.column_edge(&ctx, column.response.rect);
         egui::CentralPanel::default().frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin::same(14))).show(ui, |ui| self.monitors(ui));
 

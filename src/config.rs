@@ -1461,8 +1461,9 @@ fn is_zero_f32(v: &f32) -> bool {
 }
 
 /// The panels in the column on the right of the main window, in their usual
-/// order.
-pub const PANELS: [&str; 10] = ["stream", "uploads", "rundown", "guests", "ptz", "comments", "prompter", "macros", "graphics", "sound"];
+/// order: the most used first (shots/1-usage-audit.md: graphics, stream,
+/// sound pads, comments, PTZ, then the ones used rarely).
+pub const PANELS: [&str; 10] = ["graphics", "stream", "sound", "comments", "ptz", "rundown", "guests", "uploads", "macros", "prompter"];
 
 impl UiConfig {
     /// The panels on the right in the order they're shown: the ones you
@@ -2654,20 +2655,20 @@ mod tests {
         let mut ui = UiConfig::default();
         assert_eq!(ui.panel_order(), PANELS);
         ui.move_panel("sound", Some("stream"));
-        assert_eq!(ui.panel_order()[..2], ["sound", "stream"]);
+        assert_eq!(ui.panel_order()[..3], ["graphics", "sound", "stream"]);
         ui.move_panel("stream", None);
         assert_eq!(*ui.panel_order().last().unwrap(), "stream");
         assert_eq!(ui.panel_order().len(), PANELS.len());
         // Back where they started: nothing to save.
-        ui.move_panel("stream", Some("uploads"));
-        ui.move_panel("sound", None);
+        ui.move_panel("stream", Some("comments"));
+        ui.move_panel("sound", Some("comments"));
         assert!(ui.panel_order.is_empty());
         // A saved order from before a panel existed (or with one that's gone).
         ui.panel_order = vec!["macros".into(), "gone".into(), "stream".into(), "macros".into()];
         let order = ui.panel_order();
         assert_eq!(order.len(), PANELS.len());
-        assert_eq!(order[..2], ["macros", "graphics"], "graphics still follows macros");
-        assert_eq!(order[2..4], ["sound", "stream"]);
+        assert_eq!(order[..3], ["graphics", "macros", "prompter"], "prompter still follows macros");
+        assert_eq!(order[3..5], ["stream", "sound"]);
     }
 
     #[test]

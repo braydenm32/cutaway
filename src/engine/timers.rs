@@ -106,6 +106,16 @@ impl Timers {
         self.inner.lock_ok().segment = segment.map(|(name, secs)| SegmentClock { name, planned: Duration::from_secs(secs as u64), started: Instant::now() });
     }
 
+    /// The segment running now was renamed or given a new length (the
+    /// rundown edited during the show): keep its start, take the new plan,
+    /// so the Segment timer graphic and the rundown panel agree.
+    pub fn replan_segment(&self, name: &str, secs: u32) {
+        if let Some(s) = self.inner.lock_ok().segment.as_mut() {
+            s.name = name.to_string();
+            s.planned = Duration::from_secs(secs as u64);
+        }
+    }
+
     pub fn segment(&self) -> Option<SegmentClock> {
         self.inner.lock_ok().segment.clone()
     }
@@ -250,5 +260,8 @@ mod tests {
         assert_eq!(clock_text(&g, &timers, now), ("1:00".into(), false));
         timers.inner.lock_ok().segment.as_mut().unwrap().started -= Duration::from_secs(75);
         assert_eq!(clock_text(&g, &timers, now), ("-0:15".into(), true));
+        // The rundown's length changed mid-segment: same start, new plan.
+        timers.replan_segment("Intro", 120);
+        assert_eq!(clock_text(&g, &timers, now), ("0:45".into(), false));
     }
 }
