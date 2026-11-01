@@ -229,7 +229,7 @@ mod imp {
         String::from_utf16_lossy(&s[..s.iter().position(|&c| c == 0).unwrap_or(s.len())])
     }
 
-    /// Each display's own name (as in Settings → Display), by its GDI
+    /// Each display's own name (as in Windows Settings → Display), by its GDI
     /// device name (\\.\DISPLAY1).
     fn friendly_names() -> Vec<(String, String)> {
         // SAFETY: buffers sized from GetDisplayConfigBufferSizes; each

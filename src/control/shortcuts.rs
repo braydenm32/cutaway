@@ -209,8 +209,8 @@ impl Builtin {
 
     pub fn describe(self) -> &'static str {
         match self {
-            Builtin::Settings => "Open Settings",
-            Builtin::Undo => "Undo a change to a scene, a title's text or Settings",
+            Builtin::Settings => "Open the settings area you last had open",
+            Builtin::Undo => "Undo a change to a scene, a title's text or a setting",
             Builtin::Redo => "Redo",
             Builtin::Record => "Start / stop recording",
             Builtin::Transition => "Switch between Cut and your transition",

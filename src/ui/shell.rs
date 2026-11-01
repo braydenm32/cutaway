@@ -205,6 +205,37 @@ pub(super) fn indexes(path: &str) -> Option<(usize, usize, usize)> {
     Some((ai, ti, si))
 }
 
+/// "Sound › More › Syrinscape" (or "More ▾") as "Sound › Syrinscape".
+pub(super) fn without_more(text: &str) -> String {
+    text.replace(" › More ▾ › ", " › ").replace(" › More › ", " › ")
+}
+
+/// The place a message names ("… (Sound › Syrinscape)", "in More › Show
+/// tools › Rundown"), as its tab's label and indexes, for a link to it.
+/// The longest name found wins, so a section beats its tab.
+pub(super) fn place_named(text: &str) -> Option<(&'static str, (usize, usize, usize))> {
+    let text = &without_more(text);
+    let mut best: Option<(usize, &'static str, (usize, usize, usize))> = None;
+    for (a, area) in AREAS.iter().enumerate().skip(1) {
+        for (t, tab) in area.tabs.iter().enumerate() {
+            let tab_name = format!("{} › {}", area.label, tab.label);
+            let mut found = text.contains(&tab_name).then_some((tab_name.len(), 0));
+            for (s, sect) in tab.sections.iter().enumerate() {
+                let name = format!("{tab_name} › {}", sect.label);
+                if text.contains(&name) && found.is_none_or(|(l, _)| name.len() > l) {
+                    found = Some((name.len(), s));
+                }
+            }
+            if let Some((len, s)) = found {
+                if best.is_none_or(|(l, ..)| len > l) {
+                    best = Some((len, tab.label, (a, t, s)));
+                }
+            }
+        }
+    }
+    best.map(|(_, label, at)| (label, at))
+}
+
 pub(super) fn target_at(a: usize, t: usize, s: usize) -> Option<Target> {
     let (area, tab) = (&AREAS[a], &AREAS[a].tabs[t]);
     target(area.id, tab.id, tab.sections[s].id)
@@ -1010,7 +1041,7 @@ impl App {
                 self.set_clock_12h(twelve);
             }
             if ui.button("First-show guide").clicked() {
-                self.guide_open = true;
+                self.open_guide();
                 ui.close();
             }
         });
@@ -1334,7 +1365,7 @@ impl App {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             if ui.button("Open the first-show guide").clicked() {
-                self.guide_open = true;
+                self.open_guide();
             }
             ui.label(RichText::new("A few steps from your cameras to a first recording.").color(TEXT_DIM));
         });
@@ -1438,6 +1469,96 @@ mod tests {
             let (a, t, s) = indexes(home).unwrap_or_else(|| panic!("{page:?}: {home} isn't a place"));
             assert!(matches!(target_at(a, t, s), Some(Target::Page(p, _)) if p == page), "{page:?}: {home} shows something else");
         }
+    }
+
+    /// Every file with words people read: the app's code (strings only),
+    /// the phone and prompter pages, and the Stream Deck plugin.
+    fn user_text() -> Vec<(String, Vec<String>)> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(dir).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.extension().is_some_and(|x| ["rs", "html", "js", "json"].contains(&x.to_str().unwrap_or(""))) {
+                    out.push(p);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        walk(&root.join("src"), &mut files);
+        walk(&root.join("streamdeck/app.cutaway.streamdeck.sdPlugin"), &mut files);
+        files.into_iter().map(|p| {
+            let text = std::fs::read_to_string(&p).unwrap();
+            let rust = p.extension().is_some_and(|x| x == "rs");
+            let lines = text.lines().filter(|l| !rust || !l.trim_start().starts_with("//")).map(|l| {
+                if !rust {
+                    return l.to_string();
+                }
+                // Only what's inside "…" (an odd number of quotes before it).
+                let mut inside = false;
+                let mut prev = ' ';
+                l.chars().filter(|&c| {
+                    if c == '"' && prev != '\\' {
+                        inside = !inside;
+                        prev = c;
+                        return true;
+                    }
+                    prev = c;
+                    inside
+                }).collect()
+            }).collect();
+            (p.strip_prefix(root).unwrap().display().to_string(), lines)
+        }).collect()
+    }
+
+    /// No message still sends people to the old Settings window: they name
+    /// the place ("Sound › Inputs"). The computer's own settings app is fine.
+    #[test]
+    fn no_text_says_old_settings() {
+        let mut bad = Vec::new();
+        for (file, lines) in user_text() {
+            for (n, l) in lines.iter().enumerate() {
+                for arrow in ["→", "›"] {
+                    let needle = format!("{} {arrow}", ["Sett", "ings"].concat());
+                    for (at, _) in l.match_indices(&needle) {
+                        let before = &l[..at];
+                        if !(before.ends_with("System ") || before.ends_with("Windows ") || before.ends_with("Dashboard → ")) {
+                            bad.push(format!("{file}:{}: {}", n + 1, l.trim()));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(bad.is_empty(), "text still names the old Settings window:\n{}", bad.join("\n"));
+    }
+
+    /// Every "Area › Tab" that text names is a real tab of that area.
+    #[test]
+    fn text_names_real_places() {
+        let mut bad = Vec::new();
+        for (file, lines) in user_text() {
+            for (n, l) in lines.iter().enumerate() {
+                let l = without_more(&l.replace("&amp;", "&"));
+                for area in AREAS {
+                    let needle = format!("{} › ", area.label);
+                    for (at, _) in l.match_indices(&needle) {
+                        let rest = &l[at + needle.len()..];
+                        if !area.tabs.iter().any(|t| rest.starts_with(t.label)) && !l[..at].ends_with(" › ") {
+                            bad.push(format!("{file}:{}: {}", n + 1, l.trim()));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(bad.is_empty(), "text names a tab that isn't there:\n{}", bad.join("\n"));
+        // And a message that names a place can go there.
+        let (label, at) = place_named("Syrinscape isn't set up (Sound › Syrinscape)").unwrap();
+        assert_eq!((label, at), ("Syrinscape", indexes("sound/syrinscape/syrinscape").unwrap()));
+        assert_eq!(place_named("the rundown is empty (More › Show tools › Rundown)").unwrap().1, indexes("more/tools/rundown").unwrap());
+        assert_eq!(place_named("in More › Show tools › Macros").unwrap().1, indexes("more/tools/macros").unwrap());
+        assert_eq!(place_named("(Scenes › More › Stinger & fade to black)").unwrap().1, indexes("scenes/stinger/stinger").unwrap());
+        assert!(place_named("nothing to see here").is_none());
     }
 
     /// Every place the code goes to by name ("area/tab/section") is there.

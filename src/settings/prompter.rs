@@ -1,4 +1,4 @@
-//! Settings → Teleprompter.
+//! More › Show tools › Teleprompter.
 
 use super::*;
 
@@ -64,7 +64,7 @@ impl SettingsUi {
             });
             hint(ui, "On the second screen: choose \"The teleprompter\" in Screens & webcam.");
         } else {
-            hint(ui, "To use it on a tablet or phone, turn on Remote control (Settings → Remote & MIDI) first. On the second screen: choose \"The teleprompter\" in Screens & webcam.");
+            hint(ui, "To use it on a tablet or phone, turn on Remote control (More › Control) first. On the second screen: choose \"The teleprompter\" in Screens & webcam.");
         }
     }
 }

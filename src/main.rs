@@ -252,7 +252,7 @@ fn run() -> Result<()> {
     let made_pin = cfg.remote.ensure_pin() && args.demo.is_none();
     if made_pin {
         cfg.save(&cfg_path)?;
-        eprintln!("Made a PIN for the remote (see Settings → Remote & MIDI)");
+        eprintln!("Made a PIN for the remote (see More › Control)");
     }
     if args.demo.is_some() {
         // Keep demo output next to the real recordings but don't overwrite settings.

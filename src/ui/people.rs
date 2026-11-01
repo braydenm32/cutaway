@@ -175,9 +175,11 @@ impl App {
         ui.separator();
         let (undo, redo) = (self.history.can_undo().map(String::from), self.history.can_redo().map(String::from));
         let typing = ui.ctx().egui_wants_keyboard_input();
+        // The key as it's set now (numbers audit #22).
+        let key = self.key_label_or(crate::control::shortcuts::Builtin::Undo, "no key");
         ui.horizontal(|ui| {
             let u = ui.add_enabled(undo.is_some(), egui::Button::new("↶ Undo")).on_hover_text(match &undo {
-                Some(l) => format!("Undo: {l} (⌘Z when you're not typing)"),
+                Some(l) => format!("Undo: {l} ({key} when you're not typing)"),
                 None => "Nothing to undo".into(),
             });
             if u.clicked() {

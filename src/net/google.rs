@@ -326,7 +326,7 @@ impl Auth {
         if !ok {
             let why = reason(&v);
             if v["error"].as_str() == Some("invalid_grant") {
-                bail!("Google signed Cutaway out ({why}); sign in again in Settings → Upload");
+                bail!("Google signed Cutaway out ({why}); sign in again in Record › Upload");
             }
             bail!("Google didn't give access: {why}");
         }

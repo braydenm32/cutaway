@@ -188,7 +188,7 @@ impl Drop for VirtualCamera {
 pub fn start(rx: Receiver<VideoFrame>) -> Result<Box<dyn Running>> {
     super::mf()?;
     if !installed() {
-        bail!("the Cutaway camera isn't installed yet: Settings → Screens & webcam → Install…");
+        bail!("the Cutaway camera isn't installed yet: Record › Screens & webcam › Install…");
     }
     com();
     let name = HSTRING::from("Cutaway");

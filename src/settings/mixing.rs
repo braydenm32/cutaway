@@ -250,7 +250,7 @@ impl SettingsUi {
                 if ui.add(b).on_hover_text(if on { "Heard in the mixes: click to turn it off" } else { "Off: not heard in the mixes. Click to turn it on" }).clicked() {
                     a.in_program = !on;
                 }
-                if ui.small_button("Settings ›").on_hover_text("Its device, channels, lip sync and voice processing").clicked() {
+                if ui.small_button("Set up ›").on_hover_text("Its device, channels, lip sync and voice processing, in Sound › Inputs").clicked() {
                     edit = Some(i);
                 }
                 ui.end_row();

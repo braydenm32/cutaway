@@ -732,7 +732,7 @@ impl GuestHub {
 
     fn start_server(&self, port: u16, public: bool) -> Result<Server> {
         let addr = if public { format!("0.0.0.0:{port}") } else { format!("127.0.0.1:{port}") };
-        let listener = TcpListener::bind(&addr).with_context(|| format!("port {port} is in use (change it in Settings → Remote guests)"))?;
+        let listener = TcpListener::bind(&addr).with_context(|| format!("port {port} is in use (change it in Sources › Guests)"))?;
         listener.set_nonblocking(true)?;
         let stop = Arc::new(AtomicBool::new(false));
         let s2 = stop.clone();
@@ -966,7 +966,7 @@ impl GuestHub {
                 if was {
                     self.log(LogLevel::Info, if screen { format!("{who} stopped sharing their screen ({source})") } else { format!("{who} left ({source})") });
                 } else if state == RTCPeerConnectionState::Failed {
-                    self.log(LogLevel::Warning, format!("{who} couldn't connect to {source}: their network blocks direct connections. A TURN server (Settings → Remote guests) gets round that."));
+                    self.log(LogLevel::Warning, format!("{who} couldn't connect to {source}: their network blocks direct connections. A TURN server (Sources › Guests) gets round that."));
                 }
             }
             _ => {}

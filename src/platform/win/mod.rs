@@ -155,7 +155,7 @@ pub(crate) fn dxgi_manager() -> Option<windows::Win32::Media::MediaFoundation::I
 pub(crate) fn explain(e: &windows::core::Error, what: &str) -> anyhow::Error {
     if e.code() == E_ACCESSDENIED {
         return anyhow!(
-            "{what}: Windows blocked access. Turn on Settings → Privacy & security → Camera (or Microphone) → \"Let desktop apps access…\""
+            "{what}: Windows blocked access. Turn on Windows Settings → Privacy & security → Camera (or Microphone) → \"Let desktop apps access…\""
         );
     }
     anyhow!("{what}: {} ({:#010x})", e.message().trim(), e.code().0 as u32)

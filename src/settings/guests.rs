@@ -1,4 +1,4 @@
-//! Settings → Remote guests: people joining from a browser, by link.
+//! Sources › Guests: people joining from a browser, by link.
 
 use super::*;
 use crate::config::GuestAccess;

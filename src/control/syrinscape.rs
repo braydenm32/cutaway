@@ -103,7 +103,7 @@ impl Syrinscape {
 
     fn send(&self, job: Job) -> Result<(), String> {
         if !self.has_token() && !matches!(job, Job::Check) {
-            return Err("Syrinscape isn't set up: add your auth token in Settings → Syrinscape".into());
+            return Err("Syrinscape isn't set up: add your auth token in Sound › Syrinscape".into());
         }
         self.jobs.send(job).map_err(|_| "Syrinscape control stopped".to_string())
     }
@@ -192,7 +192,7 @@ fn get(agent: &ureq::Agent, token: &str, path: &str) -> Result<Value> {
 fn check_status(code: u16) -> Result<()> {
     match code {
         200..=299 => Ok(()),
-        401 | 403 => bail!("Syrinscape didn't accept the auth token (check it in Settings → Syrinscape)"),
+        401 | 403 => bail!("Syrinscape didn't accept the auth token (check it in Sound › Syrinscape)"),
         404 => bail!("Syrinscape doesn't know that mood or sound (was it removed?)"),
         429 => bail!("Syrinscape asked Cutaway to slow down; try again in a moment"),
         c => bail!("Syrinscape answered with error {c}"),
@@ -208,7 +208,7 @@ fn kind_path(kind: SyrinKind) -> &'static str {
 
 fn run(agent: &ureq::Agent, token: &str, job: &Job, state: &Mutex<SyrinState>) -> Result<()> {
     if token.is_empty() {
-        bail!("there's no auth token yet (Settings → Syrinscape)");
+        bail!("there's no auth token yet (Sound › Syrinscape)");
     }
     match job {
         Job::Play(kind, id) => {

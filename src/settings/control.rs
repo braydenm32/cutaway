@@ -1,4 +1,4 @@
-//! Settings → Remote & MIDI, and show profiles (in General).
+//! More › Control, and show profiles (in General).
 
 use super::*;
 use crate::config::MidiMapping;

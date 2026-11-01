@@ -1,5 +1,5 @@
 //! Is there a newer Cutaway? Asks GitHub for the latest release (once, at
-//! start, when allowed in Settings → General). Nothing else is sent.
+//! start, when allowed in More › App › General). Nothing else is sent.
 
 use anyhow::{anyhow, Result};
 use std::time::Duration;

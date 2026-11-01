@@ -634,6 +634,13 @@ function label(text, y, size = 22, color = C.text, weight = 700) {
   return `<text x="72" y="${y}" text-anchor="middle" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="${size}" font-weight="${weight}" fill="${color}">${esc(text)}</text>`;
 }
 
+// The stream as a whole, as the phone reads it (control/state.rs `stream`):
+// "off", "connecting", "live", "trouble" (some destinations not live) or
+// "ending". Older apps don't send it: the plain flag.
+function streamOf(st) {
+  return st.stream || { state: st.live ? "live" : "off", live_count: 0, total: 0 };
+}
+
 function clock(seconds) {
   const s = Math.max(0, Math.floor(seconds || 0));
   const p = (n) => String(n).padStart(2, "0");
@@ -724,8 +731,18 @@ function draw(k) {
     }
     case "live": {
       const holding = k.hold ? Math.min(1, (Date.now() - k.hold.at) / HOLD_MS) : 0;
-      if (st.live) {
-        return { image: svg(label("LIVE", 66, 32) + label(clock(st.live_seconds), 98, 17, C.text, 400) + holdBar(holding), { bg: C.red }) };
+      // As the phone says it: LIVE only once a destination really is.
+      const sm = streamOf(st);
+      switch (sm.state) {
+        case "live":
+          return { image: svg(label("LIVE", 66, 32) + label(clock(st.live_seconds), 98, 17, C.text, 400) + holdBar(holding), { bg: C.red }) };
+        case "trouble":
+          // Some destinations aren't live ("1 of 2"): amber edge, red only if any is.
+          return { image: svg(label("LIVE", 62, 30) + label(`${sm.live_count} of ${sm.total}`, 94, 18, C.text, 400) + holdBar(holding), { bg: sm.live_count > 0 ? C.red : C.raised, border: C.amber }) };
+        case "connecting":
+          return { image: svg(label("GOING", 62, 22, C.amber) + label("LIVE…", 90, 22, C.amber) + holdBar(holding)) };
+        case "ending":
+          return { image: svg(label("Ending", 64, 22, C.dim) + label("stream…", 90, 18, C.dim, 400)) };
       }
       return { image: svg(label("GO", 60, 26, C.dim) + label("LIVE", 92, 30, C.dim) + holdBar(holding)) };
     }

@@ -1,4 +1,4 @@
-//! Settings → Vertical version: a 9:16 version of the show for Shorts,
+//! Record › Vertical version: a 9:16 version of the show for Shorts,
 //! Reels and TikTok, with a tall layout per scene and a framing per source.
 
 use super::*;

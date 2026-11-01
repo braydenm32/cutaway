@@ -1,4 +1,4 @@
-//! Settings → Streaming → Scheduled stream: the next show set up ahead,
+//! Record › Scheduled: the next show set up ahead,
 //! with its YouTube event (a page to share before you go live) and going
 //! live by itself at the start time.
 
@@ -138,7 +138,7 @@ impl SettingsUi {
                     ui.spinner();
                     ui.label(RichText::new("Talking to YouTube…").color(TEXT_DIM));
                 } else if u.client_id.trim().is_empty() || u.client_secret.trim().is_empty() {
-                    hint(ui, "To make the YouTube page, set up your Google sign-in first (Settings → Output → Upload, \"Setting up your Google sign-in\").");
+                    hint(ui, "To make the YouTube page, set up your Google sign-in first (Record › Upload, \"Setting up your Google sign-in\").");
                 } else if self.google.is_some() {
                     ui.spinner();
                     ui.label(RichText::new("Finish signing in in your browser…").color(TEXT_DIM));
@@ -229,12 +229,12 @@ impl SettingsUi {
                 if let Some(n) = s.note {
                     said.push_str(&format!(" ({n})"));
                 }
-                self.message = Some((format!("{said}. Apply to keep it."), false));
+                self.message = Some((format!("{said}."), false));
             }
             JobDone::Scheduled(Err(e)) => self.message = Some((format!("Not scheduled: {e}"), true)),
             JobDone::Cancelled(Ok(())) => {
                 self.draft.schedule.youtube_id.clear();
-                self.message = Some(("Taken off YouTube. Apply to keep it.".into(), false));
+                self.message = Some(("Taken off YouTube.".into(), false));
             }
             JobDone::Cancelled(Err(e)) => self.message = Some((format!("Couldn't take it off YouTube: {e}"), true)),
         }

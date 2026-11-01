@@ -5,7 +5,7 @@
 //! transcribed again every second or so: words before a pause, or more
 //! than about ten seconds back, are settled; the rest may still change
 //! (like live captions anywhere). The speech model is downloaded once,
-//! from Settings → Captions.
+//! from Graphics › Captions.
 
 use crate::util::LockExt;
 use super::speech::{Event, Recognizer, Word};
@@ -66,7 +66,7 @@ pub fn problem(language: &str, model: SpeechModel) -> Option<String> {
         return None;
     }
     let m = model_file(language, model);
-    Some(format!("the speech model ({} MB) isn't downloaded yet (Settings → Captions → Download)", m.megabytes))
+    Some(format!("the speech model ({} MB) isn't downloaded yet (Graphics › Captions › Download)", m.megabytes))
 }
 
 // ---- downloading ---------------------------------------------------------------------------

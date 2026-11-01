@@ -1,4 +1,4 @@
-//! Settings → Macros: buttons that run a list of commands.
+//! More › Show tools › Macros: buttons that run a list of commands.
 
 use super::rundown::commands_editor;
 use super::sound::color_button;

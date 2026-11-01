@@ -1,4 +1,4 @@
-//! Settings → Upload: sending takes to YouTube and Google Drive after the
+//! Record › Upload: sending takes to YouTube and Google Drive after the
 //! show, with your own Google sign-in.
 
 use crate::util::LockExt;
@@ -162,7 +162,7 @@ impl SettingsUi {
     }
 }
 
-/// Signing in to Google from Settings → Upload.
+/// Signing in to Google from Record › Upload.
 pub(super) struct GoogleSignIn {
     pub cancel: Arc<AtomicBool>,
     /// (refresh token, account, granted) or why not.

@@ -181,7 +181,7 @@ impl Drop for Sink {
 unsafe extern "C-unwind" fn altered(_stream: u32, _token: *mut c_void, _refcon: *mut c_void) {}
 
 fn open_sink() -> Result<Sink> {
-    let (device, stream) = find().ok_or_else(|| anyhow!("the Cutaway camera isn't installed (Settings → Screens & webcam → Install)"))?;
+    let (device, stream) = find().ok_or_else(|| anyhow!("the Cutaway camera isn't installed (Record › Screens & webcam › Install)"))?;
     let mut queue: *mut c_void = std::ptr::null_mut();
     let st = unsafe { CMIOStreamCopyBufferQueue(stream, Some(altered), std::ptr::null_mut(), &mut queue) };
     if st != 0 || queue.is_null() {

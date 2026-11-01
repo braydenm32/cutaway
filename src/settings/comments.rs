@@ -1,4 +1,4 @@
-//! Settings → Viewer comments.
+//! More › Show tools › Viewer comments.
 
 use super::*;
 

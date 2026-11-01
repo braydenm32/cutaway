@@ -73,7 +73,7 @@ impl Engine {
         }
         let codec = out.codec.video_codec();
         if let Some(p) = encode::codec_problem(codec) {
-            bail!("{p}; choose H.264 or HEVC in Settings → Recording");
+            bail!("{p}; choose H.264 or HEVC in Record › Recording");
         }
         let backend = encode::resolve_backend(codec, &out.encoder)?;
         let aac = if self.audio.is_empty() { None } else { Some(encode::create_aac(audio::MIX_RATE, 2, out.audio_bitrate_kbps)?) };

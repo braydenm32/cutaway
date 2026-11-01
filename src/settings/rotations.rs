@@ -1,4 +1,4 @@
-//! Settings → Graphics → Taking turns: graphics that come on one after
+//! Graphics › Taking turns: graphics that come on one after
 //! another every few minutes (sponsors, social handles, reminders).
 
 use super::*;

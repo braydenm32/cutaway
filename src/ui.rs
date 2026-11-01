@@ -44,6 +44,12 @@ pub mod theme {
     pub const RAISED: Color32 = Color32::from_rgb(34, 38, 46);
     pub const LINE: Color32 = Color32::from_rgb(52, 57, 68);
     pub const TEXT_DIM: Color32 = Color32::from_rgb(140, 147, 160);
+    /// A box you type in: lighter than the page (BG) and panels (PANEL) so
+    /// an empty one doesn't look like a blank row, darker than a button.
+    pub const FIELD: Color32 = Color32::from_rgb(27, 31, 39);
+    /// Grey example text in an empty box: readable on FIELD, plainly not
+    /// what's typed.
+    pub const PLACEHOLDER: Color32 = Color32::from_rgb(118, 124, 136);
     /// On air: the program, the scene and sources on it, tally. Red means
     /// this and nothing else that sits beside it (REC is a dark pill with a
     /// red dot, LIVE has its own pink, buttons like TAKE and FTB aren't red).
@@ -246,11 +252,15 @@ pub fn run(cfg: Config, save_path: Option<PathBuf>, self_test: bool, made_pin: b
             if let Some(q) = queue {
                 app.uploads.load(q);
             }
-            app.guide_open = first_run || std::env::var_os("CUTAWAY_UI_TEST_GUIDE").is_some();
+            // Its progress (and whether it was open) from last time.
+            let was_open = app.load_guide(cc.storage);
+            app.guide_open = first_run || was_open || std::env::var_os("CUTAWAY_UI_TEST_GUIDE").is_some();
+            // (GUIDE=folded: folded down, as after one of its buttons.)
+            app.guide_folded = std::env::var("CUTAWAY_UI_TEST_GUIDE").is_ok_and(|v| v == "folded");
             app.fit_window = !remembered;
             if made_pin {
                 // Said after any update news, so neither hides the other.
-                let pin = format!("The remote now needs a PIN: {} (Settings → Remote & MIDI)", app.cfg.remote.pin);
+                let pin = format!("The remote now needs a PIN: {} (More › Control › Phone remote)", app.cfg.remote.pin);
                 // Up for half a minute rather than the usual few seconds:
                 // phones and the Stream Deck stop working until it's typed in.
                 app.toasts.push(Toast { text: pin, until: Some(Instant::now() + Duration::from_secs(30)), error: false });
@@ -372,6 +382,9 @@ pub struct App {
     quit_ok: bool,
     /// The first-show guide is showing.
     guide_open: bool,
+    /// It's folded down to a small button on the rail, out of the
+    /// way of the page one of its steps went to.
+    guide_folded: bool,
     /// ⌘K search (ui/search.rs).
     search: search::Search,
     /// No remembered window yet: fit the first one to the screen.
@@ -605,6 +618,7 @@ impl App {
             test_marker_list: false,
             quit_ok: false,
             guide_open: false,
+            guide_folded: false,
             search: search::Search::default(),
             fit_window: false,
             guide_recorded: false,
@@ -637,7 +651,7 @@ impl App {
         if !app.cfg.held_secrets.is_empty() {
             app.toast(
                 format!(
-                    "{} saved key(s) or password(s) couldn't be read from the {}. Allow Cutaway to use them and restart, or type them in again in Settings.",
+                    "{} saved key(s) or password(s) couldn't be read from the {}. Allow Cutaway to use them and restart, or type them in again on their pages.",
                     app.cfg.held_secrets.len(),
                     if cfg!(windows) { "Credential Manager" } else { "Keychain" }
                 ),
@@ -1032,9 +1046,13 @@ impl App {
             return;
         }
         let mut gone = None;
+        let mut go = None;
         egui::Area::new(egui::Id::unique("toasts")).anchor(Align2::CENTER_BOTTOM, vec2(0.0, -120.0)).show(ctx, |ui| {
             ui.spacing_mut().item_spacing.y = 6.0;
             for (i, t) in self.toasts.iter().enumerate() {
+                // A message that names where to fix it ("… (Sound ›
+                // Syrinscape)") gets a button that goes there.
+                let place = shell::place_named(&t.text);
                 let r = egui::Frame::new()
                     .fill(if t.error { ERROR_DIM } else { RAISED })
                     .corner_radius(CornerRadius::same(6))
@@ -1042,20 +1060,35 @@ impl App {
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label(RichText::new(&t.text).color(Color32::WHITE));
+                            if let Some((label, at)) = place {
+                                if ui.button(format!("{label} ›")).on_hover_text("Go there").clicked() {
+                                    go = Some(at);
+                                    gone = Some(i);
+                                }
+                            }
                             if t.error {
-                                ui.label(RichText::new("✕").color(Color32::WHITE));
+                                if place.is_some() {
+                                    if ui.add(egui::Button::new(RichText::new("✕").color(Color32::WHITE)).frame(false)).on_hover_text("Close (it's kept in the Log)").clicked() {
+                                        gone = Some(i);
+                                    }
+                                } else {
+                                    ui.label(RichText::new("✕").color(Color32::WHITE));
+                                }
                             }
                         });
                     })
-                    .response
-                    .interact(Sense::click());
-                if t.error && r.on_hover_text("Click to close (it's kept in the Log)").clicked() {
+                    .response;
+                // (With a button in it, only ✕ closes it, so the button gets its click.)
+                if t.error && place.is_none() && r.interact(Sense::click()).on_hover_text("Click to close (it's kept in the Log)").clicked() {
                     gone = Some(i);
                 }
             }
         });
         if let Some(i) = gone {
             self.toasts.remove(i);
+        }
+        if let Some((a, t, s)) = go {
+            self.go_to(a, t, s);
         }
         ctx.request_repaint_after(Duration::from_millis(500));
     }
@@ -1116,7 +1149,7 @@ impl App {
                         return Err("stop recording and streaming before switching shows".into());
                     }
                     if s.cfg.lineup_changed(&self.cfg) {
-                        return Err("it changes the sources or inputs: stop recording and streaming first, or change them in Settings".into());
+                        return Err("it changes the sources or inputs: stop recording and streaming first, then Undo again".into());
                     }
                 }
                 self.apply_settings_as(s.cfg.clone(), ctx, true)?;
@@ -1533,7 +1566,7 @@ impl App {
             Action::Syrinscape(cmd) => {
                 use control::syrinscape::SyrinCmd;
                 if !self.cfg.syrinscape.enabled {
-                    return Err("Syrinscape control is off (Settings → Syrinscape)".into());
+                    return Err("Syrinscape control is off (Sound › Syrinscape)".into());
                 }
                 let buttons = self.cfg.syrinscape.buttons.clone();
                 let names: Vec<String> = buttons.iter().map(|b| b.name.clone()).collect();
@@ -1595,7 +1628,7 @@ impl App {
             Action::Rundown(cmd) => {
                 let segs = &self.cfg.rundown.segments;
                 if segs.is_empty() {
-                    return Err("the rundown is empty (Settings → Rundown)".into());
+                    return Err("the rundown is empty (More › Show tools › Rundown)".into());
                 }
                 let to = self.rundown.target(&cmd, segs).ok_or_else(|| match cmd {
                     control::rundown::RundownCmd::Next => "that was the last segment".to_string(),
@@ -2421,6 +2454,10 @@ impl App {
                     self.sync = Some(SyncWizard { job, apply: Vec::new() });
                 }
                 let _ = self.add_marker(None);
+                if let Ok(text) = std::env::var("CUTAWAY_UI_TEST_TOAST") {
+                    // A message, as an error (one naming a place gets a button to it).
+                    self.toast(text, true);
+                }
                 // Commands to set the scene for a screenshot, ";"-separated.
                 if let Ok(cmds) = std::env::var("CUTAWAY_UI_TEST_COMMANDS") {
                     for c in cmds.split(';').filter(|c| !c.trim().is_empty()) {
@@ -2447,7 +2484,7 @@ impl App {
                 }
                 let source = std::env::var("CUTAWAY_UI_TEST_SOURCE").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
                 let mut win = self.new_settings().open_at(section).select_source(source);
-                // SCENE=n picks a scene in Settings → Scenes; SCENE_DELETE=1 asks to delete it.
+                // SCENE=n picks a scene in Scenes › Scenes; SCENE_DELETE=1 asks to delete it.
                 if let Some(n) = std::env::var("CUTAWAY_UI_TEST_SCENE").ok().and_then(|v| v.parse::<usize>().ok()) {
                     win = win.select_scene(n, std::env::var_os("CUTAWAY_UI_TEST_SCENE_DELETE").is_some());
                 }
@@ -2700,7 +2737,7 @@ impl App {
         }
     }
 
-    /// The same report as Settings → Diagnostics, for when the engine won't start.
+    /// The same report as More › App › Diagnostics, for when the engine won't start.
     fn save_problem_report(&mut self) {
         let Some(path) = rfd::FileDialog::new().add_filter("Zip", &["zip"]).set_file_name(crate::report::file_name()).save_file() else { return };
         let facts = self.settings_context().engine_facts;
@@ -3458,14 +3495,17 @@ impl App {
         let (cols, tile_w) = best;
         let total_w = cols as f32 * tile_w + gap * (cols as f32 - 1.0);
         let left = area.center().x - total_w / 2.0;
-        let offline_set = engine.status.lock_ok().offline.clone();
+        // Offline as everywhere else says it (numbers audit #29): marked by
+        // the watchdog and still not delivering.
         let infos: Vec<(String, Arc<FrameSlot>, f32, bool, Option<String>)> = engine
             .sources
             .iter()
-            .map(|s| {
+            .enumerate()
+            .map(|(i, s)| {
+                let offline = engine.source_offline(i);
                 let net = s.input.net.lock_ok();
                 let detail = (!net.connected && !net.detail.is_empty()).then(|| net.detail.clone());
-                (s.name.clone(), s.preview.clone(), s.size.1 as f32 / s.size.0 as f32, offline_set.contains(&s.name), detail)
+                (s.name.clone(), s.preview.clone(), s.size.1 as f32 / s.size.0 as f32, offline, detail)
             })
             .collect();
         // Guests whose connection is struggling, by source.
@@ -4110,7 +4150,7 @@ impl App {
             Confirm::StopRecording => ("Stop recording?".to_string(), "The files for this take will be finished and saved.".to_string(), "Stop recording"),
             Confirm::SwitchShow(n) => {
                 let keep = match self.unnamed_setup_name() {
-                    Some(m) => format!("This setup isn't a show yet, so Cutaway first saves it as \"{m}\" (rename it in Settings → General)."),
+                    Some(m) => format!("This setup isn't a show yet, so Cutaway first saves it as \"{m}\" (rename it in More › App › General)."),
                     None => "The current show keeps its changes.".to_string(),
                 };
                 (format!("Switch to \"{n}\"?"), format!("Sources, scenes, audio and everything else change to that show's setup. {keep}"), "Switch")
@@ -4586,10 +4626,12 @@ impl App {
     fn audio_panel(&mut self, ui: &mut egui::Ui) -> Option<f32> {
         self.audio_heading(ui);
         let engine = self.engine.as_ref()?;
-        let (meters, offline, loud) = {
+        let (meters, loud) = {
             let st = engine.status.lock_ok();
-            (st.meters.clone(), st.offline.clone(), st.loudness.clone())
+            (st.meters.clone(), st.loudness.clone())
         };
+        // Each input's offline as everywhere else says it (numbers audit #29).
+        let offline: Vec<bool> = (0..engine.audio.len()).map(|i| engine.input_offline(i)).collect();
         let strips: Vec<(String, String, bool, f32)> = engine.audio.iter().map(|a| (a.name.clone(), a.description(), a.shared.is_on(), a.shared.reduction_db())).collect();
         let automix: Vec<Option<f32>> = engine.audio.iter().map(|a| a.shared.automix_db()).collect();
         let monitoring = !self.cfg.mix.monitor_device.is_empty();
@@ -4628,7 +4670,7 @@ impl App {
                         let hold = self.peak_hold_for(&key, &m.peak_db);
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 2.0;
-                            draw_meter(ui, vec2(32.0, meter_h), &m.peak_db, &m.rms_db, &hold, offline.contains(name), !*on);
+                            draw_meter(ui, vec2(32.0, meter_h), &m.peak_db, &m.rms_db, &hold, offline.get(i).copied().unwrap_or(false), !*on);
                             // Compressor gain reduction.
                             if let Some(ac) = self.cfg.audio.get(i) {
                                 if ac.processing.enabled && ac.processing.compressor {
@@ -5685,7 +5727,7 @@ impl App {
         }
         self.cfg = new;
         self.scenes = if self.cfg.scenes.is_empty() { self.cfg.effective_scenes() } else { self.cfg.scenes.clone() };
-        // Scenes renamed in Settings → Scenes: the one on air keeps its picture under its new name.
+        // Scenes renamed in Scenes › Scenes: the one on air keeps its picture under its new name.
         let renamed = control::scene_renames(&old_names, &self.scene_names());
         if let (Some(e), false) = (&self.engine, renamed.is_empty()) {
             e.switcher.rename_scenes(&|n| renamed.iter().find(|(a, _)| a == n).map(|(_, b)| b.clone()));
@@ -5816,20 +5858,28 @@ impl eframe::App for App {
     /// Runs before every frame, and also while the window is minimised or
     /// hidden (eframe then skips drawing but still calls this when a repaint
     /// is asked for). So commands from the phone, Stream Deck, OSC and MIDI
-    /// still run, a failed recording is still stopped, and the state they
+    /// still run, a failed recording is still stopped, a comment on screen
+    /// still hides by itself, the prompter still rolls, and the state they
     /// read keeps moving when nobody is looking at the desk.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_requests();
         self.poll_status();
+        // A comment's time on screen and the prompter's scrolling keep
+        // going while the window is minimised (the phone and the second
+        // screen still show them).
+        self.tick_comments(ctx);
+        self.tick_prompter(ctx);
         self.publish_state();
         if self.remote.is_some() || self.midi.is_some() || self.osc.is_some() {
             ctx.request_repaint_after(Duration::from_millis(250));
         }
     }
 
-    /// Each area's last tab, beside the window's size (this computer, not the show).
+    /// Each area's last tab and the first-show guide's progress, beside
+    /// the window's size (this computer, not the show).
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         self.shell.save(storage);
+        self.save_guide(storage);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -5848,7 +5898,6 @@ impl eframe::App for App {
         if let Some(d) = self.next_queued() {
             ctx.request_repaint_after(d);
         }
-        self.tick_comments(&ctx);
         self.tick_uploads();
         self.tick_ndi(&ctx);
         if self.settle_at.is_some_and(|t| Instant::now() >= t) {
@@ -5857,7 +5906,6 @@ impl eframe::App for App {
                 crate::net::self_update::settled(&me, env!("CARGO_PKG_VERSION"));
             }
         }
-        self.tick_prompter(&ctx);
         self.handle_keys(&ctx);
         self.run_self_test(&ctx);
         self.scheduled_go_live(&ctx);
@@ -6162,6 +6210,10 @@ fn style(ctx: &egui::Context) {
     style.visuals.panel_fill = PANEL;
     style.visuals.window_fill = PANEL;
     style.visuals.extreme_bg_color = BG;
+    // Boxes you type in get their own fill (extreme_bg_color is the page's
+    // own colour, so they vanished on it), and readable placeholders.
+    style.visuals.text_edit_bg_color = Some(FIELD);
+    style.visuals.weak_text_color = Some(PLACEHOLDER);
     style.visuals.widgets.inactive.weak_bg_fill = RAISED;
     style.visuals.widgets.inactive.bg_fill = RAISED;
     style.visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(48, 54, 66);

@@ -353,7 +353,7 @@ pub struct SettingsUi {
     sel_source: usize,
     sel_audio: usize,
     sel_dest: usize,
-    /// Signing in to Google (Settings → Upload).
+    /// Signing in to Google (Record › Upload).
     google: Option<upload::GoogleSignIn>,
     /// Scheduling on YouTube, while it's under way.
     schedule_job: Option<scheduled::ScheduleJob>,
@@ -397,7 +397,7 @@ pub struct SettingsUi {
     syrin_soundset: Option<String>,
     sel_segment: usize,
     sel_macro: usize,
-    /// Settings → Scenes: the scene picked, its new name being typed, and
+    /// Scenes › Scenes: the scene picked, its new name being typed, and
     /// the scene waiting for "Delete".
     sel_scene: usize,
     scene_rename: Option<(usize, String)>,
@@ -647,7 +647,7 @@ impl SettingsUi {
         }
     }
 
-    /// Settings → Scenes with this scene picked, and asking whether to delete it (for the UI self-test).
+    /// Scenes › Scenes with this scene picked, and asking whether to delete it (for the UI self-test).
     pub fn select_scene(mut self, i: usize, confirm_delete: bool) -> Self {
         self.sel_scene = i;
         self.confirm_scene_delete = confirm_delete.then_some(i);
