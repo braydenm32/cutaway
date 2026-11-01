@@ -374,8 +374,10 @@ fn auto_config() -> Config {
             cfg.sources.push(SourceConfig { name: format!("Test {}", i + 1), device: "test".into(), ..Default::default() });
         }
     }
+    // The mic you speak into: a USB mic before the laptop's own (forensics
+    // guide #2). The guide says which one it is.
     let audio = devices::list(devices::Kind::Audio);
-    if let Some(d) = audio.first() {
+    if let Some(d) = devices::best_mic(&audio) {
         cfg.audio.push(AudioConfig { name: config::audio_input_name(&d.name), device: d.name.clone(), ..Default::default() });
     }
     cfg

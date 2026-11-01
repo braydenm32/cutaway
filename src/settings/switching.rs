@@ -144,6 +144,21 @@ impl SettingsUi {
 
         let scenes: Vec<String> = self.draft.effective_scenes().iter().map(|s| s.name.clone()).collect();
         let inputs: Vec<(String, u32)> = self.draft.audio.iter().map(|a| (a.name.clone(), a.channels)).collect();
+        // Each rule's mic as it runs now, by its identity, not its place in
+        // the list (numbers audit #4): its levels, and whether it's ON.
+        type Heard = (Vec<f32>, bool);
+        let running: Vec<(String, Option<Heard>)> = self
+            .draft
+            .audio
+            .iter()
+            .map(|d| {
+                let now = input_channels(&self.original, &info.input_levels, d.uid).map(|lv| {
+                    let on = self.original.audio.iter().position(|o| o.uid == d.uid).and_then(|i| info.input_on.get(i)).copied().unwrap_or(true);
+                    (lv.clone(), on)
+                });
+                (d.name.clone(), now)
+            })
+            .collect();
         let a = &mut self.draft.auto_switch;
         let state = format!(
             "{} · {}",
@@ -183,16 +198,20 @@ impl SettingsUi {
                             ui.selectable_value(&mut r.scene, s.clone(), s);
                         }
                     });
-                    // Live level, to help set the threshold.
-                    let level = inputs
-                        .iter()
-                        .position(|x| x.0 == r.input)
-                        .and_then(|ii| info.input_levels.get(ii))
-                        .map(|lv| if r.channel == 0 { lv.iter().copied().fold(-120.0, f32::max) } else { lv.get(r.channel as usize - 1).copied().unwrap_or(-120.0) });
+                    // Live level, to help set the threshold: as the
+                    // switcher hears it. An OFF mic never counts as talking.
+                    let now = running.iter().find(|x| x.0 == r.input).and_then(|x| x.1.as_ref());
+                    let level = now.map(|(lv, on)| (if r.channel == 0 { lv.iter().copied().fold(-120.0, f32::max) } else { lv.get(r.channel as usize - 1).copied().unwrap_or(-120.0) }, *on));
                     ui.horizontal(|ui| {
-                        if let Some(l) = level {
-                            let talking = l >= a.threshold_db;
-                            ui.label(RichText::new(format!("{:>4.0} dB", l.max(-99.0))).monospace().color(if talking { GREEN } else { TEXT_DIM }));
+                        match level {
+                            Some((_, false)) => {
+                                ui.label(RichText::new(" off").monospace().color(TEXT_DIM)).on_hover_text("This mic is OFF, so it never counts as talking");
+                            }
+                            Some((l, true)) => {
+                                let talking = l >= a.threshold_db;
+                                ui.label(RichText::new(format!("{:>4.0} dB", l.max(-99.0))).monospace().color(if talking { GREEN } else { TEXT_DIM }));
+                            }
+                            None => {}
                         }
                         if row_buttons(ui, i, 0, false) == Some(RowEdit::Remove) {
                             remove = Some(i);

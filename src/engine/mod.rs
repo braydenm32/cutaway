@@ -168,6 +168,11 @@ pub enum RecState {
     },
 }
 
+/// Inputs' levels from the meters (see `Engine::input_levels`).
+pub fn input_levels(meters: &HashMap<String, Meter>, n: usize) -> Vec<Option<f32>> {
+    (0..n).map(|i| meters.get(&format!("a{i}")).map(|m| m.peak_db.iter().copied().fold(-120.0f32, f32::max))).collect()
+}
+
 #[derive(Default)]
 pub struct Status {
     /// Keys: "a0", "a1", ... for inputs, "mix" for the program mix.
@@ -1793,6 +1798,15 @@ impl Engine {
     /// Whether an input is on air (the scene or the operator may change it).
     pub fn is_on(&self, input: usize) -> bool {
         self.audio.get(input).is_some_and(|a| a.shared.is_on())
+    }
+
+    /// Each input's level as its meter on the desk shows it: the loudest
+    /// channel's peak (dBFS) of what goes to the mixes, after voice
+    /// processing and before the fader and ON. The one level the desk,
+    /// Sound › Inputs, the phone, OSC, the pre-show check and the guide
+    /// all show (numbers audit #4). None while an input isn't open yet.
+    pub fn input_levels(&self) -> Vec<Option<f32>> {
+        input_levels(&self.status.lock_ok().meters, self.audio.len())
     }
 
     /// Host time the current stream started.

@@ -1,4 +1,4 @@
-//! Settings → Sound pads and Settings → Syrinscape.
+//! Sound › Pads and Sound › More › Syrinscape.
 
 use crate::util::LockExt;
 use super::*;
@@ -101,7 +101,7 @@ impl SettingsUi {
         hint(ui, "Press a pad to play it, again to stop. The Sound pads input has its own fader, is recorded like any input, and can duck under voices. Commands: pad:1, pad:Applause, pad:1:stop, pads:stop.");
     }
 
-    pub(super) fn syrinscape(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn syrinscape(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
         title(ui, "Syrinscape", "Start Syrinscape moods and sounds from Cutaway, the Stream Deck, scenes and the rundown.");
         let s = &mut self.draft.syrinscape;
         egui::Grid::new("syrin").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
@@ -143,14 +143,67 @@ impl SettingsUi {
             }
         });
 
+        // Playing it from here (the `syrinscape` command's twin), through
+        // the desk's connection, as the sound panel does.
+        use crate::control::syrinscape::SyrinCmd;
+        use crate::control::Action;
+        let now = &info.syrin;
+        let mut run: Option<SyrinCmd> = None;
+        ui.add_space(10.0);
+        ui.horizontal(|ui| {
+            ui.label("Volume");
+            let read = now.volume.or(st.volume);
+            // (What was set here shows until Syrinscape has it.)
+            if let (Some(mine), Some(r)) = (self.syrin_volume, read) {
+                if (mine - r).abs() < 0.005 && !ui.ctx().input(|i| i.pointer.any_down()) {
+                    self.syrin_volume = None;
+                }
+            }
+            let mut v = self.syrin_volume.or(read).unwrap_or(1.0) * 100.0;
+            let r = ui.add(egui::Slider::new(&mut v, 0.0..=150.0).suffix(" %").step_by(1.0).clamping(egui::SliderClamping::Never));
+            if r.changed() {
+                self.syrin_volume = Some(v / 100.0);
+            }
+            // Sent when let go (or typed): not at every step of a drag.
+            if r.drag_stopped() || (r.changed() && !r.dragged()) {
+                run = self.syrin_volume.map(SyrinCmd::Volume);
+            }
+            r.on_hover_text("Syrinscape's own volume for everything it plays (100% is normal). Commands: syrinscape:volume:0.8");
+            if read.is_none() {
+                hint(ui, "(not read yet: press Test)");
+            }
+        });
+        if let Some(p) = &now.problem {
+            ui.label(RichText::new(format!("⚠ {p}")).color(AMBER));
+        }
+
         ui.add_space(14.0);
         subtitle(ui, "Buttons");
-        hint(ui, "These appear in the main window's sound panel and as Syrinscape keys on the Stream Deck, numbered in this order.");
+        hint(ui, "These appear in the main window's sound panel and as Syrinscape keys on the Stream Deck, numbered in this order. ▶ plays one now.");
         let n = self.draft.syrinscape.buttons.len();
         let mut remove = None;
         let mut swap = None;
-        egui::Grid::new("syrin_buttons").num_columns(4).spacing(TABLE_GAP).striped(true).show(ui, |ui| {
+        egui::Grid::new("syrin_buttons").num_columns(5).spacing(TABLE_GAP).striped(true).show(ui, |ui| {
             for (i, b) in self.draft.syrinscape.buttons.iter_mut().enumerate() {
+                let playing = match b.kind {
+                    SyrinKind::Mood => now.mood == Some(b.id),
+                    SyrinKind::Element => now.elements.contains(&b.id),
+                    SyrinKind::StopAll => false,
+                };
+                let (text, tip) = match (b.kind, playing) {
+                    (SyrinKind::StopAll, _) => ("■", "Stop everything Syrinscape is playing"),
+                    (_, true) => ("■", "Playing: click to stop it"),
+                    (SyrinKind::Mood, false) => ("▶", "Play this mood now"),
+                    (_, false) => ("▶", "Play this sound now"),
+                };
+                let fill = if playing { Color32::from_rgb(150, 110, 220) } else { RAISED };
+                if ui.add(egui::Button::new(RichText::new(text).color(if playing { Color32::BLACK } else { Color32::WHITE })).fill(fill).min_size(vec2(32.0, 22.0))).on_hover_text(tip).clicked() {
+                    run = Some(match (b.kind, playing) {
+                        (SyrinKind::StopAll, _) => SyrinCmd::StopAll,
+                        (k, true) => SyrinCmd::Stop(k, b.id),
+                        (k, false) => SyrinCmd::Play(k, b.id),
+                    });
+                }
                 ui.label(RichText::new(format!("{}", i + 1)).monospace());
                 ui.add_sized([170.0, 22.0], egui::TextEdit::singleline(&mut b.name));
                 let what = match b.kind {
@@ -194,6 +247,9 @@ impl SettingsUi {
             }
         });
         hint(ui, "In the Online Player, a mood or sound's menu has \"Copy remote control links\"; paste one here.");
+        if let Some(c) = run {
+            self.pending = Some(SettingsAction::Run(Action::Syrinscape(c)));
+        }
 
         ui.add_space(14.0);
         subtitle(ui, "Browse your soundsets");
@@ -257,6 +313,6 @@ impl SettingsUi {
         ui.add_space(14.0);
         subtitle(ui, "Hearing it");
         hint(ui, "Syrinscape plays on the computer running its player. To get it into Cutaway, either add an audio input set to \"Sound from an app\" and pick the player (your browser or the Syrinscape app) — Mac and Windows — or route the player to a virtual cable (BlackHole, VB-CABLE) and add that as an input. Tick \"Duck under voices\" on that input to keep it below the talking.");
-        hint(ui, "Commands: syrinscape:2, syrinscape:Tavern, syrinscape:stop, syrinscape:volume:0.8. Scenes and rundown segments can start them too.");
+        hint(ui, "Commands (Stream Deck, MIDI, OSC, macros): syrinscape:2, syrinscape:Tavern, syrinscape:stop, syrinscape:volume:0.8. Scenes and rundown segments can start them too.");
     }
 }

@@ -105,6 +105,7 @@ const PART_HOME: &[(&str, &str)] = &[
     ("ftb", "scenes/stinger/stinger"),
     ("midi", "more/control/oscmidi"),
     ("mix_talk", "sound/phones/phones"),
+    ("mix_outs", "sound/phones/phones"),
 ];
 
 /// "area/tab/section" or "area/tab" (its first section) as indexes.

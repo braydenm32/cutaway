@@ -52,14 +52,15 @@ impl Engine {
                 _ => out.push(item(Level::Ok, what, s.description())),
             }
         }
-        // Sound.
+        // Sound, at the level its meter shows.
+        let levels = self.input_levels();
         for (i, a) in self.audio.iter().enumerate() {
             let what = format!("Audio: {}", a.name);
             if self.input_offline(i) {
                 out.push(item(Level::Fail, what, "no signal from the device"));
                 continue;
             }
-            let peak = a.shared.levels_db().into_iter().fold(-120.0f32, f32::max);
+            let peak = levels.get(i).copied().flatten().unwrap_or(-120.0);
             if !a.shared.is_on() {
                 out.push(item(Level::Warn, what, "turned off in the mix"));
             } else if peak < -60.0 && !a.input.from_source() {

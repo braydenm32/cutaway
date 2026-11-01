@@ -36,22 +36,28 @@ impl App {
         };
         let cam_list: Vec<usize> = self.cfg.sources.iter().enumerate().filter(|(_, s)| is_cam(s)).map(|(i, _)| i).collect();
         let tests = self.cfg.sources.iter().filter(|s| s.device.trim().to_lowercase().starts_with("test")).count();
-        let (cams_alive, sound_peak) = match &self.engine {
-            Some(e) => (
-                cam_list.iter().filter(|&&i| e.sources.get(i).is_some_and(|s| s.input.alive())).count(),
-                e.audio.iter().flat_map(|a| a.shared.levels_db()).fold(-120.0f32, f32::max),
-            ),
-            None => (0, -120.0),
+        // The mic: the input you speak into (not pads, an app's or a
+        // source's sound). The step checks that one hears you, not just
+        // any input (forensics guide #2).
+        let mic = guide_mic(&self.cfg.audio);
+        let (cams_alive, levels) = match &self.engine {
+            Some(e) => (cam_list.iter().filter(|&&i| e.sources.get(i).is_some_and(|s| s.input.alive())).count(), e.input_levels()),
+            None => (0, Vec::new()),
         };
+        let loud = |i: usize| levels.get(i).copied().flatten().is_some_and(|db| db > -60.0);
         let cams = cam_list.len();
         let mics = self.cfg.audio.len();
+        let mic_name = mic.map(|i| self.cfg.audio[i].name.clone()).unwrap_or_default();
+        let mic_uid = mic.map(|i| self.cfg.audio[i].uid).unwrap_or(0);
+        // Sound on another input while the mic is quiet: maybe the wrong one.
+        let elsewhere = (0..self.cfg.audio.len()).find(|&i| Some(i) != mic && loud(i) && !self.cfg.audio[i].is_pads()).map(|i| self.cfg.audio[i].name.clone());
         let folder = self.cfg.output.folder.clone();
         let free = crate::engine::health::disk_space(&folder).map(|(free, _)| free);
         let dests = self.cfg.streaming.destinations.iter().filter(|d| d.enabled && !d.key.trim().is_empty()).count();
-        if mics > 0 && sound_peak > -60.0 {
-            self.guide_heard = true;
+        if let Some(i) = mic.filter(|&i| loud(i)) {
+            self.guide_heard = self.cfg.audio[i].uid;
         }
-        let heard = self.guide_heard;
+        let heard = mic_uid != 0 && self.guide_heard == mic_uid;
         let recorded = self.engine.as_ref().is_some_and(|e| e.is_recording()) || self.guide_recorded;
 
         // Who's on camera: as Sources › People & names lists them.
@@ -145,12 +151,14 @@ impl App {
                 }
 
                 let mic_state = if mics > 0 && heard { Step::Done } else { Step::Todo };
-                let mic_text = if mics == 0 {
+                let mic_text = if mics == 0 || mic.is_none() {
                     "No microphone yet. Add one so the recording has sound.".to_string()
                 } else if heard {
-                    format!("{mics} {}, and Cutaway can hear you. Say a few words and watch the meters at the bottom.", if mics == 1 { "input" } else { "inputs" })
+                    format!("Listening to {mic_name}, and Cutaway can hear you. Say a few words and watch its meter at the bottom.")
+                } else if let Some(other) = &elsewhere {
+                    format!("Listening to {mic_name}, but it's quiet, while {other} hears sound. If {other} is the mic you speak into, pick it in Sound › Inputs.")
                 } else {
-                    format!("{mics} {}, but it's quiet. Say something, check the mic is unmuted, and that Cutaway may use it (on Mac: System Settings → Privacy & Security → Microphone; on Windows: Settings → Privacy & security → Microphone).", if mics == 1 { "input" } else { "inputs" })
+                    format!("Listening to {mic_name}, but it's quiet. Say something, check the mic is unmuted, and that Cutaway may use it (on Mac: System Settings → Privacy & Security → Microphone; on Windows: Settings → Privacy & security → Microphone). Not the mic you speak into? Pick another in Sound › Inputs.")
                 };
                 if step(ui, mic_state, "Microphone", mic_text, Some("Sound…"), None) {
                     go = Some(Section::Audio);
@@ -243,5 +251,28 @@ impl App {
         if done || !open {
             self.guide_open = false;
         }
+    }
+}
+
+/// The input the guide's mic step checks: the first that isn't the sound
+/// pads, an app's sound or a source's sound (forensics guide #2).
+fn guide_mic(audio: &[crate::config::AudioConfig]) -> Option<usize> {
+    audio.iter().position(|a| {
+        let d = a.device.trim().to_lowercase();
+        !(a.is_pads() || d.starts_with("app:") || d.starts_with("source:"))
+    })
+}
+
+#[cfg(test)]
+mod mic_tests {
+    use super::guide_mic;
+    use crate::config::AudioConfig;
+
+    #[test]
+    fn the_mic_step_checks_the_mic() {
+        let a = |name: &str, device: &str| AudioConfig { name: name.into(), device: device.into(), ..Default::default() };
+        assert_eq!(guide_mic(&[a("Sound pads", "pads"), a("Music", "app:Spotify"), a("Yeti", "Yeti Stereo Microphone")]), Some(2));
+        assert_eq!(guide_mic(&[a("Sound pads", "pads")]), None);
+        assert_eq!(guide_mic(&[]), None);
     }
 }

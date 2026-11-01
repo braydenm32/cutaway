@@ -1108,6 +1108,18 @@ impl App {
                         }
                     }
                 }
+                if page == Section::Mixing {
+                    let view = if AREAS[a].tabs[t].id == "phones" { crate::settings::MixView::Phones } else { crate::settings::MixView::Mixer };
+                    if let Some(win) = self.settings.as_mut() {
+                        win.set_mix_view(view);
+                    }
+                }
+                if page == Section::Audio {
+                    let remembered = self.shell.picked.get("inputs").cloned();
+                    if let (Some(win), Some(name)) = (self.settings.as_mut(), remembered) {
+                        win.restore_input(&name);
+                    }
+                }
                 self.settings_page(ui);
             }
             Some(Target::People) => self.people_page(ui),
@@ -1149,6 +1161,11 @@ impl App {
         if win.section() == Section::Sources {
             if let Some(name) = win.source_name() {
                 self.shell.picked.insert("sources".into(), name);
+            }
+        }
+        if win.section() == Section::Audio {
+            if let Some(name) = win.input_name() {
+                self.shell.picked.insert("inputs".into(), name);
             }
         }
         let closing = matches!(action, SettingsAction::Close | SettingsAction::Apply { close: true, .. });

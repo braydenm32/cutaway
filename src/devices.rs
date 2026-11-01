@@ -55,6 +55,31 @@ pub fn list(kind: Kind) -> Vec<DeviceInfo> {
     })
 }
 
+/// How likely a sound input is the mic someone speaks into: a USB or
+/// interface mic (2) before the computer's own (1), before virtual cables,
+/// app loopbacks and a nearby phone (0). By name: that's all the systems
+/// tell us.
+pub fn mic_rank(name: &str) -> u8 {
+    let n = name.to_lowercase();
+    let virtual_ = ["blackhole", "loopback", "vb-audio", "vb-cable", "cable output", "voicemeeter", "soundflower", "stereo mix", "what u hear", "zoomaudio", "teams audio", "virtual", "iphone", "ipad", "aggregate", "multi-output", "monitor of"];
+    let built_in = ["built-in", "builtin", "internal", "macbook", "imac", "mac mini", "mac studio", "realtek", "microphone array", "intel", "smart sound", "conexant", "synaptics", "cirrus", "default"];
+    if virtual_.iter().any(|w| n.contains(w)) {
+        0
+    } else if built_in.iter().any(|w| n.contains(w)) {
+        1
+    } else {
+        2
+    }
+}
+
+/// The input a new show (or ＋ Add) should start with: the best ranked by
+/// `mic_rank`, the first of equals (forensics guide #2: a laptop's own mic
+/// isn't picked over a USB mic that's plugged in).
+pub fn best_mic(devices: &[DeviceInfo]) -> Option<&DeviceInfo> {
+    let best = devices.iter().map(|d| mic_rank(&d.name)).max()?;
+    devices.iter().find(|d| mic_rank(&d.name) == best)
+}
+
 /// Match a device spec from the settings: exact name, partial name
 /// (case-insensitive) or "#N" (1-based).
 pub fn find<'a>(spec: &str, devices: &'a [DeviceInfo]) -> Result<&'a DeviceInfo> {
@@ -127,5 +152,29 @@ mod tests {
         assert_eq!(find("id-Cam Link 4K", &list).unwrap().name, "Cam Link 4K");
         assert!(find("#3", &list).is_err());
         assert!(find("Elgato", &list).is_err());
+    }
+}
+
+#[cfg(test)]
+mod mic_tests {
+    use super::*;
+
+    fn dev(name: &str) -> DeviceInfo {
+        DeviceInfo { name: name.into(), id: name.into(), summary: String::new(), max_channels: 1, rate: 48_000, modes: Vec::new() }
+    }
+
+    /// The USB mic, not the laptop's own, and never a loopback first.
+    #[test]
+    fn picks_the_usb_mic() {
+        let mac = [dev("MacBook Pro Microphone"), dev("BlackHole 2ch"), dev("Yeti Stereo Microphone")];
+        assert_eq!(best_mic(&mac).unwrap().name, "Yeti Stereo Microphone");
+        let win = [dev("Microphone Array (Realtek(R) Audio)"), dev("Microphone (Shure MV7)"), dev("CABLE Output (VB-Audio Virtual Cable)")];
+        assert_eq!(best_mic(&win).unwrap().name, "Microphone (Shure MV7)");
+        let alone = [dev("iPhone Microphone"), dev("MacBook Air Microphone")];
+        assert_eq!(best_mic(&alone).unwrap().name, "MacBook Air Microphone");
+        assert_eq!(best_mic(&[dev("BlackHole 2ch")]).unwrap().name, "BlackHole 2ch");
+        assert!(best_mic(&[]).is_none());
+        assert_eq!(mic_rank("Scarlett 2i2 USB"), 2);
+        assert_eq!(mic_rank("ASIO: Focusrite USB ASIO"), 2);
     }
 }
