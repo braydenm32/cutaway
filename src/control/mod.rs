@@ -186,6 +186,8 @@ pub enum CommentCmd {
     Hide,
     /// Hide the one showing, or show the next.
     Toggle,
+    /// Show this one (its id from the state's `comments.recent`).
+    Show(u64),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -440,7 +442,10 @@ impl Action {
                 "next" | "show" => CommentCmd::Next,
                 "hide" | "off" | "clear" => CommentCmd::Hide,
                 "toggle" | "" => CommentCmd::Toggle,
-                other => return Err(format!("unknown comment command \"{other}\" (next, hide or toggle)")),
+                other => match other.parse::<u64>() {
+                    Ok(id) => CommentCmd::Show(id),
+                    Err(_) => return Err(format!("unknown comment command \"{other}\" (next, hide, toggle or a comment's number)")),
+                },
             }),
             other => return Err(format!("unknown command \"{other}\"")),
         })
@@ -537,6 +542,7 @@ impl Action {
                 CommentCmd::Next => "Show the next comment".into(),
                 CommentCmd::Hide => "Hide the comment".into(),
                 CommentCmd::Toggle => "Comment on/off".into(),
+                CommentCmd::Show(id) => format!("Show comment {id}"),
             },
         }
     }
@@ -866,6 +872,8 @@ mod tests {
         assert_eq!(Action::parse("wait:250ms"), Ok(Action::Wait(0.25)));
         assert_eq!(Action::parse("prompter:faster"), Ok(Action::Prompter(PrompterCmd::Faster)));
         assert_eq!(Action::parse("comment:next"), Ok(Action::Comment(CommentCmd::Next)));
+        assert_eq!(Action::parse("comment:12"), Ok(Action::Comment(CommentCmd::Show(12))));
+        assert!(Action::parse("comment:bogus").is_err());
         assert_eq!(Action::parse("ptz:Cam 2:preset:Wide").unwrap().describe(), "Cam 2: go to preset Wide");
         assert!(Action::parse("explode").is_err());
         assert_eq!(fader_db(0.0), -60.0);

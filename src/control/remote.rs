@@ -1,7 +1,9 @@
 //! The phone/tablet remote and HTTP API: a small web server built in.
 //!
-//! * `/` — the remote (scenes, record, go live, markers, graphics, audio,
-//!   media players, tally links).
+//! * `/` — the remote, for a phone held in one hand: record and go live at
+//!   the top, Scenes / Sound / Titles / More tabs at the bottom. Its buttons
+//!   are made once and updated in place as the state is pushed, so a finger
+//!   on one never loses its tap to a redraw.
 //! * `/?tally=N` — a full-screen tally light for source N.
 //! * `/api/state` — everything as JSON.
 //! * `/api/action?do=<command>` — run a command (see `control`).

@@ -357,6 +357,12 @@ impl App {
                 self.hide_comment();
                 Ok("Comment hidden".into())
             }
+            CommentCmd::Show(id) => {
+                let chat = self.chat.as_ref().ok_or("no live chat is set up (Settings → Viewer comments)")?;
+                let m = chat.messages().into_iter().find(|m| m.id == id).ok_or("that comment has scrolled away")?;
+                self.show_comment(&m);
+                Ok(format!("Showing {}'s comment", m.author))
+            }
             CommentCmd::Next | CommentCmd::Toggle => {
                 let chat = self.chat.as_ref().ok_or("no live chat is set up (Settings → Viewer comments)")?;
                 let next = chat.messages().into_iter().find(|m| m.id > self.comment_cursor).ok_or("no new comments yet")?;
