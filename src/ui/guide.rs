@@ -164,7 +164,7 @@ impl App {
                     go = Some(Section::Audio);
                 }
 
-                let scenes_text = "A scene is a layout: which cameras show and where (one full screen, side by side, picture in picture). The buttons along the bottom take them. Edit layout lets you drag the frames on the picture to change them.".to_string();
+                let scenes_text = "A scene is a layout: which cameras show and where (one full screen, side by side, picture in picture). The buttons along the bottom take them. Show › Edit layout (or E) lets you drag the frames on the picture to change them.".to_string();
                 let scenes_state = if scenes_seen { Step::Done } else { Step::Todo };
                 if step(ui, scenes_state, "Your scenes", scenes_text, Some("Edit layout"), None) {
                     edit_layout = true;

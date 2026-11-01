@@ -32,6 +32,13 @@
 //! its device, channels, name or delay (which reopens it) waits on the bar
 //! as "Apply (restarts inputs)".
 //!
+//! The Scenes area works the same way: a scene renamed, moved, copied or
+//! deleted on Scenes › Scenes, a transition or an auto-switching rule on
+//! Switching, applies as made (the bank's CUT / MIX / ⋯ and the length
+//! are the same settings as Scenes › Switching, so each shows the other's
+//! change at once); the program's size or frame rate restarts the cameras,
+//! so it waits on the bar.
+//!
 //! Pages drawn by the app itself (People & names) use the same rules
 //! directly: they change `App::cfg`, call `remember` for Undo and save.
 
@@ -39,7 +46,7 @@ use super::*;
 use std::time::{Duration, Instant};
 
 /// The pages that save as you go.
-pub const LIVE: &[Section] = &[Section::Sources, Section::Guests, Section::Audio, Section::Mixing, Section::Pads, Section::Syrinscape, Section::Recording, Section::Streaming];
+pub const LIVE: &[Section] = &[Section::Sources, Section::Guests, Section::Audio, Section::Mixing, Section::Pads, Section::Syrinscape, Section::Recording, Section::Streaming, Section::Scenes, Section::Switching, Section::Program];
 
 /// Whether a page saves as you go.
 pub fn is_live(s: Section) -> bool {
@@ -73,7 +80,16 @@ pub fn copy_section(s: Section, from: &Config, into: &mut Config) {
         }
         Section::Syrinscape => a.syrinscape = b.syrinscape.clone(),
         Section::Rundown => a.rundown = b.rundown.clone(),
-        Section::Scenes => a.scenes = b.scenes.clone(),
+        Section::Scenes => {
+            // A scene renamed, moved or deleted takes what picks it along
+            // (macros, MIDI, keys, the rundown, auto-switching...), as the
+            // page did to the draft; only that, so changes waiting on
+            // another page's Apply stay there.
+            let names = |l: &[crate::scene::Scene]| l.iter().map(|s| s.name.clone()).collect::<Vec<_>>();
+            let (was, now) = (names(&a.scenes), names(&b.scenes));
+            crate::control::follow_scenes(a, &was, &now);
+            a.scenes = b.scenes.clone();
+        }
         Section::Macros => a.macros = b.macros.clone(),
         Section::Prompter => a.prompter = b.prompter.clone(),
         Section::Comments => a.comments = b.comments.clone(),
@@ -231,6 +247,31 @@ pub fn held_list(applied: &Config, edited: &Config) -> (Vec<String>, Restarts) {
     (out, restarts)
 }
 
+/// An Undo step's name for a change to the scenes: "Rename scene Wide",
+/// "Delete scene Grid", "New scene Scene 10", "Move scene Maya".
+fn scenes_label(before: &[crate::scene::Scene], after: &[crate::scene::Scene]) -> String {
+    let names = |l: &[crate::scene::Scene]| l.iter().map(|s| s.name.clone()).collect::<Vec<_>>();
+    let (b, a) = (names(before), names(after));
+    if a.len() > b.len() {
+        let new = a.iter().find(|n| !b.contains(n)).cloned().unwrap_or_default();
+        return format!("New scene {new}");
+    }
+    if a.len() < b.len() {
+        let gone = b.iter().find(|n| !a.contains(n)).cloned().unwrap_or_default();
+        return format!("Delete scene {gone}");
+    }
+    if let Some((old, _)) = crate::control::scene_renames(&b, &a).first() {
+        return format!("Rename scene {old}");
+    }
+    if b != a {
+        // Moved: the one that moved furthest (↑ and ↓ swap two: the first).
+        let dist = |n: &String, i: usize| a.iter().position(|x| x == n).map_or(0, |j| j.abs_diff(i));
+        let moved = b.iter().enumerate().fold((0, None), |best, (i, n)| if dist(n, i) > best.0 { (dist(n, i), Some(n)) } else { best }).1.cloned().unwrap_or_default();
+        return format!("Move scene {moved}");
+    }
+    "Scenes".into()
+}
+
 /// The audio inputs as far as reopening goes (not their levels, which an
 /// old page may have changed and which apply live).
 fn audio_keys(c: &Config) -> Vec<(u64, crate::config::AudioConfig)> {
@@ -303,6 +344,10 @@ impl SettingsUi {
 
     /// Leaving: what's waiting to be applied, whatever has the keyboard.
     pub fn take_live(&mut self) -> Option<SettingsAction> {
+        // (A scene's new name still in its box counts.)
+        if is_live(self.section) {
+            self.commit_scene_rename();
+        }
         let lp = self.live_part();
         if lp == self.original || lp.check().is_err() {
             return None;
@@ -363,6 +408,12 @@ impl SettingsUi {
             ([], _) if lp.syrinscape != o.syrinscape => "Syrinscape settings".into(),
             ([], _) if lp.mix.monitor_device != o.mix.monitor_device || lp.mix.monitor_source != o.mix.monitor_source || lp.mix.monitor_volume_db != o.mix.monitor_volume_db => "Headphones".into(),
             ([], _) if lp.mix != o.mix => "Mixer settings".into(),
+            ([], _) if lp.scenes != o.scenes => scenes_label(&o.scenes, &lp.scenes),
+            ([], _) if lp.transition.preview_mode != o.transition.preview_mode => "Preview".into(),
+            ([], _) if lp.transition != o.transition => "Transition".into(),
+            ([], _) if lp.auto_switch != o.auto_switch => "Auto-switching".into(),
+            ([], _) if lp.replay != o.replay => "Replay settings".into(),
+            ([], _) if lp.style != o.style => "Program picture".into(),
             ([], []) => "Settings change".into(),
             ([], _) => "Sound inputs".into(),
             _ => "Sources settings".into(),
@@ -641,5 +692,119 @@ mod tests {
         win.applied_live(Ok(()), &cfg, &cfg);
         assert!(win.held(Section::Pads));
         assert_eq!(held_list(&win.original, &win.draft), (vec!["adds Sound pads".to_string()], Restarts::Nothing));
+    }
+    fn with_scenes() -> Config {
+        let mut c = two();
+        c.scenes = ["Wide", "Host", "Grid"].iter().map(|n| crate::scene::Scene { name: n.to_string(), ..Default::default() }).collect();
+        c.rundown.segments.push(crate::config::Segment { name: "Intro".into(), scene: "Host".into(), ..Default::default() });
+        c.macros.push(crate::config::Macro { name: "Go".into(), commands: vec!["scene:3".into()], ..Default::default() });
+        c
+    }
+
+    /// Scenes › Scenes: a rename applies when the box is left, with what
+    /// picks the scene by name; a move takes "scene:3" along; a rundown
+    /// edit waiting on its own page's Apply isn't sent with them.
+    #[test]
+    fn scenes_save_as_you_go_with_what_picks_them() {
+        let applied = with_scenes();
+        let mut win = SettingsUi::new(applied.clone()).open_at(Section::Scenes);
+        // Waiting on the old Rundown page (not saving as you go).
+        win.draft.rundown.segments[0].name = "Opening".into();
+        win.scene_rename = Some((1, "Presenter".into()));
+        win.commit_scene_rename();
+        let ctx = egui::Context::default();
+        let Some(SettingsAction::Live { cfg, label, .. }) = win.live_step(&ctx) else { panic!("nothing to save") };
+        assert_eq!(label, "Rename scene Host");
+        assert_eq!(cfg.scenes[1].name, "Presenter");
+        assert_eq!(cfg.rundown.segments[0].scene, "Presenter", "the rundown follows the name");
+        assert_eq!(cfg.rundown.segments[0].name, "Intro", "the Rundown page's edit waits for its Apply");
+        win.applied_live(Ok(()), &cfg, &cfg);
+        assert!(!win.held(Section::Scenes));
+        // Grid moved to the top: the macro that took the third scene follows it.
+        let before: Vec<String> = win.draft.scenes.iter().map(|s| s.name.clone()).collect();
+        let grid = win.draft.scenes.remove(2);
+        win.draft.scenes.insert(0, grid);
+        let after: Vec<String> = win.draft.scenes.iter().map(|s| s.name.clone()).collect();
+        crate::control::follow_scenes(&mut win.draft, &before, &after);
+        let Some(SettingsAction::Live { cfg, label, .. }) = win.live_step(&ctx) else { panic!("nothing to save") };
+        assert_eq!(label, "Move scene Grid");
+        assert_eq!(cfg.macros[0].commands, vec!["scene:1".to_string()]);
+        win.applied_live(Ok(()), &cfg, &cfg);
+        assert!(!win.held(Section::Scenes));
+        assert!(win.unapplied(), "only the rundown's own edit is left");
+    }
+
+    /// A name still being typed is applied when you leave the page.
+    #[test]
+    fn leaving_scenes_keeps_a_name_being_typed() {
+        let applied = with_scenes();
+        let mut win = SettingsUi::new(applied).open_at(Section::Scenes);
+        win.scene_rename = Some((0, "Wide shot".into()));
+        let Some(SettingsAction::Live { cfg, .. }) = win.take_live() else { panic!("nothing handed over") };
+        assert_eq!(cfg.scenes[0].name, "Wide shot");
+        assert!(!win.unapplied());
+    }
+
+    /// Forensics settings #6: the transition is one setting. CUT / MIX and
+    /// the length on the desk show on Scenes › Switching at once, and a
+    /// change there applies at once (so the bank shows it).
+    #[test]
+    fn switching_and_the_bank_are_one_setting() {
+        use crate::config::TransitionMode;
+        let applied = two();
+        let mut win = SettingsUi::new(applied.clone()).open_at(Section::Switching);
+        // On the desk: MIX, 700 ms.
+        let mut desk = applied.clone();
+        desk.transition.mode = TransitionMode::Mix;
+        desk.transition.duration_ms = 700;
+        win.rebase(&desk);
+        assert_eq!(win.draft.transition.mode, TransitionMode::Mix);
+        assert_eq!(win.draft.transition.duration_ms, 700);
+        assert!(!win.unapplied(), "nothing to apply: the page shows what's in effect");
+        // On the page: Wipe.
+        win.draft.transition.mode = TransitionMode::Wipe;
+        let ctx = egui::Context::default();
+        let Some(SettingsAction::Live { cfg, base, label }) = win.live_step(&ctx) else { panic!("nothing to save") };
+        assert_eq!(label, "Transition");
+        // Meanwhile on the desk the length went to 900: kept.
+        let mut desk2 = desk.clone();
+        desk2.transition.duration_ms = 900;
+        let now = desk2.with_edits(&base, &cfg);
+        assert_eq!(now.transition.mode, TransitionMode::Wipe);
+        assert_eq!(now.transition.duration_ms, 900);
+        win.applied_live(Ok(()), &cfg, &now);
+        assert_eq!(win.draft.transition.duration_ms, 900);
+        assert!(!win.unapplied());
+        // The bank and the page grey the length for the same reasons.
+        assert!(TransitionMode::Cut.fixed_length().is_some() && TransitionMode::Stinger.fixed_length().is_some());
+        assert!(TransitionMode::Mix.fixed_length().is_none());
+    }
+
+    /// Scenes › More › Program picture: the frame style applies at once;
+    /// a new size restarts the cameras, so it waits on the bar.
+    #[test]
+    fn program_size_waits_and_frame_style_goes_on() {
+        let applied = two();
+        let mut win = SettingsUi::new(applied.clone()).open_at(Section::Program);
+        win.draft.style.corner_radius = 12.0;
+        win.draft.program.width = 1280;
+        win.draft.program.height = 720;
+        let Some(SettingsAction::Live { cfg, label, .. }) = win.live_step(&egui::Context::default()) else { panic!() };
+        assert_eq!(label, "Program picture");
+        assert_eq!(cfg.style.corner_radius, 12.0);
+        assert!(!applied.needs_restart(&cfg), "nothing restarts");
+        win.applied_live(Ok(()), &cfg, &cfg);
+        assert!(win.held(Section::Program));
+        let (list, restarts) = held_list(&win.original, &win.draft);
+        assert_eq!((list, restarts), (vec!["restarts the program picture".to_string()], Restarts::Cameras));
+    }
+
+    #[test]
+    fn scene_changes_are_named_for_undo() {
+        let sc = |names: &[&str]| names.iter().map(|n| crate::scene::Scene { name: n.to_string(), ..Default::default() }).collect::<Vec<_>>();
+        assert_eq!(scenes_label(&sc(&["A", "B"]), &sc(&["A", "B", "C"])), "New scene C");
+        assert_eq!(scenes_label(&sc(&["A", "B"]), &sc(&["B"])), "Delete scene A");
+        assert_eq!(scenes_label(&sc(&["A", "B"]), &sc(&["A", "Bee"])), "Rename scene B");
+        assert_eq!(scenes_label(&sc(&["A", "B"]), &sc(&["B", "A"])), "Move scene A");
     }
 }

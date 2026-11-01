@@ -1,22 +1,60 @@
-//! Settings → Switching: transitions, preview/program, automatic switching.
+//! Scenes › Switching (transitions and Preview), Scenes › More ›
+//! Auto-switching and Stinger & fade to black, and More › Show tools ›
+//! Replay: the old Switching page, in four. They save as you go
+//! (live.rs). The transition and its length are the same settings as CUT
+//! / MIX / ⋯ and the length beside the scene bank: one setting shown in
+//! two places, each showing the other's change at once.
 
 use super::*;
 use crate::config::{AutoRule, Direction, TransitionMode};
 
+/// Which part of the switching settings the page shows (the tab it's on).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SwitchView {
+    /// Scenes › Switching: the transition, its length, Preview.
+    Transition,
+    /// Scenes › More › Auto-switching.
+    Auto,
+    /// Scenes › More › Stinger & fade to black.
+    Stinger,
+    /// More › Show tools › Replay.
+    Replay,
+}
+
 impl SettingsUi {
     pub(super) fn switching(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
-        title(ui, "Switching", "How scenes change, stingers, fade to black, replays, and switching by itself from the mics.");
+        match self.switch_view {
+            SwitchView::Transition => self.transitions(ui),
+            SwitchView::Auto => self.auto_switching(ui, info),
+            SwitchView::Stinger => {
+                title(ui, "Stinger & fade to black", "A video that plays over the change of scene, and how Fade to black fades.");
+                self.stinger(ui, info);
+                self.fade_to_black(ui);
+            }
+            SwitchView::Replay => self.replay(ui),
+        }
+    }
+
+    fn transitions(&mut self, ui: &mut egui::Ui) {
+        title(ui, "Switching", "How scenes change. These are the same as CUT, MIX, ⋯ and the length beside the scenes on Show: change either and both change.");
         let t = &mut self.draft.transition;
         egui::Grid::new("transitions").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
             label(ui, "Transition");
             ui.horizontal(|ui| {
                 for m in TransitionMode::ALL {
-                    ui.selectable_value(&mut t.mode, m, m.label());
+                    ui.selectable_value(&mut t.mode, m, m.label()).on_hover_text(m.describe());
                 }
             });
             ui.end_row();
             label(ui, "Length");
-            ui.add(egui::DragValue::new(&mut t.duration_ms).range(0..=3000).speed(10).suffix(" ms"));
+            ui.horizontal(|ui| {
+                let fixed = t.mode.fixed_length();
+                let r = ui.add_enabled(fixed.is_none(), egui::DragValue::new(&mut t.duration_ms).range(0..=3000).speed(10).suffix(" ms"));
+                if let Some(why) = fixed {
+                    r.on_disabled_hover_text(why);
+                    hint(ui, why);
+                }
+            });
             ui.end_row();
             label(ui, "Wipes and pushes go");
             ui.horizontal(|ui| {
@@ -44,11 +82,21 @@ impl SettingsUi {
             ui.end_row();
         });
         ui.add_space(10.0);
+        ui.horizontal_wrapped(|ui| {
+            hint(ui, "Also here:");
+            for (text, to) in [("Stinger & fade to black ›", "scenes/stinger/stinger"), ("Auto-switching ›", "scenes/auto/rules"), ("Replay ›", "more/tools/replay")] {
+                if ui.link(text).clicked() {
+                    self.pending = Some(SettingsAction::Go(to));
+                }
+            }
+        });
+    }
 
+    fn stinger(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
         let has_pads = self.draft.audio.iter().any(|a| a.is_pads());
         let st = &mut self.draft.transition.stinger;
         let state = st.file.as_ref().and_then(|f| f.file_name()).map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| "none".into());
-        part(ui, "stinger", "Stinger", &state, false, |ui| {
+        part(ui, "stinger", "Stinger", &state, true, |ui| {
             egui::Grid::new("stinger").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "Video");
                 ui.horizontal(|ui| {
@@ -95,10 +143,12 @@ impl SettingsUi {
                 hint(ui, "Its sound plays through the Sound pads input (add one in Sound pads).");
             }
         });
+    }
 
+    fn fade_to_black(&mut self, ui: &mut egui::Ui) {
         let t = &mut self.draft.transition;
         let state = format!("{:.1} s{}", t.ftb_ms as f32 / 1000.0, if t.ftb_audio { ", sound too" } else { "" });
-        part(ui, "ftb", "Fade to black", &state, false, |ui| {
+        part(ui, "ftb", "Fade to black", &state, true, |ui| {
             egui::Grid::new("ftb").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "Fade length");
                 ui.add(egui::DragValue::new(&mut t.ftb_ms).range(0..=10_000).speed(20).suffix(" ms"));
@@ -108,11 +158,14 @@ impl SettingsUi {
                 ui.end_row();
             });
         });
+    }
 
+    fn replay(&mut self, ui: &mut egui::Ui) {
+        title(ui, "Replay", "What ⟲ Replay plays again (under ⋯ beside CUT and MIX on Show, or replay from the Stream Deck, MIDI or the phone).");
         let recorded: Vec<String> = self.draft.sources.iter().filter(|s| s.record).map(|s| s.name.clone()).collect();
         let r = &mut self.draft.replay;
         let state = format!("the last {:.0} s", r.seconds);
-        part(ui, "replay", "Instant replay", &state, false, |ui| {
+        part(ui, "replay", "Instant replay", &state, true, |ui| {
             egui::Grid::new("replay").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "Replay the last");
                 ui.add(egui::Slider::new(&mut r.seconds, 2.0..=30.0).step_by(1.0).suffix(" s"));
@@ -141,7 +194,10 @@ impl SettingsUi {
                 ui.end_row();
             });
         });
+    }
 
+    fn auto_switching(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
+        title(ui, "Auto-switching", "Switching by itself to whoever is talking, from the mics. AUTO beside the scenes on Show (or the A key) turns it on and off.");
         let scenes: Vec<String> = self.draft.effective_scenes().iter().map(|s| s.name.clone()).collect();
         let inputs: Vec<(String, u32)> = self.draft.audio.iter().map(|a| (a.name.clone(), a.channels)).collect();
         // Each rule's mic as it runs now, by its identity, not its place in
@@ -169,7 +225,7 @@ impl SettingsUi {
             },
             if a.enabled { "on at start" } else { "off at start" }
         );
-        part(ui, "auto", "Automatic switching", &state, false, |ui| {
+        part(ui, "auto", "Automatic switching", &state, true, |ui| {
             egui::Grid::new("auto_on").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "At start");
                 ui.checkbox(&mut a.enabled, "on (AUTO and the A key turn it on and off)");

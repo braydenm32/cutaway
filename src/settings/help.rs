@@ -365,8 +365,8 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Captions, "Transcript") => "Saves what was said with every take: Transcript.txt, and Captions.srt and Captions.vtt for an editor or YouTube.",
 
         // ---- Switching
-        (Switching, "Transition") => "How scenes change. Cut is instant; Mix glides frames to their new places and cross-fades; Wipe and Push bring the new picture in from a side; Dip goes through a colour; Stinger plays a video over the change. In the main window CUT and MIX sit beside the scenes and the others are under ⋯. T switches between Cut and this.",
-        (Switching, "Length") => "How long a transition takes (Mix, Wipe, Push and Dip). A cut is instant and a stinger lasts as long as its video, so the length beside the scenes is greyed for those.",
+        (Switching, "Transition") => "How scenes change. Cut is instant; Mix glides frames to their new places and cross-fades; Wipe and Push bring the new picture in from a side; Dip goes through a colour; Stinger plays a video over the change. It's the same setting as CUT, MIX and ⋯ beside the scenes on Show: change either and both change. T switches between Cut and this.",
+        (Switching, "Length") => "How long a transition takes (Mix, Wipe, Push and Dip): the same length as the one beside CUT and MIX on Show. A cut is instant and a stinger lasts as long as its video, so the length is greyed for those, here and on Show.",
         (Switching, "Wipes and pushes go") => "Which way wipes and pushes move.",
         (Switching, "Dip through") => "The colour a Dip passes through between scenes.",
         (Switching, "Preview, then take") => "Pick the next scene in a preview monitor first, then send it to air with Take (Space) or Cut (Enter). Without it, clicking a scene takes it straight to air.",
@@ -399,9 +399,9 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
 
         // ---- Scenes
         (Scenes, "Name") => "What the scene's button says. Renamed when you leave the box; what goes by its name (the rundown, \"if it drops, cut to\", automatic switching, scene:Name commands) follows the new name.",
-        (Scenes, "Number key") => "The key that takes it: 1–9 for the first nine scenes, in order. Use ↑ and ↓ (or drag the buttons in Edit layout) to put the ones you use most first. Stream Deck keys, the remote and scene:3 from MIDI or OSC also go by place.",
-        (Scenes, "Shows") => "Its frames and which source is in each. Move and resize them with Edit layout in the main window.",
-        (Scenes, "Sound and cues") => "Inputs it turns on or off and commands it runs when it's taken: set them in Edit layout (Audio, Cues).",
+        (Scenes, "Number key") => "The key that takes it: 1–9 for the first nine scenes, in order. Use ↑ and ↓ (or drag the scene buttons in Show › Edit layout) to put the ones you use most first. Stream Deck keys, the remote and scene:3 from MIDI or OSC also go by place.",
+        (Scenes, "Shows") => "Its frames and which source is in each. Move and resize them in Show › Edit layout (E): \"Edit its layout\" opens it there, in preview with Preview on, so the program stays as it is until you Take.",
+        (Scenes, "Sound and cues") => "Inputs it turns on or off and commands it runs when it's taken: set them in Show › Edit layout (Audio, Cues).",
 
         // ---- Macros
         (Macros, "Name") => "What the macro's button says. Run it from its button, the Stream Deck (Macro key), the remote, MIDI, cues, or the command macro:Name.",
