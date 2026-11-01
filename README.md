@@ -131,7 +131,7 @@ and [Install on Windows](#install-on-windows).
   pan, tilt and zoom around its picture, with presets it glides to. Frame
   the presets in Settings by dragging boxes on the wide picture; it starts
   on preset 1.
-- **Split a camera into close-ups:** right-click a camera's tile (or
+- **Split a camera into close-ups:** **⋯** on a camera's tile, or right-click it (or
   **Split…** in Settings → Video sources) and choose 2 or 3 close-ups. Each
   person gets a virtual PTZ camera of their own ("Cam 1 left", "Cam 1
   right"…), with a box on the wide picture to drag onto them and a name
@@ -716,28 +716,28 @@ Video Extensions** on some PCs.
 | Action | How |
 |---|---|
 | Take scene 1–9 | Number keys, or click the scene button |
-| Scene buttons | Along the bottom. Each shows a live picture of its scene (its sources where its frames are), ♪ when it changes the sound, and ⚠ when a source in it has no signal; a long name ends in "…" and shows in full when you hover. When they don't all fit, the edge says how many more (**+3 ›**: click it, or scroll sideways). In a window at least 1000 pixels tall they take a second row instead |
+| Scene buttons | Along the bottom, every one in view. Each shows its key number (large), its name, **ON AIR** or **NEXT** (in preview), ♪ when it changes the sound and ⚠ when a source in it has no signal; a long name ends in "…" and shows in full when you hover. With room, each has a live picture of its scene (its sources where its frames are); in a narrower window (a 13" laptop) they become two rows of smaller buttons without pictures, so up to 12 scenes always fit. A bank longer than that scrolls sideways, and the edge says how many more (**+3 ›**: click it). In a window at least 1000 pixels tall they keep their pictures in two rows |
 | Cut straight to a scene | Shift + number, or Shift + click |
-| Back to the last scene | `Backspace` (or the `back` command): the scene on air before this one goes back on air with the current transition and its cues (in Preview mode too, without passing through preview). Press it again to go back the other way |
-| Put a source full screen | Click it in the multiview |
+| Back to the last scene | **⟲ Back** under the transitions, `Backspace` or the `back` command: the scene on air before this one goes back on air with the current transition and its cues (in Preview mode too, without passing through preview). Press it again to go back the other way |
+| Put a source full screen | With Preview off, click its tile in the multiview to pick it (a blue edge), then **Put on air** on the tile: so clicking a tile to look closer never switches the show. Shift+click a tile cuts to it at once. With Preview on, a click puts it in preview. Each tile shows the source's name and who's in it |
 | Preview, then take | Turn on **Preview**; scene keys then load the preview. Space = Take (with the transition), Enter = Cut |
-| Transition | The CUT / MIX / WIPE / PUSH / DIP buttons; `T` toggles between Cut and the last transition |
-| Automatic switching | **AUTO** or `A` |
+| Transition | **CUT** or **MIX** beside the scenes, with the length (it's greyed for Cut and Stinger, where it does nothing: a stinger lasts as long as its video). Wipe, Push, Dip and Stinger are under **⋯** (which then reads WIPE ▾ and so on). `T` toggles between Cut and the last transition |
+| Automatic switching | **AUTO** or `A`. Until it has rules (Settings → Switching) AUTO is greyed, and a click says so with a **Set up rules ›** link |
 | Captions on screen | **CC** or `C` |
-| Who an auto-framed source follows | Right-click its tile: follow and shot size |
+| Who an auto-framed source follows | **⋯** on its tile (or right-click it): follow and shot size |
 | Marker | `M`, or **◆ Marker** while recording |
 | Named marker | `Shift+M` while recording: the marker goes in at that moment and a box asks for its name (typing doesn't move it; Cancel keeps "Marker 3") |
 | This take's markers | **▾** beside **◆ Marker**: each marker's time, name and the scene on air. Change a name there, or ✕ to take one out, until the take stops (clips show with ✂ and stay as they are) |
 | Save a clip | `K`, or **✂ Clip** while recording (the last 30 seconds, or as set) |
 | Instant replay | **⟲ Replay** while recording (right-click it for slow motion or another camera) |
-| Fade to black | **FTB** under the transitions; again to come back |
+| Fade to black | **Fade to black**, at the end of the transitions; it flashes while the program is black, and reads **Fade up**: click it again to come back |
 | Macros, PTZ, teleprompter, comments | Their panels on the right, the Stream Deck, the remote, MIDI or OSC |
 | Sound pads 1–12 | F1–F12, or the pad buttons in the sound panel (hold for "while held" pads) |
 | Talkback | Hold `B`, or hold **TALK** in the sound panel |
 | Next rundown segment | `N` (Shift+N goes back), or **Next ▶** in the rundown panel |
 | Timers | Right-click a countdown or stopwatch's graphic button: start, pause, reset |
 | Graphics 1–9 | Alt/Option + number, or the graphic buttons; ✎ edits a title's text live |
-| Media player | ⟲ ⏯ ⏭ on its tile; right-click the tile for the playlist |
+| Media player | ⟲ ⏯ ⏭ on its tile; **⋯** (or right-click) for the playlist |
 | Record / stop | ⌘R, or the record button. To stop, hold the **REC** button (the dark one with the pulsing red dot) for a second (a red fill grows across it; a quick click only says **Hold to stop**); ⌘R asks "Stop recording?" first, so a stray click or key can't split the take |
 | Go live / end stream | The **GO LIVE** button (until there's somewhere to stream to, the header has a small **Set up streaming** in its place). It has no key unless you give it one in Settings → Shortcuts, so a stray key can't start or end a broadcast (a key gets the same checks and "are you sure?" as the button) |
 | Put scenes in order | In **Edit layout**, drag a scene button along the bank (a bar shows where it goes). Only in Edit layout, so a slip during the show can't move one. Or ↑ ↓ in **Settings → Show → Scenes**, which also renames, duplicates, deletes (it asks first, and says what uses the scene) and starts new scenes |
@@ -1170,7 +1170,7 @@ close-up of the person on the left, cut from the same camera.*
 - **Auto-framing:** in **Settings → Video sources**, add a source of type
   **Auto-framed close-up** and pick the wide camera to cut it from, who to
   follow and the shot size (close-up, medium, wide). Add several for several
-  people. Right-click its tile during the show to change who it follows.
+  people. Use **⋯** on its tile (or right-click it) during the show to change who it follows.
   - Best from a 4K camera: a 1080p close-up cut from 4K stays sharp. **Zoom
     limit** caps how far a smaller picture is enlarged.
   - Small movements are ignored, so the shot holds steady; when someone
