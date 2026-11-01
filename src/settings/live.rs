@@ -27,6 +27,11 @@
 //!   is waiting for its box to lose focus (`take_live`); held changes ask
 //!   first, as unapplied changes always have.
 //!
+//! Inputs work the same way: a level, ON, processing, ducking or auto-mix
+//! applies straight away; a new, removed or moved input, or a change to
+//! its device, channels, name or delay (which reopens it) waits on the bar
+//! as "Apply (restarts inputs)".
+//!
 //! Pages drawn by the app itself (People & names) use the same rules
 //! directly: they change `App::cfg`, call `remember` for Undo and save.
 
@@ -34,7 +39,7 @@ use super::*;
 use std::time::{Duration, Instant};
 
 /// The pages that save as you go.
-pub const LIVE: &[Section] = &[Section::Sources, Section::Guests, Section::Recording, Section::Streaming];
+pub const LIVE: &[Section] = &[Section::Sources, Section::Guests, Section::Audio, Section::Mixing, Section::Pads, Section::Syrinscape, Section::Recording, Section::Streaming];
 
 /// Whether a page saves as you go.
 pub fn is_live(s: Section) -> bool {
@@ -56,8 +61,16 @@ pub fn copy_section(s: Section, from: &Config, into: &mut Config) {
             a.guests = b.guests.clone();
         }
         Section::Audio => a.audio = b.audio.clone(),
-        Section::Mixing => a.mix = b.mix.clone(),
-        Section::Pads => a.pads = b.pads.clone(),
+        Section::Mixing => {
+            a.mix = b.mix.clone();
+            // (Which inputs duck and auto-mix are ticked here too.)
+            a.audio = b.audio.clone();
+        }
+        Section::Pads => {
+            a.pads = b.pads.clone();
+            // (Adds the Sound pads input when there's none.)
+            a.audio = b.audio.clone();
+        }
         Section::Syrinscape => a.syrinscape = b.syrinscape.clone(),
         Section::Rundown => a.rundown = b.rundown.clone(),
         Section::Scenes => a.scenes = b.scenes.clone(),
@@ -144,9 +157,20 @@ pub fn without_reopening(applied: &Config, edited: &Config) -> Config {
     out
 }
 
-/// What a held change does, for the bar: "restarts Couch", "adds Couch left".
-pub fn held_list(applied: &Config, edited: &Config) -> (Vec<String>, bool) {
-    use crate::config::source_key;
+/// What the bar's Apply restarts, if anything.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Restarts {
+    Nothing,
+    /// An input reopens (its sound drops for a moment).
+    Inputs,
+    /// A camera or the program picture restarts.
+    Cameras,
+}
+
+/// What a held change does, for the bar: "restarts Couch", "adds Couch
+/// left", "adds Sound pads".
+pub fn held_list(applied: &Config, edited: &Config) -> (Vec<String>, Restarts) {
+    use crate::config::{audio_key, source_key};
     let mut out = Vec::new();
     let names = |v: Vec<String>| v.join(", ");
     let restarting: Vec<String> = edited
@@ -157,9 +181,8 @@ pub fn held_list(applied: &Config, edited: &Config) -> (Vec<String>, bool) {
         .collect();
     let added: Vec<String> = edited.sources.iter().filter(|d| d.uid == 0 || !applied.sources.iter().any(|o| o.uid == d.uid)).map(|d| d.name.clone()).collect();
     let removed: Vec<String> = applied.sources.iter().filter(|o| !edited.sources.iter().any(|d| d.uid == o.uid)).map(|o| o.name.clone()).collect();
-    let restarts = !restarting.is_empty() || applied.program != edited.program;
     if !restarting.is_empty() {
-        out.push(format!("restarts {}", names(restarting)));
+        out.push(format!("restarts {}", names(restarting.clone())));
     }
     if !added.is_empty() {
         out.push(format!("adds {}", names(added)));
@@ -172,12 +195,39 @@ pub fn held_list(applied: &Config, edited: &Config) -> (Vec<String>, bool) {
     if kept(applied, edited) != kept(edited, applied) {
         out.push("changes the order of the sources".into());
     }
-    if audio_keys(applied) != audio_keys(edited) {
-        out.push("changes sound inputs".into());
+    // The same for sound inputs.
+    let reopening: Vec<String> = edited
+        .audio
+        .iter()
+        .filter(|d| d.uid != 0 && applied.audio.iter().any(|o| o.uid == d.uid && audio_key(o) != audio_key(d)))
+        .map(|d| d.name.clone())
+        .collect();
+    let added: Vec<String> = edited.audio.iter().filter(|d| d.uid == 0 || !applied.audio.iter().any(|o| o.uid == d.uid)).map(|d| d.name.clone()).collect();
+    let removed: Vec<String> = applied.audio.iter().filter(|o| !edited.audio.iter().any(|d| d.uid == o.uid)).map(|o| o.name.clone()).collect();
+    if !reopening.is_empty() {
+        out.push(format!("restarts {}", names(reopening.clone())));
+    }
+    if !added.is_empty() {
+        out.push(format!("adds {}", names(added)));
+    }
+    if !removed.is_empty() {
+        out.push(format!("removes {}", names(removed)));
+    }
+    let order = |c: &Config| c.audio.iter().map(|a| a.uid).filter(|u| *u != 0).collect::<Vec<_>>();
+    let kept = |c: &Config, other: &Config| order(c).into_iter().filter(|u| other.audio.iter().any(|a| a.uid == *u)).collect::<Vec<_>>();
+    if kept(applied, edited) != kept(edited, applied) {
+        out.push("changes the order of the inputs".into());
     }
     if applied.program != edited.program {
         out.push("restarts the program picture".into());
     }
+    let restarts = if !restarting.is_empty() || applied.program != edited.program {
+        Restarts::Cameras
+    } else if !reopening.is_empty() {
+        Restarts::Inputs
+    } else {
+        Restarts::Nothing
+    };
     (out, restarts)
 }
 
@@ -302,11 +352,19 @@ impl SettingsUi {
 
     /// What an Undo step of this change is called ("Undone: …").
     fn live_label(&self, lp: &Config) -> String {
-        let changed: Vec<&SourceConfig> = lp.sources.iter().filter(|s| !self.original.sources.iter().any(|o| o == *s)).collect();
-        match changed.as_slice() {
-            [one] => format!("{} settings", one.name),
-            [] if lp.guests != self.original.guests => "Remote guests settings".into(),
-            [] => "Settings change".into(),
+        let o = &self.original;
+        let changed: Vec<&SourceConfig> = lp.sources.iter().filter(|s| !o.sources.iter().any(|x| x == *s)).collect();
+        let inputs: Vec<&AudioConfig> = lp.audio.iter().filter(|a| !o.audio.iter().any(|x| x == *a)).collect();
+        match (changed.as_slice(), inputs.as_slice()) {
+            ([one], []) => format!("{} settings", one.name),
+            ([], [one]) if lp.mix == o.mix && lp.pads == o.pads => format!("{} settings", one.name),
+            ([], _) if lp.guests != o.guests => "Remote guests settings".into(),
+            ([], _) if lp.pads != o.pads => "Sound pads".into(),
+            ([], _) if lp.syrinscape != o.syrinscape => "Syrinscape settings".into(),
+            ([], _) if lp.mix.monitor_device != o.mix.monitor_device || lp.mix.monitor_source != o.mix.monitor_source || lp.mix.monitor_volume_db != o.mix.monitor_volume_db => "Headphones".into(),
+            ([], _) if lp.mix != o.mix => "Mixer settings".into(),
+            ([], []) => "Settings change".into(),
+            ([], _) => "Sound inputs".into(),
             _ => "Sources settings".into(),
         }
     }
@@ -354,9 +412,16 @@ impl SettingsUi {
             if let Err(e) = &valid {
                 let r = ui.add(egui::Label::new(RichText::new(format!("⚠ {}", e.message)).color(AMBER)).sense(egui::Sense::click()));
                 if r.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Click to go there").clicked() {
-                    if let crate::config::ProblemAt::Source(i) = e.at {
-                        self.sel_source = i;
-                        action = Some(SettingsAction::Go("sources/cameras/list"));
+                    match e.at {
+                        crate::config::ProblemAt::Source(i) => {
+                            self.sel_source = i;
+                            action = Some(SettingsAction::Go("sources/cameras/list"));
+                        }
+                        crate::config::ProblemAt::Audio(i) => {
+                            self.sel_audio = i;
+                            action = Some(SettingsAction::Go("sound/inputs/inputs"));
+                        }
+                        _ => {}
                     }
                 }
             } else if let Some(m) = &failed {
@@ -370,9 +435,13 @@ impl SettingsUi {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let blocked = live && self.original.needs_restart(&self.draft);
                     let can = valid.is_ok() && !blocked;
-                    let text = if restarts { "Apply (restarts cameras)" } else { "Apply" };
+                    let text = match restarts {
+                        Restarts::Cameras => "Apply (restarts cameras)",
+                        Restarts::Inputs => "Apply (restarts inputs)",
+                        Restarts::Nothing => "Apply",
+                    };
                     let b = egui::Button::new(RichText::new(text).color(Color32::WHITE)).fill(ACCENT.gamma_multiply(0.55)).min_size(vec2(0.0, 28.0));
-                    if ui.add_enabled(can, b).on_hover_text("These changes open, close or restart sources, so they wait for you").on_disabled_hover_text("Fix what's marked first").clicked() {
+                    if ui.add_enabled(can, b).on_hover_text("These changes open, close or restart sources or sound inputs, so they wait for you").on_disabled_hover_text("Fix what's marked first").clicked() {
                         action = Some(self.apply(false, info));
                     }
                     if ui.button("Undo these").on_hover_text("Forget the changes waiting here (what's already saved stays)").clicked() {
@@ -417,7 +486,7 @@ mod tests {
         assert_eq!(now.sources[1].device, "test");
         assert!(!applied.lineup_changed(&now), "nothing reopens");
         let (list, restarts) = held_list(&applied, &edited);
-        assert!(restarts);
+        assert_eq!(restarts, Restarts::Cameras);
         assert_eq!(list, vec!["restarts Host".to_string(), "adds New".to_string()]);
     }
 
@@ -501,10 +570,76 @@ mod tests {
     #[test]
     fn old_pages_wait_for_apply() {
         let applied = two();
-        let mut win = SettingsUi::new(applied.clone()).open_at(Section::Mixing);
-        win.draft.mix.limiter = !win.draft.mix.limiter;
+        let mut win = SettingsUi::new(applied.clone()).open_at(Section::Prompter);
+        win.draft.prompter.mirror = !win.draft.prompter.mirror;
         assert!(win.live_step(&egui::Context::default()).is_none());
         assert!(win.unapplied());
-        assert!(!is_live(Section::Mixing));
+        assert!(!is_live(Section::Prompter));
+    }
+
+    fn with_mics() -> Config {
+        let mut c = two();
+        c.audio = vec![
+            crate::config::AudioConfig { name: "Host mic".into(), device: "test".into(), ..Default::default() },
+            crate::config::AudioConfig { name: "Guest mic".into(), device: "test".into(), ..Default::default() },
+        ];
+        c.assign_uids();
+        c
+    }
+
+    /// Sound › Inputs: a level, ON or processing goes straight on; a new
+    /// input or a new device waits on the bar, which says what it does.
+    #[test]
+    fn inputs_save_as_you_go_and_new_ones_wait() {
+        let applied = with_mics();
+        let mut win = SettingsUi::new(applied.clone()).open_at(Section::Audio);
+        win.draft.audio[0].gain_db = -52.5;
+        win.draft.audio[0].processing.enabled = true;
+        win.draft.audio[1].device = "test:other".into();
+        win.draft.audio.push(crate::config::AudioConfig { name: "USB mic".into(), device: "test".into(), ..Default::default() });
+        assert!(win.held(Section::Audio));
+        let (list, restarts) = held_list(&win.original, &win.draft);
+        assert_eq!(list, vec!["restarts Guest mic".to_string(), "adds USB mic".to_string()]);
+        assert_eq!(restarts, Restarts::Inputs);
+        let Some(SettingsAction::Live { cfg, label, .. }) = win.live_step(&egui::Context::default()) else { panic!("nothing to save") };
+        assert_eq!(label, "Host mic settings");
+        assert_eq!(cfg.audio.len(), 2, "the new input waits");
+        assert_eq!(cfg.audio[0].gain_db, -52.5, "not rounded or pulled up to −40 (numbers audit #2)");
+        assert_eq!(cfg.audio[1].device, "test", "the new device waits");
+        assert!(!applied.lineup_changed(&cfg), "nothing reopens");
+        win.applied_live(Ok(()), &cfg, &cfg);
+        assert!(win.held(Section::Audio));
+        win.drop_held();
+        assert!(!win.held(Section::Audio));
+        assert_eq!(win.draft.audio[0].gain_db, -52.5, "what's saved stays");
+    }
+
+    /// Sound › Mixer and Headphones & talkback apply as made; Sound › Pads
+    /// saves its pads, and the Sound pads input it adds waits for Apply.
+    #[test]
+    fn mixer_and_pads_save_as_you_go() {
+        let applied = with_mics();
+        let mut win = SettingsUi::new(applied.clone()).open_at(Section::Mixing);
+        win.draft.mix.limiter = !win.draft.mix.limiter;
+        win.draft.audio[1].duck = true;
+        let ctx = egui::Context::default();
+        let Some(SettingsAction::Live { cfg, label, .. }) = win.live_step(&ctx) else { panic!() };
+        assert_eq!(cfg.mix.limiter, !applied.mix.limiter);
+        assert!(cfg.audio[1].duck, "the ticks on the inputs go with it");
+        assert_eq!(label, "Mixer settings");
+        win.applied_live(Ok(()), &cfg, &cfg);
+        assert!(!win.unapplied());
+
+        let applied = cfg;
+        let mut win = SettingsUi::new(applied.clone()).open_at(Section::Pads);
+        win.draft.pads.push(crate::config::Pad { name: "Applause".into(), ..Default::default() });
+        win.draft.audio.push(crate::config::AudioConfig { name: "Sound pads".into(), device: "pads".into(), ..Default::default() });
+        let Some(SettingsAction::Live { cfg, label, .. }) = win.live_step(&ctx) else { panic!() };
+        assert_eq!(label, "Sound pads");
+        assert_eq!(cfg.pads.len(), 1);
+        assert_eq!(cfg.audio.len(), 2, "the input waits");
+        win.applied_live(Ok(()), &cfg, &cfg);
+        assert!(win.held(Section::Pads));
+        assert_eq!(held_list(&win.original, &win.draft), (vec!["adds Sound pads".to_string()], Restarts::Nothing));
     }
 }

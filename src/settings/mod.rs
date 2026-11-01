@@ -36,6 +36,7 @@ use crate::engine::{LogLevel, LogLine};
 use crate::ui::theme::*;
 use eframe::egui::{self, vec2, Align, Color32, Layout, RichText};
 pub use live::is_live;
+pub use mixing::MixView;
 pub use sources::SourcesView;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -263,8 +264,21 @@ pub struct SettingsContext {
     /// Live captions: "listening", or why not (None when off).
     pub captions_status: Option<String>,
     pub vcam_on: bool,
-    /// Live level (dB) of each audio input's channels.
+    /// Live level (dB) of each running input's channels, as the
+    /// automatic switcher hears them (before processing), by its place in
+    /// the settings in effect.
     pub input_levels: Vec<Vec<f32>>,
+    /// Each running input's level as its meter on the desk shows it (dB,
+    /// the loudest channel; `Engine::input_level`): the one level every
+    /// screen shows (numbers audit #4). None while it isn't open.
+    pub input_meters: Vec<Option<f32>>,
+    /// Whether each running input is ON (heard in the mixes).
+    pub input_on: Vec<bool>,
+    /// The talkback key as it's set now ("B"), or empty when it has none.
+    pub talkback_key: String,
+    /// Syrinscape as the desk's connection sees it: what's playing, the
+    /// volume, the last problem.
+    pub syrin: crate::control::syrinscape::SyrinState,
     /// The stinger video as loaded.
     pub stinger: Option<crate::engine::stinger::StingerInfo>,
     /// Remote guests: how they reach Cutaway, the links' start, who's on.
@@ -372,6 +386,12 @@ pub struct SettingsUi {
     /// A source was picked here (or asked for): a remembered one doesn't
     /// replace it.
     sel_picked: bool,
+    /// The same for the input on Sound › Inputs.
+    sel_audio_picked: bool,
+    /// Which part of the mixing settings shows.
+    mix_view: MixView,
+    /// Syrinscape's volume on its page, while it's being set.
+    syrin_volume: Option<f64>,
 }
 
 const RESOLUTIONS: &[(u32, u32, &str)] = &[
@@ -384,17 +404,32 @@ const RESOLUTIONS: &[(u32, u32, &str)] = &[
 ];
 const RATES: &[u32] = &[24, 25, 30, 50, 60];
 
-/// An input's level in 0.5 dB steps. It takes only a change made on it:
-/// just drawing it rounds the level to its steps (and pulls one set below
-/// −40 dB, by MIDI or a command, up to −40), which isn't a change of yours
-/// and mustn't make the page look edited (numbers audit #2).
+/// An input's level, over the fader's range (−60 to +12 dB, as MIDI and
+/// the `gain` command use: numbers audit #2). It takes only a change made
+/// on it: just drawing it never rounds or clamps the level, which isn't a
+/// change of yours and mustn't be saved. Dragging moves in 0.5 dB steps;
+/// the box takes any value.
 fn gain_slider(ui: &mut egui::Ui, gain_db: &mut f64) -> egui::Response {
     let mut g = *gain_db as f32;
-    let r = ui.add(egui::Slider::new(&mut g, -40.0..=12.0).suffix(" dB").step_by(0.5));
-    if r.changed() && (r.dragged() || r.clicked() || r.has_focus()) {
+    let r = ui
+        .horizontal(|ui| {
+            let s = ui.add(egui::Slider::new(&mut g, -60.0..=12.0).show_value(false).step_by(0.5).clamping(egui::SliderClamping::Never));
+            let mut v = g;
+            let d = ui.add(egui::DragValue::new(&mut v).range(-60.0..=12.0).clamp_existing_to_range(false).speed(0.1).fixed_decimals(1).suffix(" dB"));
+            if d.changed() {
+                g = v;
+            }
+            let r = s.union(d);
+            if r.double_clicked() {
+                g = 0.0;
+            }
+            r
+        })
+        .inner;
+    if (r.changed() || r.double_clicked()) && (g as f64 - *gain_db).abs() > 1e-6 && (r.dragged() || r.clicked() || r.has_focus() || r.double_clicked()) {
         *gain_db = g as f64;
     }
-    r
+    r.on_hover_text("Double-click for 0 dB")
 }
 
 impl SettingsUi {
@@ -452,6 +487,9 @@ impl SettingsUi {
             last_live: None,
             view: SourcesView::Cameras,
             sel_picked: false,
+            sel_audio_picked: false,
+            mix_view: MixView::Mixer,
+            syrin_volume: None,
         }
     }
 
@@ -493,6 +531,28 @@ impl SettingsUi {
                 self.sel_source = i;
             }
         }
+    }
+
+    /// The input picked on Sound › Inputs, by name (remembered on this
+    /// computer, as the source is).
+    pub fn input_name(&self) -> Option<String> {
+        self.draft.audio.get(self.sel_audio).map(|a| a.name.clone())
+    }
+
+    /// Pick the input remembered from last time, once (by name; gone: the first).
+    pub fn restore_input(&mut self, name: &str) {
+        if !self.sel_audio_picked {
+            self.sel_audio_picked = true;
+            if let Some(i) = self.draft.audio.iter().position(|a| a.name == name) {
+                self.sel_audio = i;
+            }
+        }
+    }
+
+    /// Which part of the mixing settings the page shows (Sound › Mixer, or
+    /// Headphones & talkback).
+    pub fn set_mix_view(&mut self, v: MixView) {
+        self.mix_view = v;
     }
 
     /// Which part of the sources the page shows (the Sources area's tab).
@@ -661,9 +721,9 @@ impl SettingsUi {
             Section::General => self.general(ui, info),
             Section::Sources => self.sources(ui, info),
             Section::Audio => self.audio_inputs(ui, info),
-            Section::Mixing => self.mixing(ui),
+            Section::Mixing => self.mixing(ui, info),
             Section::Pads => self.pads(ui),
-            Section::Syrinscape => self.syrinscape(ui),
+            Section::Syrinscape => self.syrinscape(ui, info),
             Section::Program => self.program(ui),
             Section::Switching => self.switching(ui, info),
             Section::Graphics => self.graphics(ui),
@@ -1055,9 +1115,10 @@ impl SettingsUi {
             }
             hint(ui, &format!("{} audio input(s) found", self.audio.len()));
             ui.separator();
-            let unsaved = self.draft != self.original;
+            // (Changes waiting for Apply first: it measures what's running.)
+            let unsaved = self.unapplied();
             let b = ui.add_enabled(!unsaved, egui::Button::new("Measure lip sync…"));
-            if b.on_hover_text(if unsaved { "Apply your changes first" } else { "Clap once: Cutaway works out the audio and video delays" }).clicked() {
+            if b.on_hover_text(if unsaved { "Apply the changes waiting below first" } else { "Clap once: Cutaway works out the audio and video delays" }).clicked() {
                 self.pending = Some(SettingsAction::MeasureSync);
             }
         });
@@ -1071,7 +1132,7 @@ impl SettingsUi {
                 ui.set_width(220.0);
                 for i in 0..n {
                     let a = &self.draft.audio[i];
-                    let level = input_level(&self.original, &info.input_levels, a.uid);
+                    let level = input_level(&self.original, &info.input_meters, a.uid);
                     let b = egui::Button::selectable(
                         self.sel_audio == i,
                         RichText::new(format!("{}\n{} · {} ch", a.name, short_audio_device(&a.device), a.channels)).size(TEXT_STATE),
@@ -1101,8 +1162,11 @@ impl SettingsUi {
                             edit,
                             false,
                             |list| {
+                                // A mic not used yet, a USB one before the
+                                // computer's own (guide #2).
                                 let used: Vec<&str> = list.iter().map(|a| a.device.as_str()).collect();
-                                let device = audio.iter().find(|d| !used.contains(&d.name.as_str())).or(audio.first()).map(|d| d.name.clone()).unwrap_or("default".into());
+                                let free: Vec<DeviceInfo> = audio.iter().filter(|d| !used.contains(&d.name.as_str())).cloned().collect();
+                                let device = devices::best_mic(&free).or(audio.first()).map(|d| d.name.clone()).unwrap_or("default".into());
                                 let name = unique(list.iter().map(|a| a.name.clone()).collect(), &crate::config::audio_input_name(&device));
                                 Some(AudioConfig { name, device, ..Default::default() })
                             },
@@ -1131,7 +1195,7 @@ impl SettingsUi {
                 };
                 let devices = &self.audio;
                 let max = devices.iter().find(|d| d.name == a.device).map(|d| d.max_channels.max(1)).unwrap_or(64).min(64);
-                let level = input_level(&self.original, &info.input_levels, a.uid);
+                let level = input_level(&self.original, &info.input_meters, a.uid);
                 let unapplied = self.original.audio.iter().all(|o| o.uid != a.uid || a.uid == 0);
                 egui::Grid::new("audio_detail").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                     label(ui, "Name");
@@ -1146,7 +1210,7 @@ impl SettingsUi {
                                 ui.label(RichText::new(format!("{:>4.0} dB", db.max(-99.0))).monospace().color(TEXT_DIM));
                             });
                         }
-                        None if unapplied => hint(ui, "Apply to hear it"),
+                        None if unapplied => hint(ui, "Apply (below) to hear it"),
                         None => hint(ui, "no sound yet (the input isn't open)"),
                     }
                     ui.end_row();
@@ -1200,7 +1264,7 @@ impl SettingsUi {
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut a.duck, "turn down while others talk");
                         if a.duck && !ducking_on {
-                            hint(ui, "(ducking is off in Mixing & headphones)");
+                            hint(ui, "(ducking is off: Sound › Mixer)");
                         }
                     });
                     ui.end_row();
@@ -1208,7 +1272,7 @@ impl SettingsUi {
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut a.automix, "a mic: up while talking, down while others talk");
                         if a.automix && !automix_on {
-                            hint(ui, "(automatic mic mixing is off in Mixing & headphones)");
+                            hint(ui, "(automatic mic mixing is off: Sound › Mixer)");
                         }
                     });
                     ui.end_row();
@@ -2531,13 +2595,25 @@ pub fn ndi_credit(ui: &mut egui::Ui) {
     });
 }
 
-/// The live level (dB, loudest channel) of the applied input with this identity, if the show is running.
-fn input_level(applied: &Config, levels: &[Vec<f32>], uid: u64) -> Option<f32> {
+/// The place in the settings in effect of the input with this identity
+/// (the running inputs, their levels and ON are by place).
+fn running_input(applied: &Config, uid: u64) -> Option<usize> {
     if uid == 0 {
         return None;
     }
-    let i = applied.audio.iter().position(|a| a.uid == uid)?;
-    levels.get(i).map(|ch| ch.iter().copied().fold(-120.0, f32::max))
+    applied.audio.iter().position(|a| a.uid == uid)
+}
+
+/// The live level (dB, as its meter on the desk shows it) of the applied
+/// input with this identity, if it's open.
+fn input_level(applied: &Config, meters: &[Option<f32>], uid: u64) -> Option<f32> {
+    meters.get(running_input(applied, uid)?).copied().flatten()
+}
+
+/// Each channel's level (dB) of the applied input with this identity, as
+/// the automatic switcher hears it.
+pub(super) fn input_channels<'a>(applied: &Config, levels: &'a [Vec<f32>], uid: u64) -> Option<&'a Vec<f32>> {
+    levels.get(running_input(applied, uid)?)
 }
 
 /// A level meter (dB) filling `rect` as far as the level reaches: green, amber near the top, red at the limit.
@@ -2604,6 +2680,10 @@ mod tests {
             captions_status: None,
             vcam_on: false,
             input_levels: Vec::new(),
+            input_meters: Vec::new(),
+            input_on: Vec::new(),
+            talkback_key: String::new(),
+            syrin: Default::default(),
             stinger: None,
             guest_reach: Default::default(),
             guest_base: None,
@@ -2766,12 +2846,16 @@ mod tests {
     fn input_levels_follow_the_input_not_its_place() {
         let mut cfg = Config::default();
         cfg.audio = vec![AudioConfig { name: "A".into(), uid: 11, ..Default::default() }, AudioConfig { name: "B".into(), uid: 12, ..Default::default() }];
-        let levels = vec![vec![-30.0, -20.0], vec![-6.0]];
-        assert_eq!(input_level(&cfg, &levels, 11), Some(-20.0));
-        assert_eq!(input_level(&cfg, &levels, 12), Some(-6.0));
-        assert_eq!(input_level(&cfg, &levels, 99), None);
-        assert_eq!(input_level(&cfg, &levels, 0), None);
+        let meters = vec![Some(-20.0), Some(-6.0)];
+        assert_eq!(input_level(&cfg, &meters, 11), Some(-20.0));
+        assert_eq!(input_level(&cfg, &meters, 12), Some(-6.0));
+        assert_eq!(input_level(&cfg, &meters, 99), None);
+        assert_eq!(input_level(&cfg, &meters, 0), None);
         assert_eq!(input_level(&cfg, &[], 11), None);
+        assert_eq!(input_level(&cfg, &[None, Some(-6.0)], 11), None, "not open yet");
+        let levels = vec![vec![-30.0, -20.0], vec![-6.0]];
+        assert_eq!(input_channels(&cfg, &levels, 12), Some(&vec![-6.0]));
+        assert_eq!(input_channels(&cfg, &levels, 0), None);
     }
 
     /// While recording, a change that restarts a source asks first (with

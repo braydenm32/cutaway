@@ -386,10 +386,22 @@ Takes start with the **Take name** from Settings → Recording. Leave it as
 - **DAW audio.** Each audio input is recorded to WAV (multichannel, or one mono
   file per channel). You pick which two channels feed the mix. Interfaces with
   their own clock are kept locked to the video for hours (drift correction).
-- **Inputs in Settings:** each input in **Settings → Audio inputs** has a live
-  level bar (in the list and beside its name), so you can see a mic is alive
-  without leaving the page; an input you haven't applied yet says "Apply to
-  hear it". **↑ / ↓** move an input (the order of the strips in the mixer;
+- **Sound › Mixer** lists every input with its meter, its fader (−60 to
+  +12 dB, the same range as the desk, MIDI and the `gain` command) and ON,
+  above the limiter, stream loudness, automatic mic mixing and ducking.
+  **Settings ›** on a row opens that input in **Sound › Inputs**.
+- **One meter per input:** the level an input shows is the same everywhere:
+  its strip on the desk, Sound › Mixer and Sound › Inputs, the phone, OSC
+  `/cutaway/level`, the pre-show check and the first-show guide all read the
+  meter after voice processing and before the fader.
+- **Sound › Inputs:** each input has a live level bar (in the list and
+  beside its name), so you can see a mic is alive without leaving the page;
+  an input not applied yet says "Apply (below) to hear it". Its level, ON,
+  where it's heard, ducking, auto-mix, recording and voice processing save
+  as you change them; a new input, a new device, channels, name or delay
+  (which restart the input) wait for **Apply (restarts inputs)** on the bar
+  at the bottom. The page comes back to the input you had picked. **↑ / ↓**
+  move an input (the order of the strips in the mixer;
   scenes, auto-mix, ducking and talkback follow an input by name, so they
   carry on; anything that says "input 2" by number, like a remote or MIDI
   button, now means whichever is second) and **Duplicate** copies one under a
@@ -414,23 +426,27 @@ Takes start with the **Take name** from Settings → Recording. Leave it as
   any output channels.
 - **Talkback:** hold **TALK** (or `B`, or a Stream Deck key) and your mic
   goes to the presenters' headphones and the guests — never the recording or
-  stream — with the rest dipped while you talk.
+  stream — with the rest dipped while you talk. Headphones, talkback and
+  more outputs are set in **Sound › More ▾ › Headphones & talkback**, which
+  shows the talkback key as it's set now.
 - **Automatic mic mixing:** for panels and round tables. The mics you tick
   share one level, the way broadcast automixers do: whoever is talking is
   up and the others drop away (up to 30 dB), so room noise, echo and
   breathing don't pile up, and two people talking at once share it. Nothing
   is ever switched off, so the start of a word is never lost. Each mic's own
-  WAV stays untouched. **Settings → Mixing & headphones → Automatic mic
+  WAV stays untouched. **Sound › Mixer → Automatic mic
   mixing**; the strip shows **↓12** while a mic is turned down.
 - **Auto-ducking:** music, pads and ambience marked to duck dip smoothly
   under the voices and come back up after a pause (off until you turn it on
-  in Settings → Mixing & headphones).
+  in Sound › Mixer).
 - **Sound pads:** jingles, stings, applause and music beds on buttons,
   F1–F12, the Stream Deck, MIDI pads and the remote: play once, loop, or
   play while held, each with its level and fade. They play through their
   own input strip, so they're recorded and can duck.
 - **Syrinscape:** start your Syrinscape Online moods and sounds from
-  Cutaway's sound panel, scenes, the rundown, the Stream Deck and MIDI. Its
+  Cutaway's sound panel, scenes, the rundown, the Stream Deck and MIDI, or
+  with ▶ beside each button in **Sound › More ▾ › Syrinscape**, which also
+  has Syrinscape's volume. Its
   sound comes in through a virtual cable or Cutaway's **Sound from an app**
   input (captures one app's audio, on Mac and Windows).
 - **Automatic lip sync:** clap once where every camera can see it; Cutaway
@@ -668,7 +684,10 @@ Video Extensions** on some PCs.
   recording and (optional) **editing afterwards**. Each step has a button to
   the right page and ticks itself off when it's done. The cameras step counts
   real cameras only: test pictures standing in when none was found don't
-  tick it, and it says where to let Cutaway use the camera. Naming
+  tick it, and it says where to let Cutaway use the camera. The microphone
+  step names the mic it listens to and ticks only when that mic hears you
+  (sound on another input doesn't count; it says which one does, so you can
+  pick it in Sound › Inputs). Naming
   people is done right in the guide, with the same rows as **Sources ›
   People & names** that behave the same way: who's in each picture and their
   role are saved as you type, and a camera's new name when you press Enter or
@@ -679,7 +698,9 @@ Video Extensions** on some PCs.
   Premiere Pro and Final Cut projects are switched on. Open it again any time
   from **More › App › Help** (or **First-show guide** under the status light).
 - **Auto-setup:** on first launch Cutaway writes a settings file with every
-  camera and capture card it finds, plus the first audio input, to
+  camera and capture card it finds, plus your microphone (a USB mic or
+  interface before the computer's own; a loopback or a phone nearby only if
+  there's nothing else), to
   `~/Library/Application Support/Cutaway/config.toml` (on Windows,
   `%APPDATA%\Cutaway\config.toml`).
   Change anything in the areas down the left of the window, or edit the
@@ -707,12 +728,13 @@ Video Extensions** on some PCs.
   lights up for a moment. A desk button is shown, never pressed, so nothing
   goes on air from search. ⌘K works even while you're typing in a box; Esc
   (or ⌘K again) closes it, and what you typed is still there next time.
-- **Changes save as you go** in Sources and in Record › Recording and Streaming (the other areas follow): what you
+- **Changes save as you go** in Sources, Sound, and Record › Recording and Streaming (the other areas follow): what you
   change applies straight away and is saved, a box when you press Enter or
   click elsewhere. **↶ Undo** and **↷ Redo** at the bottom of the page (or ⌘Z
   when you're not typing in a box) take it back. Changes that would add,
-  remove or restart a source wait in an amber line at the bottom ("Waiting:
-  restarts Couch · adds Couch left") with **Apply (restarts cameras)** and
+  remove or restart a source or a sound input wait in an amber line at the
+  bottom ("Waiting: restarts Couch · adds Couch left") with **Apply (restarts
+  cameras)** (or **Apply (restarts inputs)**) and
   **Undo these**, and an amber dot on the area in the rail; going back to Show
   asks before dropping them.
 - **Pages not moved yet** still have **Revert** on its own at the bottom left;
@@ -871,8 +893,8 @@ TALK, Undo, the graphics) always show the key as it's set now.
   version (9:16)** and it gets that instead of the program (see
   [The vertical version](#the-vertical-version)).
 - **The stream mix** can differ from the recording mix (**Heard in** on each
-  input in Settings → Audio inputs), and stream levelling keeps it at a steady
-  loudness (Settings → Mixing & headphones).
+  input in Sound › Inputs), and stream levelling keeps it at a steady
+  loudness (Sound › Mixer).
 - **Stream keys** (and other passwords and tokens) are kept in the Keychain
   on a Mac, or Credential Manager on Windows, not in the settings file. The
   file only holds a placeholder like `@keychain:3f9a01c2b7de`. A Mac may ask
@@ -1223,19 +1245,21 @@ the camera stopping (a new close-up starts once you press Apply).
 
 ## Sound pads, Syrinscape and talkback
 
-- **Sound pads:** **Settings → Sound pads → ＋ Add sounds…** (WAV, AIFF,
+- **Sound pads:** **Sound › Pads → ＋ Add sounds…** (WAV, AIFF,
   MP3, AAC/M4A, FLAC, Ogg or CAF). Each pad has a name, colour, how it plays
   (once, loop, or while held), a level and a fade-out. Cutaway adds a **Sound
-  pads** audio input for them, with its own fader, meter and WAV file. Tick
+  pads** audio input for them, with its own fader, meter and WAV file (it
+  waits for **Apply** on the bar, as a new input does). Tick
   **Duck under voices** on it to keep beds below the talking.
-- **Syrinscape:** **Settings → Syrinscape:** paste your auth token (from
+- **Syrinscape:** **Sound › More ▾ › Syrinscape:** paste your auth token (from
   syrinscape.com/account/auth-token), press **Test**, then **Load my
   soundsets** and **＋ Add** the moods and sounds you want as buttons (or
   paste a remote-control link). Keep the Syrinscape Online player open. To
   hear it in Cutaway, add an audio input set to **Sound from an app** → your
   browser or the Syrinscape app (on a Mac, allow Screen Recording when
-  asked), or route the player to a virtual cable.
-- **Talkback:** **Settings → Mixing & headphones → Talkback:** choose your
+  asked), or route the player to a virtual cable. ▶ beside a button plays
+  it now (■ stops it), and **Volume** sets Syrinscape's own volume.
+- **Talkback:** **Sound › More ▾ › Headphones & talkback → Talkback:** choose your
   mic. Add the presenters' headphones under **More outputs** (tick
   **Talkback**). Hold **TALK** or `B` to speak to them; guests hear it too
   unless you untick it.
@@ -1248,7 +1272,7 @@ the camera stopping (a new close-up starts once you press Apply).
 Cutaway records from audio *inputs*, so route the DAW's output to one:
 
 - **Two computers, or a hardware mixer:** send the DAW's output into your audio
-  interface inputs. In **Settings → Audio inputs**, pick the interface and set
+  interface inputs. In **Sound › Inputs**, pick the interface and set
   how many channels to capture. Then set the mix channels to the pair carrying
   the DAW mix, e.g. 3 and 4.
 - **Same Mac:** set the DAW's output to a loopback device and pick that device
@@ -1256,7 +1280,7 @@ Cutaway records from audio *inputs*, so route the DAW's output to one:
   interfaces (RME, MOTU, UA, Focusrite) also have a built-in loopback channel
   pair you can use.
 - **Lip sync:** cameras are usually 2–5 frames behind the audio. Press
-  **Measure lip sync…** (Settings → Audio inputs, or in the pre-show check),
+  **Measure lip sync…** (Sound › Inputs, or in the pre-show check),
   then clap once, sharply, where every camera can see it. Cutaway finds the
   clap in every camera and every input and shows the delays it suggests;
   tick the ones to apply. (`cutaway --measure-sync` does the same from the

@@ -374,8 +374,9 @@ pub struct App {
     guide_recorded: bool,
     /// The Settings page last open, so the window comes back to it (this run only).
     settings_page: Option<Section>,
-    /// Sound was heard once while the guide was open (latched so the mic step doesn't flicker).
-    guide_heard: bool,
+    /// The input the guide heard sound on once while it was open (its
+    /// identity; latched so the mic step doesn't flicker). 0: none yet.
+    guide_heard: u64,
     /// The pre-show check was run from the guide.
     guide_checked: bool,
     /// Edit layout was turned on from the guide (its scenes step).
@@ -601,7 +602,7 @@ impl App {
             fit_window: false,
             guide_recorded: false,
             settings_page: None,
-            guide_heard: false,
+            guide_heard: 0,
             guide_checked: false,
             guide_scenes: false,
             shell: shell::Shell::load(cc.storage),
@@ -1516,7 +1517,7 @@ impl App {
             Action::Talkback(t) => {
                 let e = self.engine.as_ref().ok_or("the engine isn't running")?;
                 if e.mix.talkback_input().is_none() {
-                    return Err("there's no talkback mic (Settings → Mixing & headphones)".into());
+                    return Err("there's no talkback mic (Sound › More › Headphones & talkback)".into());
                 }
                 let on = toggle(&t, e.talkback());
                 e.set_talkback(on);
@@ -1671,6 +1672,8 @@ impl App {
     /// The show as controllers see it.
     fn show_state(&self) -> Option<ShowState> {
         let e = self.engine.as_ref()?;
+        // One level per input, as the desk's meters show it (numbers audit #4).
+        let levels = e.input_levels();
         let live = e.switcher.live();
         let preview = e.switcher.preview();
         let live_sources = live.sources();
@@ -1759,7 +1762,7 @@ impl App {
                 .map(|(i, a)| show::InputState {
                     name: a.name.clone(),
                     on: e.is_on(i),
-                    level: (a.shared.levels_db().into_iter().fold(-120.0f32, f32::max) * 2.0).round() / 2.0,
+                    level: (levels.get(i).copied().flatten().unwrap_or(-120.0) * 2.0).round() / 2.0,
                     gain_db: self.cfg.audio.get(i).map(|c| c.gain_db).unwrap_or(0.0),
                 })
                 .collect(),
@@ -2323,6 +2326,19 @@ impl App {
                             if let Some(s) = c.sources.first_mut() {
                                 s.look.mirror = true;
                             }
+                        });
+                    }
+                }
+                if std::env::var_os("CUTAWAY_UI_TEST_SOUND_EDIT").is_some() {
+                    // SOUND_EDIT=1: Sound › Inputs with the first input's level at −52.5 dB (saved as you go)
+                    // and a USB mic added (waiting for Apply on the bar).
+                    self.go("sound/inputs/inputs");
+                    if let Some(win) = self.settings.as_mut() {
+                        win.edit_draft(|c| {
+                            if let Some(a) = c.audio.first_mut() {
+                                a.gain_db = -52.5;
+                            }
+                            c.audio.push(crate::config::AudioConfig { name: "USB mic".into(), device: "test".into(), ..Default::default() });
                         });
                     }
                 }
@@ -4537,7 +4553,7 @@ impl App {
                                 ui.spacing_mut().item_spacing.x = 3.0;
                                 let soloed = monitoring && self.cfg.mix.monitor_source.eq_ignore_ascii_case(name);
                                 let h = ui.add(egui::Button::selectable(soloed, RichText::new("🎧").size(TEXT_SMALL)).min_size(vec2(24.0, 18.0)));
-                                if h.on_hover_text(if monitoring { "Solo in the headphones" } else { "Choose a headphone output in Settings → Mixing & headphones" }).clicked() && monitoring {
+                                if h.on_hover_text(if monitoring { "Solo in the headphones" } else { "Choose a headphone output in Sound › More › Headphones & talkback" }).clicked() && monitoring {
                                     solo = Some(name.clone());
                                 }
                                 let mut tags = String::new();
@@ -5303,11 +5319,14 @@ impl App {
     fn settings_context(&self) -> SettingsContext {
         let mut facts = Vec::new();
         let (mut recording, mut streaming, mut log, mut levels, mut vcam_on) = (false, false, Vec::new(), Vec::new(), false);
+        let (mut meters, mut on) = (Vec::new(), Vec::new());
         if let Some(e) = &self.engine {
             recording = e.is_recording();
             streaming = e.is_streaming();
             vcam_on = e.virtual_camera_on();
             levels = e.audio.iter().map(|a| a.shared.levels_db()).collect();
+            meters = e.input_levels();
+            on = (0..e.audio.len()).map(|i| e.is_on(i)).collect();
             let st = e.status.lock_ok();
             log = st.log.iter().cloned().collect();
             facts.push(("Recording encoder".into(), e.encoder_description()));
@@ -5349,6 +5368,14 @@ impl App {
             captions_status: self.engine.as_ref().and_then(|e| e.captions()).map(|c| c.status()),
             vcam_on,
             input_levels: levels,
+            input_meters: meters,
+            input_on: on,
+            talkback_key: self.key_label_or(crate::control::shortcuts::Builtin::Talkback, ""),
+            syrin: {
+                // (Only what the page shows: not the soundsets browsed here.)
+                let st = self.syrinscape.state.lock_ok();
+                crate::control::syrinscape::SyrinState { mood: st.mood, elements: st.elements.clone(), volume: st.volume, problem: st.problem.clone(), busy: st.busy, ..Default::default() }
+            },
             stinger: self.engine.as_ref().map(|e| e.stinger.info()),
             guest_reach: crate::engine::guests::hub().reach(),
             guest_base: crate::engine::guests::hub().base_url(),

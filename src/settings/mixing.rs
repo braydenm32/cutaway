@@ -1,7 +1,18 @@
-//! Settings → Mixing & headphones, and the voice processing strip.
+//! Sound › Mixer and Sound › More › Headphones & talkback (the old
+//! Mixing & headphones page, in two), and the voice processing strip.
 
 use super::*;
 use crate::config::VoiceProcessing;
+
+/// Which part of the mixing settings the page shows.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MixView {
+    /// Sound › Mixer: limiter, stream loudness, automatic mixing, ducking.
+    Mixer,
+    /// Sound › More › Headphones & talkback: what you and the presenters
+    /// hear.
+    Phones,
+}
 
 /// What the channel strip is doing, in a few words.
 pub(super) fn processing_summary(p: &VoiceProcessing) -> String {
@@ -110,8 +121,18 @@ pub(super) fn processing_editor(ui: &mut egui::Ui, p: &mut VoiceProcessing) {
 }
 
 impl SettingsUi {
-    pub(super) fn mixing(&mut self, ui: &mut egui::Ui) {
-        title(ui, "Mixing & headphones", "Protecting the mixes, stream loudness, and what you and the presenters hear.");
+    pub(super) fn mixing(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
+        match self.mix_view {
+            MixView::Mixer => self.mixer(ui, info),
+            MixView::Phones => self.phones(ui, info),
+        }
+    }
+
+    /// Sound › Mixer.
+    fn mixer(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
+        title(ui, "Mixer", "Each input's level, protecting the mixes, stream loudness, and mics that share or step aside.");
+        self.levels(ui, info);
+        ui.add_space(12.0);
         let m = &mut self.draft.mix;
         egui::Grid::new("master").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
             label(ui, "Limiter");
@@ -129,6 +150,122 @@ impl SettingsUi {
         });
         ui.add_space(10.0);
 
+        let mixed: Vec<String> = self.draft.audio.iter().filter(|a| a.automix).map(|a| a.name.clone()).collect();
+        let state = if !self.draft.mix.automix { "off".to_string() } else if mixed.len() < 2 { "on, tick at least two mics".to_string() } else { mixed.join(", ") };
+        let open = self.draft.mix.automix;
+        part(ui, "mix_automix", "Automatic mic mixing", &state, open, |ui| {
+            hint(ui, "For panels and round tables: whoever is talking is up and the other mics go down, so their room noise, echo and breathing don't pile up. Two people talking at once share it. Nothing is cut off: a quiet mic is only ever turned down, never off.");
+            egui::Grid::new("automix").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
+                label(ui, "Automatic mixing");
+                ui.checkbox(&mut self.draft.mix.automix, "share the level between the mics below");
+                ui.end_row();
+                label(ui, "Mics");
+                ui.horizontal_wrapped(|ui| {
+                    for a in self.draft.audio.iter_mut().filter(|a| !a.is_pads()) {
+                        ui.checkbox(&mut a.automix, &a.name);
+                    }
+                    if self.draft.audio.is_empty() {
+                        hint(ui, "No audio inputs yet.");
+                    }
+                });
+                ui.end_row();
+            });
+            if self.draft.mix.automix && mixed.len() == 1 {
+                hint(ui, "Tick at least two mics: with one there's nothing to share.");
+            }
+            hint(ui, "Only the mixes change: each mic's own WAV file is recorded as it was, so you can still mix it yourself afterwards.");
+        });
+
+        let ducked: Vec<String> = self.draft.audio.iter().filter(|a| a.duck).map(|a| a.name.clone()).collect();
+        let state = if !self.draft.mix.ducking { "off".to_string() } else if ducked.is_empty() { "on, nothing ticked".to_string() } else { format!("{} under voices", ducked.join(", ")) };
+        let open = self.draft.mix.ducking;
+        part(ui, "mix_duck", "Ducking", &state, open, |ui| {
+            let ducking = self.draft.mix.ducking;
+            egui::Grid::new("ducking").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
+                label(ui, "Ducking");
+                ui.checkbox(&mut self.draft.mix.ducking, "turn music, pads and ambience down while people talk");
+                ui.end_row();
+                if ducking {
+                    let m = &mut self.draft.mix;
+                    label(ui, "Turn down by");
+                    ui.add(egui::Slider::new(&mut m.duck_db, -40.0..=-3.0).suffix(" dB"));
+                    ui.end_row();
+                    label(ui, "When a voice is above");
+                    ui.add(egui::Slider::new(&mut m.duck_threshold_db, -60.0..=-10.0).suffix(" dBFS"));
+                    ui.end_row();
+                    label(ui, "Back up after");
+                    ui.add(egui::DragValue::new(&mut m.duck_release_ms).range(100..=5000).speed(10).suffix(" ms of quiet"));
+                    ui.end_row();
+                    label(ui, "These go down");
+                    ui.horizontal_wrapped(|ui| {
+                        for a in self.draft.audio.iter_mut() {
+                            ui.checkbox(&mut a.duck, &a.name);
+                        }
+                        if self.draft.audio.is_empty() {
+                            hint(ui, "No audio inputs yet.");
+                        }
+                    });
+                    ui.end_row();
+                }
+            });
+        });
+    }
+
+    /// The inputs as a mixer: each one's meter, level and ON, as the AUDIO
+    /// strip on the desk has them (the same meter and the same −60 to +12
+    /// dB range), with the rest of its settings a click away.
+    fn levels(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
+        if self.draft.audio.is_empty() {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("No microphones or other inputs yet.").color(TEXT_DIM));
+                if ui.link("Add one in Sound › Inputs").clicked() {
+                    self.pending = Some(SettingsAction::Go("sound/inputs/inputs"));
+                }
+            });
+            return;
+        }
+        let mut edit = None;
+        egui::Grid::new("levels").num_columns(5).spacing(TABLE_GAP).show(ui, |ui| {
+            for h in ["Input", "Level", "Fader", "On", ""] {
+                column_head(ui, h);
+            }
+            ui.end_row();
+            for (i, a) in self.draft.audio.iter_mut().enumerate() {
+                ui.allocate_ui_with_layout(vec2(150.0, 22.0), Layout::left_to_right(Align::Center), |ui| {
+                    ui.set_min_width(150.0);
+                    ui.add(egui::Label::new(RichText::new(&a.name).strong()).truncate());
+                });
+                let (rect, _) = ui.allocate_exact_size(vec2(180.0, 10.0), egui::Sense::hover());
+                match input_level(&self.original, &info.input_meters, a.uid) {
+                    Some(db) => paint_level(ui, rect, db),
+                    None => {
+                        ui.painter().text(rect.left_center(), egui::Align2::LEFT_CENTER, if running_input(&self.original, a.uid).is_some() { "not open" } else { "Apply (below) to hear it" }, egui::FontId::proportional(TEXT_SMALL), TEXT_DIM);
+                    }
+                }
+                gain_slider(ui, &mut a.gain_db);
+                let on = a.in_program;
+                let b = egui::Button::new(RichText::new(if on { "ON" } else { "OFF" }).strong().size(TEXT_BODY).color(if on { Color32::BLACK } else { Color32::WHITE }))
+                    .fill(if on { GREEN } else { OFF })
+                    .min_size(vec2(48.0, 22.0));
+                if ui.add(b).on_hover_text(if on { "Heard in the mixes: click to turn it off" } else { "Off: not heard in the mixes. Click to turn it on" }).clicked() {
+                    a.in_program = !on;
+                }
+                if ui.small_button("Settings ›").on_hover_text("Its device, channels, lip sync and voice processing").clicked() {
+                    edit = Some(i);
+                }
+                ui.end_row();
+            }
+        });
+        if let Some(i) = edit {
+            self.sel_audio = i;
+            self.sel_audio_picked = true;
+            self.pending = Some(SettingsAction::Go("sound/inputs/inputs"));
+        }
+    }
+
+    /// Sound › More › Headphones & talkback.
+    fn phones(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
+        title(ui, "Headphones & talkback", "What you and the presenters hear, and talking to them.");
         let outputs = self.outputs.clone();
         let inputs: Vec<String> = self.draft.audio.iter().map(|a| a.name.clone()).collect();
         let m = &mut self.draft.mix;
@@ -172,67 +309,9 @@ impl SettingsUi {
             }
         });
 
-        let mixed: Vec<String> = self.draft.audio.iter().filter(|a| a.automix).map(|a| a.name.clone()).collect();
-        let state = if !self.draft.mix.automix { "off".to_string() } else if mixed.len() < 2 { "on, tick at least two mics".to_string() } else { mixed.join(", ") };
-        part(ui, "mix_automix", "Automatic mic mixing", &state, self.draft.mix.automix, |ui| {
-            hint(ui, "For panels and round tables: whoever is talking is up and the other mics go down, so their room noise, echo and breathing don't pile up. Two people talking at once share it. Nothing is cut off: a quiet mic is only ever turned down, never off.");
-            egui::Grid::new("automix").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
-                label(ui, "Automatic mixing");
-                ui.checkbox(&mut self.draft.mix.automix, "share the level between the mics below");
-                ui.end_row();
-                label(ui, "Mics");
-                ui.horizontal_wrapped(|ui| {
-                    for a in self.draft.audio.iter_mut().filter(|a| !a.is_pads()) {
-                        ui.checkbox(&mut a.automix, &a.name);
-                    }
-                    if self.draft.audio.is_empty() {
-                        hint(ui, "No audio inputs yet.");
-                    }
-                });
-                ui.end_row();
-            });
-            if self.draft.mix.automix && mixed.len() == 1 {
-                hint(ui, "Tick at least two mics: with one there's nothing to share.");
-            }
-            hint(ui, "Only the mixes change: each mic's own WAV file is recorded as it was, so you can still mix it yourself afterwards.");
-        });
-
-        let ducked: Vec<String> = self.draft.audio.iter().filter(|a| a.duck).map(|a| a.name.clone()).collect();
-        let state = if !self.draft.mix.ducking { "off".to_string() } else if ducked.is_empty() { "on, nothing ticked".to_string() } else { format!("{} under voices", ducked.join(", ")) };
-        part(ui, "mix_duck", "Ducking", &state, false, |ui| {
-            let ducking = self.draft.mix.ducking;
-            egui::Grid::new("ducking").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
-                label(ui, "Ducking");
-                ui.checkbox(&mut self.draft.mix.ducking, "turn music, pads and ambience down while people talk");
-                ui.end_row();
-                if ducking {
-                    let m = &mut self.draft.mix;
-                    label(ui, "Turn down by");
-                    ui.add(egui::Slider::new(&mut m.duck_db, -40.0..=-3.0).suffix(" dB"));
-                    ui.end_row();
-                    label(ui, "When a voice is above");
-                    ui.add(egui::Slider::new(&mut m.duck_threshold_db, -60.0..=-10.0).suffix(" dBFS"));
-                    ui.end_row();
-                    label(ui, "Back up after");
-                    ui.add(egui::DragValue::new(&mut m.duck_release_ms).range(100..=5000).speed(10).suffix(" ms of quiet"));
-                    ui.end_row();
-                    label(ui, "These go down");
-                    ui.horizontal_wrapped(|ui| {
-                        for a in self.draft.audio.iter_mut() {
-                            ui.checkbox(&mut a.duck, &a.name);
-                        }
-                        if self.draft.audio.is_empty() {
-                            hint(ui, "No audio inputs yet.");
-                        }
-                    });
-                    ui.end_row();
-                }
-            });
-        });
-
         let m = &mut self.draft.mix;
         let state = if m.talkback_input.is_empty() { "no mic chosen".to_string() } else { format!("on {}", m.talkback_input) };
-        part(ui, "mix_talk", "Talkback", &state, false, |ui| {
+        part(ui, "mix_talk", "Talkback", &state, true, |ui| {
             egui::Grid::new("talkback").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "Your mic");
                 let shown = if m.talkback_input.is_empty() { "none".to_string() } else { m.talkback_input.clone() };
@@ -249,6 +328,11 @@ impl SettingsUi {
                 label(ui, "Guests hear it");
                 ui.checkbox(&mut m.talkback_to_guests, "remote guests too");
                 ui.end_row();
+            });
+            // The key as it's set now (numbers audit #22).
+            hint(ui, &match info.talkback_key.as_str() {
+                "" => "To talk, hold TALK in the Sound pads panel on the desk, a Stream Deck Talkback key or TALK on the phone. Only outputs with Talkback ticked hear you: never the recording or the stream.".to_string(),
+                k => format!("To talk, hold TALK in the Sound pads panel on the desk, or hold {k}, a Stream Deck Talkback key or TALK on the phone. Only outputs with Talkback ticked hear you: never the recording or the stream."),
             });
         });
 
