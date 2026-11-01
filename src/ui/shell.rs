@@ -46,7 +46,7 @@ pub(super) struct Shell {
     /// The last area open other than Show (⌘, goes back to it).
     last_page_area: Option<usize>,
     /// The Settings page the open area page last showed, to notice when
-    /// something else (a link, "Find a setting", a problem) goes to another.
+    /// something else (a link, ⌘K search, a problem) goes to another.
     shown_section: Option<Section>,
     /// The status light's panel: open it on this tab next frame.
     pub open_status: Option<StatusTab>,
@@ -152,7 +152,7 @@ pub(super) fn target(area: &str, tab: &str, sect: &str) -> Option<Target> {
 }
 
 /// Where each old Settings page lives now ("area/tab/section"): where a
-/// link, "Find a setting" or a problem that names the page goes.
+/// link, ⌘K search or a problem that names the page goes.
 pub(super) fn home_of(page: Section) -> &'static str {
     use Section as P;
     match page {
@@ -184,7 +184,7 @@ pub(super) fn home_of(page: Section) -> &'static str {
 }
 
 /// "area/tab/section" as indexes into nav::AREAS.
-fn indexes(path: &str) -> Option<(usize, usize, usize)> {
+pub(super) fn indexes(path: &str) -> Option<(usize, usize, usize)> {
     let mut p = path.split('/');
     let (a, t, s) = (p.next()?, p.next()?, p.next()?);
     let ai = AREAS.iter().position(|x| x.id == a)?;
@@ -193,7 +193,7 @@ fn indexes(path: &str) -> Option<(usize, usize, usize)> {
     Some((ai, ti, si))
 }
 
-fn target_at(a: usize, t: usize, s: usize) -> Option<Target> {
+pub(super) fn target_at(a: usize, t: usize, s: usize) -> Option<Target> {
     let (area, tab) = (&AREAS[a], &AREAS[a].tabs[t]);
     target(area.id, tab.id, tab.sections[s].id)
 }
@@ -256,7 +256,7 @@ impl App {
     }
 
     /// Go to an area's tab and section (Show: its Switch or Edit layout tab).
-    fn go_to(&mut self, a: usize, t: usize, s: usize) {
+    pub(super) fn go_to(&mut self, a: usize, t: usize, s: usize) {
         if a == 0 {
             if self.leave_page() {
                 self.edit_mode = AREAS[0].tabs[t].id == "edit";
@@ -328,7 +328,7 @@ impl App {
     }
 
     /// Each frame, before drawing: a page opened from elsewhere (a "Set
-    /// up" link, the guide, "Find a setting", a problem's link) takes the
+    /// up" link, the guide, ⌘K search, a problem's link) takes the
     /// rail and tabs to where that page lives now.
     pub(super) fn sync_shell(&mut self) {
         let now = self.settings.as_ref().map(|w| w.section());
@@ -463,6 +463,8 @@ impl App {
         ui.horizontal_centered(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 self.status_cluster(ui, width);
+                // ⌘K search, between the tabs and the status cluster.
+                self.search_button(ui);
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| self.tab_row(ui));
             });
         });
@@ -1043,29 +1045,21 @@ impl App {
         let targets: Vec<Option<Target>> = (0..tab.sections.len()).map(|i| target_at(a, t, i)).collect();
         let mut distinct = targets.clone();
         distinct.dedup();
-        let mut find_enter = false;
-        let mut go = None;
-        ui.horizontal(|ui| {
-            if distinct.len() > 1 {
+        if distinct.len() > 1 {
+            let mut go = None;
+            ui.horizontal(|ui| {
                 for (i, sect) in tab.sections.iter().enumerate() {
                     if ui.add(egui::Button::selectable(i == s, RichText::new(sect.label).size(TEXT_BODY)).min_size(vec2(0.0, 26.0))).clicked() && i != s {
                         go = Some(i);
                     }
                 }
+            });
+            if let Some(i) = go {
+                self.go_to(a, t, i);
+                return;
             }
-            if matches!(here, Some(Target::Page(..))) {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if let Some(win) = self.settings.as_mut() {
-                        find_enter = win.find_input(ui, 220.0);
-                    }
-                });
-            }
-        });
-        if let Some(i) = go {
-            self.go_to(a, t, i);
-            return;
+            ui.separator();
         }
-        ui.separator();
         match here {
             Some(Target::Page(page, _)) => {
                 if self.settings.is_none() {
@@ -1075,7 +1069,7 @@ impl App {
                 if AREAS[a].tabs[t].sections[s].id == "general" {
                     self.clock_choice(ui);
                 }
-                self.settings_page(ui, find_enter);
+                self.settings_page(ui);
             }
             Some(Target::Takes) => self.takes_page(ui),
             Some(Target::Check) => self.check_page(ui),
@@ -1101,10 +1095,10 @@ impl App {
     }
 
     /// The Settings page in the area page, and what it asked for.
-    fn settings_page(&mut self, ui: &mut egui::Ui, find_enter: bool) {
+    fn settings_page(&mut self, ui: &mut egui::Ui) {
         let info = self.settings_info(ui.ctx());
         let Some(win) = self.settings.as_mut() else { return };
-        let action = win.show_page(ui, &info, find_enter);
+        let action = win.show_page(ui, &info);
         self.settings_page = Some(win.section());
         let closing = matches!(action, SettingsAction::Close | SettingsAction::Apply { close: true, .. });
         self.settings_action(action, ui.ctx());

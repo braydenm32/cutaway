@@ -102,7 +102,8 @@ impl Section {
         Section::ALL.into_iter().find(|s| s.label().to_lowercase().contains(&name.to_lowercase()))
     }
 
-    pub(super) fn label(self) -> &'static str {
+    /// Its name in the old Settings window (⌘K search still knows it by it).
+    pub fn label(self) -> &'static str {
         match self {
             Section::General => "General & shows",
             Section::Sources => "Video sources",
@@ -131,17 +132,11 @@ impl Section {
         }
     }
 
-    // (The old window's groups: kept for "Find a setting" to know them by, redesign PR 2.)
-    #[allow(dead_code)]
-    fn group(self) -> Group {
-        Group::ALL.into_iter().find(|g| g.sections().contains(&self)).unwrap_or(Group::General)
-    }
 }
 
 /// The old Settings window's sidebar: a few groups, each with its pages as
 /// tabs. The rail's areas (ui/nav.rs) took their place; the names stay
-/// for "Find a setting" to know them by (redesign PR 2).
-#[allow(dead_code)]
+/// for ⌘K search to know them by.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 enum Group {
     Inputs,
@@ -152,7 +147,6 @@ enum Group {
     General,
 }
 
-#[allow(dead_code)]
 impl Group {
     const ALL: [Group; 6] = [Group::Inputs, Group::Sound, Group::Look, Group::Show, Group::Output, Group::General];
 
@@ -188,6 +182,36 @@ impl Group {
             Group::General => &[Section::General, Section::Control, Section::Shortcuts, Section::Diagnostics],
         }
     }
+}
+
+// ---- for ⌘K search (ui/search.rs) ----------------------------------------------------
+
+/// Every setting that has help: its page, its name as the page writes it,
+/// and what the help says.
+pub fn setting_entries() -> impl Iterator<Item = (Section, &'static str, &'static str)> {
+    help::entries().iter().map(|e| (e.page, e.label.as_str(), e.text.as_str()))
+}
+
+/// The folded part of its page a setting is drawn in, if it's in one.
+pub fn folded_part(page: Section, label: &str) -> Option<&'static str> {
+    help::part_of(page, label)
+}
+
+/// Light up (and scroll to) a setting's name the next time its page shows it.
+pub fn light_setting(page: Section, label: &str) {
+    help::find_target(page, label);
+}
+
+/// The old window's groups: name, what was in it, and its first page.
+pub fn old_groups() -> impl Iterator<Item = (&'static str, &'static str, Section)> {
+    Group::ALL.into_iter().map(|g| (g.label(), g.summary(), g.sections()[0]))
+}
+
+/// What the old "Find a setting…" box found (a page, and a setting on it),
+/// for the test that ⌘K finds all of it.
+#[cfg(test)]
+pub fn old_find(query: &str, max: usize) -> Vec<(Section, Option<String>)> {
+    help::search(query, max).into_iter().map(|h| (h.page, h.label)).collect()
 }
 
 /// What the app should do after showing the window this frame.
@@ -268,8 +292,6 @@ pub struct SettingsUi {
     sel_source: usize,
     sel_audio: usize,
     sel_dest: usize,
-    /// What's typed in "Find a setting…".
-    find: String,
     /// Signing in to Google (Settings → Upload).
     google: Option<upload::GoogleSignIn>,
     /// Scheduling on YouTube, while it's under way.
@@ -360,7 +382,6 @@ impl SettingsUi {
             sel_source: 0,
             sel_audio: 0,
             sel_dest: 0,
-            find: String::new(),
             google: None,
             schedule_job: None,
             show_keys: HashSet::new(),
@@ -417,21 +438,6 @@ impl SettingsUi {
     /// Open with source `i` split into `n` close-ups, ready to frame.
     pub fn with_split(mut self, i: usize, n: usize) -> Self {
         self.split_source(i, n);
-        self
-    }
-
-    /// For the UI self-test: "Find a setting…" with this typed, or (`go`) already gone to its first match.
-    pub fn with_find(mut self, query: &str, go: bool) -> Self {
-        if go {
-            if let Some(h) = help::search(query, 1).into_iter().next() {
-                self.section = h.page;
-                if let Some(l) = &h.label {
-                    help::find_target(h.page, l);
-                }
-            }
-        } else {
-            self.find = query.to_string();
-        }
         self
     }
 
@@ -506,10 +512,9 @@ impl SettingsUi {
     /// The settings as a page inside the main window (a rail area), not a
     /// window of its own: the rail and the top bar's tabs stand in for the
     /// sidebar and tabs, so this draws the page and the bottom bar under it.
-    /// "Find a setting…" goes where the caller draws `find_input`; while
-    /// something's typed there its matches show in place of the page. Esc
-    /// (not while typing) asks to close, as ✕ did.
-    pub fn show_page(&mut self, ui: &mut egui::Ui, info: &SettingsContext, find_enter: bool) -> SettingsAction {
+    /// (Finding a setting is ⌘K search, ui/search.rs.) Esc (not while
+    /// typing) asks to close, as ✕ did.
+    pub fn show_page(&mut self, ui: &mut egui::Ui, info: &SettingsContext) -> SettingsAction {
         let ctx = ui.ctx().clone();
         let normal = ctx.global_style();
         let mut larger = (*normal).clone();
@@ -525,10 +530,7 @@ impl SettingsUi {
         let body_h = (size.y - self.bar_h).max(120.0);
         ui.allocate_ui_with_layout(vec2(size.x, body_h), Layout::top_down(Align::Min), |ui| {
             ui.set_min_height(body_h);
-            let width = ui.available_width().min(640.0);
-            if !self.find_hits(ui, find_enter, width) {
-                egui::ScrollArea::vertical().id_salt(self.section).max_height(body_h).auto_shrink([false, false]).show(ui, |ui| self.page(ui, info));
-            }
+            egui::ScrollArea::vertical().id_salt(self.section).max_height(body_h).auto_shrink([false, false]).show(ui, |ui| self.page(ui, info));
         });
         let top = ui.cursor().top();
         ui.separator();
@@ -1483,46 +1485,6 @@ impl SettingsUi {
 
     // ---- Streaming ----------------------------------------------------------------
 
-    /// The "Find a setting…" box on its own. True when Enter was pressed in it.
-    pub fn find_input(&mut self, ui: &mut egui::Ui, width: f32) -> bool {
-        let r = ui.add(egui::TextEdit::singleline(&mut self.find).hint_text("Find a setting…").desired_width(width).margin(vec2(8.0, 6.0)));
-        r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
-    }
-
-    /// What "Find a setting…" found, as buttons that go there (true while
-    /// something's typed; Enter takes the first).
-    fn find_hits(&mut self, ui: &mut egui::Ui, enter: bool, width: f32) -> bool {
-        if self.find.trim().is_empty() {
-            return false;
-        }
-        let hits = help::search(&self.find, 8);
-        if hits.is_empty() {
-            ui.label(RichText::new("No setting found").color(TEXT_DIM));
-            return true;
-        }
-        let mut go = None;
-        for h in &hits {
-            let text = match &h.label {
-                Some(l) => format!("{l} — {}", h.page.label()),
-                None => format!("{} (page)", h.page.label()),
-            };
-            if ui.add(egui::Button::new(RichText::new(text).size(TEXT_BODY)).min_size(vec2(width, 28.0)).wrap()).clicked() {
-                go = Some(h.clone());
-            }
-        }
-        if go.is_none() && enter {
-            go = hits.first().cloned();
-        }
-        if let Some(h) = go {
-            self.section = h.page;
-            if let Some(l) = &h.label {
-                help::find_target(h.page, l);
-            }
-            self.find.clear();
-        }
-        true
-    }
-
     fn streaming(&mut self, ui: &mut egui::Ui) {
         title(ui, "Streaming", "Go live to any number of places at once: the program is encoded once and sent to each.");
         let scan = self.encoders.lock_ok().clone();
@@ -1867,7 +1829,7 @@ pub(super) fn label(ui: &mut egui::Ui, text: &str) {
         ui.spacing_mut().item_spacing.x = 5.0;
         let r = ui.add(egui::Label::new(RichText::new(text).color(Color32::from_rgb(200, 205, 214))).selectable(false).sense(egui::Sense::hover()));
         if let Some((glow, first)) = help::lit(text) {
-            // Found with "Find a setting": scrolled to, and lit for a moment.
+            // Found with ⌘K search: scrolled to, and lit for a moment.
             if first {
                 r.scroll_to_me(Some(Align::Center));
             }

@@ -157,10 +157,12 @@ pub enum Builtin {
     Back,
     /// A marker now, then type its name.
     NamedMarker,
+    /// ⌘K: search settings, pages and the desk.
+    Search,
 }
 
 impl Builtin {
-    pub const ALL: [Builtin; 17] = [
+    pub const ALL: [Builtin; 18] = [
         Builtin::Take,
         Builtin::CutPreview,
         Builtin::Back,
@@ -178,6 +180,7 @@ impl Builtin {
         Builtin::Redo,
         Builtin::Record,
         Builtin::Settings,
+        Builtin::Search,
     ];
 
     /// Its name in the settings file.
@@ -200,6 +203,7 @@ impl Builtin {
             Builtin::Talkback => "talkback",
             Builtin::Back => "back",
             Builtin::NamedMarker => "named_marker",
+            Builtin::Search => "search",
         }
     }
 
@@ -222,6 +226,7 @@ impl Builtin {
             Builtin::Talkback => "Talkback: your mic in the presenters' ears while held",
             Builtin::Back => "Back to the last scene (the one on air before this)",
             Builtin::NamedMarker => "Add a marker and type its name while recording",
+            Builtin::Search => "Search settings, pages and the desk (works while typing too)",
         }
     }
 
@@ -251,6 +256,7 @@ impl Builtin {
             Builtin::Talkback => vec![KeyCombo::plain(Key::B)],
             Builtin::Back => vec![KeyCombo::plain(Key::Backspace)],
             Builtin::NamedMarker => vec![KeyCombo { key: Key::M, command: false, shift: true, alt: false }],
+            Builtin::Search => vec![cmd(Key::K)],
         }
     }
 }

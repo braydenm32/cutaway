@@ -4,9 +4,9 @@
 //! parts of the window that aren't an area's page. Order inside every area
 //! follows the usage audit's ranking (shots/1-usage-audit.md).
 //!
-//! The rail and the top-bar tabs are drawn from it (ui/shell.rs); ⌘K
-//! search, the "Set up ›" links and the status light's "fix it" links will
-//! be too. The tests below check it against every route there is, so
+//! The rail and the top-bar tabs are drawn from it (ui/shell.rs), and ⌘K
+//! search reads it (ui/search.rs); the "Set up ›" links and the status
+//! light's "fix it" links will be too. The tests below check it against every route there is, so
 //! nothing gets lost on the way.
 // (Parts are still only read by the tests until later redesign PRs draw them.)
 #![allow(dead_code)]
@@ -43,7 +43,7 @@ pub struct Tab {
 }
 
 /// A section of a tab. `routes`: route ids that live here. `help`: the old
-/// Settings pages whose "Find a setting" entries (help.rs) now point here.
+/// Settings pages whose settings (help.rs) ⌘K search finds here.
 pub struct Sect {
     pub id: &'static str,
     pub label: &'static str,
@@ -484,7 +484,7 @@ mod tests {
         assert_eq!(order, ["show", "sources", "scenes", "sound", "graphics", "record", "more"]);
     }
 
-    /// Every old Settings page's "Find a setting" entries land somewhere.
+    /// Every old Settings page's settings land somewhere for ⌘K search.
     #[test]
     fn every_old_settings_page_has_a_section() {
         let helped: HashSet<Page> = AREAS.iter().flat_map(|a| a.tabs).flat_map(|t| t.sections).flat_map(|s| s.help.iter().copied()).collect();

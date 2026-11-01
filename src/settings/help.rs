@@ -9,7 +9,7 @@ use std::time::Instant;
 
 thread_local! {
     static PAGE: Cell<Option<Section>> = const { Cell::new(None) };
-    /// The setting "Find a setting" took us to: page, label, when, and whether it has been scrolled to.
+    /// The setting ⌘K search took us to: page, label, when, and whether it has been scrolled to.
     static TARGET: RefCell<Option<(Section, String, Instant, bool)>> = const { RefCell::new(None) };
 }
 
@@ -104,7 +104,10 @@ fn parse_entries(src: &str) -> Vec<Entry> {
     out
 }
 
-/// One answer to "Find a setting": a page, or a setting on one.
+/// One answer from the old "Find a setting…" box: a page, or a setting on
+/// one. (⌘K search, ui/search.rs, took its place; this stays as the measure
+/// it's tested against.)
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Hit {
     pub page: Section,
@@ -113,6 +116,7 @@ pub(super) struct Hit {
 
 /// Settings and pages matching what was typed (every word of it), best first: names, then pages, then
 /// what the help says. At most `max`.
+#[cfg(test)]
 pub(super) fn search(query: &str, max: usize) -> Vec<Hit> {
     let words: Vec<String> = query.split_whitespace().map(|w| w.to_lowercase()).collect();
     if words.is_empty() {
@@ -142,6 +146,40 @@ pub(super) fn search(query: &str, max: usize) -> Vec<Hit> {
     }
     out.truncate(max);
     out
+}
+
+/// The settings drawn inside a folded part of their page (`part(ui, "id", …)`),
+/// by part: ⌘K search opens the part before lighting one of them. The test
+/// below reads the pages' source, so it can't fall out of step.
+const PARTS: &[(Section, &str, &[&str])] = &[
+    (Section::Control, "remote", &["Remote control", "Port", "PIN"]),
+    (Section::Control, "osc", &["OSC", "Listen on UDP port", "Send state to"]),
+    (Section::Control, "midi", &["MIDI control", "Controller", "Light up pads"]),
+    (Section::Guests, "turn", &["TURN server", "Username", "Password"]),
+    (Section::Mixing, "mix_phones", &["Output", "Listen to", "Volume"]),
+    (Section::Mixing, "mix_automix", &["Automatic mixing", "Mics"]),
+    (Section::Mixing, "mix_duck", &["Ducking", "Turn down by", "When a voice is above", "Back up after", "These go down"]),
+    (Section::Mixing, "mix_talk", &["Your mic", "While talking back", "Guests hear it"]),
+    (Section::Mixing, "mix_outs", &["Name", "Device", "Channels", "Mix", "Leave out", "Talkback"]),
+    (Section::Recording, "rec_quality", &["File format", "Codec", "Encoder", "Source file bitrate", "Program bitrate", "Audio in video files", "Program audio in source files", "WAV files"]),
+    (Section::Recording, "rec_editing", &["Timecode", "Editor timelines", "Audio sessions", "DaVinci Resolve", "Proxy files", "Each input on its own track", "Input tracks", "Program without graphics", "Mix WAV"]),
+    (Section::Recording, "rec_podcast", &["Podcast copy", "Loudness", "Channels", "Podcast name", "Episode title", "Author"]),
+    (Section::Streaming, "stream_quality", &["Size", "Frame rate", "Video bitrate", "Audio bitrate", "Encoder"]),
+    (Section::Streaming, "stream_rel", &["If a connection drops", "Give up after", "When going live", "Slow connection"]),
+    (Section::Outputs, "screen2", &["Show", "Full screen", "Clocks"]),
+    (Section::Outputs, "ndi_out", &["Program", "Name", "Sources"]),
+    (Section::Outputs, "vcam", &["At start"]),
+    (Section::Graphics, "rotations", &["Group name", "Graphics", "How often", "Runs"]),
+    (Section::Streaming, "scheduled", &["Title", "Description", "Starts", "Picture", "Who can watch", "At the start time"]),
+    (Section::Switching, "stinger", &["Video", "See-through parts", "Change scenes at", "Its sound"]),
+    (Section::Switching, "ftb", &["Fade length", "Sound fades too"]),
+    (Section::Switching, "replay", &["Replay the last", "Slow motion", "Shows", "Label"]),
+    (Section::Switching, "auto", &["At start", "Counts as talking above", "Talking for at least", "Shortest shot", "Wide shot", "When several talk at once", "After one person for", "After you switch by hand"]),
+];
+
+/// The folded part this setting is drawn in, if it's in one.
+pub(super) fn part_of(page: Section, label: &str) -> Option<&'static str> {
+    PARTS.iter().find(|(p, _, labels)| *p == page && labels.contains(&label)).map(|(_, part, _)| *part)
 }
 
 /// The page being drawn (None between pages).
@@ -535,6 +573,64 @@ mod tests {
             }
         }
         assert!(missing.is_empty(), "no help for: {missing:?}");
+    }
+
+    /// PARTS is what the pages draw: every `label(ui, "…")` inside a
+    /// `part(ui, "id", …)` (by the braces around it), and nothing else.
+    #[test]
+    fn folded_parts_are_where_the_pages_draw_them() {
+        use Section::*;
+        let files: [(&str, &[Section]); 8] = [
+            (include_str!("control.rs"), &[Control]),
+            (include_str!("guests.rs"), &[Guests]),
+            (include_str!("mixing.rs"), &[Mixing]),
+            (include_str!("mod.rs"), &[Recording, Streaming]),
+            (include_str!("outputs.rs"), &[Outputs]),
+            (include_str!("rotations.rs"), &[Graphics]),
+            (include_str!("scheduled.rs"), &[Streaming]),
+            (include_str!("switching.rs"), &[Switching]),
+        ];
+        let mut found: Vec<(String, String)> = Vec::new();
+        for (f, _) in files {
+            let mut depth = 0i32;
+            let mut open: Vec<(String, i32)> = Vec::new();
+            for line in f.lines() {
+                // Braces in strings ("{n}") don't count.
+                let mut code = String::new();
+                let mut in_str = false;
+                let mut esc = false;
+                for c in line.chars() {
+                    if in_str {
+                        if esc { esc = false } else if c == '\\' { esc = true } else if c == '"' { in_str = false }
+                    } else if c == '"' {
+                        in_str = true;
+                    } else {
+                        code.push(c);
+                    }
+                }
+                if let Some(rest) = line.split("part(ui, \"").nth(1) {
+                    open.push((rest.split('"').next().unwrap().to_string(), depth));
+                }
+                for piece in line.split("label(ui, \"").skip(1) {
+                    if let Some((part, _)) = open.last() {
+                        found.push((part.clone(), piece.split('"').next().unwrap().to_string()));
+                    }
+                }
+                depth += code.matches('{').count() as i32 - code.matches('}').count() as i32;
+                while open.last().is_some_and(|(_, d)| depth <= *d) {
+                    open.pop();
+                }
+            }
+        }
+        let table: Vec<(String, String)> = PARTS.iter().flat_map(|(_, part, labels)| labels.iter().map(|l| (part.to_string(), l.to_string()))).collect();
+        assert_eq!(table, found, "PARTS doesn't match the pages");
+        // Each is a setting with help on that page.
+        for (page, part, labels) in PARTS {
+            assert!(files.iter().any(|(_, pages)| pages.contains(page)), "{part}");
+            for l in labels.iter() {
+                assert!(for_page(*page, l).is_some(), "{l} in {part} has no help on {page:?}");
+            }
+        }
     }
 
     #[test]
