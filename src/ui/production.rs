@@ -168,7 +168,7 @@ impl App {
         let i = cam.find(&names).ok_or("there's no such camera")?;
         let name = names[i].clone();
         let e = self.engine.as_ref().ok_or("the engine isn't running")?;
-        let p = e.ptz(i).ok_or_else(|| format!("{name} has no PTZ controls (Settings → Video sources)"))?;
+        let p = e.ptz(i).ok_or_else(|| format!("{name} has no PTZ controls (Sources › Close-ups & PTZ)"))?;
         let virt = p.virt.clone();
         let presets: Vec<String> = self.cfg.sources[i].ptz.presets.iter().map(|p| p.name.clone()).collect();
         match cmd {

@@ -98,7 +98,7 @@ impl SettingsUi {
                 TunnelState::Up(a) => ui.label(RichText::new(format!("✓ Guests can reach {a}")).color(GREEN)),
                 TunnelState::Starting(s) => ui.label(RichText::new(s).color(TEXT_DIM)),
                 TunnelState::Failed(e) => ui.label(RichText::new(format!("⚠ {e}")).color(AMBER)),
-                TunnelState::Off => ui.label(RichText::new("Apply to start the guest page.").color(TEXT_DIM)),
+                TunnelState::Off => ui.label(RichText::new("Starting the guest page…").color(TEXT_DIM)),
                 TunnelState::NeedsYou(what, url) => {
                     ui.label(RichText::new(format!("⚠ {what}")).color(AMBER));
                     ui.hyperlink_to("Allow it on Tailscale's site", url)
@@ -140,6 +140,11 @@ impl SettingsUi {
                     None => ("apply to open it".to_string(), TEXT_DIM),
                 };
                 ui.label(RichText::new(text).color(color));
+                // How their connection holds up, said here as well as on their tile (mv.guest_warn).
+                if let Some((q, note)) = status.and_then(|st| st.link.as_ref()).filter(|(q, _)| *q != crate::engine::guests::LinkQuality::Good) {
+                    let worse = *q == crate::engine::guests::LinkQuality::Poor;
+                    ui.label(RichText::new(format!("⚠ {} connection: {note}", if worse { "Poor" } else { "Weak" })).color(AMBER));
+                }
                 match info.guest_base.as_ref() {
                     Some(base) if self.original.sources.iter().any(|o| o.guest_id() == Some(id.as_str())) => {
                         let link = format!("{base}/g/{id}");

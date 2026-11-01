@@ -135,8 +135,10 @@ and [Install on Windows](#install-on-windows).
   pan, tilt and zoom around its picture, with presets it glides to. Frame
   the presets in Settings by dragging boxes on the wide picture; it starts
   on preset 1.
-- **Split a camera into close-ups:** **⋯** on a camera's tile, or right-click it (or
-  **Split…** in Settings → Video sources) and choose 2 or 3 close-ups. Each
+- **Split a camera into close-ups:** **Sources › Close-ups & PTZ** walks you
+  through it: pick the camera and **＋ 2 close-ups** or **＋ 3 close-ups**, drag
+  each box onto a person, then **Apply**. (**⋯** on a camera's tile, right-click
+  it, or **Split…** under the list in Sources › Cameras do the same.) Each
   person gets a virtual PTZ camera of their own ("Cam 1 left", "Cam 1
   right"…), with a box on the wide picture to drag onto them and a name
   title to fill in. Each records to its own file, ready for the edit. Each
@@ -148,10 +150,16 @@ and [Install on Windows](#install-on-windows).
   stream destinations, rundown segments and macros all have the same buttons
   under the list: **＋ Add**, **Duplicate**, **Remove**, **↑** and **↓**
   (then any of their own, like **Split…**).
-- **See it before you apply it:** in **Settings → Video sources** each source
-  shows its picture above its settings (the multiview's own, so nothing is
-  opened twice). Crop and mirror show what they'll look like as you change
-  them; a source you've only just added or changed shows once you press Apply.
+- **See it as you change it:** in **Sources** each source shows its picture
+  above its settings (the multiview's own, so nothing is opened twice). Crop,
+  mirror and colour show as you change them; a source you've only just added,
+  or changed in a way that restarts it, shows once you press Apply.
+- **The Sources area** has tabs: **Cameras** (every source, with **If it drops
+  while on air** first), **Close-ups & PTZ** (close-ups cut from a camera,
+  auto-framing and PTZ cameras), **People & names**, and under **More ▾**
+  **Guests**, **Network & phone feeds** (SRT, RTMP, NDI, phone cameras) and
+  **Media & playlists** (media players, with ⏮ ⏯ ⏭ ⟲ for the one picked). It
+  remembers the source you had picked, by name, on this computer.
 
 ### Recording
 
@@ -307,7 +315,8 @@ Takes start with the **Take name** from Settings → Recording. Leave it as
   it takes), and leaves the same way back. Title text can be changed live
   between guests.
 - **Names that follow people:** give each source the name and role of
-  whoever is in it (**Settings → Video sources → Name title**; a guest spot
+  whoever is in it (**Sources › People & names**, the one place names are
+  changed, which also offers **＋ Make a name title** when there's none; a guest spot
   uses the name the guest types), and add **Names of whoever's on air** (the
   recommended button; **Fixed title** is for typed text) in
   Settings → Graphics, or with **＋ Make a name title** in the Graphics panel
@@ -568,7 +577,7 @@ this if you don't need it; everything else works without it.
 ### NDI
 
 NDI is optional, and Cutaway doesn't include it. Choose **NDI** as a
-source's type in **Settings → Video sources** and pick from the senders it
+source's type in **Sources › Network & phone feeds** and pick from the senders it
 finds. To send the program (and, if you like, every source) to the network
 as NDI, turn it on in **Settings → Screens & webcam → NDI output**; it shows
 how many receivers are watching. PTZ cameras on NDI can be steered from
@@ -647,11 +656,15 @@ Video Extensions** on some PCs.
   through cameras, **naming your people**, the microphone, **your scenes**,
   where recordings go, going live (optional), the pre-show check, a test
   recording and (optional) **editing afterwards**. Each step has a button to
-  the right page in Settings and ticks itself off when it's done. Naming
-  people is done right in the guide: a name for each camera or close-up,
-  who's in it and their role (the same as **Video sources → Name title**,
-  which changes live without reopening anything; a new camera name reopens
-  that camera for a moment). Your scenes turns on **Edit layout**, and Editing
+  the right page and ticks itself off when it's done. The cameras step counts
+  real cameras only: test pictures standing in when none was found don't
+  tick it, and it says where to let Cutaway use the camera. Naming
+  people is done right in the guide, with the same rows as **Sources ›
+  People & names** that behave the same way: who's in each picture and their
+  role are saved as you type, and a camera's new name when you press Enter or
+  click elsewhere (it restarts that camera for a moment, so it waits while
+  you're recording or live). The step also offers **＋ Make a name title** and
+  **Close-ups…** (a close-up of each person from one camera). Your scenes turns on **Edit layout**, and Editing
   afterwards opens **Recording → For editing**, where the DaVinci Resolve,
   Premiere Pro and Final Cut projects are switched on. Open it again any time
   from **More › App › Help** (or **First-show guide** under the status light).
@@ -684,13 +697,21 @@ Video Extensions** on some PCs.
   lights up for a moment. A desk button is shown, never pressed, so nothing
   goes on air from search. ⌘K works even while you're typing in a box; Esc
   (or ⌘K again) closes it, and what you typed is still there next time.
-  **Revert** sits on its own at the bottom left; **OK** and **Apply** are only
-  on when something has changed (OK and Cancel go back to Show). Changes not
-  applied yet show as an amber dot on their area in the rail, and going back
-  to Show asks before dropping them. Your show's keys keep working on these
-  pages, except while you type in a box. OK and Apply put on only what you
-  changed on the page, so a fader, ON/OFF, transition or anything else
-  changed on the desk meanwhile stays as it is.
+- **Changes save as you go** in Sources (the other areas follow): what you
+  change applies straight away and is saved, a box when you press Enter or
+  click elsewhere. **↶ Undo** and **↷ Redo** at the bottom of the page (or ⌘Z
+  when you're not typing in a box) take it back. Changes that would add,
+  remove or restart a source wait in an amber line at the bottom ("Waiting:
+  restarts Couch · adds Couch left") with **Apply (restarts cameras)** and
+  **Undo these**, and an amber dot on the area in the rail; going back to Show
+  asks before dropping them.
+- **Pages not moved yet** still have **Revert** on its own at the bottom left;
+  **OK** and **Apply** are only on when something has changed (OK and Cancel
+  go back to Show), and changes not applied yet show as an amber dot on their
+  area in the rail. Your show's keys keep working on these pages, except
+  while you type in a box. Applying (on either kind of page) puts on only
+  what you changed on the page, so a fader, ON/OFF, transition or anything
+  else changed on the desk meanwhile stays as it is.
 - **Starting up:** the window opens straight away; while the cameras come up,
   the monitors show a clapperboard with a line from the studio floor.
 - **Check your hardware:** `cutaway --probe-encoders` shows the encoders
@@ -731,7 +752,7 @@ Video Extensions** on some PCs.
   feed gone) puts a red chip on the program monitor ("Cam 2: no signal,
   reconnecting…"), one error message at the bottom, and a ⚠ on every scene
   button that uses it, until it's back. To have Cutaway cut away by itself,
-  set **Settings → Video sources → If it drops while on air** to a scene
+  set **Sources › Cameras → If it drops while on air** (the first setting of each source) to a scene
   (say, the wide shot for a close-up camera): it cuts there once, as the
   signal goes, unless that scene also needs a source with no signal. It
   doesn't switch back when the source returns.
@@ -873,7 +894,7 @@ time.
 
 ## Network sources
 
-In **Settings → Video sources**, set a source's type to **Network feed**
+In **Sources › Network & phone feeds** (or Cameras), set a source's type to **Network feed**
 (then pick SRT or RTMP under **Feed**) or **NDI** and the settings show the
 address to send to. To
 hear a network source (or the media player), add an audio input whose device
@@ -1126,7 +1147,7 @@ Safari on iPhone or Chrome on Android (they send H.264, which Cutaway takes).
 
 ## PTZ cameras
 
-In **Settings → Video sources**, open a camera's **PTZ camera control**: choose
+In **Sources › Cameras**, open a camera's **PTZ camera control**: choose
 **VISCA over IP** (Sony and most PTZ cameras, port 52381), **VISCA over
 TCP** or **UDP** (PTZOptics and others), or **NDI** for an NDI PTZ camera,
 and its address. Save presets there or from the **PTZ** panel in the main
@@ -1139,12 +1160,12 @@ another source: it pans, tilts and zooms around that picture (best from a 4K
 camera), with presets it glides to in the time you set. It records like any
 source, and starts on its first preset.
 
-Its presets are framed in **Settings → Video sources**: the wide camera's
+Its presets are framed in **Sources › Close-ups & PTZ**: the wide camera's
 picture shows each preset as a numbered box, the shot it's on now in red.
 Drag a box to move that preset and scroll over the picture to zoom it; the
 small picture beside shows what it sends out. **＋ Preset** adds a close-up in
-the middle to drag into place. Apply, and the presets change without the
-camera stopping.
+the middle to drag into place. Moving a preset is saved as you go, without
+the camera stopping (a new close-up starts once you press Apply).
 
 ## Replay, macros, ticker, comments and the teleprompter
 
@@ -1233,7 +1254,7 @@ Cutaway records from audio *inputs*, so route the DAW's output to one:
 *The presenter cut out over the slides (no green screen), and an auto-framed
 close-up of the person on the left, cut from the same camera.*
 
-- **Auto-framing:** in **Settings → Video sources**, add a source of type
+- **Auto-framing:** in **Sources › Cameras**, add a source of type
   **Auto-framed close-up** and pick the wide camera to cut it from, who to
   follow and the shot size (close-up, medium, wide). Add several for several
   people. Use **⋯** on its tile (or right-click it) during the show to change who it follows.

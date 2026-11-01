@@ -492,7 +492,8 @@ mod tests {
             let hit = hit.unwrap_or_else(|| panic!("{label} on {page:?} not found"));
             let Go::Place { at: (a, t, s), light, .. } = hit.go else { panic!("{label}: goes nowhere") };
             assert!(AREAS[a].tabs[t].sections[s].help.contains(&page), "{label} ({page:?}) lands on the wrong tab: {}", hit.place);
-            assert!(matches!(target_at(a, t, s), Some(Target::Page(p, _)) if p == page), "{label} ({page:?}): {} doesn't show its page", hit.place);
+            // (People & names is the app's own page for the sources' names.)
+            assert!(matches!(target_at(a, t, s), Some(Target::Page(p, _)) if p == page) || (page == Section::Sources && target_at(a, t, s) == Some(Target::People)), "{label} ({page:?}): {} doesn't show its page", hit.place);
             assert_eq!(light, Some((page, label)), "{label}: not lit");
         }
         for p in Section::ALL {
@@ -581,7 +582,7 @@ mod tests {
         for (page, label, path) in SETTING_HOME {
             assert!(entries.contains(&(*page, *label)), "{label} isn't a setting on {page:?}");
             let (a, t, s) = at(path).unwrap_or_else(|| panic!("{path} isn't a place"));
-            assert!(matches!(target_at(a, t, s), Some(Target::Page(p, _)) if p == *page), "{path} doesn't show {page:?}");
+            assert!(matches!(target_at(a, t, s), Some(Target::Page(p, _)) if p == *page) || (*page == Section::Sources && target_at(a, t, s) == Some(Target::People)), "{path} doesn't show {page:?}");
         }
         for (part, path) in PART_HOME {
             assert!(at(path).is_some(), "{part}: {path} isn't a place");

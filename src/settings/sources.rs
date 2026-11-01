@@ -1,4 +1,4 @@
-//! Settings → Video sources: cameras, capture cards, the screen, test
+//! Sources › Cameras (and its other tabs: Close-ups & PTZ, Network & phone feeds, Media & playlists): cameras, capture cards, the screen, test
 //! pictures, media players and network inputs, plus each source's crop,
 //! colour and keying.
 
@@ -107,69 +107,211 @@ fn random_key() -> String {
     format!("cam{:05}", n % 100_000)
 }
 
+/// The Sources area's tabs that show sources: Cameras lists every source;
+/// the others show their part of the list, with their own Add.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SourcesView {
+    /// Every source (Sources › Cameras).
+    Cameras,
+    /// Close-ups cut from a camera, auto-framing and PTZ cameras.
+    CloseUps,
+    /// SRT, RTMP, NDI and phone cameras.
+    Network,
+    /// Media players.
+    Media,
+}
+
+impl SourcesView {
+    fn shows(self, s: &SourceConfig) -> bool {
+        let k = SourceKind::of(&s.device);
+        match self {
+            SourcesView::Cameras => true,
+            SourcesView::CloseUps => matches!(k, SourceKind::Framed | SourceKind::VirtualPtz) || s.ptz.control != crate::config::PtzControl::None,
+            SourcesView::Network => k.is_network_feed() || matches!(k, SourceKind::Ndi | SourceKind::Phone),
+            SourcesView::Media => k == SourceKind::Media,
+        }
+    }
+}
+
+/// A camera close-ups can be cut from (not a close-up itself, a media
+/// player or a guest).
+fn is_wide(s: &SourceConfig) -> bool {
+    !matches!(SourceKind::of(&s.device), SourceKind::Framed | SourceKind::VirtualPtz | SourceKind::Media | SourceKind::Guest)
+}
+
 impl SettingsUi {
     pub(super) fn sources(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
-        title(ui, "Video sources", "Cameras, capture cards, the screen, media and network feeds. Each shows in the multiview and can record to its own file.");
-        ui.horizontal(|ui| {
-            if ui.button("Rescan devices").clicked() {
-                self.video = devices::list(Kind::Video);
+        let view = self.view;
+        match view {
+            SourcesView::Cameras => {
+                ui.horizontal(|ui| {
+                    if ui.button("Rescan devices").clicked() {
+                        self.video = devices::list(Kind::Video);
+                    }
+                    hint(ui, &format!("{} camera(s) / capture card(s) found", self.video.len()));
+                });
             }
-            hint(ui, &format!("{} camera(s) / capture card(s) found", self.video.len()));
-        });
+            SourcesView::CloseUps => self.closeup_guide(ui),
+            SourcesView::Network => hint(ui, "Pictures that arrive over the network: OBS or an encoder (SRT, RTMP), NDI from another computer, or a phone's camera."),
+            SourcesView::Media => hint(ui, "Videos and pictures that play as a source: an intro, a loop behind the titles, a clip to cut to."),
+        }
         ui.add_space(6.0);
         let n = self.draft.sources.len();
         if self.sel_source >= n {
             self.sel_source = n.saturating_sub(1);
         }
+        let shown: Vec<usize> = (0..n).filter(|&i| view.shows(&self.draft.sources[i])).collect();
+        if !shown.contains(&self.sel_source) {
+            if let Some(&first) = shown.first() {
+                self.sel_source = first;
+            }
+        }
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
                 ui.set_width(220.0);
-                for i in 0..n {
+                for &i in &shown {
                     let s = &self.draft.sources[i];
                     let text = format!("{}  {}", i + 1, s.name);
                     let sub = short_device(&s.device);
                     let b = egui::Button::selectable(self.sel_source == i, RichText::new(format!("{text}\n{sub}")).size(TEXT_STATE)).min_size(vec2(220.0, 40.0));
                     if ui.add(b).clicked() {
                         self.sel_source = i;
+                        self.sel_picked = true;
                     }
                 }
                 ui.add_space(6.0);
-                ui.horizontal_wrapped(|ui| {
-                    if let Some(edit) = list_buttons(ui, n, self.sel_source, Some("＋ Add")) {
-                        let video = &self.video;
-                        apply_list_edit(
-                            &mut self.draft.sources,
-                            &mut self.sel_source,
-                            edit,
-                            false,
-                            |list| {
-                                let used: Vec<&str> = list.iter().map(|s| s.device.as_str()).collect();
-                                let device = video.iter().find(|d| !used.contains(&d.name.as_str())).map(|d| d.name.clone()).unwrap_or("test".into());
-                                let name = unique(list.iter().map(|s| s.name.clone()).collect(), "Cam");
-                                Some(SourceConfig { name, device, ..Default::default() })
-                            },
-                            |s, list| SourceConfig { name: unique(list.iter().map(|s| s.name.clone()).collect(), &s.name), ..s.clone() },
-                        );
+                ui.horizontal_wrapped(|ui| match view {
+                    SourcesView::Cameras => self.camera_list_buttons(ui),
+                    SourcesView::CloseUps => {}
+                    SourcesView::Network => {
+                        if ui.button("＋ Network feed").on_hover_text("SRT, waiting for a sender (change it to RTMP or NDI under Type)").clicked() {
+                            self.add_source(SourceKind::SrtListen, "Feed");
+                        }
+                        if ui.button("＋ Phone camera").on_hover_text("A phone joins by scanning a QR code").clicked() {
+                            self.add_source(SourceKind::Phone, "Phone");
+                        }
                     }
-                    let can_split = self.draft.sources.get(self.sel_source).is_some_and(|s| s.framed_from().is_none() && s.virtual_ptz_of().is_none());
-                    ui.add_enabled_ui(can_split, |ui| {
-                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                        ui.menu_button("Split…", |ui| {
-                            ui.label(RichText::new("Close-ups of the people in it, each its own source").color(TEXT_DIM).size(TEXT_BODY));
-                            for n in [2, 3] {
-                                if ui.button(format!("Into {n} close-ups")).clicked() {
-                                    self.split_source(self.sel_source, n);
-                                    ui.close();
-                                }
-                            }
-                        })
-                        .response
-                        .on_hover_text("Make close-ups of the people in this camera (virtual PTZ cameras), to frame on its picture");
-                    });
+                    SourcesView::Media => {
+                        if ui.button("＋ Media player").clicked() {
+                            self.add_source(SourceKind::Media, "Media");
+                        }
+                    }
                 });
             });
             ui.add_space(14.0);
-            ui.vertical(|ui| self.source_detail(ui, info));
+            ui.vertical(|ui| {
+                if shown.is_empty() {
+                    hint(
+                        ui,
+                        match view {
+                            SourcesView::Cameras => "No sources yet. Add your cameras, capture cards, the screen, a media player or a network input.",
+                            SourcesView::CloseUps => "No close-ups or PTZ cameras yet. Make close-ups from a camera above, or turn on PTZ control for a camera in Cameras.",
+                            SourcesView::Network => "No network feeds yet.",
+                            SourcesView::Media => "No media players yet.",
+                        },
+                    );
+                } else {
+                    self.source_detail(ui, info);
+                }
+            });
+        });
+    }
+
+    /// ＋ Add, Duplicate, Remove, ↑ ↓ and Split… under the full list.
+    fn camera_list_buttons(&mut self, ui: &mut egui::Ui) {
+        let n = self.draft.sources.len();
+        if let Some(edit) = list_buttons(ui, n, self.sel_source, Some("＋ Add")) {
+            let video = &self.video;
+            apply_list_edit(
+                &mut self.draft.sources,
+                &mut self.sel_source,
+                edit,
+                false,
+                |list| {
+                    let used: Vec<&str> = list.iter().map(|s| s.device.as_str()).collect();
+                    let device = video.iter().find(|d| !used.contains(&d.name.as_str())).map(|d| d.name.clone()).unwrap_or("test".into());
+                    let name = unique(list.iter().map(|s| s.name.clone()).collect(), "Cam");
+                    Some(SourceConfig { name, device, ..Default::default() })
+                },
+                |s, list| SourceConfig { name: unique(list.iter().map(|s| s.name.clone()).collect(), &s.name), ..s.clone() },
+            );
+        }
+        let can_split = self.draft.sources.get(self.sel_source).is_some_and(|s| s.framed_from().is_none() && s.virtual_ptz_of().is_none());
+        ui.add_enabled_ui(can_split, |ui| {
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+            ui.menu_button("Split…", |ui| {
+                ui.label(RichText::new("Close-ups of the people in it, each its own source").color(TEXT_DIM).size(TEXT_BODY));
+                for n in [2, 3] {
+                    if ui.button(format!("Into {n} close-ups")).clicked() {
+                        self.split_source(self.sel_source, n);
+                        ui.close();
+                    }
+                }
+            })
+            .response
+            .on_hover_text("Make close-ups of the people in this camera (virtual PTZ cameras), to frame on its picture");
+        });
+    }
+
+    /// A new source of this kind at the end of the list, picked.
+    fn add_source(&mut self, kind: SourceKind, base: &str) {
+        let name = unique(self.draft.sources.iter().map(|s| s.name.clone()).collect(), base);
+        let mut s = SourceConfig { name, device: kind.default_device(&self.video), record: kind != SourceKind::Media, ..Default::default() };
+        if kind == SourceKind::Phone {
+            let p = super::guests::phone_source(&s.name);
+            (s.device, s.width, s.height, s.fps, s.network_latency_ms) = (p.device, p.width, p.height, p.fps, p.network_latency_ms);
+            self.draft.guests.enabled = true;
+        }
+        self.draft.sources.push(s);
+        self.sel_source = self.draft.sources.len() - 1;
+        self.sel_picked = true;
+    }
+
+    /// Close-ups & PTZ: a close-up of each person from one camera, in
+    /// three steps (forensics guide #5), using Split….
+    fn closeup_guide(&mut self, ui: &mut egui::Ui) {
+        let wides: Vec<(usize, String, usize)> = self
+            .draft
+            .sources
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| is_wide(s))
+            .map(|(i, s)| {
+                let cuts = self.draft.sources.iter().filter(|c| c.virtual_ptz_of().or(c.framed_from()).is_some_and(|f| f.trim().eq_ignore_ascii_case(s.name.trim()))).count();
+                (i, s.name.clone(), cuts)
+            })
+            .collect();
+        egui::Frame::new().fill(RAISED).corner_radius(6.0).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
+            ui.set_width(ui.available_width().min(760.0));
+            ui.label(RichText::new("Two or three people in one camera? Give each a close-up of their own").strong());
+            ui.label(RichText::new("1. Pick the camera and how many people.  2. Drag each box on its picture onto a person.  3. Apply: the close-ups start, with a scene of them side by side.").color(TEXT_DIM).size(TEXT_BODY));
+            ui.add_space(4.0);
+            if wides.is_empty() {
+                hint(ui, "Add a camera in Cameras first.");
+                return;
+            }
+            let id = ui.scope_id().with("closeup_from");
+            let mut from: usize = ui.data(|d| d.get_temp(id)).filter(|i| wides.iter().any(|w| w.0 == *i)).unwrap_or_else(|| {
+                // The one picked, if it can be, else the widest picture.
+                wides.iter().find(|w| w.0 == self.sel_source).map(|w| w.0).unwrap_or_else(|| wides.iter().max_by_key(|w| self.draft.sources[w.0].width).map(|w| w.0).unwrap_or(0))
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.label("From");
+                let shown = wides.iter().find(|w| w.0 == from).map(|w| w.1.clone()).unwrap_or_default();
+                egui::ComboBox::from_id_salt("closeup_from_combo").selected_text(shown).width(180.0).show_ui(ui, |ui| {
+                    for (i, name, cuts) in &wides {
+                        let text = if *cuts > 0 { format!("{name} ({cuts} close-ups)") } else { name.clone() };
+                        ui.selectable_value(&mut from, *i, text);
+                    }
+                });
+                for n in [2, 3] {
+                    let b = egui::Button::new(RichText::new(format!("＋ {n} close-ups")).color(Color32::WHITE)).fill(ACCENT.gamma_multiply(0.55));
+                    if ui.add(b).on_hover_text(format!("{n} virtual PTZ cameras cut from it, one box per person to drag into place")).clicked() {
+                        self.split_source(from, n);
+                    }
+                }
+            });
+            ui.data_mut(|d| d.insert_temp(id, from));
         });
     }
 
@@ -196,17 +338,46 @@ impl SettingsUi {
         let mut scan_ndi = false;
         let kind = SourceKind::of(&src.device);
         let old_name = src.name.clone();
+        // Running already: it's renamed (and who's in it named) in People & names.
+        let running = src.uid != 0 && self.original.sources.iter().any(|o| o.uid == src.uid);
+        let mut go_people = false;
+        let mut media_cmd = None;
         egui::Grid::new("source_detail").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
-            label(ui, "Name");
-            ui.add_sized([240.0, 22.0], egui::TextEdit::singleline(&mut src.name));
+            // First: what happens if it drops while it's on air (forensics settings #5).
+            label(ui, "If it drops while on air");
+            let shown = if src.on_drop_scene.is_empty() {
+                "Don't switch".to_string()
+            } else if scene_names.contains(&src.on_drop_scene) {
+                format!("Cut to {}", src.on_drop_scene)
+            } else {
+                format!("Cut to {} (no such scene now)", src.on_drop_scene)
+            };
+            egui::ComboBox::from_id_salt("src_on_drop").selected_text(shown).width(240.0).show_ui(ui, |ui| {
+                ui.selectable_value(&mut src.on_drop_scene, String::new(), "Don't switch");
+                for n in &scene_names {
+                    ui.selectable_value(&mut src.on_drop_scene, n.clone(), format!("Cut to {n}"));
+                }
+            });
             ui.end_row();
 
-            label(ui, "Name title");
-            ui.horizontal(|ui| {
-                let guest = src.guest_id().is_some();
-                ui.add(egui::TextEdit::singleline(&mut src.person).hint_text(if guest { "the name they type" } else { "who's in it" }).desired_width(170.0));
-                ui.add(egui::TextEdit::singleline(&mut src.role).hint_text("role or handle").desired_width(170.0));
-            });
+            label(ui, "Name");
+            if running {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(&src.name).color(Color32::WHITE));
+                    let who = match (src.person.trim(), src.role.trim()) {
+                        ("", _) if src.guest_id().is_some() => "the name the guest types".to_string(),
+                        ("", _) => "nobody named".to_string(),
+                        (p, "") => p.to_string(),
+                        (p, r) => format!("{p}, {r}"),
+                    };
+                    ui.label(RichText::new(format!("· {who}")).color(TEXT_DIM));
+                    if ui.add(egui::Button::new(RichText::new("Rename or name people ›").size(TEXT_SMALL).color(ACCENT)).frame(false)).on_hover_text("Names are changed in one place: Sources › People & names").clicked() {
+                        go_people = true;
+                    }
+                });
+            } else {
+                ui.add_sized([240.0, 22.0], egui::TextEdit::singleline(&mut src.name));
+            }
             ui.end_row();
 
             label(ui, "Type");
@@ -427,21 +598,6 @@ impl SettingsUi {
             label(ui, "Record to its own file");
             ui.checkbox(&mut src.record, "");
             ui.end_row();
-            label(ui, "If it drops while on air");
-            let shown = if src.on_drop_scene.is_empty() {
-                "Don't switch".to_string()
-            } else if scene_names.contains(&src.on_drop_scene) {
-                format!("Cut to {}", src.on_drop_scene)
-            } else {
-                format!("Cut to {} (no such scene now)", src.on_drop_scene)
-            };
-            egui::ComboBox::from_id_salt("src_on_drop").selected_text(shown).width(240.0).show_ui(ui, |ui| {
-                ui.selectable_value(&mut src.on_drop_scene, String::new(), "Don't switch");
-                for n in &scene_names {
-                    ui.selectable_value(&mut src.on_drop_scene, n.clone(), format!("Cut to {n}"));
-                }
-            });
-            ui.end_row();
             if !matches!(kind, SourceKind::Framed | SourceKind::VirtualPtz) {
                 label(ui, "Delay");
                 ui.add(egui::DragValue::new(&mut src.delay_ms).range(0..=2000).suffix(" ms"));
@@ -467,6 +623,19 @@ impl SettingsUi {
             }
             SourceKind::Test => {}
             SourceKind::Media => {
+                if running {
+                    // Next, restart and the rest, as the tile and the `media` command do.
+                    use crate::control::MediaCmd as M;
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Now").color(TEXT_DIM));
+                        for (text, tip, cmd) in [("⏮", "Previous", M::Previous), ("⏯", "Play or pause", M::Toggle), ("⏭", "Next", M::Next), ("⟲", "From the beginning", M::Restart)] {
+                            if ui.add(egui::Button::new(text).min_size(vec2(36.0, 28.0))).on_hover_text(tip).clicked() {
+                                media_cmd = Some(cmd);
+                            }
+                        }
+                    });
+                    ui.add_space(4.0);
+                }
                 media_editor(ui, &mut src.media);
                 hint(ui, &format!("To hear its sound, add an audio input set to \"Sound from {}\".", src.name));
             }
@@ -554,6 +723,13 @@ impl SettingsUi {
         if guests_on {
             self.draft.guests.enabled = true;
         }
+        if go_people {
+            self.pending = Some(SettingsAction::Go("sources/people/who"));
+        }
+        if let Some(cmd) = media_cmd {
+            let name = self.draft.sources[self.sel_source].name.clone();
+            self.pending = Some(SettingsAction::Run(crate::control::Action::Media(crate::control::Target::Name(name), cmd)));
+        }
         if scan_ndi {
             let out = self.ndi_found.clone();
             *out.lock_ok() = None;
@@ -625,6 +801,7 @@ impl SettingsUi {
             at += 1;
         }
         self.sel_source = first;
+        self.sel_picked = true;
         self.sel_preset = Some((first, 0));
         self.section = Section::Sources;
     }

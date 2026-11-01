@@ -38,12 +38,12 @@ impl SettingsUi {
                 ui.add_space(6.0);
                 let named = self.draft.sources.iter().filter(|s| !s.person.trim().is_empty()).count();
                 if named == 0 && self.draft.graphics.iter().any(|g| g.kind == GraphicKind::Title && g.follow) {
-                    ui.label(RichText::new(format!("⚠ 0 of {} sources have a name: set them in Video sources → Name title", self.draft.sources.len())).color(AMBER));
+                    ui.label(RichText::new(format!("⚠ 0 of {} sources have a name: set them in Sources › People & names", self.draft.sources.len())).color(AMBER));
                     ui.add_space(4.0);
                 }
                 ui.vertical(|ui| {
                     let names: Vec<String> = self.draft.graphics.iter().map(|g| g.name.clone()).collect();
-                    if ui.add(egui::Button::new("＋ Names of whoever's on air (recommended)").min_size(vec2(220.0, 0.0))).on_hover_text("A name title that names whoever is on air, from the Name title set on each source (Video sources)").clicked() {
+                    if ui.add(egui::Button::new("＋ Names of whoever's on air (recommended)").min_size(vec2(220.0, 0.0))).on_hover_text("A name title that names whoever is on air, from the names set in Sources › People & names").clicked() {
                         self.draft.graphics.push(Graphic::names(&unique(names.clone(), "Names")));
                         self.sel_graphic = self.draft.graphics.len() - 1;
                     }
@@ -165,7 +165,7 @@ impl SettingsUi {
                         ui.radio_value(&mut g.follow, true, "whoever is on air");
                         if g.follow {
                             let named = sources.iter().filter(|(_, p)| !p.trim().is_empty()).count();
-                            hint(ui, &format!("Their name and role come from each source's Name title (Settings → Video sources); guests' from the name they type. {named} of {} sources have a name.", sources.len()));
+                            hint(ui, &format!("Their name and role come from Sources › People & names; guests' from the name they type. {named} of {} sources have a name.", sources.len()));
                         }
                     });
                     ui.end_row();

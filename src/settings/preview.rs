@@ -153,7 +153,7 @@ impl SettingsUi {
                 ui.painter().image(pic.tex, r, uv, Color32::WHITE);
                 ui.label(RichText::new(what).size(TEXT_BODY));
                 if let Some(i) = sel {
-                    ui.label(RichText::new(format!("{:.1}× · Apply to use it", presets[i].zoom)).size(TEXT_BODY).color(TEXT_DIM));
+                    ui.label(RichText::new(format!("{:.1}×", presets[i].zoom)).size(TEXT_BODY).color(TEXT_DIM));
                 }
             });
         });
@@ -199,7 +199,7 @@ fn look_picture(ui: &mut egui::Ui, pic: &Picture, look: &SourceLook) {
             ui.painter().rect_filled(r, 2.0, Color32::BLACK);
             ui.painter().image(pic.tex, r, uv, Color32::WHITE);
             ui.label(RichText::new("What it'll look like").size(TEXT_BODY));
-            ui.label(RichText::new("Colour changes show after Apply").size(TEXT_BODY).color(TEXT_DIM));
+            ui.label(RichText::new("Colour changes show in the multiview and on air as you make them").size(TEXT_BODY).color(TEXT_DIM));
         });
     });
     ui.add_space(8.0);

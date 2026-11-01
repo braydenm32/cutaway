@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 mod panels;
 mod column;
 mod guide;
+mod people;
 mod production;
 mod starting;
 mod undo;
@@ -342,6 +343,11 @@ pub struct App {
     scene_name_edit: Option<(String, String)>,
     /// Undo and redo for scene layouts and settings.
     history: undo::History,
+    /// Changes from a page that saves as you go, left waiting for its box
+    /// when you went elsewhere: applied at the start of the next frame.
+    deferred_settings: Vec<SettingsAction>,
+    /// Saving a change made as you go: no "Saved settings" message.
+    quiet_save: bool,
     drag: Option<Drag>,
     settings: Option<SettingsUi>,
     confirm: Option<Confirm>,
@@ -572,6 +578,8 @@ impl App {
             selected_layer: None,
             scene_name_edit: None,
             history: undo::History::default(),
+            deferred_settings: Vec::new(),
+            quiet_save: false,
             drag: None,
             settings: None,
             confirm: None,
@@ -922,7 +930,9 @@ impl App {
                         let _ = profiles::save(&crate::config::profiles_dir(p), &self.cfg.ui.profile, &self.cfg);
                     }
                     crate::secrets::tidy(p);
-                    self.toast(format!("Saved settings to {}", p.display()), false)
+                    if !self.quiet_save {
+                        self.toast(format!("Saved settings to {}", p.display()), false)
+                    }
                 }
                 Err(e) => self.toast(format!("Couldn't save settings: {e:#}"), true),
             }
@@ -1096,8 +1106,9 @@ impl App {
                     }
                 }
                 self.apply_settings_as(s.cfg.clone(), ctx, true)?;
+                let now = self.live_settings();
                 if let Some(win) = self.settings.as_mut() {
-                    win.applied(Ok(()), &self.cfg);
+                    win.restored(&now);
                 }
             }
             undo::Kind::Titles => {
@@ -2291,6 +2302,24 @@ impl App {
                 2
             }
             2 if t > 4.0 => {
+                if let Ok(i) = std::env::var("CUTAWAY_UI_TEST_SPLIT_PAGE").map(|v| v.parse::<usize>().unwrap_or(0)) {
+                    // SPLIT_PAGE=n: source n split in two on Sources › Close-ups & PTZ, waiting for Apply.
+                    self.go("sources/closeups/split");
+                    if let Some(win) = self.settings.as_mut() {
+                        win.split_source(i, 2);
+                    }
+                }
+                if std::env::var_os("CUTAWAY_UI_TEST_LIVE_EDIT").is_some() {
+                    // LIVE_EDIT=1: Sources › Cameras with the first source mirrored, as a click there does (saved as you go).
+                    self.go("sources/cameras/list");
+                    if let Some(win) = self.settings.as_mut() {
+                        win.edit_draft(|c| {
+                            if let Some(s) = c.sources.first_mut() {
+                                s.look.mirror = true;
+                            }
+                        });
+                    }
+                }
                 if std::env::var_os("CUTAWAY_UI_TEST_SPLIT").is_some() {
                     // Split the first camera in two and apply, as the Split… button does.
                     let cfg = self.new_settings().with_split(0, 2).draft_config();
@@ -3545,10 +3574,9 @@ impl App {
                 clicked = None;
             }
             Some((i, TilePick::Split(k))) => {
-                // Settings, with the close-ups made and waiting to be framed.
-                if self.settings.is_none() {
-                    self.settings = Some(self.new_settings().open_at(Section::Sources).with_split(i, k));
-                } else if let Some(win) = self.settings.as_mut() {
+                // Sources › Close-ups & PTZ, with the close-ups made and waiting to be framed.
+                self.go("sources/closeups/split");
+                if let Some(win) = self.settings.as_mut() {
                     win.split_source(i, k);
                 }
                 clicked = None;
@@ -5304,6 +5332,8 @@ impl App {
             guest_status: crate::engine::guests::hub().guests(),
             ndi_watchers: self.engine.as_ref().and_then(|e| e.ndi_watchers()),
             on_air: self.engine.as_ref().map(|e| e.switcher.live().layers.iter().filter_map(|l| self.cfg.sources.get(l.source).map(|s| s.uid)).collect()).unwrap_or_default(),
+            undo: self.history.can_undo().map(String::from),
+            redo: self.history.can_redo().map(String::from),
             pictures: Vec::new(),
             virtual_ptz: Vec::new(),
         }
@@ -5330,7 +5360,41 @@ impl App {
     fn settings_action(&mut self, action: SettingsAction, ctx: &egui::Context) {
         match action {
             SettingsAction::None => {}
-            SettingsAction::Close => self.settings = None,
+            SettingsAction::Close => {
+                // (A page that saves as you go: what's still in a box is kept.)
+                if let Some(a) = self.settings.as_mut().and_then(|w| w.take_live()) {
+                    self.settings_action(a, ctx);
+                }
+                self.settings = None;
+            }
+            SettingsAction::Live { cfg, base, label } => {
+                let before = self.snapshot(undo::Kind::Settings, label);
+                // Only what was changed on the page: the desk's changes stay.
+                let merged = self.live_settings().with_edits(&base, &cfg);
+                self.quiet_save = true;
+                let result = self.apply_settings(merged, ctx);
+                self.quiet_save = false;
+                if result.is_ok() && before.settings_differ(&self.cfg) {
+                    self.history.record(before);
+                }
+                let now = self.live_settings();
+                match self.settings.as_mut() {
+                    Some(win) => win.applied_live(result, &cfg, &now),
+                    None => {
+                        if let Err(e) = result {
+                            self.toast(format!("Couldn't save a change: {e}"), true);
+                        }
+                    }
+                }
+            }
+            SettingsAction::Undo => self.undo(ctx),
+            SettingsAction::Redo => self.redo(ctx),
+            SettingsAction::Go(place) => self.go(place),
+            SettingsAction::Run(a) => {
+                if let Err(e) = self.run_action(a) {
+                    self.toast(e, true);
+                }
+            }
             SettingsAction::VirtualCamera(on) => self.set_virtual_camera(on),
             SettingsAction::MeasureSync => {
                 self.settings = None;
@@ -5603,6 +5667,10 @@ impl eframe::App for App {
             self.start_engine();
         }
 
+        // What a page that saves as you go left waiting when you went elsewhere.
+        for a in std::mem::take(&mut self.deferred_settings) {
+            self.settings_action(a, &ctx);
+        }
         // The rail of areas down the left, the top bar with the area's tabs
         // and the status cluster, then Show's desk or the area's page.
         self.sync_shell();
@@ -5636,6 +5704,11 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self) {
+        // A change still in a box on a page that saves as you go is kept.
+        if let Some(SettingsAction::Live { cfg, base, .. }) = self.settings.as_mut().and_then(|w| w.take_live()) {
+            self.cfg = self.cfg.with_edits(&base, &cfg);
+            self.cfg_dirty = true;
+        }
         self.finish_starting();
         self.remote = None;
         self.midi = None;

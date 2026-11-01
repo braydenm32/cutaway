@@ -53,6 +53,9 @@ pub(super) struct Shell {
     pub status_tab: StatusTab,
     /// When Record › Takes last looked for takes.
     takes_looked: Option<Instant>,
+    /// What's picked on an area's page, by name ("sources" → the source),
+    /// so coming back lands on it (remembered on this computer).
+    pub picked: HashMap<String, String>,
 }
 
 /// What's remembered between runs (in "Main window.ron", beside the
@@ -60,6 +63,8 @@ pub(super) struct Shell {
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 struct Saved {
     tabs: Vec<(String, String, String)>,
+    #[serde(default)]
+    picked: Vec<(String, String)>,
 }
 
 const SAVE_KEY: &str = "nav";
@@ -68,13 +73,16 @@ impl Shell {
     pub fn load(storage: Option<&dyn eframe::Storage>) -> Shell {
         let saved: Saved = storage.and_then(|s| eframe::get_value(s, SAVE_KEY)).unwrap_or_default();
         let last = saved.tabs.into_iter().filter(|(a, t, s)| nav::place_exists(&format!("{a}/{t}/{s}"))).map(|(a, t, s)| (a, (t, s))).collect();
-        Shell { area: 0, last, last_page_area: None, shown_section: None, open_status: None, status_tab: StatusTab::Now, takes_looked: None }
+        let picked = saved.picked.into_iter().collect();
+        Shell { area: 0, last, last_page_area: None, shown_section: None, open_status: None, status_tab: StatusTab::Now, takes_looked: None, picked }
     }
 
     pub fn save(&self, storage: &mut dyn eframe::Storage) {
         let mut tabs: Vec<(String, String, String)> = self.last.iter().map(|(a, (t, s))| (a.clone(), t.clone(), s.clone())).collect();
         tabs.sort();
-        eframe::set_value(storage, SAVE_KEY, &Saved { tabs });
+        let mut picked: Vec<(String, String)> = self.picked.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        picked.sort();
+        eframe::set_value(storage, SAVE_KEY, &Saved { tabs, picked });
     }
 
     pub fn on_show(&self) -> bool {
@@ -114,6 +122,9 @@ pub(super) enum Target {
     About,
     /// More › App › Help: the first-show guide and the keys.
     Help,
+    /// Sources › People & names: who's in each picture (drawn by the app,
+    /// people.rs).
+    People,
 }
 
 /// The section at "area/tab/section", and what it shows.
@@ -124,6 +135,7 @@ pub(super) fn target(area: &str, tab: &str, sect: &str) -> Option<Target> {
         ("record", "recording", "check") => Some(Target::Check),
         ("more", "app", "about") => Some(Target::About),
         ("more", "app", "help") => Some(Target::Help),
+        ("sources", "people", _) => Some(Target::People),
         _ => None,
     };
     if custom.is_some() {
@@ -222,6 +234,7 @@ impl App {
     /// Open a Settings page where it lives now (an area page), keeping any
     /// changes not applied yet; `part`: one of its folded parts, opened.
     pub(super) fn open_page(&mut self, page: Section, part: Option<&str>) {
+        self.flush_live();
         match self.settings.as_mut() {
             Some(win) => win.go_to(page),
             None => self.settings = Some(self.new_settings().open_at(page)),
@@ -263,6 +276,7 @@ impl App {
             }
             return;
         }
+        self.flush_live();
         self.set_place(a, t, s);
         match target_at(a, t, s) {
             Some(Target::Page(page, part)) => {
@@ -299,6 +313,7 @@ impl App {
         if self.shell.area == 0 {
             return true;
         }
+        self.flush_live();
         if let Some(win) = self.settings.as_mut() {
             if !win.leave() {
                 // The question shows on the page with the changes.
@@ -319,6 +334,15 @@ impl App {
 
     fn place(&self) -> (usize, usize, usize) {
         self.shell.place()
+    }
+
+    /// Going somewhere else: what a page that saves as you go still has
+    /// waiting (a box being typed in) is applied, at the start of the next
+    /// frame (settings/live.rs).
+    pub(super) fn flush_live(&mut self) {
+        if let Some(a) = self.settings.as_mut().and_then(|w| w.take_live()) {
+            self.deferred_settings.push(a);
+        }
     }
 
     /// ⌘, : the area last open other than Show (Sources the first time).
@@ -483,7 +507,7 @@ impl App {
         let font = FontId::proportional(TEXT_STATE);
         let pad = ui.spacing().button_padding.x * 2.0 + ui.spacing().item_spacing.x;
         let width_of = |ui: &egui::Ui, text: &str| ui.painter().layout_no_wrap(text.to_string(), font.clone(), Color32::WHITE).size().x + pad;
-        let more_w = width_of(ui, "More ▾") + 40.0;
+        let more_w = width_of(ui, "More ▾") + 12.0;
         let mut room = ui.available_width() - more_w;
         let mut shown = Vec::new();
         let mut under_more = Vec::new();
@@ -1069,8 +1093,24 @@ impl App {
                 if AREAS[a].tabs[t].sections[s].id == "general" {
                     self.clock_choice(ui);
                 }
+                if page == Section::Sources {
+                    let view = match AREAS[a].tabs[t].id {
+                        "closeups" => crate::settings::SourcesView::CloseUps,
+                        "network" => crate::settings::SourcesView::Network,
+                        "media" => crate::settings::SourcesView::Media,
+                        _ => crate::settings::SourcesView::Cameras,
+                    };
+                    let remembered = self.shell.picked.get("sources").cloned();
+                    if let Some(win) = self.settings.as_mut() {
+                        win.set_sources_view(view);
+                        if let Some(name) = remembered {
+                            win.restore_source(&name);
+                        }
+                    }
+                }
                 self.settings_page(ui);
             }
+            Some(Target::People) => self.people_page(ui),
             Some(Target::Takes) => self.takes_page(ui),
             Some(Target::Check) => self.check_page(ui),
             Some(Target::About) => self.about_page(ui),
@@ -1097,9 +1137,20 @@ impl App {
     /// The Settings page in the area page, and what it asked for.
     fn settings_page(&mut self, ui: &mut egui::Ui) {
         let info = self.settings_info(ui.ctx());
+        let now = self.settings.as_ref().filter(|w| crate::settings::is_live(w.section())).map(|_| self.live_settings());
         let Some(win) = self.settings.as_mut() else { return };
+        // A page that saves as you go shows the settings in effect, with
+        // what's being edited on top.
+        if let Some(now) = &now {
+            win.rebase(now);
+        }
         let action = win.show_page(ui, &info);
         self.settings_page = Some(win.section());
+        if win.section() == Section::Sources {
+            if let Some(name) = win.source_name() {
+                self.shell.picked.insert("sources".into(), name);
+            }
+        }
         let closing = matches!(action, SettingsAction::Close | SettingsAction::Apply { close: true, .. });
         self.settings_action(action, ui.ctx());
         if closing && self.settings.is_none() {

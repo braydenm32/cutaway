@@ -288,7 +288,7 @@ impl App {
 
     /// One click from the empty Graphics panel: a title that names whoever
     /// is on air, from the names set on each source.
-    fn make_name_title(&mut self, ctx: &egui::Context) {
+    pub(super) fn make_name_title(&mut self, ctx: &egui::Context) {
         let mut name = "Names".to_string();
         let mut n = 2;
         while self.cfg.graphics.iter().any(|g| g.name.eq_ignore_ascii_case(&name)) {
