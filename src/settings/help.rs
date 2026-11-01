@@ -327,7 +327,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Program, "Drop shadow") => "A soft shadow under those frames, so they lift off the background.",
 
         // ---- Graphics
-        (Graphics, "Name") => "What the graphic's button says. The first nine also have Alt+1 to Alt+9.",
+        (Graphics, "Name") => "What the graphic's button says. The first nine on Titles & overlays also have Alt+1 to Alt+9 (⌥1 to ⌥9 on a Mac), in that order.",
         (Graphics, "Text") => "The ticker's items, one per line; they scroll past in turn, again and again. Change them live from the ticker's button (✎).",
         (Graphics, "Label") => "A few words in front, like \"Coming up\" on a ticker or \"Starting in\" on a countdown. Optional.",
         (Graphics, "Speed") => "How fast the ticker scrolls, in picture widths a minute.",
@@ -335,15 +335,15 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Graphics, "Page size") => "The size the page is laid out at, in pixels: usually the program's size, for a page made for a whole screen. Width (below) sets how big it is on the picture.",
         (Graphics, "Drawn by") => "Web pages are drawn by Chrome or Edge, run hidden in the background (nothing opens on screen). Install one if none is found.",
         (Graphics, "Image") => "The picture to show. A PNG with a transparent background works best for logos.",
-        (Graphics, "Names") => "A title can show fixed text, or name whoever is on air: the person set on the source that fills most of the program (Sources › People & names, which also has ＋ Make a name title), changing at each cut. With nobody named on air, it stays off until someone is. A show with no graphics yet gets one from ＋ Make a name title in the Graphics panel on the desk.",
+        (Graphics, "Names") => "A title can show fixed text, or name whoever is on air: the person set on the source that fills most of the program (Sources › People & names, which also has ＋ Make a name title), changing at each cut. With nobody named on air, it stays off until someone is. A show with no graphics yet gets one from ＋ Make a name title, on Graphics › Titles & overlays or in the Graphics panel on the desk.",
         (Graphics, "By itself") => "Brings the name on by itself for a few seconds when someone new comes on air, like a broadcast name strap, so you never have to press it. It won't name the same person again until the minutes you set have passed (0 for every time). Its button still shows and hides it whenever you like.",
         (Graphics, "Sample") => "Text to show in the preview here. On air, the title shows whoever is on.",
         (Graphics, "Name line") => "The title's top line, usually a name. Change it live from the title's button (✎), handy between guests.",
         (Graphics, "Second line") => "The line underneath: a role, a topic or a handle.",
         (Graphics, "Shows") => "What the clock shows: the time of day, a countdown to a time, a countdown, a stopwatch, or the time left in the rundown segment.",
-        (Graphics, "Format") => "24-hour or 12-hour time, with or without seconds.",
-        (Graphics, "Counting down to") => "The time of day it counts down to, like 19:30 or 7:30 pm, by this computer's clock.",
-        (Graphics, "From") => "Where the countdown starts. Start, pause and reset it with ▶ / ⏸ and ⟲ beside its button on the desk (right-click the button for Stop and reset), a Stream Deck Timer key, or the timer commands.",
+        (Graphics, "Format") => "With or without seconds. 12-hour or 24-hour is the show's one setting, used for the top bar's clock, clock graphics, the second screen and scheduled times: change it at the top of Graphics › Clocks & timers, in More › App › General, or by clicking the clock in the top bar.",
+        (Graphics, "Counting down to") => "The time of day it counts down to, like 19:30 or 7:30 pm, by this computer's clock. Once that time has gone by (for more than an hour), it counts to the same time the next day, so a countdown to 00:30 set at 23:50 shows 40:00. For the hour after, it rests at 0:00.",
+        (Graphics, "From") => "Where the countdown starts. Start, pause and reset it with ▶ Start and ⟲ at the top of its page in Graphics › Clocks & timers, with ▶ / ⏸ and ⟲ beside its button on the desk (right-click the button for Stop and reset), a Stream Deck Timer key, or the timer commands.",
         (Graphics, "Colours") => "The text colour, the box colour, and how solid the box behind the text is.",
         (Graphics, "Font") => "A font file (TTF or OTF) for the text, or the built-in one.",
         (Graphics, "Position") => "Where the graphic's top-left corner sits: across and down, as a share of the picture.",
@@ -510,7 +510,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
 
         // ---- Remote & MIDI
         // ---- Graphics taking turns
-        (Graphics, "Group name") => "What this group is called on its button beside the graphics, and in commands (rotation:Sponsors).",
+        (Graphics, "Group name") => "What this group is called on its button beside the graphics, and in commands (rotation:Sponsors). Start now and Stop beside it start or stop it on the show straight away.",
         (Graphics, "Graphics") => "The graphics that take turns, in order. When the last one has been on, it starts again from the first.",
         (Graphics, "How often") => "How often the next graphic comes on, and how long it stays. If it stays on longer than the gap, they follow straight on from each other.",
         (Graphics, "Runs") => "When it starts and stops by itself. Its button beside the graphics starts or stops it any time, and so do the remote, Stream Deck, MIDI and keys (rotation:Name).",

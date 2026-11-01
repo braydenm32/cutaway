@@ -287,8 +287,8 @@ impl App {
     }
 
     /// One click from the empty Graphics panel: a title that names whoever
-    /// is on air, from the names set on each source.
-    pub(super) fn make_name_title(&mut self, ctx: &egui::Context) {
+    /// is on air, from the names set on each source. Its name, once made.
+    pub(super) fn make_name_title(&mut self, ctx: &egui::Context) -> Option<String> {
         let mut name = "Names".to_string();
         let mut n = 2;
         while self.cfg.graphics.iter().any(|g| g.name.eq_ignore_ascii_case(&name)) {
@@ -310,8 +310,12 @@ impl App {
                     },
                     false,
                 );
+                Some(name)
             }
-            Err(e) => self.toast(format!("Couldn't make the title: {e}"), true),
+            Err(e) => {
+                self.toast(format!("Couldn't make the title: {e}"), true);
+                None
+            }
         }
     }
 

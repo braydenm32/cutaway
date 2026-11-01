@@ -138,6 +138,36 @@ pub fn fmt_span(d: Duration, round_up: bool) -> String {
     }
 }
 
+/// The time of day as the show shows it everywhere (the top bar, clock
+/// graphics, the second screen, scheduled times): `twelve` is the show's
+/// one 12/24-hour setting (numbers audit #8).
+pub fn time_format(twelve: bool, seconds: bool) -> &'static str {
+    match (twelve, seconds) {
+        (false, true) => "%H:%M:%S",
+        (false, false) => "%H:%M",
+        (true, true) => "%-I:%M:%S %p",
+        (true, false) => "%-I:%M %p",
+    }
+}
+
+/// How long a countdown to a time of day stays at 0:00 once that time
+/// has come, before it counts to the same time tomorrow.
+pub const UNTIL_HOLD: Duration = Duration::from_secs(3600);
+
+/// When a countdown to `until` ("19:30") ends, seen at `now`: today, or
+/// after midnight when that time has gone by (a countdown to 00:30 set at
+/// 23:50 counts 40 minutes, numbers audit #11). For an hour after the time
+/// comes it stays on today's, so the clock rests at 0:00.
+pub fn until_target(until: &str, now: chrono::DateTime<chrono::Local>) -> Option<chrono::DateTime<chrono::Local>> {
+    let (h, m) = parse_time_of_day(until)?;
+    let on = |day: chrono::NaiveDate| day.and_hms_opt(h, m, 0).and_then(|t| t.and_local_timezone(chrono::Local).earliest());
+    let today = on(now.date_naive());
+    match today {
+        Some(t) if t >= now || (now - t).to_std().unwrap_or_default() <= UNTIL_HOLD => Some(t),
+        _ => on(now.date_naive().succ_opt()?),
+    }
+}
+
 /// "19:30", "7:30 pm" or "7:30pm" as (hour, minute).
 pub fn parse_time_of_day(s: &str) -> Option<(u32, u32)> {
     let t = s.trim().to_lowercase().replace(' ', "");
@@ -167,22 +197,14 @@ pub fn parse_time_of_day(s: &str) -> Option<(u32, u32)> {
 
 /// What a clock graphic shows at `now`: (text, over time).
 pub fn clock_text(g: &Graphic, timers: &Timers, now: chrono::DateTime<chrono::Local>) -> (String, bool) {
-    use chrono::Timelike;
     match g.clock {
         ClockKind::Time => {
-            let f = match (g.clock_24h, g.show_seconds) {
-                (true, true) => "%H:%M:%S",
-                (true, false) => "%H:%M",
-                (false, true) => "%-I:%M:%S %p",
-                (false, false) => "%-I:%M %p",
-            };
-            (now.format(f).to_string(), false)
+            // (`clock_24h` follows the show's 12/24-hour setting: Config::sync_clock_format.)
+            (now.format(time_format(!g.clock_24h, g.show_seconds)).to_string(), false)
         }
         ClockKind::Until => {
-            let Some((h, m)) = parse_time_of_day(&g.until) else { return ("--:--".into(), false) };
-            let target = now.with_hour(h).and_then(|t| t.with_minute(m)).and_then(|t| t.with_second(0)).and_then(|t| t.with_nanosecond(0));
-            let left = target.map(|t| (t - now).to_std().unwrap_or_default()).unwrap_or_default();
-            (fmt_span(left, true), false)
+            let Some(target) = until_target(&g.until, now) else { return ("--:--".into(), false) };
+            (fmt_span((target - now).to_std().unwrap_or_default(), true), false)
         }
         ClockKind::Countdown => {
             let left = Duration::from_secs(g.seconds as u64).saturating_sub(timers.elapsed(&g.name));
@@ -237,7 +259,17 @@ mod tests {
         g.until = "7pm".into();
         assert_eq!(clock_text(&g, &timers, now).0, "4:59");
         g.until = "18:00".into();
-        assert_eq!(clock_text(&g, &timers, now).0, "0:00", "passed");
+        assert_eq!(clock_text(&g, &timers, now).0, "0:00", "just passed: rests at 0:00");
+        g.until = "17:30".into();
+        assert_eq!(clock_text(&g, &timers, now).0, "22:34:59", "long gone: tomorrow's");
+        // Across midnight (numbers audit #11).
+        let late = chrono::Local.with_ymd_and_hms(2026, 10, 18, 23, 50, 0).unwrap();
+        g.until = "00:30".into();
+        assert_eq!(clock_text(&g, &timers, late).0, "40:00");
+        g.until = "12am".into();
+        assert_eq!(clock_text(&g, &timers, late).0, "10:00");
+        assert_eq!(until_target("00:30", late).unwrap().date_naive(), late.date_naive().succ_opt().unwrap());
+        assert_eq!(until_target("23:55", late).unwrap().date_naive(), late.date_naive());
 
         g.clock = ClockKind::Countdown;
         g.seconds = 90;

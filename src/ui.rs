@@ -1488,7 +1488,7 @@ impl App {
                 Ok(format!("{} {db:+.1} dB", names[i]))
             }
             Action::Captions(t) => {
-                let c = self.engine.as_ref().and_then(|e| e.captions()).ok_or("live captions are off (Settings → Captions)")?;
+                let c = self.engine.as_ref().and_then(|e| e.captions()).ok_or("live captions are off (Graphics › Captions)")?;
                 let on = toggle(&t, c.showing());
                 c.set_showing(on);
                 Ok(format!("Captions {}", if on { "on" } else { "off" }))
@@ -2214,7 +2214,7 @@ impl App {
             let secs = left.num_seconds();
             Some((format!("{name}: live in {}:{:02} ({how})", secs / 60, secs % 60), AMBER))
         } else {
-            Some((format!("{name}: live at {} ({how})", at.format("%H:%M")), TEXT_DIM))
+            Some((format!("{name}: live at {} ({how})", at_time(at, self.cfg.ui.clock_12h)), TEXT_DIM))
         }
     }
 
@@ -2400,6 +2400,10 @@ impl App {
                         Some(i) => self.go_area(i),
                         None => self.go(&place),
                     }
+                }
+                if std::env::var_os("CUTAWAY_UI_TEST_MAKE_TITLE").is_some() {
+                    // MAKE_TITLE=1: what ＋ Make a name title on Graphics › Titles & overlays does.
+                    self.settings_action(SettingsAction::MakeNameTitle, ctx);
                 }
                 if std::env::var_os("CUTAWAY_UI_TEST_COMMENTS").is_some() {
                     // A few viewer comments, as if from a live chat.
@@ -5247,7 +5251,7 @@ impl App {
                 RecState::Recording { since, .. } => Some(since.elapsed()),
                 _ => None,
             };
-            (segment, rec)
+            (segment, rec, self.cfg.ui.clock_12h)
         });
         let mut close = false;
         let mut toggle_full = std::mem::take(&mut self.display_toggle_full);
@@ -5309,8 +5313,8 @@ impl App {
                         painter.text(rr.left_bottom() + vec2(6.0, -6.0), Align2::LEFT_BOTTOM, format!("{} {}", i + 1, name), FontId::proportional(TEXT_STATE), Color32::WHITE);
                     }
                 }
-                if let Some((segment, rec)) = &clocks {
-                    App::draw_display_clocks(&painter, area, segment.clone(), *rec);
+                if let Some((segment, rec, twelve)) = &clocks {
+                    App::draw_display_clocks(&painter, area, segment.clone(), *rec, *twelve);
                     ui.ctx().request_repaint_after(Duration::from_millis(250));
                 }
                 if resp.double_clicked() {
@@ -5490,7 +5494,21 @@ impl App {
             redo: self.history.can_redo().map(String::from),
             pictures: Vec::new(),
             virtual_ptz: Vec::new(),
+            graphics_now: self.graphics_now(),
+            rotations_now: self.engine.as_ref().map(|e| e.rotations.list().into_iter().map(|r| (r.name, r.running)).collect()).unwrap_or_default(),
         }
+    }
+
+    /// The graphics as they are on the program now (the Graphics pages'
+    /// Show / Take off, clocks and timers).
+    fn graphics_now(&self) -> Vec<crate::settings::GraphicNow> {
+        let Some(e) = &self.engine else { return Vec::new() };
+        e.graphics
+            .list()
+            .into_iter()
+            .enumerate()
+            .map(|(i, (name, on, problem))| crate::settings::GraphicNow { running: e.graphics.timers.running(&name), clock: e.graphics.clock_text(i).map(|c| c.0), name, on, problem })
+            .collect()
     }
 
     /// What a Settings page shows from the running show, the sources'
@@ -5550,6 +5568,22 @@ impl App {
                     self.toast(e, true);
                 }
             }
+            SettingsAction::MakeNameTitle => {
+                if let Some(name) = self.make_name_title(ctx) {
+                    let now = self.live_settings();
+                    if let Some(win) = self.settings.as_mut() {
+                        win.restored(&now);
+                        win.pick_graphic(&name);
+                    }
+                }
+            }
+            SettingsAction::ReloadGraphic(name) => {
+                if let Some(e) = &self.engine {
+                    if let Some(i) = e.graphics.index_of(&name) {
+                        e.graphics.reload(i);
+                    }
+                }
+            }
             SettingsAction::VirtualCamera(on) => self.set_virtual_camera(on),
             SettingsAction::MeasureSync => {
                 self.settings = None;
@@ -5588,6 +5622,8 @@ impl App {
     /// now (an edit in Settings), so they're not moved with the sources.
     fn apply_settings_as(&mut self, mut new: Config, ctx: &egui::Context, own_scenes: bool) -> Result<(), String> {
         new.validate().map_err(|e| e.to_string())?;
+        // Clock graphics show the show's 12/24-hour format.
+        new.sync_clock_format();
         if new.remote.ensure_pin() {
             self.toast(format!("The remote's PIN is {}", new.remote.pin), false);
         }
@@ -6101,7 +6137,19 @@ fn cut_after_drop(dropped: &[String], sources: &[crate::config::SourceConfig], s
 
 /// The time of day for the header: "15:05", or "3:05 PM".
 fn clock_text(t: chrono::NaiveTime, twelve: bool) -> String {
-    if twelve { t.format("%-I:%M %p").to_string() } else { t.format("%H:%M").to_string() }
+    t.format(crate::engine::timers::time_format(twelve, false)).to_string()
+}
+
+/// A time later on, in the show's clock format, saying so when it's after
+/// midnight: "21:30", "00:30 tomorrow" (numbers audit #11).
+pub(crate) fn at_time(at: chrono::DateTime<chrono::Local>, twelve: bool) -> String {
+    let t = at.format(crate::engine::timers::time_format(twelve, false)).to_string();
+    let days = (at.date_naive() - chrono::Local::now().date_naive()).num_days();
+    match days {
+        0 => t,
+        1 => format!("{t} tomorrow"),
+        _ => format!("{t} {}", at.format("%a %-d %b")),
+    }
 }
 
 fn fmt_clock(d: Duration) -> String {

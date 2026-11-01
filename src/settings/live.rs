@@ -46,7 +46,7 @@ use super::*;
 use std::time::{Duration, Instant};
 
 /// The pages that save as you go.
-pub const LIVE: &[Section] = &[Section::Sources, Section::Guests, Section::Audio, Section::Mixing, Section::Pads, Section::Syrinscape, Section::Recording, Section::Streaming, Section::Scenes, Section::Switching, Section::Program];
+pub const LIVE: &[Section] = &[Section::Sources, Section::Guests, Section::Audio, Section::Mixing, Section::Pads, Section::Syrinscape, Section::Graphics, Section::Captions, Section::Recording, Section::Streaming, Section::Scenes, Section::Switching, Section::Program];
 
 /// Whether a page saves as you go.
 pub fn is_live(s: Section) -> bool {
@@ -325,6 +325,9 @@ impl SettingsUi {
         if !is_live(self.section) {
             return None;
         }
+        // (A clock just added takes the show's 12/24-hour format, as the app
+        // would make it: otherwise it would be sent again and again.)
+        self.draft.sync_clock_format();
         let lp = self.live_part();
         if lp == self.original || self.failed.as_deref() == Some(&lp) || lp.check().is_err() {
             return None;
@@ -348,6 +351,7 @@ impl SettingsUi {
         if is_live(self.section) {
             self.commit_scene_rename();
         }
+        self.draft.sync_clock_format();
         let lp = self.live_part();
         if lp == self.original || lp.check().is_err() {
             return None;
@@ -400,6 +404,7 @@ impl SettingsUi {
         let o = &self.original;
         let changed: Vec<&SourceConfig> = lp.sources.iter().filter(|s| !o.sources.iter().any(|x| x == *s)).collect();
         let inputs: Vec<&AudioConfig> = lp.audio.iter().filter(|a| !o.audio.iter().any(|x| x == *a)).collect();
+        let graphics: Vec<&crate::config::Graphic> = lp.graphics.iter().filter(|g| !o.graphics.contains(g)).collect();
         match (changed.as_slice(), inputs.as_slice()) {
             ([one], []) => format!("{} settings", one.name),
             ([], [one]) if lp.mix == o.mix && lp.pads == o.pads => format!("{} settings", one.name),
@@ -414,6 +419,12 @@ impl SettingsUi {
             ([], _) if lp.auto_switch != o.auto_switch => "Auto-switching".into(),
             ([], _) if lp.replay != o.replay => "Replay settings".into(),
             ([], _) if lp.style != o.style => "Program picture".into(),
+            ([], []) if lp.graphics.len() > o.graphics.len() => "Add a graphic".into(),
+            ([], []) if lp.graphics.len() < o.graphics.len() => "Remove a graphic".into(),
+            ([], []) if graphics.len() == 1 => format!("{} graphic", graphics[0].name),
+            ([], []) if lp.graphics != o.graphics => "Graphics".into(),
+            ([], []) if lp.rotations != o.rotations => "Graphics taking turns".into(),
+            ([], []) if lp.captions != o.captions => "Captions settings".into(),
             ([], []) => "Settings change".into(),
             ([], _) => "Sound inputs".into(),
             _ => "Sources settings".into(),
@@ -615,6 +626,32 @@ mod tests {
         win.drop_held();
         assert_eq!(win.draft.audio[0].gain_db, 6.0);
         assert!(!win.held(Section::Sources));
+    }
+
+    /// Graphics save as you go: a clock just added takes the show's 12/24-
+    /// hour format and is sent once, not again every frame; the picked
+    /// graphic comes back by name.
+    #[test]
+    fn graphics_save_as_you_go() {
+        use crate::config::{ClockKind, Graphic};
+        let applied = two();
+        assert!(!applied.ui.clock_12h);
+        let mut win = SettingsUi::new(applied.clone()).open_at(Section::Graphics);
+        win.draft.graphics.push(Graphic::clock("Clock", ClockKind::Time, ""));
+        let ctx = egui::Context::default();
+        let Some(SettingsAction::Live { cfg, base, label }) = win.live_step(&ctx) else { panic!("nothing to save") };
+        assert_eq!(label, "Add a graphic");
+        assert!(cfg.graphics[0].clock_24h, "the show's format");
+        let mut now = applied.with_edits(&base, &cfg);
+        now.sync_clock_format();
+        win.applied_live(Ok(()), &cfg, &now);
+        assert!(win.live_step(&ctx).is_none(), "sent once");
+        assert!(!win.unapplied());
+        win.draft.graphics.push(Graphic::names("Names"));
+        let mut win2 = SettingsUi::new(win.draft.clone()).open_at(Section::Graphics);
+        win2.restore_graphic("names");
+        assert_eq!(win2.graphic_name().as_deref(), Some("Names"));
+        assert!(is_live(Section::Captions));
     }
 
     /// An old page (not saving as you go) keeps its draft until Apply.

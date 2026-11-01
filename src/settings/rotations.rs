@@ -5,12 +5,13 @@ use super::*;
 use crate::config::{Rotation, RotationStart};
 
 impl SettingsUi {
-    pub(super) fn rotations(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn rotations(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
         let n = self.draft.rotations.len();
         let state = if n == 0 { "none".to_string() } else { self.draft.rotations.iter().map(|r| r.name.clone()).collect::<Vec<_>>().join(", ") };
         let names: Vec<String> = self.draft.graphics.iter().map(|g| g.name.clone()).collect();
-        part(ui, "rotations", "Taking turns", &state, n > 0, |ui| {
-            hint(ui, "Graphics that come on one after another by themselves: sponsors, your social handles, a reminder to subscribe. Each still has its own button too.");
+        let mut run = None;
+        // (Its own tab now, so it's open.)
+        part(ui, "rotations", "Taking turns", &state, true, |ui| {
             let mut remove = None;
             for (ri, r) in self.draft.rotations.iter_mut().enumerate() {
                 ui.add_space(6.0);
@@ -19,7 +20,21 @@ impl SettingsUi {
                         label(ui, "Group name");
                         ui.horizontal(|ui| {
                             ui.add(egui::TextEdit::singleline(&mut r.name).desired_width(180.0));
-                            if ui.small_button("Remove").clicked() {
+                            // Start or stop it now, as its ⟳ button on the desk does.
+                            match info.rotations_now.iter().find(|(name, _)| *name == r.name) {
+                                Some((name, running)) => {
+                                    let (text, tip) = if *running { ("Stop", "Stop it taking turns now") } else { ("Start now", "Start it taking turns now") };
+                                    let b = egui::Button::new(RichText::new(text).color(if *running { Color32::BLACK } else { Color32::WHITE })).fill(if *running { AMBER } else { RAISED });
+                                    if ui.add(b).on_hover_text(tip).clicked() {
+                                        run = Some(name.clone());
+                                    }
+                                    if *running {
+                                        ui.label(RichText::new("running").color(AMBER));
+                                    }
+                                }
+                                None => hint(ui, "being saved…"),
+                            }
+                            if ui.small_button("Remove").on_hover_text("Undo puts it back").clicked() {
                                 remove = Some(ri);
                             }
                         });
@@ -54,7 +69,7 @@ impl SettingsUi {
                             }
                             let left: Vec<&String> = names.iter().filter(|n| !r.graphics.contains(n)).collect();
                             if left.is_empty() && names.is_empty() {
-                                hint(ui, "Add a graphic above first.");
+                                hint(ui, "Add a graphic on Titles & overlays first.");
                             } else if !left.is_empty() {
                                 egui::ComboBox::from_id_salt(("rotation_add", ri)).selected_text("＋ Add a graphic").width(200.0).show_ui(ui, |ui| {
                                     for n in left {
@@ -100,5 +115,8 @@ impl SettingsUi {
             }
             hint(ui, "Each take's folder gets Graphics on air.csv: every graphic that was on screen, how many times and for how long. Handy for sponsors.");
         });
+        if let Some(name) = run {
+            self.pending = Some(SettingsAction::Run(crate::control::Action::Rotation(crate::control::Target::Name(name), crate::control::Toggle::Toggle)));
+        }
     }
 }
