@@ -11,6 +11,7 @@
 
 use super::nav::{self, Icon, AREAS};
 use super::theme::*;
+use super::hold::HoldStep;
 use super::{fmt_clock, App, REC_HOLD_SECS};
 use crate::control::shortcuts::{Builtin, KeyCombo, DIGITS};
 use crate::control::{self, Action};
@@ -807,7 +808,14 @@ impl App {
     /// "Saving 40%" while it finishes. Returns where it is (for the take card).
     fn rec_pill(&mut self, ui: &mut egui::Ui, rec: &RecState, roomy: bool) -> Rect {
         let w = if roomy { 150.0 } else { 122.0 };
-        let (rect, r) = ui.allocate_exact_size(vec2(w, 40.0), Sense::click());
+        // Click and drag, so egui still reports a press past 0.8 s or a few
+        // points of movement (see hold.rs); a click still records.
+        let recording = matches!(rec, RecState::Recording { .. });
+        let mut held = self.rec_hold;
+        let (rect, r, step) = super::hold::hold_area(ui, vec2(w, 40.0), &mut held, REC_HOLD_SECS, recording && self.test_hold);
+        if recording {
+            self.rec_hold = held;
+        }
         let p = ui.painter().clone();
         let radius = 20.0;
         match rec {
@@ -817,36 +825,29 @@ impl App {
                 p.rect_stroke(rect, radius, Stroke::new(1.5, REC_EDGE), StrokeKind::Inside);
                 let pulse = 0.55 + 0.45 * ((t.as_secs_f32() * std::f32::consts::PI).cos() * 0.5 + 0.5);
                 p.circle_filled(rect.left_center() + vec2(18.0, 0.0), 6.0, REC_DOT.gamma_multiply(pulse));
-                let down = r.is_pointer_button_down_on() || self.test_hold;
-                match (down, self.rec_hold) {
-                    (true, _) if self.rec_hold_spent => {}
-                    (true, None) => self.rec_hold = Some(Instant::now()),
-                    (true, Some(since)) => {
-                        let f = (since.elapsed().as_secs_f32() / REC_HOLD_SECS).min(1.0);
-                        // A red fill grows across the pill while it's held (see-through, so the text reads).
-                        let fill = Rect::from_min_size(rect.min, vec2(rect.width() * f, rect.height()));
-                        p.with_clip_rect(fill).rect_filled(rect, radius, REC_HOLD);
-                        if f >= 1.0 {
-                            self.rec_hold = None;
-                            self.rec_hold_spent = true;
-                            if let Some(e) = &self.engine {
-                                e.stop_recording();
-                            }
-                        }
+                let fill_to = |f: f32| {
+                    // A red fill grows across the pill while it's held (see-through, so the text reads).
+                    let fill = Rect::from_min_size(rect.min, vec2(rect.width() * f, rect.height()));
+                    p.with_clip_rect(fill).rect_filled(rect, radius, REC_HOLD);
+                };
+                match step {
+                    HoldStep::Holding(f) => {
+                        fill_to(f);
                         ui.ctx().request_repaint();
                     }
-                    (false, held) => {
-                        if held.is_some() {
-                            // Let go too soon: nothing happens, but the hint lights up.
-                            self.rec_hint_until = Some(Instant::now() + Duration::from_millis(1500));
+                    HoldStep::Done => {
+                        fill_to(1.0);
+                        if let Some(e) = &self.engine {
+                            e.stop_recording();
                         }
-                        self.rec_hold = None;
-                        self.rec_hold_spent = false;
                     }
+                    // Let go too soon: nothing happens, but the hint lights up.
+                    HoldStep::LetGo => self.rec_hint_until = Some(Instant::now() + Duration::from_millis(1500)),
+                    HoldStep::Up | HoldStep::Spent => {}
                 }
                 let text_x = rect.left() + 32.0;
                 super::bold_text(&p, pos2(text_x, rect.center().y - 7.0), Align2::LEFT_CENTER, &format!("REC {}", fmt_clock(t)), TEXT_STATE, Color32::WHITE);
-                let hint_lit = self.rec_hold.is_some() || self.rec_hint_until.is_some_and(|u| Instant::now() < u);
+                let hint_lit = self.rec_hold.active() || self.rec_hint_until.is_some_and(|u| Instant::now() < u);
                 p.text(pos2(text_x, rect.center().y + 9.0), Align2::LEFT_CENTER, "hold to stop", FontId::proportional(TEXT_SMALL), if hint_lit { Color32::WHITE } else { TEXT_DIM });
                 ui.ctx().request_repaint_after(Duration::from_millis(50));
                 r.on_hover_text(format!("Hold for a second to stop recording (the key{} asks first)\nRecording to {}", self.key_hint(Builtin::Record), folder.display()));
@@ -861,7 +862,7 @@ impl App {
                 ui.ctx().request_repaint_after(Duration::from_millis(100));
             }
             RecState::Idle => {
-                self.rec_hold_spent = false;
+                self.rec_hold.reset();
                 let fill = if r.hovered() { NEUTRAL_HOVER } else { RAISED };
                 p.rect_filled(rect, radius, fill);
                 p.rect_stroke(rect, radius, Stroke::new(1.5, REC_EDGE), StrokeKind::Inside);
