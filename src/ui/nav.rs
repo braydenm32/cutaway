@@ -91,7 +91,7 @@ pub const AREAS: &[Area] = &[
             Sect { id: "who", label: "Who's in each picture", help: &[Page::Sources], routes: &[] } ]},
         // 0 visits for every persona
         Tab { id: "guests", label: "Guests", more: true, sections: &[
-            Sect { id: "guests", label: "Remote guests", help: &[Page::Guests], routes: &["set.inputs.guests"] } ]},
+            Sect { id: "guests", label: "Remote guests", help: &[Page::Guests], routes: &["set.inputs.guests", "mv.guest_warn"] } ]},
         Tab { id: "network", label: "Network & phone feeds", more: true, sections: &[
             Sect { id: "feeds", label: "SRT, RTMP, NDI", help: &[Page::Sources], routes: &[] } ]},
         Tab { id: "media", label: "Media & playlists", more: true, sections: &[
@@ -247,14 +247,14 @@ pub const VISIBLE: &[(&str, &str)] = &[
     ("cmd.captions", "show/switch/bank"), ("cmd.auto", "show/switch/bank"), ("cmd.gain", "show/switch/column"),
     ("cmd.mute", "show/switch/column"), ("cmd.talkback", "show/switch/column"), ("cmd.pad", "show/switch/column"),
     ("cmd.syrinscape", "sound/syrinscape"), ("cmd.timer", "graphics/timers"), ("cmd.rundown", "show/switch/column"),
-    ("cmd.media", "sources/media"), ("cmd.clip:N", "status"), ("cmd.replay:N", "show/switch/bank"),
+    ("cmd.media", "sources/media/media"), ("cmd.clip:N", "status"), ("cmd.replay:N", "show/switch/bank"),
     ("cmd.macro", "show/switch/column"), ("cmd.wait", "more/tools/macros"), ("cmd.ptz", "show/switch/column"),
     ("cmd.prompter", "show/switch/column"), ("cmd.comment", "show/switch/column"), ("cmd.guest", "show/switch/column"),
     // right-click and hover
     ("ctx.replay", "show/switch/bank"), ("ctx.clock", "show/switch/column"), ("ctx.ptz.preset", "show/switch/column"),
     // (the tile's ⋯ offers what its right-click does)
     ("ctx.mv.split", "show/switch/multiview"), ("ctx.mv.framing", "show/switch/multiview"), ("ctx.mv.playlist", "show/switch/multiview"),
-    ("mv.guest_warn", "status"),
+    ("mv.guest_warn", "sources/guests/guests"),
     // reachable only one way today
     ("dlg.marker_name", "status"), ("main.header.clock", "more/app/general"),
     // Stream Deck, OSC, MIDI, HTTP

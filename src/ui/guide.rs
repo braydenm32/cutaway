@@ -28,14 +28,22 @@ impl App {
         // The key as it's set now (numbers audit #22).
         let record_key = self.key_hint(crate::control::shortcuts::Builtin::Record);
         // What's set up, as it is now.
+        // Cameras: not test pictures (they stand in when none is found:
+        // guide #3), close-ups cut from a camera, media players or guests.
+        let is_cam = |s: &crate::config::SourceConfig| {
+            let d = s.device.trim().to_lowercase();
+            !(d == "test" || d.starts_with("test:") || d == "media" || d.starts_with("vptz:") || d.starts_with("frame:") || s.guest_id().is_some())
+        };
+        let cam_list: Vec<usize> = self.cfg.sources.iter().enumerate().filter(|(_, s)| is_cam(s)).map(|(i, _)| i).collect();
+        let tests = self.cfg.sources.iter().filter(|s| s.device.trim().to_lowercase().starts_with("test")).count();
         let (cams_alive, sound_peak) = match &self.engine {
             Some(e) => (
-                e.sources.iter().filter(|s| s.input.alive()).count(),
+                cam_list.iter().filter(|&&i| e.sources.get(i).is_some_and(|s| s.input.alive())).count(),
                 e.audio.iter().flat_map(|a| a.shared.levels_db()).fold(-120.0f32, f32::max),
             ),
             None => (0, -120.0),
         };
-        let cams = self.cfg.sources.len();
+        let cams = cam_list.len();
         let mics = self.cfg.audio.len();
         let folder = self.cfg.output.folder.clone();
         let free = crate::engine::health::disk_space(&folder).map(|(free, _)| free);
@@ -46,16 +54,17 @@ impl App {
         let heard = self.guide_heard;
         let recorded = self.engine.as_ref().is_some_and(|e| e.is_recording()) || self.guide_recorded;
 
-        // Who's on camera: the video sources with a picture of their own (not a guest spot or a media player).
-        let people: Vec<usize> = self.cfg.sources.iter().enumerate().filter(|(_, s)| s.guest_id().is_none() && !s.device.trim().eq_ignore_ascii_case("media")).map(|(i, _)| i).collect();
+        // Who's on camera: as Sources › People & names lists them.
+        let people: Vec<usize> = self.people_sources();
         let named = people.iter().filter(|&&i| !self.cfg.sources[i].person.trim().is_empty()).count();
+        let name_title = self.has_name_title();
         let timelines = self.cfg.output.export_timelines;
         let scenes_seen = self.guide_scenes || self.edit_mode;
 
         let mut open = true;
-        let mut rename: Option<(usize, String)> = None;
-        let mut people_changed = false;
         let mut edit_layout = false;
+        let mut go_place: Option<&'static str> = None;
+        let mut make_title = false;
         let mut go_part: Option<(Section, &str)> = None;
         let mut go: Option<Section> = None;
         let mut check = false;
@@ -68,7 +77,7 @@ impl App {
             .pivot(egui::Align2::CENTER_CENTER)
             .default_pos(ctx.content_rect().center())
             .show(ctx, |ui| {
-                ui.label("A few steps to a first recording and its edit. Each button opens the right page in Settings; this stays open while you work.");
+                ui.label("A few steps to a first recording and its edit. Each button opens the right page; this stays open while you work.");
                 ui.add_space(8.0);
                 egui::ScrollArea::vertical().max_height((ctx.content_rect().height() - 220.0).max(240.0)).auto_shrink([true, true]).show(ui, |ui| {
                 let mut n = 0;
@@ -99,6 +108,7 @@ impl App {
 
                 let cam_state = if cams > 0 && cams_alive == cams { Step::Done } else { Step::Todo };
                 let cam_text = match (cams, cams_alive) {
+                    (0, _) if tests > 0 => format!("No camera found yet: test pictures stand in for now. Plug one in and add it here (a capture card, a USB camera or a phone). If it's plugged in, check that no other app is using it and that Cutaway may use the camera ({CAMERA_PRIVACY})."),
                     (0, _) => "No cameras yet. Plug one in, then add it here (a capture card, a USB camera or a phone).".to_string(),
                     (1, 1) => "1 camera with a picture. Name it so scenes and titles make sense.".to_string(),
                     (c, a) if a == c => format!("{c} cameras with a picture. Name them so scenes and titles make sense."),
@@ -106,42 +116,32 @@ impl App {
                     (c, a) => format!("{a} of {c} cameras have a picture. Check the cable, or that no other app is using {}.", if c - a == 1 { "the one without" } else { "them" }),
                 };
                 if step(ui, cam_state, "Cameras", cam_text, Some("Cameras…"), None) {
-                    go = Some(Section::Sources);
+                    go_place = Some("sources/cameras/list");
                 }
 
                 if !people.is_empty() {
-                    let people_state = if named == people.len() { Step::Done } else { Step::Todo };
+                    let people_state = if named == people.len() && name_title { Step::Done } else { Step::Todo };
                     let people_text = format!(
-                        "Who is in each picture, for the name titles that follow whoever is on air ({named} of {} named). Set a close-up for each person if two share a camera. A new name for a camera reopens it for a moment.",
-                        people.len()
+                        "Who is in each picture, for the name titles that follow whoever is on air ({named} of {} named{}). Saved as you type; a new camera name restarts that camera for a moment. Two people on one camera? Give each a close-up.",
+                        people.len(),
+                        if name_title { "" } else { "; there's no name title yet" }
                     );
-                    let cfg = &mut self.cfg;
-                    let mut fields = |ui: &mut egui::Ui| {
-                        for &i in people.iter().take(8) {
-                            // The source's name is changed once you leave the box, so the camera isn't reopened at every letter.
-                            let id = ui.scope_id().with(("guide_name", cfg.sources[i].uid, i));
-                            let mut name: String = ui.data_mut(|d| d.get_temp(id)).unwrap_or_else(|| cfg.sources[i].name.clone());
-                            ui.horizontal(|ui| {
-                                let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(110.0).hint_text("camera name"));
-                                if r.lost_focus() && name.trim() != cfg.sources[i].name.trim() {
-                                    rename = Some((i, name.trim().to_string()));
-                                }
-                                let s = &mut cfg.sources[i];
-                                let a = ui.add(egui::TextEdit::singleline(&mut s.person).desired_width(130.0).hint_text("who's in it"));
-                                let b = ui.add(egui::TextEdit::singleline(&mut s.role).desired_width(110.0).hint_text("role or handle"));
-                                people_changed |= a.changed() || b.changed();
-                            });
-                            if name == cfg.sources[i].name {
-                                ui.data_mut(|d| d.remove::<String>(id));
-                            } else {
-                                ui.data_mut(|d| d.insert_temp(id, name));
+                    // The same rows as Sources › People & names (forensics settings #4).
+                    let mut rows = |ui: &mut egui::Ui| {
+                        self.people_rows(ui, 8, false);
+                        ui.horizontal(|ui| {
+                            if !name_title && ui.button("＋ Make a name title").on_hover_text("Adds a title that names whoever is on air (Undo takes it away)").clicked() {
+                                make_title = true;
                             }
-                        }
-                        if people.len() > 8 {
-                            ui.label(RichText::new(format!("and {} more in Settings → Video sources", people.len() - 8)).color(TEXT_DIM));
-                        }
+                            if ui.button("Close-ups…").on_hover_text("A close-up of each person from one camera").clicked() {
+                                go_place = Some("sources/closeups/split");
+                            }
+                            if ui.button("People & names…").clicked() {
+                                go_place = Some("sources/people/who");
+                            }
+                        });
                     };
-                    step(ui, people_state, "Name your people", people_text, None, Some(&mut fields));
+                    step(ui, people_state, "Name your people", people_text, None, Some(&mut rows));
                 }
 
                 let mic_state = if mics > 0 && heard { Step::Done } else { Step::Todo };
@@ -223,30 +223,18 @@ impl App {
         if let Some(section) = go {
             self.open_page(section, None);
         }
+        if let Some(place) = go_place {
+            self.go(place);
+        }
+        if make_title {
+            self.make_name_title(ctx);
+        }
         if let Some((section, part)) = go_part {
             self.open_page(section, Some(part));
         }
         if edit_layout {
             self.edit_mode = true;
             self.guide_scenes = true;
-        }
-        if let Some((i, new)) = rename {
-            let mut cfg = self.cfg.clone();
-            cfg.scenes = self.scenes.clone();
-            match cfg.rename_source(i, &new) {
-                Ok(()) => {
-                    if let Err(e) = self.apply_settings(cfg, ctx) {
-                        self.toast(e, true);
-                    }
-                }
-                Err(e) => self.toast(e, true),
-            }
-        } else if people_changed {
-            // Who's in it changes live: nothing reopens.
-            self.cfg_dirty = true;
-            if let Some(e) = &self.engine {
-                let _ = e.update_config(&self.cfg);
-            }
         }
         if check {
             self.guide_checked = true;

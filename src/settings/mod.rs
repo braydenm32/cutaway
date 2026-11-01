@@ -1,7 +1,8 @@
 //! The Settings pages: each edits a draft copy of the configuration, and
 //! they open inside the main window as the rail's areas (ui/shell.rs).
-//! Nothing changes until Apply/OK; changes that need the video engine
-//! rebuilt are flagged, everything else applies live.
+//! The pages in `live::LIVE` save as you go, with Undo (see live.rs); on
+//! the others nothing changes until Apply/OK, and changes that need the
+//! video engine rebuilt are flagged, everything else applies live.
 
 mod captions;
 mod capture_picker;
@@ -10,6 +11,7 @@ mod control;
 mod graphics;
 mod guests;
 mod help;
+mod live;
 mod macros;
 mod prompter;
 mod mixing;
@@ -33,6 +35,8 @@ use crate::devices::{self, DeviceInfo, Kind, Mode, TEST_PATTERN_NAMES};
 use crate::engine::{LogLevel, LogLine};
 use crate::ui::theme::*;
 use eframe::egui::{self, vec2, Align, Color32, Layout, RichText};
+pub use live::is_live;
+pub use sources::SourcesView;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -225,6 +229,16 @@ pub enum SettingsAction {
     VirtualCamera(bool),
     /// Close and measure lip sync.
     MeasureSync,
+    /// A page that saves as you go: apply this now (only what changed since
+    /// `base`), as one Undo step called `label`.
+    Live { cfg: Config, base: Box<Config>, label: String },
+    /// The page's ↶ Undo and ↷ Redo (the app's own, as ⌘Z).
+    Undo,
+    Redo,
+    /// Go to another place ("area/tab/section").
+    Go(&'static str),
+    /// Do something on the show now (a media player's next, say).
+    Run(crate::control::Action),
 }
 
 /// Read-only facts the window shows (engine state, log, ...).
@@ -259,6 +273,9 @@ pub struct SettingsContext {
     pub ndi_watchers: Option<u32>,
     /// The sources on the program right now (by uid).
     pub on_air: Vec<u64>,
+    /// What ↶ Undo and ↷ Redo would undo or redo now.
+    pub undo: Option<String>,
+    pub redo: Option<String>,
     /// Running sources' pictures (by uid), as the multiview shows them.
     pub pictures: Vec<preview::Picture>,
     /// Virtual PTZ cameras (by uid), for the shot they're on.
@@ -346,6 +363,13 @@ pub struct SettingsUi {
     sel_preset: Option<(usize, usize)>,
     /// The bottom bar's height, as last drawn.
     bar_h: f32,
+    /// When a page that saves as you go last applied a change.
+    last_live: Option<std::time::Instant>,
+    /// Which part of the sources a Sources tab shows.
+    view: SourcesView,
+    /// A source was picked here (or asked for): a remembered one doesn't
+    /// replace it.
+    sel_picked: bool,
 }
 
 const RESOLUTIONS: &[(u32, u32, &str)] = &[
@@ -423,6 +447,9 @@ impl SettingsUi {
             lut_check: None,
             sel_preset: None,
             bar_h: 48.0,
+            last_live: None,
+            view: SourcesView::Cameras,
+            sel_picked: false,
         }
     }
 
@@ -444,7 +471,47 @@ impl SettingsUi {
     /// Show this source on the Video sources page.
     pub fn select_source(mut self, i: usize) -> Self {
         self.sel_source = i;
+        self.sel_picked = true;
         self
+    }
+
+    /// The source picked on the Sources pages, by name (remembered on this
+    /// computer: forensics settings #2).
+    pub fn source_name(&self) -> Option<String> {
+        self.draft.sources.get(self.sel_source).map(|s| s.name.clone())
+    }
+
+    /// Pick the source remembered from last time, unless one was picked
+    /// already. By name, never by place (a reorder would point elsewhere);
+    /// gone: the first.
+    pub fn restore_source(&mut self, name: &str) {
+        if !self.sel_picked {
+            self.sel_picked = true;
+            if let Some(i) = self.draft.sources.iter().position(|s| s.name == name) {
+                self.sel_source = i;
+            }
+        }
+    }
+
+    /// Which part of the sources the page shows (the Sources area's tab).
+    pub fn set_sources_view(&mut self, v: SourcesView) {
+        self.view = v;
+    }
+
+    /// A camera renamed elsewhere (People & names): what's being edited
+    /// here that names it follows, so nothing points at the old name.
+    pub fn follow_rename(&mut self, uid: u64, old: &str, new: &str) {
+        for s in &mut self.draft.sources {
+            if s.uid == uid && uid != 0 {
+                s.name = new.to_string();
+            }
+            if s.framed_from().is_some_and(|f| f.trim().eq_ignore_ascii_case(old.trim())) {
+                s.device = format!("frame:{new}");
+            }
+            if s.virtual_ptz_of().is_some_and(|f| f.trim().eq_ignore_ascii_case(old.trim())) {
+                s.device = format!("vptz:{new}");
+            }
+        }
     }
 
     /// Settings → Scenes with this scene picked, and asking whether to delete it (for the UI self-test).
@@ -454,13 +521,20 @@ impl SettingsUi {
         self
     }
 
+    /// Change the settings being edited, as the page would (for the UI self-test).
+    pub fn edit_draft(&mut self, f: impl FnOnce(&mut Config)) {
+        f(&mut self.draft);
+    }
+
     /// The settings as they are being edited (for the UI self-test).
     pub fn draft_config(&self) -> Config {
         self.draft.clone()
     }
 
+    /// Changes not applied yet (on a page that saves as you go, only those
+    /// held back for its Apply: the rest is applied by itself).
     pub fn dirty(&self) -> bool {
-        self.draft != self.original || self.scene_rename_pending()
+        self.unapplied()
     }
 
     /// Called by the app after it tried to apply (`now`: the settings in
@@ -534,8 +608,14 @@ impl SettingsUi {
         });
         let top = ui.cursor().top();
         ui.separator();
-        if let Some(a) = self.bottom_bar(ui, info) {
+        let bar = if live::is_live(self.section) { self.live_bar(ui, info) } else { self.bottom_bar(ui, info) };
+        if let Some(a) = bar {
             action = a;
+        }
+        if matches!(action, SettingsAction::None) {
+            if let Some(a) = self.live_step(&ctx) {
+                action = a;
+            }
         }
         self.bar_h = ui.min_rect().bottom() - top + ui.spacing().item_spacing.y;
         if let Some(a) = self.after(&ctx, esc) {
@@ -701,7 +781,11 @@ impl SettingsUi {
             let r = egui::Modal::new(egui::Id::unique("discard_settings")).show(ctx, |ui| {
                 ui.set_width(340.0);
                 ui.heading("Discard your changes?");
-                ui.label("Your edits to the settings haven't been applied.");
+                ui.label(if live::is_live(self.section) {
+                    "Some changes here wait for Apply because they open, close or restart sources. Everything else is already saved."
+                } else {
+                    "Your edits to the settings haven't been applied."
+                });
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if ui.button("Discard").clicked() {
@@ -863,6 +947,9 @@ impl SettingsUi {
 
     /// Changes not applied yet on this page.
     pub fn section_dirty(&self, s: Section) -> bool {
+        if live::is_live(s) {
+            return self.held(s);
+        }
         let (a, b) = (&self.draft, &self.original);
         match s {
             Section::General => a.ui != b.ui,
@@ -2469,6 +2556,8 @@ mod tests {
             guest_status: Vec::new(),
             ndi_watchers: None,
             on_air: Vec::new(),
+            undo: None,
+            redo: None,
             pictures: Vec::new(),
             virtual_ptz: Vec::new(),
         }
