@@ -197,7 +197,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
     use Section::*;
     let text = match (page, name) {
         // ---- General & shows
-        (General, "Interface size") => "Makes everything in Cutaway's window bigger or smaller: text, buttons and monitors. Handy on a big screen across the room, or a small laptop.",
+        (General, "Interface size") => "Makes everything in Cutaway's window bigger or smaller: text, buttons and monitors. Handy on a big screen across the room, or a small laptop. It changes when you let go of the slider.",
         (General, "Ask before") => "Asks you to confirm before the stream ends, so a stray click or key can't end the show. A recording is always protected: hold the REC pill (top right; it says hold to stop under its time) for a second to stop it, and its key (Cmd/Ctrl+R) asks first. On the phone remote and the Stream Deck, stopping or ending takes a one-second hold (on the phone, so do going live, fade to black and turning a mic off).",
         (General, "Pre-show check") => "Before you record or go live, Cutaway checks that every source has a picture, the inputs have sound, the disk has room and the stream servers answer. Anything wrong is listed, and you can still go ahead. Starting from the phone remote, the Stream Deck, MIDI or OSC runs it too; the phone shows that it's waiting on the desk and what the check found. Run it by hand from the status light (top right) or Record › Recording › Before you start.",
         (General, "Updates") => "When Cutaway starts, it asks GitHub whether there's a newer release and tells you if there is, with a blue dot on More in the rail (nothing about you or your show is sent); Update now in More › App › Updates & about downloads and puts it in. With the second box ticked, Cutaway downloads it by itself and puts it in the next time you close Cutaway, keeping your settings and shows.",
@@ -516,10 +516,10 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Graphics, "Runs") => "When it starts and stops by itself. Its button beside the graphics starts or stops it any time, and so do the remote, Stream Deck, MIDI and keys (rotation:Name).",
 
         (Control, "Remote control") => "Lets phones, tablets, the Stream Deck plugin, Companion and scripts on this network run the show, through a web page and web addresses. On a phone it has Scenes, Sound, Titles and More tabs, keeps updating while this window is minimised (so do a comment on screen hiding by itself and the teleprompter rolling), and needs a one-second hold for anything you can't take back. The phone and the Stream Deck's Go Live key say GOING LIVE… until a destination is really on air, and \"LIVE 1 of 2\" while one isn't.",
-        (Control, "Port") => "The port the remote runs on.",
+        (Control, "Port") => "The port the remote runs on. A new port takes effect when you let go of it (or leave the box); phones then need the new address.",
         (Control, "PIN") => "The code every phone, Stream Deck and script needs to use the remote. There's always one: Cutaway makes a four-digit PIN if this is empty. A device that gets it wrong five times in a row has to wait a minute before trying again.",
         (Control, "OSC") => "Accepts OSC commands over the network: QLab, Companion, TouchOSC, lighting desks.",
-        (Control, "Listen on UDP port") => "The port OSC commands arrive on.",
+        (Control, "Listen on UDP port") => "The port OSC commands arrive on. A new port takes effect when you let go of it.",
         (Control, "Send state to") => "Where Cutaway sends its state as OSC whenever it changes (scenes, tally, recording, levels, and /stream: connecting, live, or trouble with /stream/live as \"1 of 2\"), so a controller can show it. Optional.",
         (Control, "MIDI control") => "Lets MIDI controllers' pads, keys and faders run commands. Map them below with Learn. A \"while held\" sound pad or talkback:on stops when you let go of the pad.",
         (Control, "Controller") => "Which MIDI device to listen to, or every one connected.",
@@ -527,6 +527,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
 
         // ---- Diagnostics
         (Diagnostics, "Version") => "The Cutaway version you're running.",
+        (Diagnostics, "Settings file") => "Where this show's settings are kept (the same file as --config on the command line). Export, import or reset them in More › App › Shows.",
         (Diagnostics, "Log file") => "What Cutaway has been doing, kept in case something goes wrong.",
         (Diagnostics, "Problem report") => "Saves one .zip to send when something goes wrong: the log, the last take's note (Take.txt), your settings and the devices found. Stream keys, passwords and tokens are taken out first, even where they appear in the log.",
 

@@ -554,6 +554,9 @@ mod tests {
         assert!(search("phone fade", 10).iter().any(|h| h.place.starts_with("Phone remote")));
         // A way in with no screen of its own goes to its visible twin.
         assert!(search("--list-devices", 5).iter().any(|h| h.place == "More › App › Diagnostics"));
+        // The command line's tools have buttons now (route map #14).
+        assert!(search("test encoders", 5).iter().any(|h| h.place == "More › App › Diagnostics"));
+        assert!(search("list devices", 5).iter().any(|h| h.place == "More › App › Diagnostics"));
         // An area by name.
         let sound = AREAS.iter().position(|a| a.id == "sound").unwrap();
         assert!(search("sound", 8).iter().any(|h| h.go == Go::Area(sound)));

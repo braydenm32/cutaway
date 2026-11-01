@@ -78,7 +78,7 @@ impl SettingsUi {
 
         ui.add_space(14.0);
         subtitle(ui, "Framing");
-        hint(ui, "Which part of each source's picture fills a tall frame: slide it to where the person sits, and zoom in for a closer shot. Apply to see it on the vertical monitor.");
+        hint(ui, "Which part of each source's picture fills a tall frame: slide it to where the person sits, and zoom in for a closer shot. The vertical monitor shows it as you change it.");
         egui::Grid::new("vertical_framing").num_columns(4).spacing(TABLE_GAP).striped(true).show(ui, |ui| {
             for n in &names {
                 let mut f = self.draft.vertical.framing_of(n);

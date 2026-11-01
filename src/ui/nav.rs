@@ -8,7 +8,7 @@
 //! search reads it (ui/search.rs); the "Set up ›" links and the status
 //! light's "fix it" links will be too. The tests below check it against every route there is, so
 //! nothing gets lost on the way.
-// (Parts are still only read by the tests until later redesign PRs draw them.)
+// (Some parts are only read by the tests.)
 #![allow(dead_code)]
 
 use crate::settings::Section as Page;
@@ -539,7 +539,9 @@ mod tests {
         let done = ROUTES.iter().filter(|r| !r.legacy).count();
         println!("Rehomed: {done} of {} routes", ROUTES.len());
         // Moved routes have every way in they had (no_way_in_was_lost),
-        // and a home in the new tree (every_route_has_a_home).
-        assert!(done <= ROUTES.len());
+        // and a home in the new tree (every_route_has_a_home). Since
+        // redesign PR 11 every route has moved.
+        let left: Vec<_> = ROUTES.iter().filter(|r| r.legacy).map(|r| r.id).collect();
+        assert!(left.is_empty(), "still in their 0.9.7 place: {left:?}");
     }
 }

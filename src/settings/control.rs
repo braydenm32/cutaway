@@ -1,4 +1,5 @@
-//! More › Control, and show profiles (in General).
+//! More › Control (the phone remote, Stream Deck, OSC and MIDI), and
+//! More › App › Shows.
 
 use super::*;
 use crate::config::MidiMapping;
@@ -33,12 +34,64 @@ mod tests {
     }
 }
 
+/// The Stream Deck plugin's actions, as its manifest names and explains
+/// them (so the page lists exactly what the plugin has).
+fn stream_deck_actions() -> Vec<(String, String)> {
+    let manifest: serde_json::Value = serde_json::from_str(include_str!("../../streamdeck/app.cutaway.streamdeck.sdPlugin/manifest.json")).unwrap_or_default();
+    let actions = manifest["Actions"].as_array().cloned().unwrap_or_default();
+    actions.iter().map(|a| (a["Name"].as_str().unwrap_or_default().to_string(), a["Tooltip"].as_str().unwrap_or_default().to_string())).collect()
+}
+
+/// A part of More › Control: folded under its heading when the whole page
+/// shows, or (`only`, the section's own page) with its state on one line.
+fn control_part(ui: &mut egui::Ui, id: &str, only: Option<&str>, name: &str, state: &str, open: bool, body: impl FnOnce(&mut egui::Ui)) {
+    let shown = match only {
+        None => true,
+        Some("osc") => id == "osc" || id == "midi",
+        Some(o) => o == id,
+    };
+    if !shown {
+        return;
+    }
+    // (OSC and MIDI share a section: each keeps its heading there.)
+    if only.is_none() || only == Some("osc") {
+        part(ui, id, name, state, open || only.is_some(), body);
+        return;
+    }
+    if !state.is_empty() {
+        // (On or Off: the port and PIN are in the form just below.)
+        let on = state.starts_with("on");
+        let words = match state {
+            s if s.starts_with("on") => "On",
+            "off" => "Off",
+            s => s,
+        };
+        ui.horizontal(|ui| {
+            let (rect, _) = ui.allocate_exact_size(vec2(10.0, 10.0), egui::Sense::hover());
+            ui.painter().circle_filled(rect.center(), 4.5, if on { GREEN } else { TEXT_DIM });
+            ui.label(RichText::new(words).color(if on { Color32::WHITE } else { TEXT_DIM }));
+        });
+        ui.add_space(4.0);
+    }
+    body(ui);
+}
+
 impl SettingsUi {
+    /// More › Control: the phone remote, the Stream Deck, OSC and MIDI
+    /// (`part_only` picks the section's part; None: all of them).
     pub(super) fn control(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
-        title(ui, "Remote & MIDI", "Run the show from a phone or tablet, a Stream Deck, Companion, show-control software or a MIDI controller.");
+        let only = self.part_only;
+        let intro = match only {
+            Some("remote") => "Run the show from a phone or tablet on the same Wi-Fi, and use phones as tally lights. Scripts and show-control apps use the same address.",
+            Some("streamdeck") => "Stream Deck keys with live pictures of scenes and sources, red and green tally, and every command.",
+            Some("osc") => "Show-control software (QLab, Companion, TouchOSC, lighting desks) over OSC, and MIDI controllers' pads, keys and faders.",
+            _ => "Run the show from a phone or tablet, a Stream Deck, Companion, show-control software or a MIDI controller.",
+        };
+        title(ui, "Control", intro);
+        let sources: Vec<String> = self.draft.sources.iter().map(|s| s.name.clone()).collect();
         let r = &mut self.draft.remote;
         let state = if r.enabled { format!("on, port {}, PIN {}", r.port, r.pin.trim()) } else { "off".to_string() };
-        part(ui, "remote", "Phone and tablet remote", &state, true, |ui| {
+        control_part(ui, "remote", only, "Phone and tablet remote", &state, true, |ui| {
             egui::Grid::new("remote").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "Remote control");
                 ui.checkbox(&mut r.enabled, "devices on this network can run the show");
@@ -48,80 +101,123 @@ impl SettingsUi {
                 ui.end_row();
                 label(ui, "PIN");
                 ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut r.pin).desired_width(90.0).hint_text("made for you"));
+                    ui.add(egui::TextEdit::singleline(&mut r.pin).desired_width(120.0).hint_text("made for you"));
                     if ui.small_button("New PIN").clicked() {
                         r.pin = crate::config::new_pin();
                     }
                     if r.enabled && r.pin.trim().is_empty() {
-                        ui.label(RichText::new("a PIN is made when you apply").color(TEXT_DIM).size(TEXT_BODY));
+                        ui.label(RichText::new("a PIN is made as it turns on").color(TEXT_DIM).size(TEXT_BODY));
                     } else if r.pin.trim().chars().count() < 4 {
                         ui.label(RichText::new("short PINs are easy to guess: use 4 or more").color(AMBER).size(TEXT_BODY));
                     }
                 });
                 ui.end_row();
             });
-            if r.enabled {
-                let ip = crate::engine::netsrc::local_ip().unwrap_or_else(|| "this-computer".into());
-                let url = format!("http://{ip}:{}", r.port);
-                ui.horizontal(|ui| {
-                    ui.label("Open");
-                    ui.label(RichText::new(&url).monospace().color(ACCENT));
-                    ui.label("on a phone or tablet on the same Wi-Fi.");
-                    if ui.small_button("Copy").clicked() {
-                        ui.ctx().copy_text(url.clone());
-                    }
-                });
-                ui.horizontal(|ui| {
-                    qr_code(ui, &remote_link(&url, &r.pin), 132.0);
-                    ui.vertical(|ui| {
-                        ui.add_space(4.0);
-                        ui.label(RichText::new("Scan with your phone's camera").size(TEXT_BODY).color(TEXT_DIM));
-                        hint(ui, "It opens the remote already signed in with the PIN.");
-                    });
-                });
-                if info.remote_port.is_none() && self.original.remote.enabled {
-                    ui.label(RichText::new("⚠ The remote isn't running (see the log: the port may be in use).").color(AMBER));
+            if !r.enabled {
+                hint(ui, "Turn it on to get the address and a QR code for your phone, tally lights, and the links for scripts.");
+                return;
+            }
+            let ip = crate::engine::netsrc::local_ip().unwrap_or_else(|| "this-computer".into());
+            let url = format!("http://{ip}:{}", r.port);
+            ui.horizontal(|ui| {
+                ui.label("Open");
+                ui.label(RichText::new(&url).monospace().color(ACCENT));
+                ui.label("on a phone or tablet on the same Wi-Fi.");
+                if ui.small_button("Copy").clicked() {
+                    ui.ctx().copy_text(url.clone());
                 }
-                hint(ui, &format!("Tally lights: open {url}/?tally=1 (2, 3…) on a phone mounted on each camera — red when on air, green in preview."));
-                ui.add_space(6.0);
-                ui.label(RichText::new("Stream Deck, Bitfocus Companion and scripts").strong());
+            });
+            ui.horizontal(|ui| {
+                qr_code(ui, &remote_link(&url, &r.pin), 132.0);
+                ui.vertical(|ui| {
+                    ui.add_space(4.0);
+                    ui.label(RichText::new("Scan with your phone's camera").size(TEXT_BODY).color(TEXT_DIM));
+                    hint(ui, "It opens the remote already signed in with the PIN.");
+                });
+            });
+            if info.remote_port.is_none() && self.original.remote.enabled {
+                ui.label(RichText::new("⚠ The remote isn't running (see the log: the port may be in use).").color(AMBER));
+            }
+            let pin_q = if r.pin.trim().is_empty() { String::new() } else { format!("&pin={}", r.pin.trim()) };
+            ui.add_space(6.0);
+            ui.label(RichText::new("Tally lights").strong());
+            hint(ui, "Open one of these on a phone mounted on each camera: red when it's on air, green in preview. (The phone remote's More tab lists them too.)");
+            ui.horizontal_wrapped(|ui| {
+                for (i, name) in sources.iter().enumerate() {
+                    let link = format!("{url}/?tally={}{pin_q}", i + 1);
+                    if ui.small_button(format!("{name}  ⧉")).on_hover_text(format!("Copy {link}")).clicked() {
+                        ui.ctx().copy_text(link);
+                    }
+                }
+                if sources.is_empty() {
+                    hint(ui, "(Add sources first.)");
+                }
+            });
+            ui.add_space(6.0);
+            egui::CollapsingHeader::new(RichText::new("For scripts, Companion and other apps").strong()).id_salt("remote_api").show(ui, |ui| {
                 hint(ui, "Any button that can open a web address can run a command:");
                 let pin = format!("&pin={}", if r.pin.trim().is_empty() { "PIN" } else { r.pin.trim() });
                 for (cmd, what) in [("scene:1", "take scene 1"), ("preview:2", "preview scene 2"), ("take", "take preview to program"), ("record", "record on/off"), ("marker", "add a marker"), ("graphic:1", "graphic 1 on/off")] {
                     ui.label(RichText::new(format!("{url}/api/action?do={cmd}{pin}    ({what})")).monospace().size(TEXT_BODY).color(TEXT_DIM));
                 }
-                hint(ui, "The full command list is in the README. Scripts can also connect to ws://…/api/ws for live state.");
-            }
+                ui.add_space(4.0);
+                for (path, what) in [
+                    ("/api/state", "everything on the remote as JSON: scenes, tally, recording, levels"),
+                    ("/api/ws", "the same, live, over a WebSocket (ws://…)"),
+                    ("/api/program.jpg", "a still of the program"),
+                    ("/api/tally/1", "source 1's tally (program, preview or off), for lights and scripts"),
+                    ("/prompter", "the teleprompter page (More › Show tools › Teleprompter)"),
+                ] {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new(format!("{url}{path}")).monospace().size(TEXT_BODY).color(TEXT_DIM));
+                        ui.label(RichText::new(what).size(TEXT_BODY).color(TEXT_DIM));
+                    });
+                }
+                hint(ui, "Each needs the PIN (pin=…). The full command list is in the README.");
+            });
         });
-        part(ui, "streamdeck", "Stream Deck", if self.draft.remote.enabled { "" } else { "needs the remote" }, false, |ui| {
-            hint(ui, "The Cutaway plugin's keys show live pictures of scenes and sources, light up red and green, and run anything: take and cut, record, go live, markers, graphics, audio (with Stream Deck+ dials), auto-switching, media players and any command.");
+        let remote_on = self.draft.remote.enabled;
+        let port = self.draft.remote.port;
+        let mut note = self.plugin_note.clone();
+        control_part(ui, "streamdeck", only, "Stream Deck", if remote_on { "" } else { "needs the remote" }, false, |ui| {
+            hint(ui, "The Cutaway plugin's keys show live pictures of scenes and sources (drawn by Cutaway, /api/key), light up red and green, and run anything.");
             ui.horizontal(|ui| {
                 let plugin = crate::util::bundled("Cutaway.streamDeckPlugin", "streamdeck");
                 if ui.add_enabled(plugin.is_some(), egui::Button::new("Install the Stream Deck plugin…")).clicked() {
                     if let Some(p) = &plugin {
-                        if let Err(e) = crate::util::open_with_system(p) {
-                            self.plugin_note = Some(format!("Couldn't open {}: {e}", p.display()));
-                        } else {
-                            self.plugin_note = Some("The Stream Deck app will ask to install it.".into());
-                        }
+                        note = Some(match crate::util::open_with_system(p) {
+                            Err(e) => format!("Couldn't open {}: {e}", p.display()),
+                            Ok(_) => "The Stream Deck app will ask to install it.".into(),
+                        });
                     }
                 }
-                match (&plugin, &self.plugin_note) {
+                match (&plugin, &note) {
                     (_, Some(n)) => hint(ui, n),
                     (None, None) => hint(ui, "Cutaway.streamDeckPlugin is in the streamdeck folder of the download: double-click it."),
                     _ => {}
                 }
             });
-            if !self.draft.remote.enabled {
-                ui.label(RichText::new("The plugin talks to Cutaway through remote control: turn it on above.").color(AMBER));
+            if !remote_on {
+                ui.label(RichText::new("The plugin talks to Cutaway through the phone remote: turn it on in More › Control › Phone remote.").color(AMBER));
             } else {
                 let ip = crate::engine::netsrc::local_ip().unwrap_or_else(|| "this-computer".into());
-                hint(ui, &format!("In a key's settings, use address 127.0.0.1:{} on this computer ({ip}:{} from another one), and the PIN.", self.draft.remote.port, self.draft.remote.port));
+                hint(ui, &format!("In a key's settings, use address 127.0.0.1:{port} on this computer ({ip}:{port} from another one), and the PIN."));
             }
+            ui.add_space(6.0);
+            let actions = stream_deck_actions();
+            ui.label(RichText::new(format!("The plugin's {} keys", actions.len())).strong());
+            egui::Grid::new("sd_actions").num_columns(2).spacing([14.0, 4.0]).striped(true).show(ui, |ui| {
+                for (name, what) in &actions {
+                    ui.label(RichText::new(name).size(TEXT_BODY).color(Color32::WHITE));
+                    ui.add(egui::Label::new(RichText::new(what).size(TEXT_BODY).color(TEXT_DIM)).wrap());
+                    ui.end_row();
+                }
+            });
         });
+        self.plugin_note = note;
         let o = &mut self.draft.osc;
         let state = if o.enabled { format!("on, UDP port {}", o.port) } else { "off".to_string() };
-        part(ui, "osc", "OSC (show-control software)", &state, false, |ui| {
+        control_part(ui, "osc", only, "OSC (show-control software)", &state, false, |ui| {
             egui::Grid::new("osc").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "OSC");
                 ui.checkbox(&mut o.enabled, "accept OSC commands");
@@ -158,7 +254,7 @@ impl SettingsUi {
             }
         });
         if !midi::available() {
-            part(ui, "midi", "MIDI controller", "needs macOS or Windows", false, |ui| hint(ui, "MIDI needs macOS or Windows."));
+            control_part(ui, "midi", only, "MIDI controller", "needs macOS or Windows", false, |ui| hint(ui, "MIDI needs macOS or Windows."));
             return;
         }
         let m = &self.draft.midi;
@@ -170,7 +266,7 @@ impl SettingsUi {
         } else {
             "off".to_string()
         };
-        part(ui, "midi", "MIDI controller", &state, self.draft.midi.enabled, |ui| {
+        control_part(ui, "midi", only, "MIDI controller", &state, self.draft.midi.enabled, |ui| {
             let m = &mut self.draft.midi;
             egui::Grid::new("midi").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "MIDI control");
@@ -240,14 +336,13 @@ impl SettingsUi {
         });
     }
 
-    /// Show profiles, inside General.
+    /// Saved shows (More › App › Shows).
     pub(super) fn shows(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
-        subtitle(ui, "Shows");
         let Some(dir) = info.profiles_dir.clone() else {
             hint(ui, "Demo mode: shows can't be saved.");
             return;
         };
-        hint(ui, "A show is a whole setup: sources, scenes, audio, graphics, streaming. Save one per production and switch from the header.");
+        hint(ui, "A show is a whole setup: sources, scenes, audio, graphics, streaming. Save one per production; switch here or from the show's name under the logo.");
         let current = self.draft.ui.profile.clone();
         let list = profiles::list(&dir);
         ui.add_space(4.0);
@@ -306,14 +401,8 @@ impl SettingsUi {
                         if ui.small_button("Rename").clicked() {
                             self.renaming = Some((name.clone(), name.clone()));
                         }
-                        if ui.small_button("Load").on_hover_text("Loads into this window; Apply to switch").clicked() {
-                            self.message = Some(match profiles::load(&dir, name) {
-                                Ok(cfg) => {
-                                    self.draft = cfg;
-                                    (format!("Loaded \"{name}\" — press Apply to switch to it"), false)
-                                }
-                                Err(e) => (format!("{e:#}"), true),
-                            });
+                        if !is_current && ui.small_button("Switch to it").on_hover_text("Asks first; this show's settings are kept as they are").clicked() {
+                            self.pending = Some(SettingsAction::SwitchShow(name.clone()));
                         }
                     });
                 });
@@ -328,8 +417,11 @@ impl SettingsUi {
             let b = ui.add_enabled(!name.is_empty(), egui::Button::new(label));
             let b = if exists { b.on_hover_text(format!("There's already a show called \"{name}\": this replaces it")) } else { b };
             if b.clicked() {
+                // What's in effect (not changes still waiting for Apply).
+                let mut cfg = self.live_part();
+                cfg.ui.profile = name.clone();
                 self.draft.ui.profile = name.clone();
-                self.message = Some(match profiles::save(&dir, &name, &self.draft) {
+                self.message = Some(match profiles::save(&dir, &name, &cfg) {
                     Ok(()) => (format!("Saved \"{name}\""), false),
                     Err(e) => (format!("{e:#}"), true),
                 });

@@ -73,7 +73,6 @@ impl App {
     /// The column: a slim bar with ⋯, the panels, then the audio strip.
     pub(super) fn right_column(&mut self, ui: &mut egui::Ui) {
         ui.set_min_width(280.0);
-        self.sync_segment_clock();
         self.column_bar(ui);
         // The audio strip keeps room for its meters, faders and ON buttons;
         // the panels get the rest, and scroll.
@@ -320,8 +319,9 @@ impl App {
     }
 
     /// The Segment timer graphic follows the rundown as it's edited (numbers
-    /// audit #9): same start, the plan it has now.
-    fn sync_segment_clock(&mut self) {
+    /// audit #9): same start, the plan it has now. Every frame, whichever
+    /// area is open (the rundown is edited on More › Show tools).
+    pub(super) fn sync_segment_clock(&mut self) {
         let Some(e) = &self.engine else { return };
         let Some(i) = self.rundown.status(&self.cfg.rundown.segments).index else { return };
         let Some(seg) = self.cfg.rundown.segments.get(i) else { return };

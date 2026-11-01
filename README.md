@@ -763,26 +763,36 @@ Video Extensions** on some PCs.
   lights up for a moment. A desk button is shown, never pressed, so nothing
   goes on air from search. ⌘K works even while you're typing in a box; Esc
   (or ⌘K again) closes it, and what you typed is still there next time.
-- **Changes save as you go** in Sources, Sound, Graphics (Captions too), and Record › Recording and Streaming (the other areas follow): what you
-  change applies straight away and is saved, a box when you press Enter or
-  click elsewhere. **↶ Undo** and **↷ Redo** at the bottom of the page (or ⌘Z
-  when you're not typing in a box) take it back. Changes that would add,
-  remove or restart a source or a sound input wait in an amber line at the
-  bottom ("Waiting: restarts Couch · adds Couch left") with **Apply (restarts
-  cameras)** (or **Apply (restarts inputs)**) and
-  **Undo these**, and an amber dot on the area in the rail; going back to Show
-  asks before dropping them.
-- **Pages not moved yet** still have **Revert** on its own at the bottom left;
-  **OK** and **Apply** are only on when something has changed (OK and Cancel
-  go back to Show), and changes not applied yet show as an amber dot on their
-  area in the rail. Your show's keys keep working on these pages, except
-  while you type in a box. Applying (on either kind of page) puts on only
-  what you changed on the page, so a fader, ON/OFF, transition or anything
-  else changed on the desk meanwhile stays as it is.
+- **Changes save as you go** on every page: what you change applies
+  straight away and is saved, a box when you press Enter or click elsewhere,
+  a port or the interface size when you let go of it. There's no OK, Apply or
+  Cancel. **↶ Undo** and **↷ Redo** at the bottom of the page (or ⌘Z when
+  you're not typing in a box) take it back one step at a time, and **Undo
+  changes on this page** puts the whole page back as it was when you opened
+  it. Changes that would add, remove or restart a source or a sound input, or
+  the program's size or frame rate, wait in an amber line at the bottom
+  ("Waiting: restarts Couch · adds Couch left") with **Apply (restarts
+  cameras)** (or **Apply (restarts inputs)**) and **Undo these**, and an
+  amber dot on the area in the rail; going back to Show asks before dropping
+  them. A change saved on a page puts on only what you changed there, so a
+  fader, ON/OFF, transition or anything else changed on the desk meanwhile
+  stays as it is. Your show's keys keep working on these pages, except while
+  you type in a box. Esc goes back to Show.
+- **More** (the last area on the rail) holds the rest, in three tabs:
+  **Control** (Phone remote, Stream Deck, OSC and MIDI, Shortcuts), **Show
+  tools** (Rundown, Macros, Teleprompter, Viewer comments, Replay) and
+  **App** (Shows, General, Diagnostics, Updates & about, Help & first-show
+  guide). Viewer comments is always there, so you can set them up before
+  streaming. The rundown segment and macro you had picked are picked again
+  when you come back.
 - **Starting up:** the window opens straight away; while the cameras come up,
   the monitors show a clapperboard with a line from the studio floor.
-- **Check your hardware:** `cutaway --probe-encoders` shows the encoders
-  (including whether ProRes is available) and the GPU Cutaway will use.
+- **Check your hardware:** **More › App › Diagnostics → Test encoders**
+  (or `cutaway --probe-encoders`) shows the encoders (including whether
+  ProRes is available), NDI and the GPU Cutaway will use; **List devices
+  again** there (or `cutaway --list-devices`) lists the cameras, capture
+  cards and audio inputs it can see, with **Copy**. Where the settings file
+  is: **Diagnostics → Settings file → Show**.
 - **Try it without hardware:** `cutaway --demo 4` runs with 4 test pictures and
   a test tone.
 
@@ -848,10 +858,11 @@ Video Extensions** on some PCs.
 | Marker | `M`, or **◆ Marker** beside REC while recording (just **◆ 3** in a narrow window) |
 | Named marker | `Shift+M` while recording, or **▾ › Named marker…** beside ◆: the marker goes in at that moment and a box asks for its name (typing doesn't move it; Cancel keeps "Marker 3") |
 | This take's markers | **▾** beside **◆ Marker**: each marker's time, name and the scene on air. Change a name there, or ✕ to take one out, until the take stops (clips show with ✂ and stay as they are) |
-| Save a clip | `K`, or **✂ Clip** beside REC while recording (the last 30 seconds, or as set) |
-| Instant replay | **⟲ Replay** under the status light while recording: Slow, and from the program, one camera or every angle |
+| Save a clip | `K`, or **✂ Clip** beside REC while recording (the last 30 seconds, or as set); the status light's panel has **✂ Clip the last 10 / 30 / 60 s** |
+| Instant replay | **⋯** beside CUT / MIX › **⟲ Replay**, or under the status light, while recording: Slow, from the program, one camera or every angle, and the last 5 / 10 / 20 / 30 s |
 | Fade to black | **Fade to black**, at the end of the transitions; it flashes while the program is black, and reads **Fade up**: click it again to come back |
-| Macros, PTZ, teleprompter, comments | Their panels on the right, the Stream Deck, the remote, MIDI or OSC |
+| Macros, PTZ, teleprompter, comments | Their panels on the right, the Stream Deck, the remote, MIDI or OSC. Set them up in **More › Show tools** |
+| Teleprompter page keys | On the prompter page on a computer: Space rolls or pauses, ← → jump a paragraph, ↑ ↓ change the speed, Home goes to the top (the bar under the script says so) |
 | Sound pads 1–12 | F1–F12, or the pad buttons in the sound panel (hold for "while held" pads) |
 | Talkback | Hold `B`, or hold **TALK** in the sound panel |
 | Next rundown segment | `N` (Shift+N goes back), or **Next ▶** in the rundown panel |
@@ -1030,6 +1041,10 @@ The remote keeps updating while the Cutaway window is minimised or hidden.
 
 - **Tally lights:** `http://<address>:8790/?tally=2` turns a phone into a
   full-screen tally light for source 2 (red on air, green in preview).
+  **More › Control › Phone remote → Tally lights** has a button per source
+  that copies its link (with the PIN), and so does the remote's More tab.
+- **For scripts:** the same page's **For scripts, Companion and other apps**
+  lists these addresses with your own computer's address and PIN in them.
 - **Stream Deck:** install the Cutaway plugin (below).
 - **Companion / scripts:** every command is a web address:
   `http://<address>:8790/api/action?do=<command>&pin=<PIN>`. In Companion,
@@ -1048,7 +1063,8 @@ The remote keeps updating while the Cutaway window is minimised or hidden.
 ### Stream Deck
 
 Double-click `streamdeck/Cutaway.streamDeckPlugin` (or press **Install the
-Stream Deck plugin…** in More › Control; the Mac app carries it
+Stream Deck plugin…** in More › Control › Stream Deck, which also lists
+all 26 of the plugin's keys and what each does; the Mac app carries it
 inside). Drag Cutaway actions onto keys, and in any key's settings enter the
 address (`127.0.0.1:8790` on the same computer) and the PIN. Needs Stream
 Deck 6.5 or later, on macOS or Windows. See [streamdeck/README.md](streamdeck/README.md).
@@ -1062,7 +1078,7 @@ and captions light up when on.*
 
 ### OSC
 
-Turn on **OSC** in More › Control (UDP port 8791). Addresses
+Turn on **OSC** in More › Control › OSC and MIDI (UDP port 8791). Addresses
 follow the commands (the `/cutaway` prefix is optional):
 
 | Address | Does |
@@ -1249,7 +1265,10 @@ the camera stopping (a new close-up starts once you press Apply).
   seconds (More › Show tools › Replay sets how many, and the slow
   motion speed) over the program, labelled "REPLAY", and fades back to live.
   It comes from the recording itself, so it costs nothing extra.
-  - **From any camera:** right-click **⟲ Replay** and pick a camera to see
+  - **From any camera:** **⋯** beside CUT / MIX on the scene bank has
+    **⟲ Replay** (with **Slow**, each camera and **the last 5 / 10 / 20 /
+    30 s**); the status light's panel has it too while recording. Pick a
+    camera to see
     the moment from its angle, even one the program wasn't showing, or
     **Every angle at once** for up to four cameras in a grid. **Shows** in
     the replay settings sets what a plain click plays. It uses each camera's
@@ -1548,7 +1567,7 @@ source that drops can't stall the cameras, the program or the other outputs.
 | `windows/` | The Windows build script, icon, and the virtual camera source (`windows/vcam`, a Media Foundation media source DLL) |
 | `models/` | The two small models for finding people on Windows, with their licenses |
 | `macos/virtualcam/` | The camera extension (Swift) and its signing script |
-| `src/ui.rs`, `src/settings/` | The director interface and settings window |
+| `src/ui.rs`, `src/ui/`, `src/settings/` | The director interface: the rail of areas, the desk, and the settings pages (which save as you go, `src/settings/live.rs`) |
 | `streamdeck/` | The Stream Deck plugin (no dependencies), its icons and its test |
 
 ## Development on Linux

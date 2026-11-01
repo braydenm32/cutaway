@@ -18,6 +18,9 @@
   #bar.hide { opacity: 0; pointer-events: none; }
   #bar button { font: inherit; font-size: 18px; min-width: 52px; padding: 10px 14px; border-radius: 10px; border: 0; background: #2a2f3a; color: #fff; }
   #bar span { align-self: center; color: #aab; min-width: 90px; text-align: center; }
+  /* The keys, where there's a keyboard (not on a phone or tablet). */
+  #bar .keys { display: none; font-size: 13px; color: #889; min-width: 0; margin-left: 10px; }
+  @media (hover: hover) and (pointer: fine) { #bar .keys { display: inline; } }
   #pin { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: #10131a; }
   #pin input { font-size: 28px; width: 160px; text-align: center; padding: 8px; border-radius: 8px; border: 0; }
   #msg { position: fixed; top: 12px; left: 0; right: 0; text-align: center; color: #f5a524; font-size: 14px; }
@@ -26,11 +29,12 @@
 <body>
 <div id="view"><div id="flip"><div id="text"></div><div id="shade"></div><div id="arrow"></div></div></div>
 <div id="bar">
-  <button id="top" title="Back to the top">⏮</button>
-  <button id="back" title="Back a paragraph">◀</button>
-  <button id="play" title="Roll / pause">▶</button>
-  <button id="fwd" title="Forward a paragraph">▶▶</button>
-  <button id="slower">−</button><span id="wpm"></span><button id="faster">＋</button>
+  <button id="top" title="Back to the top (Home)">⏮</button>
+  <button id="back" title="Back a paragraph (←)">◀</button>
+  <button id="play" title="Roll / pause (Space, or tap the script)">▶</button>
+  <button id="fwd" title="Forward a paragraph (→)">▶▶</button>
+  <button id="slower" title="Slower (↑)">−</button><span id="wpm"></span><button id="faster" title="Faster (↓)">＋</button>
+  <span class="keys">Space roll · ← → paragraph · ↑ ↓ speed · Home top</span>
 </div>
 <div id="pin"><form><input id="pinbox" inputmode="numeric" placeholder="PIN" autocomplete="off"></form></div>
 <div id="msg"></div>

@@ -109,12 +109,21 @@ impl Rundown {
         let now = Instant::now();
         let mut st = RundownStatus { count: segments.len(), ..Default::default() };
         // Over or under: each finished segment's real length against its
-        // plan (open-ended ones count as planned), and this one once it's over.
-        let mut drift = 0.0;
+        // plan (open-ended ones count as planned), and this one once it's
+        // over. A segment gone back to counts once, with all its visits
+        // added up (numbers audit #10).
+        let mut ran: Vec<(usize, f64)> = Vec::new();
         for (i, d) in &self.done {
+            match ran.iter_mut().find(|(j, _)| j == i) {
+                Some((_, t)) => *t += d.as_secs_f64(),
+                None => ran.push((*i, d.as_secs_f64())),
+            }
+        }
+        let mut drift = 0.0;
+        for (i, t) in &ran {
             let planned = segments.get(*i).map(|s| s.seconds).unwrap_or(0);
-            if planned > 0 {
-                drift += d.as_secs_f64() - planned as f64;
+            if planned > 0 && Some(*i) != self.current {
+                drift += t - planned as f64;
             }
         }
         if let (Some(i), Some(s)) = (self.current, self.started) {
@@ -124,8 +133,9 @@ impl Rundown {
             st.next = segments.get(i + 1).map(|s| s.name.clone());
             st.elapsed = (now - s).as_secs_f64();
             st.planned = seg.map(|s| s.seconds as f64).unwrap_or(0.0);
-            if st.planned > 0.0 && st.elapsed > st.planned {
-                drift += st.elapsed - st.planned;
+            let before = ran.iter().find(|(j, _)| *j == i).map_or(0.0, |(_, t)| *t);
+            if st.planned > 0.0 && before + st.elapsed > st.planned {
+                drift += before + st.elapsed - st.planned;
             }
         } else {
             st.next = segments.first().map(|s| s.name.clone());
@@ -188,5 +198,29 @@ mod tests {
         assert_eq!(r.status(&s).show, 0.0);
         assert_eq!(planned_total(&s), 660);
         assert_eq!(Rundown::default().target(&RundownCmd::Next, &[]), None);
+    }
+
+    /// Going back to a segment and on again counts it once (numbers audit #10).
+    #[test]
+    fn going_back_doesnt_count_a_segment_twice() {
+        let s = segs();
+        let mut r = Rundown::default();
+        let ago = |secs| Instant::now() - Duration::from_secs(secs);
+        // Intro (60 s) ran 40 s, Interview 10 s, back to the Intro for 10 s, on again.
+        r.current = Some(1);
+        r.started = Some(ago(0));
+        r.show_started = Some(ago(60));
+        r.done = vec![(0, Duration::from_secs(40)), (1, Duration::from_secs(10)), (0, Duration::from_secs(10))];
+        let st = r.status(&s);
+        // Intro: 50 of 60 s (10 under); the Interview is running again, not over.
+        assert!((st.drift + 10.0).abs() < 0.5, "drift {}", st.drift);
+        // Back on the Intro: its earlier 50 s count with this visit, once.
+        r.current = Some(0);
+        r.done = vec![(0, Duration::from_secs(40)), (1, Duration::from_secs(10)), (0, Duration::from_secs(10)), (1, Duration::from_secs(5))];
+        r.started = Some(ago(20));
+        let st = r.status(&s);
+        // Intro 50 + 20 = 70 of 60: 10 over; the Interview (open on 600) not counted under twice: 15 − 600.
+        assert!((st.drift - (10.0 + 15.0 - 600.0)).abs() < 0.5, "drift {}", st.drift);
+        assert!(st.elapsed >= 19.0 && st.elapsed < 22.0, "this visit's own time");
     }
 }
