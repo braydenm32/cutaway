@@ -121,14 +121,18 @@ impl App {
     /// below: which ones, and a click scrolls to them.
     fn more_below(&mut self, ui: &mut egui::Ui, out: &egui::scroll_area::ScrollAreaOutput<Vec<(&'static str, f32)>>) {
         let view = out.inner_rect;
-        let seen_to = out.state.offset.y + view.height();
+        let seen_to = out.state.clamped_offset().y + view.height();
         if out.content_size.y - seen_to < 6.0 {
             return;
         }
         // Panels that start below what's in view (or the one cut off).
         let below: Vec<&str> = out.inner.iter().filter(|(_, y)| *y > seen_to - 24.0).map(|(p, _)| panel_info(p).0).collect();
         let text = match below.as_slice() {
-            [] => "More below ▾".to_string(),
+            // The last panel in view goes on below.
+            [] => match out.inner.iter().rev().find(|(_, y)| *y < seen_to) {
+                Some((p, _)) => format!("More of {} below ▾", panel_info(p).0),
+                None => "More below ▾".to_string(),
+            },
             [one] => format!("{one} below ▾"),
             [one, two] => format!("{one} and {two} below ▾"),
             [one, rest @ ..] => format!("{one} and {} more below ▾", rest.len()),
@@ -141,14 +145,14 @@ impl App {
             painter.rect_filled(r, 0.0, PANEL.gamma_multiply(k as f32 / 8.0));
         }
         painter.rect_filled(bar, 0.0, PANEL);
-        let r = ui.interact(bar, ui.id().with("more_below"), Sense::click());
+        let r = ui.interact(bar, ui.scope_id().with("more_below"), Sense::click());
         let color = if r.hovered() { Color32::WHITE } else { ACCENT };
         painter.text(bar.center(), Align2::CENTER_CENTER, text, FontId::proportional(TEXT_SMALL), color);
         if r.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
         if r.on_hover_text("Scroll the panels down (or use the mouse wheel)").clicked() {
-            let next = out.inner.iter().map(|(_, y)| *y).find(|y| *y > out.state.offset.y + 8.0 && *y >= seen_to - 24.0);
+            let next = out.inner.iter().map(|(_, y)| *y).find(|y| *y > out.state.clamped_offset().y + 8.0 && *y >= seen_to - 24.0);
             let max = (out.content_size.y - view.height()).max(0.0);
             self.column.scroll_to = Some(next.unwrap_or(seen_to).min(max));
         }
@@ -199,7 +203,7 @@ impl App {
         let mut moved: Option<(&'static str, Option<&'static str>)> = None;
         let mut fold: Option<(&'static str, bool)> = None;
         let mut reset = false;
-        egui::Window::new("Arrange panels").id(egui::Id::new("arrange_panels")).open(&mut open).collapsible(false).resizable(false).anchor(Align2::RIGHT_TOP, vec2(-16.0, 70.0)).show(ctx, |ui| {
+        egui::Window::new("Arrange panels").id(egui::Id::unique("arrange_panels")).open(&mut open).collapsible(false).resizable(false).anchor(Align2::RIGHT_TOP, vec2(-16.0, 70.0)).show(ctx, |ui| {
             ui.set_width(330.0);
             ui.label(RichText::new("Top to bottom, as in the column. Audio always stays at the bottom.").size(TEXT_SMALL).color(TEXT_DIM));
             ui.add_space(4.0);

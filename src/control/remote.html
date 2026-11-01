@@ -10,169 +10,336 @@
 <title>Cutaway Remote</title>
 <style>
   :root { --bg:#0e1014; --panel:#16191f; --raised:#22262e; --line:#343944; --text:#e8eaf0; --dim:#8c93a0;
-          --red:#e83440; --onair:#e83440; --rec:#ff4040; --recpill:#281e22; --take:#3470cc; --green:#3ac470; --amber:#f5a623; --live:#d62878; --accent:#5aa0ff; }
+          --red:#e83440; --onair:#e83440; --rec:#ff4040; --recpill:#281e22; --take:#3470cc; --green:#3ac470; --amber:#f5a623; --live:#d62878; --accent:#5aa0ff;
+          --bottom:0px; }
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html,body { margin:0; background:var(--bg); color:var(--text); font:15px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
-  body { padding:12px max(12px,env(safe-area-inset-right)) 24px max(12px,env(safe-area-inset-left)); }
-  header { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-  .brand { font-weight:700; letter-spacing:3px; font-size:15px; margin-right:auto; }
-  button { font:inherit; color:var(--text); background:var(--raised); border:1px solid var(--line); border-radius:12px; padding:12px 14px; min-height:48px; cursor:pointer; }
+  body { overflow-x:hidden; }
+  button { font:inherit; color:var(--text); background:var(--raised); border:1px solid var(--line); border-radius:12px; padding:10px 12px; min-height:48px; cursor:pointer; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
+  /* A tap always lands on the button itself, never on a label inside it. */
+  button * { pointer-events:none; }
   button:active { transform:scale(.98); }
-  .pill { border-radius:24px; font-weight:700; min-width:118px; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
-  /* Red means on air; recording is a dark pill with a pulsing red dot. */
-  .rec::before { content:''; display:inline-block; width:11px; height:11px; border-radius:50%; background:var(--rec); margin-right:8px; vertical-align:middle; }
-  .rec.on { background-color:var(--recpill); border-color:#783038; }
-  .rec.on::before { animation:recdot 1.2s ease-in-out infinite; }
-  @keyframes recdot { 50% { opacity:.35; } }
-  .live.on { background:var(--live); border-color:var(--live); }
-  .monitor { margin:12px 0; position:relative; background:#000; border-radius:10px; overflow:hidden; aspect-ratio:16/9; border:2px solid #401018; }
-  .monitor img { width:100%; height:100%; object-fit:contain; display:block; }
-  .monitor .tag { position:absolute; left:8px; top:8px; background:var(--onair); border-radius:4px; padding:2px 8px; font-size:12px; font-weight:700; }
-  .monitor .name { position:absolute; left:84px; top:8px; background:#000a; border-radius:4px; padding:2px 8px; font-size:13px; }
-  h2 { font-size:11px; letter-spacing:1.5px; color:var(--dim); font-weight:600; margin:18px 0 8px; text-transform:uppercase; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(132px,1fr)); gap:8px; }
-  .scene { min-height:72px; text-align:left; display:flex; flex-direction:column; justify-content:space-between; }
-  .scene small { color:var(--dim); font-size:12px; }
-  .scene.program { background:var(--onair); border-color:var(--onair); }
-  .scene.program small, .scene.preview small { color:#fffc; }
-  .scene.preview { background:#1e7a45; border-color:var(--green); }
-  .row { display:flex; gap:8px; flex-wrap:wrap; }
-  .toggle.on { background:var(--green); color:#000; border-color:var(--green); font-weight:600; }
-  .take { background:var(--take); border-color:var(--take); font-weight:700; flex:1; }
-  .cut { flex:1; font-weight:700; }
-  .status { color:var(--dim); font-size:13px; margin-top:6px; min-height:18px; }
-  .warn { color:var(--amber); }
-  #pin { position:fixed; inset:0; background:var(--bg); display:none; align-items:center; justify-content:center; flex-direction:column; gap:12px; padding:24px; text-align:center; }
-  #pin input { font-size:28px; text-align:center; width:180px; padding:10px; border-radius:12px; border:1px solid var(--line); background:var(--raised); color:var(--text); letter-spacing:8px; }
-  .tally { position:fixed; inset:0; display:none; align-items:center; justify-content:center; flex-direction:column; font-size:9vw; font-weight:800; }
+  button.dim { opacity:.45; }
   a { color:var(--accent); }
+  .pad-x { padding-left:max(12px,env(safe-area-inset-left)); padding-right:max(12px,env(safe-area-inset-right)); }
+
+  /* ---- top strip: one status line, then REC and LIVE ---- */
+  #top { position:sticky; top:0; z-index:5; background:var(--bg); padding-top:max(8px,env(safe-area-inset-top)); padding-bottom:8px; border-bottom:1px solid var(--panel); }
+  .statusline { display:flex; align-items:center; gap:8px; min-height:32px; font-size:14px; }
+  .show { font-weight:650; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:0 1 auto; }
+  .light { min-height:32px; padding:4px 10px; border-radius:16px; font-size:13px; display:inline-flex; align-items:center; gap:6px; flex:0 0 auto; background:var(--panel); }
+  .light i { width:9px; height:9px; border-radius:50%; background:var(--green); display:inline-block; }
+  .light.warn i { background:var(--amber); }
+  .light.warn { color:var(--amber); border-color:#5a4520; }
+  .left { margin-left:auto; color:var(--dim); white-space:nowrap; font-variant-numeric:tabular-nums; flex:0 0 auto; }
+  .pills { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:6px; }
+  .pill { border-radius:24px; font-weight:700; touch-action:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-variant-numeric:tabular-nums; }
+  /* Red means on air; recording is a dark pill with a pulsing red dot. */
+  .rec .dot { display:inline-block; width:11px; height:11px; border-radius:50%; background:var(--rec); margin-right:8px; vertical-align:middle; }
+  .rec.on { background-color:var(--recpill); border-color:#783038; }
+  .rec.on .dot { animation:recdot 1.2s ease-in-out infinite; }
+  @keyframes recdot { 50% { opacity:.35; } }
+  .pill.live { color:var(--live); border-color:#6a2a48; }
+  .pill.live.on { background:var(--live); border-color:var(--live); color:#fff; }
+  .pill.live.going { background:#4a1f35; border-color:var(--live); color:#fff; animation:going 1.4s ease-in-out infinite; }
+  .pill.live.trouble { background:#6b3a10; border-color:var(--amber); color:#fff; }
+  @keyframes going { 50% { background:#7a2a55; } }
+  .dests { display:flex; flex-wrap:wrap; gap:4px 12px; margin-top:6px; font-size:13px; color:var(--dim); }
+  .dests span::before { content:'●'; margin-right:5px; }
+  .dests .d-live::before { color:var(--green); } .dests .d-connecting::before, .dests .d-retrying::before { color:var(--amber); } .dests .d-failed::before { color:var(--red); }
+  .sheet { margin-top:8px; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:10px 12px; font-size:14px; }
+  .sheet.warn { border-color:#5a4520; }
+  .sheet .title { font-weight:650; }
+  .sheet ul { margin:6px 0 0; padding-left:18px; }
+  .sheet li { margin:2px 0; }
+  .muted { color:var(--dim); font-size:13px; }
+  .warntext { color:var(--amber); }
+  .failtext { color:var(--red); }
+
+  /* ---- tabs ---- */
+  main { padding-top:10px; padding-bottom:calc(var(--bottom) + 16px); }
+  section[hidden], [hidden] { display:none !important; }
+  h2 { font-size:11px; letter-spacing:1.5px; color:var(--dim); font-weight:600; margin:18px 0 8px; text-transform:uppercase; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; }
+  .row > button { flex:1 1 0; }
+  .empty { color:var(--dim); font-size:14px; padding:12px 2px; }
+
+  .monitor { position:relative; background:#000; border-radius:10px; overflow:hidden; aspect-ratio:16/9; border:2px solid #401018; }
+  .monitor img { width:100%; height:100%; object-fit:contain; display:block; }
+  .monitor .tags { position:absolute; left:8px; top:8px; right:8px; display:flex; gap:6px; align-items:center; }
+  .monitor .tag { background:var(--onair); border-radius:4px; padding:2px 8px; font-size:12px; font-weight:700; flex:0 0 auto; }
+  .monitor .name { background:#000a; border-radius:4px; padding:2px 8px; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
   .monitor .cc { position:absolute; left:10%; right:10%; bottom:8%; text-align:center; font-size:13px; white-space:pre-line; }
   .monitor .cc span { background:#000c; padding:2px 6px; border-radius:4px; }
-  .meter { height:6px; border-radius:3px; background:#08090c; overflow:hidden; margin-top:6px; }
-  .meter i { display:block; height:100%; background:var(--green); width:0; }
-  .pad { min-height:64px; text-align:left; position:relative; overflow:hidden; touch-action:none; user-select:none; -webkit-user-select:none; }
-  .pad i { position:absolute; left:0; top:0; bottom:0; opacity:.55; pointer-events:none; }
-  .pad span, .pad small { position:relative; }
-  .pad small { display:block; color:#fffb; font-size:12px; }
+  .onair-line { color:var(--dim); font-size:13px; }
+  .segline { width:100%; margin-top:8px; text-align:left; display:flex; gap:8px; align-items:center; min-height:44px; background:var(--panel); font-size:14px; }
+  .segline .grow { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .segline .num { font-variant-numeric:tabular-nums; font-weight:700; }
+  .segline .over { color:var(--red); }
+
+  .switchrow { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-top:10px; }
+  .switchrow button { font-weight:650; }
+  .toggle.on { background:var(--green); color:#000; border-color:var(--green); font-weight:600; }
+  .take { background:var(--take); border-color:var(--take); font-weight:700; }
+  .scene { min-height:68px; text-align:left; display:flex; flex-direction:column; justify-content:space-between; gap:4px; min-width:0; }
+  .scene .top { display:flex; gap:8px; align-items:baseline; min-width:0; max-width:100%; }
+  .scene .key { color:var(--dim); font-size:12px; font-variant-numeric:tabular-nums; flex:0 0 auto; }
+  .scene .nm { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+  .scene .state { font-size:11px; font-weight:700; letter-spacing:.8px; min-height:14px; }
+  .scene.program { background:var(--onair); border-color:var(--onair); }
+  .scene.program .key, .scene.preview .key { color:#fffc; }
+  .scene.preview { background:#1e7a45; border-color:var(--green); }
+  details.more { margin-top:12px; }
+  details.more summary { list-style:none; cursor:pointer; color:var(--dim); font-size:14px; padding:12px 2px; min-height:44px; }
+  details.more summary::-webkit-details-marker { display:none; }
+  .ftb { touch-action:none; }
+  .ftb.on { background:#000; border-color:var(--amber); color:var(--amber); font-weight:700; }
+
+  /* ---- bottom: Names / Marker / Clip and the tab bar ---- */
+  #bottom { position:fixed; left:0; right:0; bottom:0; z-index:5; background:var(--bg); border-top:1px solid var(--panel); padding-bottom:env(safe-area-inset-bottom); }
+  .actions { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; padding-top:8px; }
+  .actions.two { grid-template-columns:repeat(2,1fr); }
+  .actions button { min-height:50px; font-weight:650; }
+  .tabs { display:grid; grid-template-columns:repeat(4,1fr); }
+  .tabs button { background:none; border:0; border-radius:0; min-height:54px; color:var(--dim); font-size:13px; font-weight:600; position:relative; }
+  .tabs button.sel { color:var(--text); }
+  .tabs button.sel::after { content:''; position:absolute; left:28%; right:28%; top:0; height:3px; border-radius:2px; background:var(--accent); }
+  .tabs .badge { display:inline-block; min-width:16px; padding:0 4px; margin-left:4px; border-radius:8px; background:var(--amber); color:#000; font-size:11px; line-height:16px; }
+  #toast { position:fixed; left:12px; right:12px; bottom:calc(var(--bottom) + 8px); z-index:6; background:var(--raised); border:1px solid var(--line); border-radius:12px; padding:10px 12px; font-size:14px; display:none; }
+  #toast.bad { border-color:var(--amber); color:var(--amber); }
+
+  /* ---- sound ---- */
+  .padbtn { min-height:64px; text-align:left; position:relative; overflow:hidden; touch-action:none; }
+  .padbtn i { position:absolute; left:0; top:0; bottom:0; opacity:.55; }
+  .padbtn span, .padbtn small { position:relative; }
+  .padbtn small { display:block; color:#fffb; font-size:12px; }
   .syrin.on { background:#9a6ee0; border-color:#9a6ee0; color:#000; font-weight:600; }
-  .talk { width:100%; border-radius:28px; font-weight:700; touch-action:none; user-select:none; -webkit-user-select:none; }
+  .talk { width:100%; border-radius:28px; font-weight:700; touch-action:none; margin-top:8px; }
   .talk.on { background:var(--amber); border-color:var(--amber); color:#000; }
+  .input { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:10px 12px; margin-bottom:8px; }
+  .input .head { display:flex; align-items:center; gap:10px; }
+  .input .nm { flex:1; min-width:0; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .input .onoff { min-width:84px; font-weight:700; touch-action:none; }
+  .input .onoff.on { background:var(--green); border-color:var(--green); color:#000; }
+  .meter { height:8px; border-radius:4px; background:#08090c; overflow:hidden; margin:10px 0 4px; border:1px solid var(--line); }
+  .meter i { display:block; height:100%; background:var(--green); width:0; }
+  .meter i.hot { background:var(--amber); }
+  .fader { display:flex; align-items:center; gap:10px; }
+  .fader input { flex:1; height:44px; accent-color:var(--accent); margin:0; }
+  .fader .db { width:64px; text-align:right; font-variant-numeric:tabular-nums; color:var(--dim); font-size:13px; }
+
+  /* ---- titles and more ---- */
   .segment { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px; }
   .segment .big { font-size:30px; font-weight:700; font-variant-numeric:tabular-nums; float:right; }
   .segment .big.over { color:var(--red); }
   .clock.running { background:#1e7a45; border-color:var(--green); }
-  .ftb.on { background:#000; border-color:var(--amber); color:var(--amber); font-weight:700; }
   .replay.on { background:var(--onair); border-color:var(--onair); }
   .macro { min-height:56px; text-align:left; border-left-width:6px; }
+  .comment { display:block; width:100%; text-align:left; margin-bottom:6px; min-height:44px; background:var(--panel); }
+  .comment.new { background:var(--raised); }
+  .comment.showing { background:var(--amber); border-color:var(--amber); color:#000; }
+  .comment .who { font-weight:650; margin-right:6px; }
+  .comment .meta { display:block; font-size:12px; color:var(--dim); margin-top:2px; }
+  .comment.showing .meta { color:#000b; }
+  .rowlabel { flex-basis:100%; color:var(--dim); font-size:13px; }
+  .destline { display:flex; gap:8px; align-items:baseline; padding:8px 0; border-bottom:1px solid var(--panel); }
+  .destline .grow { flex:1; font-weight:600; }
+
+  #pin { position:fixed; inset:0; background:var(--bg); display:none; align-items:center; justify-content:center; flex-direction:column; gap:12px; padding:24px; text-align:center; z-index:10; }
+  #pin input { font-size:28px; text-align:center; width:180px; padding:10px; border-radius:12px; border:1px solid var(--line); background:var(--raised); color:var(--text); letter-spacing:8px; }
+  .tally { position:fixed; inset:0; display:none; align-items:center; justify-content:center; flex-direction:column; font-size:9vw; font-weight:800; z-index:20; }
 </style>
 </head>
 <body>
-<header>
-  <div class="brand">CUTAWAY</div>
-  <button class="pill rec" id="rec">RECORD</button>
-  <button class="pill live" id="live">◉ GO LIVE</button>
-  <button id="marker" onclick="act('marker')">＋ Marker</button>
-  <button id="clip" onclick="act('clip')">✂ Clip</button>
-  <button class="replay" id="replay" onclick="act('replay')">⟲ Replay</button>
-  <button class="ftb" id="ftb" onclick="act('ftb')">FTB</button>
+<header id="top" class="pad-x">
+  <div class="statusline">
+    <span class="show" id="showname">Cutaway</span>
+    <button class="light" id="light"><i></i><span id="lighttext">All good</span></button>
+    <span class="left" id="left"></span>
+  </div>
+  <div class="pills">
+    <button class="pill rec" id="rec"><span class="dot"></span><span id="rectext">RECORD</span></button>
+    <button class="pill live" id="live"><span id="livetext">◉ GO LIVE</span></button>
+  </div>
+  <div class="dests" id="dests"></div>
+  <div class="sheet" id="check" hidden></div>
+  <div class="sheet" id="details" hidden></div>
 </header>
-<div class="status" id="status"></div>
-<div class="monitor"><img id="program" alt=""><div class="tag">PROGRAM</div><div class="name" id="pname"></div><div class="cc" id="cc"></div></div>
-<div class="row" id="takerow" style="display:none">
-  <button class="cut" onclick="act('cut')">CUT</button>
-  <button class="take" onclick="act('take')">TAKE</button>
-</div>
-<div id="rundownwrap"><h2>Rundown</h2><div class="segment" id="segment"></div>
-  <div class="row" style="margin-top:8px"><button onclick="act('rundown:previous')">◀ Back</button><button class="take" id="nextseg" onclick="act('rundown:next')">Next ▶</button><button onclick="act('rundown:stop')">■</button></div></div>
-<h2 id="sceneshead">Scenes</h2>
-<div class="grid" id="scenes"></div>
-<h2>Switching</h2>
-<div class="row" id="switching"></div>
-<div id="gfxwrap"><h2>Graphics</h2><div class="grid" id="graphics"></div></div>
-<div id="macrowrap"><h2>Macros</h2><div class="grid" id="macros"></div></div>
-<div id="ptzwrap"><h2>PTZ</h2><div id="ptz"></div></div>
-<div id="prompterwrap"><h2>Teleprompter</h2><div class="row" id="prompter"></div></div>
-<div id="commentwrap"><h2>Viewer comments</h2><div class="row" id="comments"></div></div>
-<div id="clockwrap"><h2>Timers</h2><div id="clocks"></div></div>
-<div id="soundwrap"><h2>Sound</h2><div class="grid" id="pads"></div>
-  <div class="row" id="syrin" style="margin-top:8px"></div>
-  <div style="margin-top:8px"><button class="talk" id="talk">TALK (hold)</button></div></div>
-<div id="audiowrap"><h2>Audio</h2><div class="grid" id="audio"></div></div>
-<div id="mediawrap"><h2>Media</h2><div id="media"></div></div>
-<h2>Tally lights</h2>
-<div class="row" id="tallies"></div>
-<p class="status">Open a tally link on a phone mounted on each camera. Stream Deck and Companion: use <code>/api/action?do=scene:1</code> (see the README).</p>
 
-<div id="pin"><div style="font-size:20px">Enter the remote PIN</div><div class="status">It's shown in Cutaway under Settings → Remote &amp; MIDI.</div>
+<main class="pad-x">
+<section id="tab-scenes">
+  <div class="monitor"><img id="program" alt=""><div class="tags"><span class="tag">ON AIR</span><span class="name" id="pname"></span></div><div class="cc" id="cc"></div></div>
+  <button class="segline" id="segline" hidden></button>
+  <div class="switchrow">
+    <button id="sw1">Mix</button><button id="sw2">Cut</button><button id="swback">⟲ Back</button>
+  </div>
+  <h2 id="sceneshead">Scenes</h2>
+  <div class="grid" id="scenes"></div>
+  <details class="more" id="moresw"><summary id="moreswsum">More transitions, Auto, fade to black ▾</summary>
+    <div class="row" id="transitions"></div>
+    <div class="row" style="margin-top:8px">
+      <button class="toggle" id="auto">Auto switching</button>
+      <button class="toggle" id="cc_btn">CC</button>
+      <button class="ftb" id="ftb">Fade to black</button>
+    </div>
+  </details>
+</section>
+
+<section id="tab-sound" hidden>
+  <div class="onair-line" data-onair></div>
+  <div id="padwrap"><h2>Sound pads</h2><div class="grid" id="pads"></div></div>
+  <div class="row" id="syrin" style="margin-top:8px"></div>
+  <button class="talk" id="talk">TALK (hold)</button>
+  <div id="audiowrap"><h2>Mics and inputs</h2><div id="audio"></div></div>
+  <div class="empty" id="soundempty" hidden>No sound pads or mics yet. Add them on the desk in Settings.</div>
+</section>
+
+<section id="tab-titles" hidden>
+  <div class="onair-line" data-onair></div>
+  <div id="gfxwrap"><h2>Titles and graphics</h2><div class="grid" id="graphics"></div></div>
+  <div id="clockwrap"><h2>Timers</h2><div id="clocks"></div></div>
+  <div class="empty" id="titlesempty" hidden>No titles yet. Add them on the desk in Settings → Graphics.</div>
+</section>
+
+<section id="tab-more" hidden>
+  <div class="onair-line" data-onair></div>
+  <div id="streamwrap"><h2>Stream</h2><div id="streamdests"></div></div>
+  <div id="commentwrap"><h2>Viewer comments</h2>
+    <div id="comments"></div>
+    <div class="empty" id="nocomments" hidden>No comments yet</div>
+    <div class="row" style="margin-top:4px"><button id="cnext">Show next</button><button class="toggle on" id="chide">Hide</button></div></div>
+  <div id="replaywrap"><h2>Replay</h2><div class="row"><button class="replay" id="replay">⟲ Replay</button></div></div>
+  <div id="rundownwrap"><h2>Rundown</h2><div class="segment" id="segment"><div class="big"></div><div></div><small class="muted"></small></div>
+    <div class="row" style="margin-top:8px"><button id="rdback">◀ Back</button><button class="take" id="nextseg">Next ▶</button><button id="rdstop">■ Stop</button></div></div>
+  <div id="macrowrap"><h2>Macros</h2><div class="grid" id="macros"></div></div>
+  <div id="mediawrap"><h2>Media</h2><div id="media"></div></div>
+  <div id="ptzwrap"><h2>PTZ</h2><div id="ptz"></div></div>
+  <div id="prompterwrap"><h2>Teleprompter</h2>
+    <div class="row" id="prompter"><button id="pr_top">⏮</button><button id="pr_back">◀</button><button class="toggle" id="pr_play">▶ Roll</button><button id="pr_fwd">▶▶</button><button id="pr_slow">−</button><span class="muted" id="pr_wpm" style="align-self:center"></span><button id="pr_fast">＋</button></div>
+    <a id="prompterlink" style="display:inline-block;padding:12px 0">Open the prompter on this device</a></div>
+  <h2>Tally lights</h2>
+  <div class="row" id="tallies"></div>
+  <p class="muted">Open a tally link on a phone mounted on each camera. Stream Deck and Companion: use <code>/api/action?do=scene:1</code> (see the README).</p>
+</section>
+</main>
+
+<div id="toast"></div>
+<footer id="bottom">
+  <div class="actions pad-x" id="actions">
+    <button class="toggle" id="names">Names</button>
+    <button id="marker">◆ Marker</button>
+    <button id="clip">✂ Clip</button>
+  </div>
+  <nav class="tabs">
+    <button data-tab="scenes">Scenes</button><button data-tab="sound">Sound</button><button data-tab="titles">Titles</button><button data-tab="more">More<span class="badge" id="morebadge" hidden></span></button>
+  </nav>
+</footer>
+
+<div id="pin"><div style="font-size:20px">Enter the remote PIN</div><div class="muted">It's shown in Cutaway under Settings → Remote &amp; MIDI.</div>
   <input id="pinbox" inputmode="numeric" autocomplete="off" maxlength="12"><button onclick="savePin()">Connect</button></div>
 <div class="tally" id="tally"><div id="tname"></div><div id="tstate" style="font-size:4vw;opacity:.85"></div></div>
 
 <script>
 const q = new URLSearchParams(location.search);
-let pin = q.get('pin') || localStorage.getItem('cutaway_pin') || '';
+// Browser storage can be missing (private mode): the page works without it.
+function stored(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function store(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+let pin = q.get('pin') || stored('cutaway_pin') || '';
 const tallySource = q.get('tally');
 let state = null, imgBusy = false;
+const $ = id => document.getElementById(id);
+// How many buttons each list has made. Once made, a button is updated in
+// place, never replaced, so a finger on it can't lose its tap to a state
+// push (a test reads these counts).
+window.cutawayBuilt = { scenes: 0, graphics: 0, pads: 0, inputs: 0, other: 0 };
 
 function api(path) { return path + (path.includes('?') ? '&' : '?') + 'pin=' + encodeURIComponent(pin); }
-function savePin() { pin = document.getElementById('pinbox').value.trim(); localStorage.setItem('cutaway_pin', pin); document.getElementById('pin').style.display = 'none'; poll(); }
+function savePin() { pin = $('pinbox').value.trim(); store('cutaway_pin', pin); $('pin').style.display = 'none'; poll(); connectWs(); }
 async function act(cmd) {
   try {
     const r = await fetch(api('/api/action?do=' + encodeURIComponent(cmd)), { method: 'POST' });
     const t = await r.text();
     if (!r.ok) flash(t, true);
+    else if (/pre-show check/i.test(t)) flash(t + '…');
     if (!wsLive) poll();
   } catch (e) { flash('Cutaway isn\'t answering', true); }
 }
-// Stopping a take or ending the stream takes a one-second hold (a fill
-// grows across the button), like the Stream Deck, so a stray tap in a pocket
-// can't split the show. Starting is one tap.
+
+// ---- small DOM helpers that only touch what changed ----
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
+function setText(e, t) { t = String(t); if (e.textContent !== t) e.textContent = t; }
+function setClass(e, c) { if (e.className !== c) e.className = c; }
+function showIf(e, on) { if (e.hidden === !!on) e.hidden = !on; }
+function setStyle(e, k, v) { if (e.style[k] !== v) e.style[k] = v; }
+// A keyed list: each item keeps its element for as long as its key is in the
+// list; new ones are made, gone ones removed, the rest updated in place.
+function list(box, items, keyOf, make, update, counter) {
+  const old = box._kids || new Map(), kids = new Map();
+  items.forEach((it, i) => {
+    const k = keyOf(it, i);
+    let e = old.get(k);
+    if (!e || kids.has(k)) { e = make(it, i); window.cutawayBuilt[counter || 'other']++; }
+    kids.set(k, e);
+    update(e, it, i);
+    if (box.children[i] !== e) box.insertBefore(e, box.children[i] || null);
+  });
+  old.forEach((e, k) => { if (kids.get(k) !== e) e.remove(); });
+  while (box.children.length > items.length) box.lastChild.remove();
+  box._kids = kids;
+}
+function onTap(b, f) { b.addEventListener('click', f); return b; }
+
+// ---- holds ----
+// Stopping a take, going live, ending the stream, fading to black and
+// turning a mic off take a one-second hold (a fill grows across the
+// button), like the Stream Deck, so a stray tap in a pocket can't do them.
 const HOLD_MS = 1000;
-let holding = null, hint = null, hintTimer = null, heldAt = 0;
-function isOn(cmd) { return !!state && (cmd === 'record' ? state.recording : state.live); }
-function setFill(b, f) { b.style.backgroundImage = f > 0 ? 'linear-gradient(90deg, #ffffff66 ' + (f * 100) + '%, transparent ' + (f * 100) + '%)' : ''; }
-function holdStart(e, cmd) {
-  if (!isOn(cmd) || holding) return;
-  e.preventDefault();
-  const b = e.currentTarget, start = performance.now();
-  holding = { cmd, b };
-  if (state) render();
-  const step = () => {
-    if (!holding || holding.b !== b) return;
-    const f = Math.min(1, (performance.now() - start) / HOLD_MS);
-    setFill(b, f);
-    if (f < 1) { requestAnimationFrame(step); return; }
-    holding = null; heldAt = Date.now(); setFill(b, 0); act(cmd);
-  };
-  requestAnimationFrame(step);
-}
-function holdEnd() {
-  if (!holding) return;
-  // Let go too soon: nothing happens, but say how.
-  const { cmd, b } = holding; holding = null; setFill(b, 0);
-  showHint(cmd);
-}
-function showHint(cmd) {
-  hint = cmd; clearTimeout(hintTimer);
-  hintTimer = setTimeout(() => { hint = null; if (state) render(); }, 1500);
-  if (state) render();
-}
-function tapped(cmd) {
-  // The click that ends a hold (or a tap while it's on) never starts or stops anything.
-  if (Date.now() - heldAt < 1500) return;
-  if (isOn(cmd)) { if (!hint) showHint(cmd); return; }
-  act(cmd);
-}
-[['rec', 'record'], ['live', 'live']].forEach(([id, cmd]) => {
-  const b = document.getElementById(id);
+let holding = null;
+function setFill(b, f) { b.style.backgroundImage = f > 0 ? 'linear-gradient(90deg, #ffffff55 ' + (f * 100) + '%, transparent ' + (f * 100) + '%)' : ''; }
+// needs(): a hold is needed now; cmd(): what a hold sends; tap(): what a plain tap does when no hold is needed.
+function holdable(b, opts) {
   b.style.touchAction = 'none';
-  b.onpointerdown = e => holdStart(e, cmd);
-  ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => b.addEventListener(ev, holdEnd));
-  b.onclick = () => tapped(cmd);
-});
-// An error stays up for at least 4 s, so the next state push doesn't wipe it before it's read.
-let errUntil = 0;
-function setStatus(text, bad) { const s = document.getElementById('status'); s.textContent = text; s.className = 'status' + (bad ? ' warn' : ''); }
-function flash(text, bad) { if (bad) errUntil = Date.now() + 4000; setStatus(text, bad); }
+  b.addEventListener('pointerdown', e => {
+    b._swallow = false;
+    if (!opts.needs() || holding) return;
+    e.preventDefault();
+    const start = performance.now();
+    holding = { b };
+    b._hint = true; refresh();
+    const step = () => {
+      if (!holding || holding.b !== b) return;
+      const f = Math.min(1, (performance.now() - start) / HOLD_MS);
+      setFill(b, f);
+      if (f < 1) { requestAnimationFrame(step); return; }
+      holding = null; b._swallow = true; setFill(b, 0); b._hint = false;
+      act(opts.cmd());
+    };
+    requestAnimationFrame(step);
+  });
+  const end = () => {
+    if (!holding || holding.b !== b) return;
+    // Let go too soon: nothing happens, but the button says how.
+    holding = null; setFill(b, 0); hint(b);
+  };
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => b.addEventListener(ev, end));
+  b.addEventListener('click', () => {
+    // The click that ends a hold never does anything by itself.
+    if (b._swallow) { b._swallow = false; return; }
+    if (opts.needs()) { hint(b); return; }
+    opts.tap ? opts.tap() : act(opts.cmd());
+  });
+}
+function hint(b) { b._hint = true; clearTimeout(b._hintTimer); b._hintTimer = setTimeout(() => { b._hint = false; refresh(); }, 1500); refresh(); }
+function refresh() { if (state) render(); }
+
+// ---- messages: they stay up long enough to read ----
+let toastTimer = null;
+function flash(text, bad) {
+  const t = $('toast'); t.textContent = text; t.className = bad ? 'bad' : ''; t.style.display = 'block';
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.style.display = 'none'; }, bad ? 4000 : 2500);
+}
+
 // Keep the screen on (tally phones sit on a camera for hours).
 let lock = null;
 async function keepAwake() {
@@ -182,205 +349,419 @@ if (tallySource !== null) {
   keepAwake();
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') keepAwake(); });
 }
-function el(tag, cls, text, onclick) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; if (onclick) e.onclick = onclick; return e; }
 function clock(s) { s = Math.floor(s); return [s / 3600, s / 60 % 60, s % 60].map(v => String(Math.floor(v)).padStart(2, '0')).join(':'); }
+function db(v) { v = Math.round(v * 2) / 2; return (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toFixed(1) + ' dB'; }
+
+// ---- tabs (the last one used is remembered on this phone) ----
+const TABS = ['scenes', 'sound', 'titles', 'more'];
+let tab = stored('cutaway_tab') || 'scenes';
+function selectTab(t) {
+  if (!TABS.includes(t)) t = 'scenes';
+  tab = t; store('cutaway_tab', t);
+  TABS.forEach(n => showIf($('tab-' + n), n === t));
+  document.querySelectorAll('.tabs button').forEach(b => setClass(b, b.dataset.tab === t ? 'sel' : ''));
+  window.scrollTo(0, 0);
+  if (t === 'scenes') refreshImage();
+  refresh();
+}
+document.querySelectorAll('[data-tab]').forEach(b => onTap(b, () => selectTab(b.dataset.tab)));
+function measure() { document.documentElement.style.setProperty('--bottom', $('bottom').offsetHeight + 'px'); }
+window.addEventListener('resize', measure);
+
+// ---- fixed controls (made once, updated in place) ----
+holdable($('rec'), { needs: () => !!state && state.recording, cmd: () => 'record' });
+holdable($('live'), { needs: () => true, cmd: () => 'live' });
+holdable($('ftb'), { needs: () => !!state && !state.black, cmd: () => 'ftb' });
+let detailsOpen = false;
+onTap($('light'), () => { detailsOpen = !detailsOpen; refresh(); });
+onTap($('segline'), () => selectTab('more'));
+onTap($('sw1'), () => act(state && state.preview_mode ? 'cut' : 'transition:mix'));
+onTap($('sw2'), () => act(state && state.preview_mode ? 'take' : 'transition:cut'));
+onTap($('swback'), () => act('back'));
+['wipe', 'push', 'dip', 'stinger'].forEach(t => $('transitions').append(onTap(el('button', 'toggle', t[0].toUpperCase() + t.slice(1)), () => act('transition:' + t))));
+onTap($('auto'), () => act('auto'));
+onTap($('cc_btn'), () => act('captions'));
+function namesIndex() { return state ? state.graphics.findIndex(g => g.names) : -1; }
+onTap($('names'), () => { const i = namesIndex(); if (i >= 0) act('graphic:' + (i + 1)); });
+onTap($('marker'), () => state && state.recording ? act('marker') : flash('Markers go in a recording: start one first'));
+onTap($('clip'), () => state && state.recording ? act('clip') : flash('Clips come from a recording: start one first'));
+onTap($('cnext'), () => act('comment:next'));
+onTap($('chide'), () => act('comment:hide'));
+onTap($('replay'), () => act(state && state.replaying ? 'replay:stop' : 'replay'));
+onTap($('rdback'), () => act('rundown:previous'));
+onTap($('nextseg'), () => act('rundown:next'));
+onTap($('rdstop'), () => act('rundown:stop'));
+[['pr_top', 'top'], ['pr_back', 'back'], ['pr_play', 'toggle'], ['pr_fwd', 'forward'], ['pr_slow', 'slower'], ['pr_fast', 'faster']].forEach(([id, c]) => onTap($(id), () => act('prompter:' + c)));
 
 function render() {
   const s = state;
   if (tallySource !== null) return renderTally();
-  const rec = document.getElementById('rec'), live = document.getElementById('live');
-  rec.className = 'pill rec' + (s.recording ? ' on' : '');
-  rec.textContent = s.saving ? 'Saving ' + Math.round(s.saving.percent) + '%' : s.recording ? (hint === 'record' || (holding && holding.cmd === 'record') ? 'Hold to stop' : 'REC ' + clock(s.rec_seconds)) : 'RECORD';
-  rec.title = s.saving ? s.saving.step : '';
-  live.className = 'pill live' + (s.live ? ' on' : '');
-  live.textContent = s.live ? (hint === 'live' || (holding && holding.cmd === 'live') ? 'Hold to end' : '◉ LIVE ' + clock(s.live_seconds)) : '◉ GO LIVE';
-  document.getElementById('marker').style.display = s.recording ? '' : 'none';
-  const clip = document.getElementById('clip');
-  clip.style.display = s.recording ? '' : 'none';
-  clip.textContent = '✂ Clip ' + (s.clip_seconds || 30) + 's';
-  document.getElementById('pname').textContent = s.program || '';
-  const cc = document.getElementById('cc'); cc.innerHTML = '';
-  if (s.captions && s.caption_text) cc.append(el('span', '', s.caption_text));
-  document.getElementById('takerow').style.display = s.preview_mode ? 'flex' : 'none';
-  document.getElementById('sceneshead').textContent = s.preview_mode ? 'Scenes (tap to preview)' : 'Scenes (tap to take)';
-  const notes = [];
-  if (s.disk) notes.push(s.disk);
-  if (s.problems && s.problems.length) notes.push('⚠ ' + s.problems.join(' · '));
-  if (Date.now() >= errUntil) setStatus(s.saving ? s.saving.step + '…' : notes.join('   '), s.problems && s.problems.length);
-
-  const scenes = document.getElementById('scenes'); scenes.innerHTML = '';
-  s.scenes.forEach((sc, i) => {
-    const b = el('button', 'scene' + (sc.program ? ' program' : sc.preview ? ' preview' : ''), undefined, () => act((s.preview_mode ? 'preview:' : 'scene:') + (i + 1)));
-    b.append(el('span', '', sc.name), el('small', '', sc.program ? 'ON AIR' : sc.preview ? 'PREVIEW' : String(i + 1)));
-    scenes.append(b);
-  });
-  const sw = document.getElementById('switching'); sw.innerHTML = '';
-  sw.append(el('button', 'toggle' + (s.auto ? ' on' : ''), 'Auto switching', () => act('auto')));
-  if (s.captions_available) sw.append(el('button', 'toggle' + (s.captions ? ' on' : ''), 'CC', () => act('captions')));
-  ['cut', 'mix', 'wipe', 'push', 'dip', 'stinger'].forEach(t => sw.append(el('button', 'toggle' + (s.transition === t ? ' on' : ''), t[0].toUpperCase() + t.slice(1), () => act('transition:' + t))));
-
-  const gfx = document.getElementById('graphics'); gfx.innerHTML = '';
-  document.getElementById('gfxwrap').style.display = s.graphics.length ? '' : 'none';
-  s.graphics.forEach((g, i) => gfx.append(el('button', 'toggle' + (g.on ? ' on' : ''), g.name, () => act('graphic:' + (i + 1)))));
-  (s.rotations || []).forEach((r, i) => gfx.append(el('button', 'toggle' + (r.running ? ' on' : ''), '⟳ ' + r.name, () => act('rotation:' + (i + 1)))));
-  // Rundown.
-  const rd = s.rundown;
-  document.getElementById('rundownwrap').style.display = rd ? '' : 'none';
-  if (rd) {
-    const seg = document.getElementById('segment'); seg.innerHTML = '';
-    if (rd.number) {
-      seg.append(el('div', 'big' + (rd.over ? ' over' : ''), rd.left));
-      seg.append(el('div', '', rd.number + '/' + rd.count + '  ' + rd.name));
-      const d = Math.round(rd.drift);
-      seg.append(el('small', '', (rd.next ? 'Next: ' + rd.next : 'Last segment') + (Math.abs(d) >= 5 ? '  ·  ' + clock(Math.abs(d)).replace(/^00:/, '') + (d > 0 ? ' over' : ' under') : '  ·  on time')));
-      seg.lastChild.style.color = 'var(--dim)';
-    } else {
-      seg.append(el('div', '', rd.count + ' segments — first: ' + (rd.next || '')));
-    }
-    const nb = document.getElementById('nextseg');
-    nb.textContent = rd.number ? 'Next ▶' : 'Start ▶';
-    nb.disabled = rd.number > 0 && !rd.next;
-  }
-  // Timers.
-  const timers = (s.clocks || []).filter(c => c.timer);
-  document.getElementById('clockwrap').style.display = timers.length ? '' : 'none';
-  const ck = document.getElementById('clocks'); ck.innerHTML = '';
-  timers.forEach(c => {
-    const r = el('div', 'row'); r.style.marginBottom = '8px';
-    r.append(el('button', 'clock' + (c.running ? ' running' : ''), c.name + '  ' + c.text, () => act('timer:' + c.name + ':toggle')));
-    r.firstChild.style.flex = '1';
-    r.append(el('button', '', 'Reset', () => act('timer:' + c.name + ':reset')), el('button', 'toggle' + (c.on ? ' on' : ''), 'On screen', () => act('graphic:' + c.name)));
-    ck.append(r);
-  });
-  // Sound: pads (held pads play while held), Syrinscape, talkback.
-  const pads = s.pads || [], syr = s.syrinscape || [];
-  document.getElementById('soundwrap').style.display = pads.length || syr.length || s.talkback_available ? '' : 'none';
-  const pd = document.getElementById('pads'); pd.innerHTML = '';
-  pads.forEach((p, i) => {
-    const b = el('button', 'pad');
-    b.style.borderColor = p.color;
-    const fill = el('i'); fill.style.background = p.color; fill.style.width = (p.playing ? Math.round(p.progress * 100) : 0) + '%';
-    b.append(fill, el('span', '', p.name), el('small', '', p.playing ? Math.ceil(p.remaining) + ' s' : 'pad ' + (i + 1)));
-    b.onpointerdown = e => { e.preventDefault(); hold('pad:' + (i + 1) + ':press', 'pad:' + (i + 1) + ':release'); };
-    pd.append(b);
-  });
-  const sy = document.getElementById('syrin'); sy.innerHTML = '';
-  syr.forEach((b, i) => sy.append(el('button', 'syrin' + (b.playing ? ' on' : ''), b.name, () => act('syrinscape:' + (i + 1)))));
-  const talk = document.getElementById('talk');
-  talk.style.display = s.talkback_available ? '' : 'none';
-  talk.className = 'talk' + (s.talkback ? ' on' : '');
-  talk.textContent = s.talkback ? 'TALKING' : 'TALK (hold)';
-  const au = document.getElementById('audio'); au.innerHTML = '';
-  document.getElementById('audiowrap').style.display = s.inputs.length ? '' : 'none';
-  s.inputs.forEach((a, i) => {
-    const b = el('button', 'toggle' + (a.on ? ' on' : ''), undefined, () => act('audio:' + (i + 1)));
-    b.append(el('div', '', a.name));
-    const m = el('div', 'meter'); const bar = el('i'); bar.style.width = Math.max(0, Math.min(100, (a.level + 60) / 60 * 100)) + '%'; m.append(bar); b.append(m);
-    au.append(b);
-  });
-  const md = document.getElementById('media'); md.innerHTML = '';
-  document.getElementById('mediawrap').style.display = s.players.length ? '' : 'none';
-  s.players.forEach(p => {
-    const r = el('div', 'row'); r.style.marginBottom = '8px';
-    r.append(el('div', '', p.name + (p.item ? ' — ' + p.item : '')));
-    r.firstChild.style.cssText = 'flex-basis:100%;color:var(--dim);font-size:13px';
-    r.append(el('button', '', '⏮', () => act('media:' + p.name + ':previous')), el('button', p.playing ? 'toggle on' : '', p.playing ? '⏸ Pause' : '▶ Play', () => act('media:' + p.name + ':toggle')),
-             el('button', '', '⟲ Restart', () => act('media:' + p.name + ':restart')), el('button', '', '⏭', () => act('media:' + p.name + ':next')));
-    md.append(r);
-  });
-  // Replay (while recording) and fade to black.
-  const rp = document.getElementById('replay');
-  rp.style.display = s.recording || s.replaying ? '' : 'none';
-  rp.className = 'replay' + (s.replaying ? ' on' : '');
-  rp.textContent = s.replaying ? '■ Stop replay' : '⟲ Replay';
-  rp.onclick = () => act(s.replaying ? 'replay:stop' : 'replay');
-  const fb = document.getElementById('ftb');
-  fb.className = 'ftb' + (s.black ? ' on' : '');
-  fb.textContent = s.black ? 'BLACK' : 'FTB';
-  // Macros.
-  const mac = s.macros || [];
-  document.getElementById('macrowrap').style.display = mac.length ? '' : 'none';
-  const mc = document.getElementById('macros'); mc.innerHTML = '';
-  mac.forEach((m, i) => { const b = el('button', 'macro', m.name, () => act('macro:' + (i + 1))); b.style.borderLeftColor = m.color; mc.append(b); });
-  // PTZ: presets, home, and a nudge.
-  const cams = s.ptz || [];
-  document.getElementById('ptzwrap').style.display = cams.length ? '' : 'none';
-  const pz = document.getElementById('ptz'); pz.innerHTML = '';
-  cams.forEach(c => {
-    const r = el('div', 'row'); r.style.marginBottom = '8px';
-    r.append(el('div', '', c.name)); r.firstChild.style.cssText = 'flex-basis:100%;color:var(--dim);font-size:13px';
-    c.presets.forEach((p, k) => r.append(el('button', '', p, () => act('ptz:' + c.source + ':preset:' + (k + 1)))));
-    r.append(el('button', '', '⌂ Home', () => act('ptz:' + c.source + ':home')));
-    [['◀', 'left'], ['▲', 'up'], ['▼', 'down'], ['▶', 'right'], ['＋', 'in'], ['－', 'out']].forEach(([label, dir]) => {
-      const b = el('button', '', label); b.style.touchAction = 'none';
-      b.onpointerdown = e => { e.preventDefault(); hold('ptz:' + c.source + ':' + dir + ':0.5', 'ptz:' + c.source + ':stop'); };
-      r.append(b);
-    });
-    pz.append(r);
-  });
-  // Teleprompter.
-  const pr = s.prompter;
-  document.getElementById('prompterwrap').style.display = pr ? '' : 'none';
-  const pc = document.getElementById('prompter'); pc.innerHTML = '';
-  if (pr) {
-    pc.append(el('button', '', '⏮', () => act('prompter:top')), el('button', '', '◀', () => act('prompter:back')),
-              el('button', 'toggle' + (pr.playing ? ' on' : ''), pr.playing ? '⏸ Pause' : '▶ Roll', () => act('prompter:toggle')),
-              el('button', '', '▶▶', () => act('prompter:forward')), el('button', '', '−', () => act('prompter:slower')),
-              el('div', '', Math.round(pr.words_per_minute) + ' wpm'), el('button', '', '＋', () => act('prompter:faster')));
-    const a = el('a', '', 'Open the prompter on this device'); a.href = '/prompter' + (pin ? '?pin=' + encodeURIComponent(pin) : ''); a.style.cssText = 'flex-basis:100%;margin-top:4px';
-    pc.append(a);
-  }
-  // Viewer comments.
-  const cm = s.comments;
-  document.getElementById('commentwrap').style.display = cm ? '' : 'none';
-  const cr = document.getElementById('comments'); cr.innerHTML = '';
-  if (cm) {
-    cr.append(el('button', '', 'Show next' + (cm.waiting ? ' (' + cm.waiting + ' waiting)' : ''), () => act('comment:next')));
-    if (cm.showing) cr.append(el('button', 'toggle on', 'Hide', () => act('comment:hide')));
-  }
-  const t = document.getElementById('tallies'); t.innerHTML = '';
-  s.sources.forEach((src, i) => { const a = el('a', '', src.name); a.href = '/?tally=' + (i + 1) + (pin ? '&pin=' + encodeURIComponent(pin) : ''); a.style.marginRight = '14px'; t.append(a); });
+  renderTop(s);
+  document.querySelectorAll('[data-onair]').forEach(e => setText(e, s.program ? 'On air: ' + s.program : ''));
+  if (tab === 'scenes') renderScenes(s);
+  if (tab === 'sound') renderSound(s);
+  if (tab === 'titles') renderTitles(s);
+  if (tab === 'more') renderMore(s);
+  renderActions(s);
+  const n = s.comments ? s.comments.waiting : 0;
+  showIf($('morebadge'), n > 0); setText($('morebadge'), n);
 }
 
-// Hold-to-play: the release goes out when the finger lifts anywhere (the
-// buttons are redrawn as the state changes).
+// Older apps don't send `stream`: fall back to the plain flag.
+function streamOf(s) { return s.stream || { state: s.live ? 'live' : 'off', live_count: 0, total: 0, destinations: [] }; }
+
+let lastCheck = null;
+function renderTop(s) {
+  setText($('showname'), s.show_name || 'Cutaway');
+  setText($('left'), s.disk_left ? s.disk_left + ' left' : '');
+  // One status light for everything that needs a look.
+  const st = streamOf(s);
+  const issues = (s.problems || []).slice();
+  if (st.state !== 'connecting') st.destinations.filter(d => d.state !== 'live').forEach(d => issues.push(d.name + ': ' + d.text.toLowerCase()));
+  if (st.lowered_kbps) issues.push('stream bitrate lowered to ' + (st.lowered_kbps / 1000).toFixed(1) + ' Mbps');
+  st.destinations.filter(d => d.congested).forEach(d => issues.push(d.name + ': connection too slow, dropping frames'));
+  setClass($('light'), 'light' + (issues.length ? ' warn' : ''));
+  setText($('lighttext'), issues.length ? issues.length + ' to check' : 'All good');
+  const det = $('details');
+  showIf(det, detailsOpen);
+  if (detailsOpen) {
+    const lines = issues.map(t => '⚠ ' + t);
+    st.destinations.filter(d => d.state === 'live').forEach(d => lines.push(d.name + ' live, ' + d.mbps.toFixed(1) + ' Mbps'));
+    if (s.saving) lines.push(s.saving.step + '…');
+    if (s.disk) lines.push(s.disk);
+    const key = lines.join('\n');
+    if (det._key !== key) { det._key = key; det.innerHTML = ''; det.append(el('div', 'title', issues.length ? 'To check' : 'All good')); const ul = el('ul'); lines.forEach(l => ul.append(el('li', '', l))); det.append(ul); }
+    setClass(det, 'sheet' + (issues.length ? ' warn' : ''));
+  }
+  // RECORD: one tap to start, hold to stop.
+  const rec = $('rec');
+  setClass(rec, 'pill rec' + (s.recording ? ' on' : ''));
+  setText($('rectext'), s.saving ? 'Saving ' + Math.round(s.saving.percent) + '%' : s.recording ? (rec._hint ? 'Hold to stop' : 'REC ' + clock(s.rec_seconds)) : 'RECORD');
+  // LIVE: a hold to go live and to end; it says how many places are really live.
+  const live = $('live');
+  const label = { off: '◉ GO LIVE', connecting: 'GOING LIVE…', ending: 'Ending stream…',
+                  live: '◉ LIVE ' + clock(s.live_seconds), trouble: '◉ LIVE ' + st.live_count + ' of ' + st.total }[st.state] || (s.live ? '◉ LIVE' : '◉ GO LIVE');
+  setClass(live, 'pill live' + ({ live: ' on', connecting: ' going', trouble: ' trouble', ending: ' going' }[st.state] || ''));
+  setText($('livetext'), live._hint ? (s.live ? 'Hold to end' : 'Hold to go live') : label);
+  // Each destination, while they aren't all live.
+  const showDests = st.state === 'connecting' || st.state === 'trouble';
+  list($('dests'), showDests ? st.destinations : [], d => d.name, () => el('span'), (e, d) => {
+    setClass(e, 'd-' + d.state); setText(e, d.name + ' ' + (d.state === 'live' ? d.mbps.toFixed(1) + ' Mbps' : d.text.toLowerCase()));
+  });
+  // The pre-show check, while it's open on the desk, and how it ended.
+  const pc = s.precheck, box = $('check');
+  if (pc) {
+    lastCheck = pc;
+    const what = pc.then === 'record' ? 'Before recording' : pc.then === 'live' ? 'Before going live' : 'Pre-show check';
+    const lines = pc.items.map(i => (i.level === 'fail' ? '✖ ' : '⚠ ') + i.what + ': ' + i.detail);
+    const done = pc.waiting === 0;
+    const next = !done ? 'Checking' + (pc.waiting ? ' (contacting ' + pc.waiting + ' stream server' + (pc.waiting > 1 ? 's' : '') + ')' : '') + '…'
+      : pc.then ? 'Waiting for someone at the desk to press Start or Cancel.' : 'Open on the desk.';
+    const key = [what, pc.verdict, next, pc.level].concat(lines).join('\n');
+    if (box._key !== key) {
+      box._key = key; box.innerHTML = '';
+      box.append(el('div', 'title', what + ' · ' + (done ? pc.verdict : 'checking on the desk')));
+      if (lines.length) { const ul = el('ul'); lines.forEach(l => ul.append(el('li', l.startsWith('✖') ? 'failtext' : 'warntext', l))); box.append(ul); }
+      box.append(el('div', 'muted', next));
+    }
+    setClass(box, 'sheet' + (pc.level !== 'ok' ? ' warn' : ''));
+    showIf(box, true);
+  } else {
+    if (lastCheck && lastCheck.then) {
+      // It closed: say what happened.
+      const started = lastCheck.then === 'record' ? s.recording : s.live;
+      flash(started ? 'Pre-show check done: ' + (lastCheck.then === 'record' ? 'recording' : 'going live') : 'The pre-show check was closed on the desk', !started);
+    }
+    lastCheck = null;
+    showIf(box, false);
+  }
+}
+
+function renderScenes(s) {
+  setText($('pname'), s.program || '');
+  const cc = $('cc'), ccText = s.captions && s.caption_text ? s.caption_text : '';
+  if (cc._t !== ccText) { cc._t = ccText; cc.innerHTML = ''; if (ccText) cc.append(el('span', '', ccText)); }
+  // The rundown in one line while it runs (the whole of it is under More).
+  const rd = s.rundown, seg = $('segline');
+  showIf(seg, !!(rd && rd.number));
+  if (rd && rd.number) {
+    if (!seg.children.length) seg.append(el('span', 'num'), el('span', 'grow'), el('span', 'muted'));
+    setText(seg.children[0], rd.left); setClass(seg.children[0], 'num' + (rd.over ? ' over' : ''));
+    setText(seg.children[1], rd.number + '/' + rd.count + '  ' + rd.name);
+    setText(seg.children[2], rd.drift_text || '');
+  }
+  // Mix / Cut / Back; with Preview on, Cut / Take / Back.
+  const sw1 = $('sw1'), sw2 = $('sw2');
+  if (s.preview_mode) {
+    setText(sw1, 'Cut'); setClass(sw1, '');
+    setText(sw2, 'Take'); setClass(sw2, 'take');
+  } else {
+    setText(sw1, 'Mix'); setClass(sw1, 'toggle' + (s.transition === 'mix' ? ' on' : ''));
+    setText(sw2, 'Cut'); setClass(sw2, 'toggle' + (s.transition === 'cut' ? ' on' : ''));
+  }
+  setText($('sceneshead'), s.preview_mode ? 'Scenes · tap to preview' : 'Scenes · tap to take');
+  list($('scenes'), s.scenes, (sc, i) => i + ':' + sc.name, () => {
+    const b = el('button', 'scene');
+    const top = el('span', 'top'); top.append(el('span', 'key'), el('span', 'nm'));
+    b.append(top, el('span', 'state'));
+    onTap(b, () => act((state.preview_mode ? 'preview:' : 'scene:') + (b._i + 1)));
+    return b;
+  }, (b, sc, i) => {
+    b._i = i;
+    setClass(b, 'scene' + (sc.program ? ' program' : sc.preview ? ' preview' : ''));
+    setText(b.firstChild.firstChild, String(i + 1));
+    setText(b.firstChild.lastChild, sc.name);
+    setText(b.lastChild, sc.program ? 'ON AIR' : sc.preview ? 'NEXT' : '');
+  }, 'scenes');
+  // More transitions, Auto, CC and fade to black.
+  const other = ['wipe', 'push', 'dip', 'stinger'];
+  const special = other.includes(s.transition);
+  setText($('moreswsum'), (special ? 'Transition: ' + s.transition[0].toUpperCase() + s.transition.slice(1) + '. ' : '') + (s.black ? 'Faded to black. ' : '') + 'More transitions, Auto, fade to black ▾');
+  if ((special || s.black) && !$('moresw')._opened) { $('moresw').open = true; $('moresw')._opened = true; }
+  [...$('transitions').children].forEach((b, i) => setClass(b, 'toggle' + (s.transition === other[i] ? ' on' : '')));
+  setClass($('auto'), 'toggle' + (s.auto ? ' on' : ''));
+  showIf($('cc_btn'), !!s.captions_available); setClass($('cc_btn'), 'toggle' + (s.captions ? ' on' : ''));
+  const fb = $('ftb');
+  setClass(fb, 'ftb' + (s.black ? ' on' : ''));
+  setText(fb, s.black ? 'BLACK: tap to come back' : fb._hint ? 'Hold for black' : 'Fade to black');
+}
+
+function renderActions(s) {
+  const ni = namesIndex();
+  showIf($('names'), ni >= 0);
+  const cls = 'actions pad-x' + (ni >= 0 ? '' : ' two');
+  if ($('actions').className !== cls) { $('actions').className = cls; measure(); }
+  if (ni >= 0) setClass($('names'), 'toggle' + (s.graphics[ni].on ? ' on' : ''));
+  setClass($('marker'), s.recording ? '' : 'dim');
+  setClass($('clip'), s.recording ? '' : 'dim');
+  setText($('clip'), '✂ Clip ' + (s.clip_seconds || 30) + 's');
+}
+
+// Hold-to-play: the release goes out when the finger lifts anywhere.
 let held = null;
 function hold(down, up) { if (held) act(held); held = up; act(down); }
 function letGo() { if (held) { const up = held; held = null; act(up); } }
 ['pointerup', 'pointercancel'].forEach(ev => document.addEventListener(ev, letGo));
-document.getElementById('talk').onpointerdown = e => { e.preventDefault(); hold('talkback:on', 'talkback:off'); };
+$('talk').onpointerdown = e => { e.preventDefault(); hold('talkback:on', 'talkback:off'); };
+
+// Faders: at most ~8 changes a second while dragging, and the last one always.
+const gainSent = {};
+function sendGain(i, v, now) {
+  const g = gainSent[i] || (gainSent[i] = { at: 0, timer: null });
+  clearTimeout(g.timer);
+  const go = () => { g.at = Date.now(); act('gain:' + (i + 1) + ':' + v); };
+  if (now || Date.now() - g.at > 120) go(); else g.timer = setTimeout(go, 120);
+}
+
+function renderSound(s) {
+  const pads = s.pads || [], syr = s.syrinscape || [];
+  showIf($('padwrap'), pads.length > 0);
+  list($('pads'), pads, (p, i) => i + ':' + p.name, () => {
+    const b = el('button', 'padbtn');
+    b.append(el('i'), el('span'), el('small'));
+    b.onpointerdown = e => { e.preventDefault(); hold('pad:' + (b._i + 1) + ':press', 'pad:' + (b._i + 1) + ':release'); };
+    return b;
+  }, (b, p, i) => {
+    b._i = i;
+    setStyle(b, 'borderColor', p.color);
+    setStyle(b.children[0], 'background', p.color);
+    setStyle(b.children[0], 'width', (p.playing ? Math.round(p.progress * 100) : 0) + '%');
+    setText(b.children[1], p.name);
+    setText(b.children[2], p.playing ? Math.ceil(p.remaining) + ' s' : 'pad ' + (i + 1));
+  }, 'pads');
+  list($('syrin'), syr, (x, i) => i + ':' + x.name, () => { const b = el('button'); onTap(b, () => act('syrinscape:' + (b._i + 1))); return b; },
+    (b, x, i) => { b._i = i; setClass(b, 'syrin' + (x.playing ? ' on' : '')); setText(b, x.name); });
+  const talk = $('talk');
+  showIf(talk, !!s.talkback_available);
+  setClass(talk, 'talk' + (s.talkback ? ' on' : ''));
+  setText(talk, s.talkback ? 'TALKING' : 'TALK (hold)');
+  showIf($('audiowrap'), s.inputs.length > 0);
+  // Each input: ON/OFF, its level and a fader (−60 to +12 dB, as commands and MIDI use).
+  list($('audio'), s.inputs, (a, i) => i + ':' + a.name, () => {
+    const c = el('div', 'input');
+    const head = el('div', 'head'), onoff = el('button', 'onoff');
+    head.append(el('span', 'nm'), onoff);
+    // Turning a mic on is one tap; turning it off is a hold.
+    holdable(onoff, { needs: () => !!(state && state.inputs[c._i] && state.inputs[c._i].on), cmd: () => 'audio:' + (c._i + 1) + ':off', tap: () => act('audio:' + (c._i + 1) + ':on') });
+    const m = el('div', 'meter'); m.append(el('i'));
+    const f = el('div', 'fader'), inp = el('input'), lab = el('span', 'db');
+    inp.type = 'range'; inp.min = -60; inp.max = 12; inp.step = 0.5;
+    inp.setAttribute('aria-label', 'Level');
+    // What you drag wins over what comes back, until a moment after you let go.
+    const busy = () => { c._busyUntil = Date.now() + 1500; };
+    inp.addEventListener('pointerdown', busy);
+    inp.addEventListener('input', () => { busy(); setText(lab, db(+inp.value)); sendGain(c._i, inp.value, false); });
+    inp.addEventListener('change', () => { busy(); sendGain(c._i, inp.value, true); });
+    inp.addEventListener('dblclick', () => { busy(); inp.value = 0; setText(lab, db(0)); sendGain(c._i, 0, true); });
+    f.append(inp, lab);
+    c.append(head, m, f);
+    return c;
+  }, (c, a, i) => {
+    c._i = i;
+    const [head, m, f] = c.children;
+    setText(head.children[0], a.name);
+    const onoff = head.children[1];
+    setClass(onoff, 'onoff' + (a.on ? ' on' : ''));
+    setText(onoff, a.on ? (onoff._hint ? 'Hold' : 'ON') : 'OFF');
+    setStyle(m.firstChild, 'width', Math.max(0, Math.min(100, (a.level + 60) / 60 * 100)) + '%');
+    setClass(m.firstChild, a.level > -6 ? 'hot' : '');
+    if (!(c._busyUntil > Date.now())) {
+      const v = String(Math.max(-60, Math.min(12, a.gain_db)));
+      if (f.firstChild.value !== v) f.firstChild.value = v;
+      setText(f.lastChild, db(a.gain_db));
+    }
+  }, 'inputs');
+  showIf($('soundempty'), !pads.length && !syr.length && !s.inputs.length && !s.talkback_available);
+}
+
+function renderTitles(s) {
+  const items = s.graphics.map((g, i) => ({ k: 'g' + i + ':' + g.name, name: g.name, on: g.on, cmd: 'graphic:' + (i + 1) }))
+    .concat((s.rotations || []).map((r, i) => ({ k: 'r' + i + ':' + r.name, name: '⟳ ' + r.name, on: r.running, cmd: 'rotation:' + (i + 1) })));
+  showIf($('gfxwrap'), items.length > 0);
+  list($('graphics'), items, x => x.k, () => { const b = el('button', 'toggle'); onTap(b, () => act(b._cmd)); return b; },
+    (b, x) => { b._cmd = x.cmd; setClass(b, 'toggle' + (x.on ? ' on' : '')); setText(b, x.name); }, 'graphics');
+  const timers = (s.clocks || []).filter(c => c.timer);
+  showIf($('clockwrap'), timers.length > 0);
+  list($('clocks'), timers, c => c.name, () => {
+    const r = el('div', 'row'); r.style.marginBottom = '8px';
+    const run = el('button', 'clock'), reset = el('button', '', 'Reset'), on = el('button', 'toggle', 'On screen');
+    run.style.flex = '2 1 0';
+    onTap(run, () => act('timer:' + r._name + ':toggle')); onTap(reset, () => act('timer:' + r._name + ':reset')); onTap(on, () => act('graphic:' + r._name));
+    r.append(run, reset, on); return r;
+  }, (r, c) => {
+    r._name = c.name;
+    setClass(r.children[0], 'clock' + (c.running ? ' running' : '')); setText(r.children[0], c.name + '  ' + c.text);
+    setClass(r.children[2], 'toggle' + (c.on ? ' on' : ''));
+  });
+  showIf($('titlesempty'), !items.length && !timers.length);
+}
+
+function renderMore(s) {
+  // Stream: each destination, as the desk's Stream panel shows it.
+  const st = streamOf(s);
+  showIf($('streamwrap'), st.state !== 'off');
+  list($('streamdests'), st.state !== 'off' ? st.destinations : [], d => d.name, () => {
+    const r = el('div', 'destline'); r.append(el('span', 'grow'), el('span')); return r;
+  }, (r, d) => {
+    setText(r.children[0], d.name);
+    setClass(r.children[1], d.state === 'live' ? '' : d.state === 'failed' ? 'failtext' : 'warntext');
+    setText(r.children[1], (d.state === 'live' ? 'Live, ' + d.mbps.toFixed(1) + ' Mbps' : d.text) + (d.congested ? ' · too slow' : '') + (d.message ? ' · ' + d.message : ''));
+  });
+  // Viewer comments: read them first, then tap one (or Show next) to put it on screen.
+  const cm = s.comments;
+  showIf($('commentwrap'), !!cm);
+  if (cm) {
+    const recent = cm.recent || [];
+    list($('comments'), recent, c => c.id, () => {
+      const b = el('button', 'comment'); b.append(el('span', 'who'), el('span'), el('span', 'meta'));
+      onTap(b, () => act(b._showing ? 'comment:hide' : 'comment:' + b._id)); return b;
+    }, (b, c) => {
+      b._id = c.id; b._showing = c.showing;
+      setClass(b, 'comment' + (c.showing ? ' showing' : c.new ? ' new' : ''));
+      setText(b.children[0], c.author); setText(b.children[1], c.text);
+      setText(b.children[2], c.platform + (c.showing ? ' · on screen: tap to hide' : c.new ? ' · new: tap to show' : ' · shown'));
+    });
+    showIf($('nocomments'), !recent.length);
+    setText($('cnext'), 'Show next' + (cm.waiting ? ' (' + cm.waiting + ' waiting)' : ''));
+    showIf($('chide'), cm.showing);
+  }
+  // Replay (while recording).
+  showIf($('replaywrap'), s.recording || s.replaying);
+  setClass($('replay'), 'replay' + (s.replaying ? ' on' : ''));
+  setText($('replay'), s.replaying ? '■ Stop replay' : '⟲ Replay');
+  // Rundown.
+  const rd = s.rundown;
+  showIf($('rundownwrap'), !!rd);
+  if (rd) {
+    const seg = $('segment').children;
+    setText(seg[0], rd.number ? rd.left : ''); setClass(seg[0], 'big' + (rd.over ? ' over' : ''));
+    setText(seg[1], rd.number ? rd.number + '/' + rd.count + '  ' + rd.name : rd.count + ' segments, first: ' + (rd.next || ''));
+    setText(seg[2], rd.number ? (rd.next ? 'Next: ' + rd.next : 'Last segment') + '  ·  ' + (rd.drift_text || 'on time') : '');
+    const nb = $('nextseg');
+    setText(nb, rd.number ? 'Next ▶' : 'Start ▶');
+    nb.disabled = rd.number > 0 && !rd.next;
+  }
+  // Macros.
+  const mac = s.macros || [];
+  showIf($('macrowrap'), mac.length > 0);
+  list($('macros'), mac, (m, i) => i + ':' + m.name, () => { const b = el('button', 'macro'); onTap(b, () => act('macro:' + (b._i + 1))); return b; },
+    (b, m, i) => { b._i = i; setText(b, m.name); setStyle(b, 'borderLeftColor', m.color); });
+  // Media players.
+  showIf($('mediawrap'), s.players.length > 0);
+  list($('media'), s.players, p => p.name, () => {
+    const r = el('div', 'row'); r.style.marginBottom = '8px';
+    r.append(el('div', 'rowlabel'));
+    [['⏮', 'previous'], ['▶ Play', 'toggle'], ['⟲ Restart', 'restart'], ['⏭', 'next']].forEach(([t, c]) => r.append(onTap(el('button', '', t), () => act('media:' + r._name + ':' + c))));
+    return r;
+  }, (r, p) => {
+    r._name = p.name;
+    setText(r.children[0], p.name + (p.item ? ' — ' + p.item : ''));
+    setClass(r.children[2], p.playing ? 'toggle on' : ''); setText(r.children[2], p.playing ? '⏸ Pause' : '▶ Play');
+  });
+  // PTZ: presets, home, and a nudge.
+  const cams = s.ptz || [];
+  showIf($('ptzwrap'), cams.length > 0);
+  list($('ptz'), cams, c => c.source + ':' + c.name + ':' + c.presets.join('|'), c => {
+    const r = el('div', 'row'); r.style.marginBottom = '8px';
+    r.append(el('div', 'rowlabel', c.name));
+    c.presets.forEach((p, k) => r.append(onTap(el('button', '', p), () => act('ptz:' + c.source + ':preset:' + (k + 1)))));
+    r.append(onTap(el('button', '', '⌂ Home'), () => act('ptz:' + c.source + ':home')));
+    // The nudges on a row of their own: they move while held.
+    const nudge = el('div', 'row'); nudge.style.flexBasis = '100%';
+    [['◀', 'left'], ['▲', 'up'], ['▼', 'down'], ['▶', 'right'], ['＋', 'in'], ['－', 'out']].forEach(([label, dir]) => {
+      const b = el('button', '', label); b.style.touchAction = 'none'; b.style.padding = '10px 4px';
+      b.onpointerdown = e => { e.preventDefault(); hold('ptz:' + c.source + ':' + dir + ':0.5', 'ptz:' + c.source + ':stop'); };
+      nudge.append(b);
+    });
+    r.append(nudge);
+    return r;
+  }, () => {});
+  // Teleprompter.
+  const pr = s.prompter;
+  showIf($('prompterwrap'), !!pr);
+  if (pr) {
+    setClass($('pr_play'), 'toggle' + (pr.playing ? ' on' : '')); setText($('pr_play'), pr.playing ? '⏸ Pause' : '▶ Roll');
+    setText($('pr_wpm'), Math.round(pr.words_per_minute) + ' wpm');
+    const href = '/prompter' + (pin ? '?pin=' + encodeURIComponent(pin) : '');
+    if ($('prompterlink').getAttribute('href') !== href) $('prompterlink').href = href;
+  }
+  // Tally lights.
+  list($('tallies'), s.sources, (src, i) => i + ':' + src.name, (src, i) => {
+    const a = el('a', '', src.name); a.href = '/?tally=' + (i + 1) + (pin ? '&pin=' + encodeURIComponent(pin) : ''); a.style.cssText = 'margin-right:14px;padding:10px 0;display:inline-block'; return a;
+  }, () => {});
+}
 
 function renderTally() {
   document.querySelectorAll('body > :not(#tally)').forEach(e => e.style.display = 'none');
-  const t = document.getElementById('tally'); t.style.display = 'flex';
+  const t = $('tally'); t.style.display = 'flex';
   const src = state.sources[parseInt(tallySource) - 1];
-  if (!src) { document.getElementById('tname').textContent = 'No source ' + tallySource; return; }
+  if (!src) { $('tname').textContent = 'No source ' + tallySource; return; }
   t.style.background = src.tally === 'program' ? '#e01020' : src.tally === 'preview' ? '#10a040' : '#111';
-  document.getElementById('tname').textContent = src.name;
-  document.getElementById('tstate').textContent = src.tally === 'program' ? 'ON AIR' : src.tally === 'preview' ? 'PREVIEW' : '';
+  $('tname').textContent = src.name;
+  $('tstate').textContent = src.tally === 'program' ? 'ON AIR' : src.tally === 'preview' ? 'PREVIEW' : '';
 }
 
 async function poll() {
   try {
     const r = await fetch(api('/api/state'));
-    if (r.status === 401) { document.getElementById('pin').style.display = 'flex'; return; }
+    if (r.status === 401) { $('pin').style.display = 'flex'; return; }
     state = await r.json();
     render();
   } catch (e) { flash('Cutaway isn\'t answering…', true); }
 }
 function refreshImage() {
-  if (tallySource !== null || imgBusy || document.hidden) return;
+  if (tallySource !== null || imgBusy || document.hidden || tab !== 'scenes') return;
   imgBusy = true;
-  const img = document.getElementById('program');
+  const img = $('program');
   const next = new Image();
   next.onload = () => { img.src = next.src; imgBusy = false; };
   next.onerror = () => { imgBusy = false; };
   next.src = api('/api/program.jpg?t=' + Date.now());
 }
 // Live updates over WebSocket; polling while it isn't connected.
-let wsLive = false;
+let wsLive = false, ws = null;
 function connectWs() {
-  let ws;
+  if (ws && ws.readyState <= 1) return;
   try { ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/ws?pin=' + encodeURIComponent(pin)); }
   catch (e) { return; }
   ws.onmessage = ev => {
@@ -390,6 +771,7 @@ function connectWs() {
   };
   ws.onclose = () => { wsLive = false; setTimeout(connectWs, 3000); };
 }
+if (tallySource === null) { selectTab(tab); measure(); }
 poll(); connectWs();
 setInterval(() => { if (!wsLive) poll(); }, 500);
 setInterval(refreshImage, 700);

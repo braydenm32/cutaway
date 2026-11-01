@@ -443,6 +443,9 @@ pub struct App {
     midi: Option<midi::Midi>,
     osc: Option<osc::Osc>,
     last_publish: Instant,
+    /// The last recording failure and when, so controllers still hear of it
+    /// after `poll_status` has taken it (cleared by the next take).
+    rec_problem: Option<(String, Instant)>,
     precheck: Option<Precheck>,
     /// Title being edited live: (graphic, title, subtitle).
     title_edit: Option<(usize, String, String)>,
@@ -595,6 +598,7 @@ impl App {
             midi: None,
             osc: None,
             last_publish: Instant::now(),
+            rec_problem: None,
             precheck: None,
             title_edit: None,
             marker_name: None,
@@ -1662,16 +1666,50 @@ impl App {
         // The same LIVE time as the desk's: from the first destination really live.
         let live_seconds = st.stream.live_seconds();
         let mut problems = st.health.problems();
-        if st.rec_failed.is_some() {
-            problems.push("recording problem".into());
+        // Still there until a new take starts (poll_status takes the flag itself).
+        let rec_since = match &st.rec {
+            RecState::Recording { since, .. } => Some(*since),
+            _ => None,
+        };
+        let rec_problem = self.rec_problem.as_ref().filter(|(_, at)| rec_since.is_none_or(|s| s < *at));
+        if st.rec_failed.is_some() || rec_problem.is_some() {
+            problems.push(match rec_problem {
+                Some((f, _)) => format!("recording problem: {f}"),
+                None => "recording problem".into(),
+            });
         }
         let disk = st.disk.as_ref().map(|d| d.describe()).unwrap_or_default();
+        let disk_left = st.disk.as_ref().and_then(|d| d.seconds_left()).map(crate::engine::health::fmt_left).unwrap_or_default();
+        let stream = show::StreamState::from_status(&st.stream, e.is_streaming());
         let markers = st.markers;
         drop(st);
         let tally = |i: usize| if live_sources.contains(&i) { "program" } else if preview_sources.contains(&i) { "preview" } else { "off" }.to_string();
         Some(ShowState {
             saving,
             version: env!("CARGO_PKG_VERSION").into(),
+            show_name: self.cfg.ui.profile.clone(),
+            stream,
+            disk_left,
+            precheck: self.precheck.as_ref().map(|pc| {
+                let worst = pc.items.iter().map(|i| i.level).max().unwrap_or(Level::Ok);
+                let word = |l: Level| match l {
+                    Level::Ok => "ok",
+                    Level::Warn => "warn",
+                    Level::Fail => "fail",
+                };
+                show::PrecheckState {
+                    then: match pc.then {
+                        Some(Then::Record) => "record",
+                        Some(Then::Live) => "live",
+                        None => "",
+                    }
+                    .into(),
+                    verdict: precheck_verdict(&pc.items, pc.waiting == 0).0,
+                    level: word(worst).into(),
+                    waiting: pc.waiting,
+                    items: pc.items.iter().filter(|i| i.level != Level::Ok).map(|i| show::CheckLine { level: word(i.level).into(), what: i.what.clone(), detail: i.detail.clone() }).collect(),
+                }
+            }),
             recording: e.is_recording(),
             rec_seconds,
             live: e.is_streaming(),
@@ -1691,7 +1729,7 @@ impl App {
                 .map(|s| show::SceneState { name: s.name.clone(), program: s.name == live.name, preview: preview.as_ref().is_some_and(|p| p.name == s.name) })
                 .collect(),
             sources: e.sources.iter().enumerate().map(|(i, s)| show::SourceState { name: s.name.clone(), tally: tally(i), offline: e.source_offline(i) }).collect(),
-            graphics: e.graphics.list().into_iter().map(|(name, on, _)| show::GraphicState { name, on }).collect(),
+            graphics: e.graphics.list().into_iter().enumerate().map(|(i, (name, on, _))| show::GraphicState { name, on, names: self.cfg.graphics.get(i).is_some_and(|g| g.follow) }).collect(),
             rotations: e.rotations.list().into_iter().map(|r| show::RotationState { name: r.name, running: r.running, showing: r.showing }).collect(),
             inputs: e
                 .audio
@@ -1761,7 +1799,20 @@ impl App {
                     presets: s.ptz.presets.iter().enumerate().map(|(k, p)| if p.name.trim().is_empty() { format!("Preset {}", k + 1) } else { p.name.clone() }).collect(),
                 })
                 .collect(),
-            comments: self.chat.as_ref().map(|c| show::CommentsState { showing: self.comment_on.is_some(), waiting: c.messages().iter().filter(|m| m.id > self.comment_cursor).count() }),
+            comments: self.chat.as_ref().map(|c| {
+                let messages = c.messages();
+                show::CommentsState {
+                    showing: self.comment_on.is_some(),
+                    waiting: messages.iter().filter(|m| m.id > self.comment_cursor).count(),
+                    recent: messages
+                        .iter()
+                        .rev()
+                        .take(15)
+                        .rev()
+                        .map(|m| show::CommentInfo { id: m.id, author: m.author.clone(), text: m.text.clone(), platform: m.platform.name().into(), showing: self.comment_on == Some(m.id), new: m.id > self.comment_cursor })
+                        .collect(),
+                }
+            }),
             guests: if self.cfg.guests.enabled {
                 crate::engine::guests::hub()
                     .guests()
@@ -1802,6 +1853,7 @@ impl App {
                     left,
                     over,
                     drift: st.drift,
+                    drift_text: show::RundownState::drift_words(st.drift),
                 }
             }),
         })
@@ -2273,6 +2325,17 @@ impl App {
                         None => self.go(&place),
                     }
                 }
+                if std::env::var_os("CUTAWAY_UI_TEST_COMMENTS").is_some() {
+                    // A few viewer comments, as if from a live chat.
+                    let chat = crate::net::chat::Chat::start(&Default::default(), self.waker.clone());
+                    for (who, text) in [("maya_k", "Love the new set!"), ("streamfan22", "What mic are you using? It sounds great"), ("Sam O", "Hi from Lisbon 👋")] {
+                        chat.inject(crate::net::chat::Platform::Twitch, who, text);
+                    }
+                    self.chat = Some(chat);
+                }
+                if std::env::var_os("CUTAWAY_UI_TEST_ARRANGE").is_some() {
+                    self.column.arrange = true;
+                }
                 if std::env::var_os("CUTAWAY_UI_TEST_SYNC").is_some() {
                     let job = self.engine.as_ref().map(|e| e.measure_sync(3.0));
                     self.sync = Some(SyncWizard { job, apply: Vec::new() });
@@ -2353,6 +2416,7 @@ impl App {
             if e.is_recording() {
                 e.stop_recording();
             }
+            self.rec_problem = Some((f.to_string(), Instant::now()));
             self.toast(format!("Recording stopped: {f}"), true);
         }
         let Some(e) = &self.engine else { return };
@@ -4371,7 +4435,7 @@ impl App {
         // headphone line, which always fit.
         let rest = self.column.audio_rest.unwrap_or(130.0);
         let meter_h = (ui.available_height() - rest).clamp(column::METER_MIN, 560.0);
-        egui::ScrollArea::horizontal().id_salt("strips").show(ui, |ui| {
+        egui::ScrollArea::horizontal().id_salt("strips").auto_shrink([true, true]).show(ui, |ui| {
             ui.horizontal_top(|ui| {
                 for (i, (name, desc, on, reduction)) in strips.iter().enumerate() {
                     let key = format!("a{i}");
@@ -4393,7 +4457,7 @@ impl App {
                             if let Some(ac) = self.cfg.audio.get_mut(i) {
                                 ui.spacing_mut().slider_width = meter_h;
                                 let mut g = ac.gain_db as f32;
-                                if ui.add(egui::Slider::new(&mut g, -40.0..=12.0).vertical().show_value(false)).on_hover_text(format!("Level {g:+.1} dB (double-click resets)")).double_clicked() {
+                                if ui.add(egui::Slider::new(&mut g, -60.0..=12.0).vertical().show_value(false)).on_hover_text(format!("Level {g:+.1} dB (double-click resets)")).double_clicked() {
                                     g = 0.0;
                                 }
                                 if (g as f64 - ac.gain_db).abs() > 1e-3 {
@@ -4445,7 +4509,10 @@ impl App {
                         }
                     });
                 }
-                ui.separator();
+                // A line between the inputs and the mixes, as tall as the meters
+                // (a plain separator would take the whole column's height).
+                let (line, _) = ui.allocate_exact_size(vec2(9.0, meter_h + 20.0), Sense::hover());
+                ui.painter().vline(line.center().x, line.y_range(), Stroke::new(1.0, LINE));
                 for (key, label_text, l) in [("mix", "REC MIX", &loud.recording), ("stream", "STREAM", &loud.stream)] {
                     ui.vertical(|ui| {
                         ui.set_width(70.0);
@@ -5473,6 +5540,20 @@ impl eframe::App for App {
         false
     }
 
+    /// Runs before every frame, and also while the window is minimised or
+    /// hidden (eframe then skips drawing but still calls this when a repaint
+    /// is asked for). So commands from the phone, Stream Deck, OSC and MIDI
+    /// still run, a failed recording is still stopped, and the state they
+    /// read keeps moving when nobody is looking at the desk.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.handle_requests();
+        self.poll_status();
+        self.publish_state();
+        if self.remote.is_some() || self.midi.is_some() || self.osc.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(250));
+        }
+    }
+
     /// Each area's last tab, beside the window's size (this computer, not the show).
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         self.shell.save(storage);
@@ -5488,7 +5569,8 @@ impl eframe::App for App {
         self.fit_first_window(&ctx);
         self.tick_starting(&ctx);
         self.autosave();
-        self.handle_requests();
+        // Controllers' commands, the engine's status and the published state
+        // are handled in `logic`, which runs just before this.
         self.run_queued();
         if let Some(d) = self.next_queued() {
             ctx.request_repaint_after(d);
@@ -5504,16 +5586,11 @@ impl eframe::App for App {
         }
         self.tick_prompter(&ctx);
         self.handle_keys(&ctx);
-        self.poll_status();
         self.run_self_test(&ctx);
         self.scheduled_go_live(&ctx);
-        self.publish_state();
         let busy = self.engine.as_ref().is_some_and(|e| e.is_recording() || e.is_streaming());
         if !busy && crate::platform::permissions_changed() {
             self.start_engine();
-        }
-        if self.remote.is_some() || self.midi.is_some() || self.osc.is_some() {
-            ctx.request_repaint_after(Duration::from_millis(250));
         }
 
         // The rail of areas down the left, the top bar with the area's tabs
