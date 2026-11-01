@@ -6,7 +6,7 @@ use super::theme::*;
 use super::App;
 use crate::control::{Action, CommentCmd, PrompterCmd, PtzCmd, ReplayAngle, ReplayCmd, Target};
 use crate::settings::Section;
-use eframe::egui::{self, vec2, Color32, RichText};
+use eframe::egui::{self, vec2, Color32, Rect, RichText};
 use std::time::{Duration, Instant};
 
 fn color_of(s: &str, fallback: u32) -> Color32 {
@@ -16,6 +16,8 @@ fn color_of(s: &str, fallback: u32) -> Color32 {
 
 /// Macros inside macros go this deep at most.
 const MAX_DEPTH: usize = 4;
+/// How long Undo stays beside PTZ Home.
+const PTZ_UNDO_FOR: Duration = Duration::from_secs(20);
 
 /// A command waiting for its time (after a "wait" in a macro or cues).
 pub(super) struct Queued {
@@ -285,12 +287,10 @@ impl App {
                         send.push(PtzCmd::Stop);
                     }
                 }
-                if ui.add(egui::Button::new("⌂ Home").min_size(vec2(96.0, 24.0))).clicked() {
-                    send.push(PtzCmd::Home);
-                }
             });
         });
-        // Presets: click to go; right-click to save the current shot there.
+        // Presets: click to go. "Save here" (or a preset's right-click) keeps
+        // the current shot in one.
         let presets: Vec<String> = self.cfg.sources.get(cam).map(|s| s.ptz.presets.iter().map(|p| p.name.clone()).collect()).unwrap_or_default();
         ui.horizontal_wrapped(|ui| {
             for (k, name) in presets.iter().enumerate() {
@@ -305,12 +305,77 @@ impl App {
                     }
                 });
             }
-            if ui.small_button("＋").on_hover_text("Save the current shot as a new preset").clicked() {
-                send.push(PtzCmd::Store(Target::Name(format!("Preset {}", presets.len() + 1))));
-            }
+            ui.menu_button(RichText::new("Save here ▾").size(TEXT_BODY), |ui| {
+                ui.label(RichText::new("Keep the shot it has now as:").size(TEXT_SMALL).color(TEXT_DIM));
+                for (k, name) in presets.iter().enumerate() {
+                    if ui.button(format!("\"{name}\" (replaces it)")).clicked() {
+                        send.push(PtzCmd::Store(Target::Index(k)));
+                        ui.close();
+                    }
+                }
+                if ui.button("A new preset").clicked() {
+                    send.push(PtzCmd::Store(Target::Name(format!("Preset {}", presets.len() + 1))));
+                    ui.close();
+                }
+            })
+            .response
+            .on_hover_text("Save the current shot as a preset");
         });
-        if !status.is_empty() && status != "virtual" {
-            ui.label(RichText::new(&status).color(TEXT_DIM).size(TEXT_SMALL));
+        // Home: away from Zoom out. While this camera is on air it takes a
+        // one-second hold, and a close-up made from a bigger picture can go
+        // back with Undo.
+        let on_air = live.contains(&cam);
+        let virt = self.engine.as_ref().and_then(|e| e.ptz(cam)).and_then(|p| p.virt.clone());
+        let mut home = false;
+        ui.horizontal(|ui| {
+            if !status.is_empty() && status != "virtual" {
+                ui.label(RichText::new(&status).color(TEXT_DIM).size(TEXT_SMALL));
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let r = ui.add(egui::Button::new(RichText::new(if on_air { "⌂ Home (hold)" } else { "⌂ Home" }).size(TEXT_BODY)).min_size(vec2(84.0, 24.0)).sense(egui::Sense::click_and_drag()));
+                if on_air {
+                    match (r.is_pointer_button_down_on(), self.ptz_home_hold) {
+                        (true, None) => self.ptz_home_hold = Some((Instant::now(), false)),
+                        (true, Some((since, false))) => {
+                            let f = (since.elapsed().as_secs_f32() / super::REC_HOLD_SECS).min(1.0);
+                            let fill = Rect::from_min_size(r.rect.min, vec2(r.rect.width() * f, r.rect.height()));
+                            ui.painter().with_clip_rect(fill).rect_filled(r.rect, 4.0, ACCENT.gamma_multiply(0.35));
+                            if f >= 1.0 {
+                                home = true;
+                                self.ptz_home_hold = Some((since, true));
+                            }
+                            ui.ctx().request_repaint();
+                        }
+                        (true, Some(_)) => {}
+                        (false, held) => {
+                            if held.is_some_and(|(_, spent)| !spent) {
+                                self.toast(format!("{} is on air: hold ⌂ Home for a second to go to the whole picture", self.cfg.sources.get(cam).map(|s| s.name.as_str()).unwrap_or("This camera")), false);
+                            }
+                            self.ptz_home_hold = None;
+                        }
+                    }
+                    r.on_hover_text("On air now: hold for a second to go to the whole picture");
+                } else {
+                    self.ptz_home_hold = None;
+                    if r.on_hover_text("Go to the whole picture (home)").clicked() {
+                        home = true;
+                    }
+                }
+                let undo = self.ptz_home_undo.filter(|(c, _, at)| *c == cam && at.elapsed() < PTZ_UNDO_FOR);
+                if let (Some((_, shot, _)), Some(v)) = (undo, &virt) {
+                    if ui.button(RichText::new("↶ Undo Home").size(TEXT_BODY)).on_hover_text("Glide back to the shot it had before Home").clicked() {
+                        v.go_to(shot);
+                        self.ptz_home_undo = None;
+                    }
+                    ui.ctx().request_repaint_after(Duration::from_millis(500));
+                }
+            });
+        });
+        if home {
+            if let Some(v) = &virt {
+                self.ptz_home_undo = Some((cam, v.position(), Instant::now()));
+            }
+            send.push(PtzCmd::Home);
         }
         if self.ptz_drive.is_some() || self.ptz_zoom.is_some() {
             ui.ctx().request_repaint_after(Duration::from_millis(50));
