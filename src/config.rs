@@ -485,6 +485,29 @@ impl TransitionMode {
         }
     }
 
+    /// What it does, in a few words (the bank's ⋯ and Scenes › Switching).
+    pub fn describe(self) -> &'static str {
+        match self {
+            TransitionMode::Cut => "Scenes change at once",
+            TransitionMode::Mix => "Frames glide to their new places and cross-fade",
+            TransitionMode::Wipe => "A soft edge sweeps across",
+            TransitionMode::Push => "The new scene pushes the old one out",
+            TransitionMode::Dip => "Through a colour (black unless set)",
+            TransitionMode::Stinger => "A video plays over the change",
+        }
+    }
+
+    /// Why the length doesn't apply to it, if it doesn't: a cut is instant
+    /// and a stinger lasts as long as its video (numbers audit #14). The
+    /// bank and Scenes › Switching grey the length for the same reason.
+    pub fn fixed_length(self) -> Option<&'static str> {
+        match self {
+            TransitionMode::Cut => Some("A cut is instant. The length is for Mix and the other transitions."),
+            TransitionMode::Stinger => Some("A stinger lasts as long as its video (Scenes › More › Stinger & fade to black)."),
+            _ => None,
+        }
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             TransitionMode::Cut => "cut",

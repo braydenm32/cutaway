@@ -1697,7 +1697,7 @@ impl Engine {
                 }
                 None => {
                     let info = self.stinger.info();
-                    let why = info.problem.unwrap_or_else(|| if info.loading { "the stinger is still loading".into() } else { "no stinger video is set (Settings → Switching)".into() });
+                    let why = info.problem.unwrap_or_else(|| if info.loading { "the stinger is still loading".into() } else { "no stinger video is set (Scenes › More › Stinger & fade to black)".into() });
                     self.status.lock_ok().push(LogLevel::Warning, format!("Mixed instead of the stinger: {why}"));
                     mode = TransitionMode::Mix;
                 }
@@ -1786,7 +1786,7 @@ impl Engine {
     pub fn set_auto_switch(&self, on: bool) {
         self.auto.enabled.store(on, Ordering::Relaxed);
         if on && self.config().auto_switch.rules.is_empty() {
-            self.status.lock_ok().push(LogLevel::Warning, "Auto switching has no rules yet: add them in Settings → Switching.");
+            self.status.lock_ok().push(LogLevel::Warning, "Auto switching has no rules yet: add them in Scenes › More › Auto-switching.");
         }
         (self.waker)();
     }

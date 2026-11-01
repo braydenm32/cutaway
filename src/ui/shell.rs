@@ -385,8 +385,16 @@ impl App {
     }
 
     /// ⌘1–⌘7 (when not given to anything else) and Esc (not while typing:
-    /// that's handled in handle_keys' early return).
-    pub(super) fn shell_key(&mut self, combo: KeyCombo) -> bool {
+    /// that's handled in handle_keys' early return). `menu_open`: a menu is
+    /// up, which Esc closes by itself.
+    pub(super) fn shell_key(&mut self, combo: KeyCombo, menu_open: bool) -> bool {
+        // Esc in Edit layout: done, back to Switch.
+        if combo == KeyCombo::plain(egui::Key::Escape) && self.on_show() && self.edit_mode {
+            if !menu_open {
+                self.edit_mode = false;
+            }
+            return true;
+        }
         if combo.command && !combo.shift && !combo.alt {
             if let Some(i) = DIGITS.iter().position(|k| *k == combo.key) {
                 if let Some(a) = AREAS.iter().position(|a| a.key == Some(i as u8 + 1)) {
@@ -525,7 +533,8 @@ impl App {
             let b = egui::Button::selectable(i == active, RichText::new(area.tabs[i].label).size(TEXT_STATE)).min_size(vec2(0.0, 30.0));
             let mut r = ui.add(b);
             if a == 0 && area.tabs[i].id == "edit" {
-                r = r.on_hover_text(format!("Change the layout of the scene on air{}", self.key_hint(Builtin::Edit)));
+                let what = if self.preview_mode() { "Move and resize the frames of the scene in preview" } else { "Move and resize the frames of the scene on air" };
+                r = r.on_hover_text(format!("{what}{}. Esc or Done comes back to Switch", self.key_hint(Builtin::Edit)));
             }
             if r.clicked() {
                 go = Some(i);
@@ -1128,6 +1137,18 @@ impl App {
                     let view = if AREAS[a].tabs[t].id == "phones" { crate::settings::MixView::Phones } else { crate::settings::MixView::Mixer };
                     if let Some(win) = self.settings.as_mut() {
                         win.set_mix_view(view);
+                    }
+                }
+                if page == Section::Switching {
+                    use crate::settings::SwitchView;
+                    let view = match (AREAS[a].id, AREAS[a].tabs[t].id) {
+                        ("scenes", "auto") => SwitchView::Auto,
+                        ("scenes", "stinger") => SwitchView::Stinger,
+                        ("more", "tools") => SwitchView::Replay,
+                        _ => SwitchView::Transition,
+                    };
+                    if let Some(win) = self.settings.as_mut() {
+                        win.set_switch_view(view);
                     }
                 }
                 if page == Section::Audio {

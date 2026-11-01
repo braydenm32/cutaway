@@ -38,6 +38,7 @@ use eframe::egui::{self, vec2, Align, Color32, Layout, RichText};
 pub use live::is_live;
 pub use graphics::GraphicsView;
 pub use mixing::MixView;
+pub use switching::SwitchView;
 pub use sources::SourcesView;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -241,6 +242,9 @@ pub enum SettingsAction {
     Go(&'static str),
     /// Do something on the show now (a media player's next, say).
     Run(crate::control::Action),
+    /// Scenes › Scenes › Edit its layout: Show › Edit layout on this scene
+    /// (put in preview with Preview on; never taken to air).
+    EditLayout(String),
     /// Make a name title that follows who's on air (the desk's one-click
     /// way, with its Undo and its note about names).
     MakeNameTitle,
@@ -307,6 +311,8 @@ pub struct SettingsContext {
     pub ndi_watchers: Option<u32>,
     /// The sources on the program right now (by uid).
     pub on_air: Vec<u64>,
+    /// The scene on the program right now, by name.
+    pub on_air_scene: Option<String>,
     /// What ↶ Undo and ↷ Redo would undo or redo now.
     pub undo: Option<String>,
     pub redo: Option<String>,
@@ -417,6 +423,8 @@ pub struct SettingsUi {
     sel_audio_picked: bool,
     /// Which part of the mixing settings shows.
     mix_view: MixView,
+    /// Which part of the switching settings shows (the Scenes tab it's on).
+    switch_view: SwitchView,
     /// Syrinscape's volume on its page, while it's being set.
     syrin_volume: Option<f64>,
 }
@@ -518,6 +526,7 @@ impl SettingsUi {
             sel_picked: false,
             sel_audio_picked: false,
             mix_view: MixView::Mixer,
+            switch_view: SwitchView::Transition,
             syrin_volume: None,
         }
     }
@@ -609,6 +618,12 @@ impl SettingsUi {
     /// Headphones & talkback).
     pub fn set_mix_view(&mut self, v: MixView) {
         self.mix_view = v;
+    }
+
+    /// Which part of the switching settings the page shows (Scenes ›
+    /// Switching, Auto-switching, Stinger & fade to black, or Replay).
+    pub fn set_switch_view(&mut self, v: SwitchView) {
+        self.switch_view = v;
     }
 
     /// Which part of the sources the page shows (the Sources area's tab).
@@ -784,7 +799,7 @@ impl SettingsUi {
             Section::Switching => self.switching(ui, info),
             Section::Graphics => self.graphics(ui, info),
             Section::Rundown => self.rundown(ui),
-            Section::Scenes => self.scenes(ui),
+            Section::Scenes => self.scenes(ui, info),
             Section::Macros => self.macros(ui),
             Section::Prompter => self.prompter(ui),
             Section::Comments => self.comments(ui),
@@ -2746,6 +2761,7 @@ mod tests {
             guest_status: Vec::new(),
             ndi_watchers: None,
             on_air: Vec::new(),
+            on_air_scene: None,
             undo: None,
             redo: None,
             pictures: Vec::new(),

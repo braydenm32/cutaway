@@ -279,6 +279,9 @@ enum Confirm {
     SwitchShow(String),
     /// Closing the window while recording or live.
     Quit,
+    /// Edit layout's Delete (forensics edit #1: it asks, like Scenes ›
+    /// Remove).
+    DeleteScene(String),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -349,6 +352,9 @@ pub struct App {
     /// Saving a change made as you go: no "Saved settings" message.
     quiet_save: bool,
     drag: Option<Drag>,
+    /// Edit layout's Move picture tool: a drag moves the picture inside
+    /// its frame (as Alt/Option-drag does).
+    pan_tool: bool,
     settings: Option<SettingsUi>,
     confirm: Option<Confirm>,
     /// The REC button: when the hold to stop began, whether this press
@@ -588,6 +594,7 @@ impl App {
             deferred_settings: Vec::new(),
             quiet_save: false,
             drag: None,
+            pan_tool: false,
             settings: None,
             confirm: None,
             rec_hold: None,
@@ -2022,7 +2029,7 @@ impl App {
                 }
                 Some(_) => {}
                 // ⌘1–⌘7 to the areas, Esc back to Show (unless given to something else).
-                None if !repeat && self.shell_key(combo) => {}
+                None if !repeat && self.shell_key(combo, egui::Popup::is_any_open(ctx)) => {}
                 None if !repeat => self.numbered_key(combo),
                 None => {}
             }
@@ -2106,6 +2113,8 @@ impl App {
                 };
                 self.cfg_dirty = true;
             }
+            // On an area page: Show › Edit layout (it was switched on out of sight).
+            Builtin::Edit if !self.on_show() => self.go("show/edit/canvas"),
             Builtin::Edit => self.edit_mode = !self.edit_mode,
             Builtin::Marker => match self.add_marker(None) {
                 Ok(n) => self.toast(format!("{n} added"), false),
@@ -2353,6 +2362,15 @@ impl App {
                     // EDIT=reorder: picture in picture dragged to the front of the bank.
                     if std::env::var("CUTAWAY_UI_TEST_EDIT").is_ok_and(|v| v == "reorder") {
                         self.move_scene(pip, 0);
+                    }
+                    // EDIT=pan: the Move picture tool on. EDIT=delete: Delete pressed (asking first).
+                    if std::env::var("CUTAWAY_UI_TEST_EDIT").is_ok_and(|v| v == "pan") {
+                        self.pan_tool = true;
+                    }
+                    if std::env::var("CUTAWAY_UI_TEST_EDIT").is_ok_and(|v| v == "delete") {
+                        if let Some(sc) = self.edit_target() {
+                            self.confirm = Some(Confirm::DeleteScene(sc.name));
+                        }
                     }
                     // EDIT=move: picture in picture's inset moved, not saved yet (in preview, with Preview on).
                     if std::env::var("CUTAWAY_UI_TEST_EDIT").is_ok_and(|v| v == "move") {
@@ -2985,7 +3003,7 @@ impl App {
                 });
                 self.selected_layer = hit.map(|h| h.0);
                 if resp.drag_started() {
-                    let pan = ui.input(|i| i.modifiers.alt);
+                    let pan = self.pan_tool || ui.input(|i| i.modifiers.alt);
                     self.drag = hit.map(|(layer, resize)| Drag { layer, resize: resize && !pan, pan });
                     if let Some(d) = &self.drag {
                         let name = scene.layers.get(d.layer).and_then(|l| names.get(l.source)).cloned().unwrap_or_default();
@@ -3053,7 +3071,7 @@ impl App {
             }
         }
         if resp.hovered() {
-            let panning = self.drag.as_ref().is_some_and(|d| d.pan) || (self.drag.is_none() && ui.input(|i| i.modifiers.alt));
+            let panning = self.drag.as_ref().is_some_and(|d| d.pan) || (self.drag.is_none() && (self.pan_tool || ui.input(|i| i.modifiers.alt)));
             ctx.set_cursor_icon(if panning {
                 egui::CursorIcon::Move
             } else if self.drag.as_ref().is_some_and(|d| d.resize) {
@@ -3111,17 +3129,12 @@ impl App {
         let mut rename_clash = None;
         // The keys as they're set now (numbers audit #22).
         let (undo_key, redo_key) = (self.key_hint(Builtin::Undo), self.key_hint(Builtin::Redo));
-        // A heading, what's being edited, and Undo / Save / Done.
+        let mut preview_on = false;
+        // What's being edited (red ON AIR with Preview off: forensics edit
+        // #1), then Undo / Redo / Save / Done.
         ui.horizontal(|ui| {
-            ui.label(RichText::new("EDIT LAYOUT").color(AMBER).strong());
-            let (what, tip) = if in_preview {
-                (format!("{} in preview: the program stays as it is until you Take", scene.name), "With Preview on you edit the next shot. Take (or Cut) puts it on air.")
-            } else {
-                (format!("{} on air: changes show at once", scene.name), "Turn on Preview to edit a scene without it showing in the recording or stream until you Take it.")
-            };
-            ui.label(RichText::new(what).color(if in_preview { GREEN } else { Color32::WHITE }).size(TEXT_BODY)).on_hover_text(tip);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Done").clicked() {
+                if ui.button("Done").on_hover_text("Back to Switch (Esc)").clicked() {
                     self.edit_mode = false;
                 }
                 if ui.add_enabled(self.scenes_dirty || self.scene_name_edit.is_some(), egui::Button::new("Save scenes")).on_hover_text("Write the scenes to the settings file now (they're also saved a few seconds after Done)").clicked() {
@@ -3144,15 +3157,42 @@ impl App {
                 }).clicked() {
                     undo_clicked = true;
                 }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    if in_preview {
+                        let chip = egui::Button::new(RichText::new("PREVIEW").strong().size(TEXT_BODY).color(Color32::WHITE)).fill(GREEN_DIM).sense(Sense::hover());
+                        ui.add(chip);
+                        let what = format!("{}: the program stays as it is until you Take", scene.name);
+                        ui.add(egui::Label::new(RichText::new(what).color(GREEN).size(TEXT_BODY)).truncate()).on_hover_text("With Preview on you edit the next shot. Take (or Cut) puts it on air.");
+                    } else {
+                        let chip = egui::Button::new(RichText::new("● ON AIR").strong().size(TEXT_BODY).color(Color32::WHITE)).fill(ON_AIR).sense(Sense::hover());
+                        ui.add(chip).on_hover_text("You're editing the scene on air: the recording and the stream show each change");
+                        if ui.button("Edit in preview").on_hover_text("Turn on Preview: edit the next shot without it showing, then Take it").clicked() {
+                            preview_on = true;
+                        }
+                        let what = format!("{}: changes show at once", scene.name);
+                        ui.add(egui::Label::new(RichText::new(what.clone()).color(Color32::WHITE).size(TEXT_BODY)).truncate()).on_hover_text(format!("{what}, in the recording and the stream"));
+                    }
+                });
             });
         });
-        // The two groups side by side when they fit (as measured last time), else one under the other.
+        // The groups side by side as far as they fit (as measured last
+        // time), the rest on the next row.
         let widths_id = egui::Id::unique("edit_group_widths");
-        let widths: [f32; 2] = ui.ctx().data(|d| d.get_temp(widths_id)).unwrap_or([f32::INFINITY; 2]);
-        let one_row = widths[0] + widths[1] + ui.spacing().item_spacing.x <= ui.available_width();
-        let mut measured = [0.0; 2];
+        let widths: [f32; 3] = ui.ctx().data(|d| d.get_temp(widths_id)).unwrap_or([f32::INFINITY; 3]);
+        let (avail, gap) = (ui.available_width(), ui.spacing().item_spacing.x);
+        let mut new_row = [false; 3];
+        let mut x = 0.0;
+        for (i, w) in widths.iter().enumerate() {
+            if x > 0.0 && x + gap + w > avail {
+                new_row[i] = true;
+                x = *w;
+            } else {
+                x += if x > 0.0 { gap } else { 0.0 } + w;
+            }
+        }
+        let mut measured = [0.0; 3];
         ui.horizontal_wrapped(|ui| {
-            // Frame: the selected frame and the picture in it.
+            // Frame: the selected frame.
             let sel = self.selected_layer.filter(|&i| i < scene.layers.len());
             measured[0] = tool_group(ui, "FRAME", |ui| {
                 egui::ComboBox::from_id_salt("add_layer").selected_text("Add source").show_ui(ui, |ui| {
@@ -3182,42 +3222,53 @@ impl App {
                     (l.x, l.y, l.w, l.h) = (0.0, 0.0, 1.0, 1.0);
                     changed = true;
                 }
-                // The picture in the selected frame: fitted or filling, and zoom
-                // (always there, so the bar doesn't change size on a click).
-                let mut none = Layer::at(0, 0.0, 0.0, 1.0, 1.0);
-                ui.add_enabled_ui(sel.is_some(), |ui| {
-                    let l = match sel {
-                        Some(i) => &mut scene.layers[i],
-                        None => &mut none,
-                    };
-                    if ui.selectable_label(!l.fill && sel.is_some(), "Fit").on_hover_text("Show the whole picture (bars where the frame is another shape)").clicked() {
-                        l.fill = false;
-                        changed = true;
-                    }
-                    if ui.selectable_label(l.fill, "Fill").on_hover_text("Fill the frame, cropping the picture to its shape (or double-click the frame)").clicked() {
-                        l.fill = true;
-                        changed = true;
-                    }
-                    ui.label("Zoom");
-                    if ui.add(egui::Slider::new(&mut l.zoom, 1.0..=crate::scene::MAX_ZOOM).step_by(0.05).fixed_decimals(1).suffix("×")).on_hover_text("Or scroll over the frame").changed() {
-                        changed = true;
-                    }
-                    if ui.add_enabled(l.crops() || l.focus != [0.5, 0.5], egui::Button::new("Reset picture")).on_hover_text("Fit, no zoom, centred").clicked() {
-                        (l.fill, l.zoom, l.focus) = (false, 1.0, [0.5, 0.5]);
-                        changed = true;
-                    }
-                });
             });
-            if !one_row {
+            if new_row[1] {
+                ui.end_row();
+            }
+            // Picture: the picture in the selected frame, fitted or filling,
+            // its zoom, and moving it (always there, so the bar doesn't
+            // change size on a click).
+            measured[1] = tool_group(ui, "PICTURE", |ui| {
+                ui.spacing_mut().slider_width = 90.0;
+                let on = sel.is_some();
+                let mut none = Layer::at(0, 0.0, 0.0, 1.0, 1.0);
+                let l = match sel {
+                    Some(i) => &mut scene.layers[i],
+                    None => &mut none,
+                };
+                if ui.add_enabled(on, egui::Button::selectable(!l.fill && on, "Fit")).on_hover_text("Show the whole picture (bars where the frame is another shape)").on_disabled_hover_text("Click a frame first").clicked() {
+                    l.fill = false;
+                    changed = true;
+                }
+                if ui.add_enabled(on, egui::Button::selectable(l.fill, "Fill")).on_hover_text("Fill the frame, cropping the picture to its shape (or double-click the frame)").on_disabled_hover_text("Click a frame first").clicked() {
+                    l.fill = true;
+                    changed = true;
+                }
+                if ui.add_enabled(on, egui::Slider::new(&mut l.zoom, 1.0..=crate::scene::MAX_ZOOM).step_by(0.05).fixed_decimals(1).suffix("×")).on_hover_text("Zoom (or scroll over the frame)").changed() {
+                    changed = true;
+                }
+                // Moving the picture inside its frame, without holding Alt
+                // (route map #5): on until clicked again.
+                let pan_tip = format!("Drag inside a frame to move the picture in it, once it's zoomed or set to Fill (or hold {} while dragging). Click again to move frames.", if cfg!(target_os = "macos") { "Option" } else { "Alt" });
+                if ui.selectable_label(self.pan_tool, "✥ Move picture").on_hover_text(pan_tip).clicked() {
+                    self.pan_tool = !self.pan_tool;
+                }
+                if ui.add_enabled(on && (l.crops() || l.focus != [0.5, 0.5]), egui::Button::new("Reset")).on_hover_text("Fit, no zoom, centred").clicked() {
+                    (l.fill, l.zoom, l.focus) = (false, 1.0, [0.5, 0.5]);
+                    changed = true;
+                }
+            });
+            if new_row[2] {
                 ui.end_row();
             }
             // Scene: its name, sound and cues, and the scene itself.
-            measured[1] = tool_group(ui, "SCENE", |ui| {
+            measured[2] = tool_group(ui, "SCENE", |ui| {
                 let mut name = match &self.scene_name_edit {
                     Some((of, text)) if *of == old_name => text.clone(),
                     _ => scene.name.clone(),
                 };
-                let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(130.0)).on_hover_text("The scene's name");
+                let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(if ui.available_width() < 600.0 { 84.0 } else { 120.0 })).on_hover_text("The scene's name");
                 if r.changed() {
                     self.scene_name_edit = Some((old_name.clone(), name.clone()));
                 }
@@ -3311,13 +3362,21 @@ impl App {
                     s.name = unique_name(&self.scenes, &format!("{} copy", scene.name));
                     new_scene = Some(s);
                 }
-                if ui.add_enabled(self.scenes.len() > 1, egui::Button::new("Delete")).on_hover_text("Delete this scene (Undo brings it back)").on_disabled_hover_text("The last scene can't go").clicked() {
+                if ui.add_enabled(self.scenes.len() > 1, egui::Button::new("Delete…")).on_hover_text("Delete this scene: asks first, and Undo brings it back").on_disabled_hover_text("The last scene can't go").clicked() {
                     delete = true;
                 }
             });
         });
         ui.ctx().data_mut(|d| d.insert_temp(widths_id, measured));
-        ui.label(RichText::new(if cfg!(target_os = "macos") { "Drag frames · corner to resize · Shift keeps shape · scroll to zoom · double-click to fill · Option-drag moves the picture" } else { "Drag frames · corner to resize · Shift keeps shape · scroll to zoom · double-click to fill · Alt-drag moves the picture" }).color(TEXT_DIM).size(TEXT_SMALL));
+        // What the mouse does on the picture (scroll and double-click have
+        // no button of their own).
+        let alt = if cfg!(target_os = "macos") { "Option" } else { "Alt" };
+        let hint = if self.pan_tool {
+            "✥ Move picture is on: drag inside a frame to move its picture · scroll to zoom · click ✥ again to move frames".to_string()
+        } else {
+            format!("Drag a frame to move it · corner to resize (Shift keeps shape) · scroll to zoom · double-click to fit or fill · ✥ or {alt}-drag moves the picture · Esc when done")
+        };
+        ui.add(egui::Label::new(RichText::new(hint.clone()).color(TEXT_DIM).size(TEXT_SMALL)).truncate()).on_hover_text(hint);
         if let Some(n) = rename_clash {
             self.toast(format!("There's already a scene called {n}"), true);
         }
@@ -3334,10 +3393,18 @@ impl App {
                 self.toast(format!("{} is at the end of the scenes: take it to edit it", s.name), false);
             }
         }
-        if changed || new_scene.is_some() || (delete && self.scenes.len() > 1) {
-            let label = if delete {
-                format!("Delete scene {old_name}")
-            } else if new_scene.is_some() {
+        if delete && self.scenes.len() > 1 {
+            // Asked first (confirm_dialog), then delete_scene.
+            self.confirm = Some(Confirm::DeleteScene(old_name.clone()));
+        }
+        if preview_on {
+            // As the bank's Preview: what's on air goes in preview to edit.
+            self.cfg.transition.preview_mode = true;
+            self.cfg_dirty = true;
+            self.mv_selected = None;
+        }
+        if changed || new_scene.is_some() {
+            let label = if new_scene.is_some() {
                 format!("Duplicate scene {old_name}")
             } else if scene.name != old_name {
                 format!("Rename scene {old_name}")
@@ -3358,20 +3425,6 @@ impl App {
             self.scenes.push(s.clone());
             self.scenes_dirty = true;
             self.show_edit(s);
-        }
-        if delete && self.scenes.len() > 1 {
-            self.scenes.retain(|s| s.name != old_name);
-            self.scenes_dirty = true;
-            if in_preview {
-                // The next scene to edit goes in preview; the program carries on.
-                if let (Some(e), Some(mut s)) = (&self.engine, self.scenes.first().cloned()) {
-                    s.retain_sources(e.sources.len());
-                    e.switcher.set_preview(Some(s));
-                }
-                self.selected_layer = None;
-            } else if let Some(s) = self.scenes.first().cloned() {
-                self.take_scene(&s, true);
-            }
         }
         self.scenes_moved(&before);
         let ctx = ui.ctx().clone();
@@ -3763,17 +3816,13 @@ impl App {
         let mut open_switching = false;
         for m in [TransitionMode::Cut, TransitionMode::Mix] {
             let b = ui.add(egui::Button::selectable(mode == m, RichText::new(m.label().to_uppercase()).strong().size(TEXT_BODY)).min_size(vec2(46.0, 26.0)));
-            let tip = if m == TransitionMode::Cut { format!("Scenes change at once{}", self.key_hint(Builtin::Transition)) } else { format!("Frames glide to their new places and cross-fade{}", self.key_hint(Builtin::Transition)) };
+            let tip = format!("{}{}", m.describe(), self.key_hint(Builtin::Transition));
             if b.on_hover_text(tip).clicked() {
                 mode = m;
             }
         }
         // The length does nothing for a cut, or for a stinger (its video sets it: numbers audit #14).
-        let fixed = match mode {
-            TransitionMode::Cut => Some("A cut is instant. The length is for Mix and the other transitions."),
-            TransitionMode::Stinger => Some("A stinger lasts as long as its video (Settings → Switching)."),
-            _ => None,
-        };
+        let fixed = mode.fixed_length();
         let mut ms = self.cfg.transition.duration_ms;
         let len = ui.add_enabled(fixed.is_none(), egui::DragValue::new(&mut ms).range(0..=3000).speed(10).suffix(" ms"));
         let len = if let Some(why) = fixed { len.on_disabled_hover_text(why) } else { len.on_hover_text("Transition length: drag, or click to type") };
@@ -3786,19 +3835,14 @@ impl App {
         let more = ui.add(egui::Button::selectable(other, RichText::new(label).strong().size(TEXT_BODY)).min_size(vec2(30.0, 26.0)));
         egui::Popup::menu(&more).show(|ui| {
             ui.label(RichText::new("More transitions").color(TEXT_DIM).size(TEXT_SMALL));
-            for (m, what) in [
-                (TransitionMode::Wipe, "A soft edge sweeps across"),
-                (TransitionMode::Push, "The new scene pushes the old one out"),
-                (TransitionMode::Dip, "Through a colour (black unless set)"),
-                (TransitionMode::Stinger, "A video plays over the change"),
-            ] {
-                if ui.selectable_label(mode == m, m.label()).on_hover_text(what).clicked() {
+            for m in [TransitionMode::Wipe, TransitionMode::Push, TransitionMode::Dip, TransitionMode::Stinger] {
+                if ui.selectable_label(mode == m, m.label()).on_hover_text(m.describe()).clicked() {
                     mode = m;
                     ui.close();
                 }
             }
             ui.separator();
-            if ui.button("Transition settings ›").clicked() {
+            if ui.button("Transition settings ›").on_hover_text("Scenes › Switching: the same transition and length, with directions and the dip colour").clicked() {
                 open_switching = true;
                 ui.close();
             }
@@ -3819,18 +3863,19 @@ impl App {
             .fill(if lit { AMBER } else if black { AMBER_DIM } else { RAISED })
             .stroke(Stroke::new(1.0, if black { AMBER } else { LINE }))
             .min_size(vec2(104.0, 26.0));
-        if ui.add(ftb).on_hover_text(if black { "The program is black: click to fade back up" } else { "Fade the program, graphics and sound to black; click again to come back (the fade's length is in Settings → Switching)" }).clicked() {
+        if ui.add(ftb).on_hover_text(if black { "The program is black: click to fade back up" } else { "Fade the program, graphics and sound to black; click again to come back (the fade's length is in Scenes › More › Stinger & fade to black)" }).clicked() {
             self.act(Action::Ftb(Toggle::Toggle));
         }
         if black {
             ui.ctx().request_repaint_after(Duration::from_millis(250));
         }
-        if open_switching && self.settings.is_none() {
-            self.settings = Some(self.new_settings().open_at(Section::Switching));
+        if open_switching {
+            self.go("scenes/switching/transition");
         }
     }
 
-    /// Under the transitions: Preview, AUTO, CC, Edit layout and ⟲ Back.
+    /// Under the transitions: Preview, AUTO, CC and ⟲ Back. (Edit layout is
+    /// Show's second tab, and E.)
     fn bank_toggles(&mut self, ui: &mut egui::Ui) {
         let mut pv = self.cfg.transition.preview_mode;
         if ui.add(egui::Button::selectable(pv, "Preview")).on_hover_text(format!("Pick the next scene in preview, then Take{} or Cut{}", self.key_hint(Builtin::Take), self.key_hint(Builtin::CutPreview))).clicked() {
@@ -3861,10 +3906,10 @@ impl App {
                 }
             });
             auto_btn.on_hover_text("Auto switching: no rules yet. Click to set them up.");
-            if set_up && self.settings.is_none() {
-                self.settings = Some(self.new_settings().open_at(Section::Switching));
+            if set_up {
+                self.go("scenes/auto/rules");
             }
-        } else if auto_btn.on_hover_text(format!("Switch automatically to whoever is talking{}. Rules are in Settings → Switching.", self.key_hint(Builtin::Auto))).clicked() {
+        } else if auto_btn.on_hover_text(format!("Switch automatically to whoever is talking{}. Rules are in Scenes › More › Auto-switching.", self.key_hint(Builtin::Auto))).clicked() {
             self.set_auto(!auto);
         }
         if let Some(c) = self.engine.as_ref().and_then(|e| e.captions()) {
@@ -3877,10 +3922,6 @@ impl App {
             if ui.add(b).on_hover_text(tip).clicked() {
                 c.set_showing(!on);
             }
-        }
-        let label = if self.edit_mode { "Editing" } else { "Edit layout" };
-        if ui.add(egui::Button::selectable(self.edit_mode, label)).on_hover_text(format!("Move and resize frames{}", self.key_hint(Builtin::Edit))).clicked() {
-            self.edit_mode = !self.edit_mode;
         }
         // Back to the scene on air before this one (was Backspace only).
         let last = self.engine.as_ref().and_then(|e| e.switcher.previous()).map(|s| s.name);
@@ -4078,7 +4119,19 @@ impl App {
                 let (rec, live) = self.engine.as_ref().map_or((false, false), |e| (e.is_recording(), e.is_streaming()));
                 quit_text(rec, live, self.busy())
             }
+            Confirm::DeleteScene(n) => {
+                let names = self.scene_names();
+                let i = names.iter().position(|x| x == n).unwrap_or(usize::MAX);
+                let uses = control::scene_uses(&self.live_settings(), &names, i);
+                let used = if uses.is_empty() { String::new() } else { format!("Used by: {}. They won't find it any more. ", uses.join(", ")) };
+                // With Preview off the scene being edited is on air: say what replaces it.
+                let on_air = !self.preview_mode() && self.engine.as_ref().is_some_and(|e| e.switcher.live().name == *n);
+                let next = names.iter().find(|x| *x != n).cloned().unwrap_or_default();
+                let air = if on_air { format!("It's on air: {next} goes on air in its place. ") } else { String::new() };
+                (format!("Delete {n}?"), format!("{air}{used}Undo ({}) brings it back.", self.key_label_or(Builtin::Undo, "⌘Z")), "Delete")
+            }
         };
+        let mut delete_scene = None;
         let mut close = false;
         let mut switch_to = None;
         let r = egui::Modal::new(egui::Id::unique("confirm")).show(ctx, |ui| {
@@ -4094,6 +4147,7 @@ impl App {
                             Confirm::StopRecording => e.stop_recording(),
                             Confirm::SwitchShow(n) => switch_to = Some(n.clone()),
                             Confirm::Quit => {}
+                            Confirm::DeleteScene(n) => delete_scene = Some(n.clone()),
                         }
                     }
                     if which == Confirm::Quit {
@@ -4113,6 +4167,55 @@ impl App {
         if let Some(n) = switch_to {
             self.switch_show(&n, ctx);
         }
+        if let Some(n) = delete_scene {
+            self.delete_scene(&n);
+        }
+    }
+
+    /// Scenes › Scenes › Edit its layout: Show › Edit layout on that scene.
+    /// With Preview on it goes in preview (the program stays as it is);
+    /// with it off, only the scene on air can be edited, so nothing else
+    /// is ever taken to air from here.
+    fn edit_scene_layout(&mut self, name: &str) {
+        let Some(mut s) = self.scenes.iter().find(|s| s.name == name).cloned() else { return };
+        let Some(e) = &self.engine else { return };
+        if self.preview_mode() {
+            s.retain_sources(e.sources.len());
+            e.switcher.set_preview(Some(s));
+        } else if e.switcher.live().name != name {
+            self.toast(format!("{name} isn't on air: turn on Preview to edit it first"), false);
+            return;
+        }
+        self.selected_layer = None;
+        self.go("show/edit/canvas");
+    }
+
+    /// Delete a scene (Edit layout's Delete, once confirmed), as one Undo
+    /// step. With Preview on the first scene goes in preview to edit next;
+    /// with it off, the first scene is taken if this one was on air.
+    fn delete_scene(&mut self, name: &str) {
+        if self.scenes.len() <= 1 || !self.scenes.iter().any(|s| s.name == name) {
+            return;
+        }
+        self.remember(undo::Kind::Scenes, format!("Delete scene {name}"));
+        let before = self.scene_names();
+        self.scenes.retain(|s| s.name != name);
+        self.scenes_dirty = true;
+        self.selected_layer = None;
+        if self.preview_mode() {
+            // The next scene to edit goes in preview; the program carries on.
+            if let (Some(e), Some(mut s)) = (&self.engine, self.scenes.first().cloned()) {
+                if e.switcher.preview().is_none_or(|p| p.name == name) {
+                    s.retain_sources(e.sources.len());
+                    e.switcher.set_preview(Some(s));
+                }
+            }
+        } else if self.engine.as_ref().is_some_and(|e| e.switcher.live().name == name) {
+            if let Some(s) = self.scenes.first().cloned() {
+                self.take_scene(&s, true);
+            }
+        }
+        self.scenes_moved(&before);
     }
 
     /// Only once there's somewhere to stream to (Record › Streaming sets
@@ -5386,6 +5489,7 @@ impl App {
             guest_status: crate::engine::guests::hub().guests(),
             ndi_watchers: self.engine.as_ref().and_then(|e| e.ndi_watchers()),
             on_air: self.engine.as_ref().map(|e| e.switcher.live().layers.iter().filter_map(|l| self.cfg.sources.get(l.source).map(|s| s.uid)).collect()).unwrap_or_default(),
+            on_air_scene: self.engine.as_ref().map(|e| e.switcher.live().name),
             undo: self.history.can_undo().map(String::from),
             redo: self.history.can_redo().map(String::from),
             pictures: Vec::new(),
@@ -5458,6 +5562,7 @@ impl App {
             SettingsAction::Undo => self.undo(ctx),
             SettingsAction::Redo => self.redo(ctx),
             SettingsAction::Go(place) => self.go(place),
+            SettingsAction::EditLayout(name) => self.edit_scene_layout(&name),
             SettingsAction::Run(a) => {
                 if let Err(e) = self.run_action(a) {
                     self.toast(e, true);
@@ -5570,6 +5675,14 @@ impl App {
         }
         let vcam_was = self.engine.as_ref().is_some_and(|e| e.virtual_camera_on()) || self.starting.as_ref().is_some_and(|s| s.vcam);
         let old_names = self.scene_names();
+        // Preview turned off (Scenes › Switching): as the bank's Preview
+        // button, nothing's left waiting in preview.
+        if self.cfg.transition.preview_mode && !new.transition.preview_mode {
+            if let Some(e) = &self.engine {
+                e.switcher.set_preview(None);
+            }
+            self.mv_selected = None;
+        }
         self.cfg = new;
         self.scenes = if self.cfg.scenes.is_empty() { self.cfg.effective_scenes() } else { self.cfg.scenes.clone() };
         // Scenes renamed in Settings → Scenes: the one on air keeps its picture under its new name.

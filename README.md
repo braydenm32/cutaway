@@ -291,17 +291,21 @@ Takes start with the **Take name** from Settings → Recording. Leave it as
 - **Scenes.** Preset scenes (each source full screen, side by side,
   picture-in-picture, grid) plus your own: drag and resize frames live, then
   save them. Start a new scene blank or from one of those layouts
-  (**＋ New scene** in Edit layout or Settings → Scenes), and put the scene
-  buttons in the order you want (drag them in Edit layout, or ↑ ↓ in
-  Settings → Scenes): keys 1–9 take the first nine.
+  (**＋ New scene** in Show › Edit layout or Scenes › Scenes), and put the
+  scene buttons in the order you want (drag them in Edit layout, or ↑ ↓ in
+  Scenes › Scenes): keys 1–9 take the first nine. The Scenes pages save as
+  you go, with Undo.
 - **Fill, crop and zoom per scene.** Each frame in a scene can show the whole
   picture (fit) or fill the frame, cropped to its shape, so a camera in a tall
   half-screen box has no black bars. Zoom in (scroll over the frame, up to
-  4×) and move the picture inside its frame (Option/Alt-drag), so the same
+  4×) and move the picture inside its frame (**✥ Move picture**, or
+  Option/Alt-drag), so the same
   camera can be a close-up in one scene and wide in another. Mixes glide the
   crop along with the frame.
 - **Transitions:** Cut, Mix (shared frames glide to their new places while
   others fade), Wipe, Push and Dip to a colour, with a direction and length.
+  CUT / MIX / ⋯ beside the scenes and **Scenes › Switching** are the same
+  setting: change either and the other shows it at once.
 - **Stinger transitions:** a short video (a logo sweep, a burst of colour)
   plays over the program and the scenes change underneath at its cut point,
   with its sound. Use a stinger with a track matte (most stinger packs
@@ -310,12 +314,17 @@ Takes start with the **Take name** from Settings → Recording. Leave it as
 - **Preview/program:** optionally pick the next scene in a preview monitor
   first, then **Take** (Space) or **Cut** (Enter), like a hardware switcher.
   **Edit layout** then changes the scene in preview, never the one on air,
-  so moving a picture-in-picture doesn't show in the recording.
+  so moving a picture-in-picture doesn't show in the recording. With Preview
+  off, Edit layout shows a red **ON AIR** label, because every change is
+  seen at once, and an **Edit in preview** button.
 - **Automatic switching:** follows whoever is talking, from each person's mic
   channel, with a minimum shot length, a wide shot for crosstalk or long
   shots, and a pause after you switch by hand.
 - **Frame styling:** rounded corners, borders and drop shadows on framed
-  sources (they disappear smoothly as a frame grows to full screen).
+  sources (they disappear smoothly as a frame grows to full screen). They're
+  in Scenes › More ▾ › Program picture and apply as you change them; the
+  program's size, frame rate and background there wait for **Apply
+  (restarts cameras)**.
 - **Graphics:** logos/watermarks (PNG with transparency) and name titles
   (lower thirds) above every scene, each with its own button. Each comes on
   its own way: a fade, a slide in from the nearer side, a wipe from left to
@@ -826,7 +835,7 @@ Video Extensions** on some PCs.
 | Put a source full screen | With Preview off, click its tile in the multiview to pick it (a blue edge), then **Put on air** on the tile: so clicking a tile to look closer never switches the show. Shift+click a tile cuts to it at once. With Preview on, a click puts it in preview. Each tile shows the source's name and who's in it |
 | Preview, then take | Turn on **Preview**; scene keys then load the preview. Space = Take (with the transition), Enter = Cut |
 | Transition | **CUT** or **MIX** beside the scenes, with the length (it's greyed for Cut and Stinger, where it does nothing: a stinger lasts as long as its video). Wipe, Push, Dip and Stinger are under **⋯** (which then reads WIPE ▾ and so on). `T` toggles between Cut and the last transition |
-| Automatic switching | **AUTO** or `A`. Until it has rules (Settings → Switching) AUTO is greyed, and a click says so with a **Set up rules ›** link |
+| Automatic switching | **AUTO** or `A`. Until it has rules (Scenes › More ▾ › Auto-switching) AUTO is greyed, and a click says so with a **Set up rules ›** link |
 | Captions on screen | **CC** or `C` |
 | Who an auto-framed source follows | **⋯** on its tile (or right-click it): follow and shot size |
 | Marker | `M`, or **◆ Marker** beside REC while recording (just **◆ 3** in a narrow window) |
@@ -844,9 +853,9 @@ Video Extensions** on some PCs.
 | Media player | ⟲ ⏯ ⏭ on its tile; **⋯** (or right-click) for the playlist |
 | Record / stop | ⌘R, or **● Record** at the top right. While recording, the **REC** pill (dark, with a pulsing red dot) shows the time with **hold to stop** under it: hold it for a second to stop (a red fill grows across it; a quick click does nothing but light up the hint). ⌘R asks "Stop recording?" first, so a stray click or key can't split the take |
 | Go live / end stream | **◉ Go live** at the top right, once there's somewhere to stream to (set that up in **Record › Streaming**). It says **Going live…** until a destination is really on air, and the **LIVE** time counts from then, the same on the desk, the phone and OSC. It has no key unless you give it one in More › Control › Shortcuts, so a stray key can't start or end a broadcast (a key gets the same checks and "are you sure?" as the button) |
-| Put scenes in order | In **Edit layout**, drag a scene button along the bank (a bar shows where it goes). Only in Edit layout, so a slip during the show can't move one. Or ↑ ↓ in **Settings → Show → Scenes**, which also renames, duplicates, deletes (it asks first, and says what uses the scene) and starts new scenes |
-| New scene | **＋ New scene** in Edit layout (or Settings → Scenes): **Blank**, or from a layout (a source full screen, side by side, picture in picture, grid). It goes at the end of the bank, so no other scene's number changes. With Preview on it goes in preview to edit; otherwise take it to edit it |
-| Edit layout | `E`, or **Edit layout**. With **Preview** on you edit the scene in preview (click a scene to pick it; the one on air goes there if preview is empty): the program, and so the recording and stream, stays exactly as it is until you **Take** or **Cut** it. With Preview off you edit the scene on air, and changes show at once. The bar has two groups. **Frame**: **Add source**, **Remove**, **To front**, **Full frame**, **Fit/Fill** and **Zoom** for the selected frame. **Scene**: its name, **Audio** (inputs it turns on or off), **Cues**, **＋ New scene**, **Duplicate**, **Delete**. Drag frames, drag the corner to resize (Shift keeps shape), double-click a frame to fill it, scroll to zoom, Option/Alt-drag to move the picture. **Unsaved** shows until the scenes are written to disk: **Save scenes**, or a few seconds after **Done** |
+| Put scenes in order | In **Edit layout**, drag a scene button along the bank (a bar shows where it goes). Only in Edit layout, so a slip during the show can't move one. Or ↑ ↓ in **Scenes › Scenes**, which also renames, duplicates, deletes (it asks first, and says what uses the scene) and starts new scenes. Changes there save as you make them (↶ Undo at the bottom, or ⌘Z); **Edit its layout ›** opens the picked scene in Edit layout (in preview with Preview on) |
+| New scene | **＋ New scene** in Edit layout (or Scenes › Scenes): **Blank**, or from a layout (a source full screen, side by side, picture in picture, grid). It goes at the end of the bank, so no other scene's number changes. With Preview on it goes in preview to edit; otherwise take it to edit it |
+| Edit layout | `E`, or the **Edit layout** tab beside **Switch** at the top of Show. With **Preview** on you edit the scene in preview (click a scene to pick it; the one on air goes there if preview is empty): the program, and so the recording and stream, stays exactly as it is until you **Take** or **Cut** it. With Preview off you edit the scene on air, and a red **ON AIR** label says so, with **Edit in preview** to turn Preview on. **↶ Undo** and **↷ Redo** sit at the top. **Frame**: **Add source**, **Remove**, **To front**, **Full frame**. **Picture** (in the selected frame): **Fit/Fill**, **Zoom**, **✥ Move picture** (drag inside a frame to move its picture; Option/Alt-drag does the same) and **Reset**. **Scene**: its name, **Audio** (inputs it turns on or off), **Cues**, **＋ New scene**, **Duplicate**, **Delete…** (it asks first, says what uses the scene, and Undo brings it back). A line under the bar says what the mouse does: drag frames, drag the corner to resize (Shift keeps shape), scroll to zoom, double-click to fit or fill. **Unsaved** shows until the scenes are written to disk: **Save scenes**, or a few seconds after **Done**. **Done** or Esc goes back to Switch |
 | Audio strip | Always at the bottom of the column, under a fixed AUDIO heading, with room kept for it. Fader beside each meter = level, −60 to +12 dB (double-click resets), **ON** = in the mixes, 🎧 = solo in the headphones |
 | Fold or move a panel on the right | Click its heading (▾) to fold it down to one line, again to open it. Drag a heading by its ⠿ dots onto another panel's heading to move it above that one, or use **⋯ › Arrange panels…** at the top of the column (↑ ↓, Open, and **Reset order, folds and width**). Hovering a heading shows **Set up ›** for that panel; ⋯ lists them all. When panels go on below what fits, a line at the bottom says which (click it to scroll). Each show remembers its own |
 | Widen the column on the right | Drag its left edge (the three dots), up to about 60% of the window. Each show remembers its width |
@@ -1079,7 +1088,7 @@ for button feedback.
 | `media:Clips:play` | Media player: `play`, `pause`, `toggle`, `restart`, `next`, `previous` |
 | `source:2` | A source full screen (like clicking it in the multiview) |
 | `captions`, `captions:on`, `captions:off` | Captions on screen |
-| `transition:stinger` | Use the stinger (set in Settings → Switching) |
+| `transition:stinger` | Use the stinger (set in Scenes › More ▾ › Stinger & fade to black) |
 | `pad:1`, `pad:Applause`, `pad:1:stop`, `pads:stop` | Sound pads (press: play, or stop if playing; `play`, `stop`, `release`) |
 | `talkback`, `talkback:on`, `talkback:off` | Talkback |
 | `syrinscape:2`, `syrinscape:Tavern`, `syrinscape:stop`, `syrinscape:volume:0.8` | Syrinscape buttons (by number or name); `syrinscape:mood:19` and `syrinscape:element:1541818` start any by its number |
@@ -1109,7 +1118,7 @@ that go by name (the rundown's scenes, "if it drops, cut to", automatic
 switching, the vertical version's layouts, `scene:Wide`) are unaffected by
 the order, and follow a scene when it's renamed. Back to the last scene
 goes by name too. A deleted scene's references are left as they were
-(Settings → Scenes lists them before you delete).
+(Scenes › Scenes and Edit layout list them before you delete).
 
 Scenes and rundown segments can run commands as **cues** when they start
 (Edit layout → Cues; Settings → Rundown), e.g. a break scene that
@@ -1226,7 +1235,7 @@ the camera stopping (a new close-up starts once you press Apply).
 ## Replay, macros, ticker, comments and the teleprompter
 
 - **Instant replay:** while recording, **⟲ Replay** plays the last few
-  seconds (Settings → Switching → Instant replay sets how many, and the slow
+  seconds (More › Show tools › Replay sets how many, and the slow
   motion speed) over the program, labelled "REPLAY", and fades back to live.
   It comes from the recording itself, so it costs nothing extra.
   - **From any camera:** right-click **⟲ Replay** and pick a camera to see

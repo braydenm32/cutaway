@@ -1,6 +1,6 @@
-//! Settings → Scenes: the scene bank as a list, to put in order, rename,
-//! duplicate, delete and start new ones (blank or from a layout). Frames
-//! are moved with Edit layout in the main window.
+//! Scenes › Scenes: the scene bank as a list, to put in order, rename,
+//! duplicate, delete and start new ones (blank or from a layout). Saves as
+//! you go (live.rs). Frames are moved in Show › Edit layout.
 
 use super::*;
 use crate::scene::Scene;
@@ -85,8 +85,8 @@ impl SettingsUi {
         }
     }
 
-    pub(super) fn scenes(&mut self, ui: &mut egui::Ui) {
-        title(ui, "Scenes", "The buttons along the bottom of the main window, in order: keys 1–9 take the first nine. Put them in order, rename, copy or delete them, or start a new one. Move and resize frames with Edit layout in the main window.");
+    pub(super) fn scenes(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
+        title(ui, "Scenes", "The scene buttons on Show, in order: keys 1–9 take the first nine. Put them in order, rename, copy or delete them, or start a new one. Changes save as you make them.");
         if self.draft.scenes.is_empty() {
             self.draft.scenes = self.draft.effective_scenes();
         }
@@ -103,7 +103,14 @@ impl SettingsUi {
                     let s = &self.draft.scenes[i];
                     let key = if i < 9 { format!("{}", i + 1) } else { "  ".into() };
                     let b = egui::Button::selectable(self.sel_scene == i, RichText::new(format!("{key}   {}", s.name)).size(TEXT_STATE)).min_size(vec2(250.0, 30.0));
-                    if ui.add(b).on_hover_text(if i < 9 { format!("Key {}", i + 1) } else { "No number key (keys 1–9 take the first nine)".into() }).clicked() {
+                    let r = ui.add(b);
+                    // The one on air: a red dot (red only means on air).
+                    let on_air = info.on_air_scene.as_deref() == Some(s.name.as_str());
+                    if on_air {
+                        ui.painter().circle_filled(r.rect.right_center() - vec2(14.0, 0.0), 4.5, ON_AIR);
+                    }
+                    let key = if i < 9 { format!("Key {}", i + 1) } else { "No number key (keys 1–9 take the first nine)".into() };
+                    if r.on_hover_text(if on_air { format!("{key} · on air now") } else { key }).clicked() {
                         self.commit_scene_rename();
                         self.sel_scene = i;
                         self.confirm_scene_delete = None;
@@ -191,6 +198,27 @@ impl SettingsUi {
                     label(ui, "Shows");
                     ui.vertical(|ui| {
                         sketch(ui, &scene, &sources, vec2(240.0, 135.0));
+                        // Its frames are moved on Show › Edit layout: in
+                        // preview with Preview on; on air only if it's on air.
+                        let on_air = info.on_air_scene.as_deref() == Some(scene.name.as_str());
+                        let preview = self.original.transition.preview_mode;
+                        let saved = self.original.scenes.iter().any(|s| s.name == scene.name);
+                        if !saved {
+                            hint(ui, "Edit its layout once its name is saved (leave the name box).");
+                        } else if preview || on_air {
+                            let tip = if preview { "Puts it in preview and opens Show › Edit layout: the program stays as it is until you Take" } else { "It's on air, so changes show in the recording and stream at once" };
+                            if ui.button("Edit its layout ›").on_hover_text(tip).clicked() {
+                                self.pending = Some(SettingsAction::EditLayout(scene.name.clone()));
+                            }
+                            if on_air && !preview {
+                                ui.label(RichText::new("● On air: changes show at once").color(ON_AIR).size(TEXT_SMALL));
+                            }
+                        } else {
+                            hint(ui, "It isn't on air, so its frames are moved in preview first:");
+                            if ui.button("Turn on Preview").on_hover_text("Pick the next scene in a preview monitor, then Take it (Scenes › Switching). Then Edit its layout here puts it in preview").clicked() {
+                                self.draft.transition.preview_mode = true;
+                            }
+                        }
                     });
                     ui.end_row();
                     label(ui, "Sound and cues");
@@ -229,17 +257,18 @@ mod tests {
     fn a_name_still_being_typed_is_applied() {
         let mut cfg = Config::default();
         cfg.scenes = vec![Scene { name: "Wide".into(), ..Default::default() }];
-        let mut win = SettingsUi::new(cfg);
+        let mut win = SettingsUi::new(cfg).open_at(Section::Scenes);
         assert!(!win.dirty());
         win.scene_rename = Some((0, "Wide shot".into()));
-        assert!(win.dirty(), "OK and Apply are on");
+        assert!(win.dirty(), "leaving now hands it over (take_live)");
         win.commit_scene_rename();
         assert_eq!(win.draft.scenes[0].name, "Wide shot");
         assert!(win.scene_rename.is_none());
+        // Saved as you go: nothing waits for an Apply.
+        assert!(!win.dirty());
+        assert!(matches!(win.live_step(&egui::Context::default()), Some(SettingsAction::Live { .. })));
         // A name that can't be used isn't a change.
         win.scene_rename = Some((0, "".into()));
-        assert!(win.dirty(), "the rename above");
-        win.original = win.draft.clone();
         assert!(!win.dirty());
     }
 }
