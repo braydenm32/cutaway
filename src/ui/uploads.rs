@@ -1,4 +1,4 @@
-//! Uploading takes to YouTube and Google Drive (Settings → Upload): a queue
+//! Uploading takes to YouTube and Google Drive (Record › Upload): a queue
 //! worked through in the background, one upload at a time, shown in the
 //! UPLOADS panel. A take is offered once it's saved (or sent straight away
 //! when that's set). The queue is kept in uploads.json beside the settings
@@ -227,13 +227,13 @@ fn jobs_for(cfg: &Config, report: &TakeReport) -> (Vec<Job>, Vec<String>) {
                 }
                 jobs.push(job("YouTube".into(), Work::Youtube { file, title, description, privacy: u.youtube_privacy.api().to_string() }));
             }
-            Some(_) => problems.push("sign in again to allow YouTube (Settings → Upload)".into()),
+            Some(_) => problems.push("sign in again to allow YouTube (Record › Upload)".into()),
             None => problems.push("the take has no program file for YouTube".into()),
         }
     }
     if u.drive {
         if !granted("drive") {
-            problems.push("sign in again to allow Google Drive (Settings → Upload)".into());
+            problems.push("sign in again to allow Google Drive (Record › Upload)".into());
         } else {
             let files: Vec<(PathBuf, Vec<String>)> = match u.drive_files {
                 DriveFiles::Program => file_named(report, "Program").into_iter().map(|f| (f, Vec::new())).collect(),
@@ -494,7 +494,7 @@ impl App {
             });
             if go {
                 if !self.cfg.upload.ready() {
-                    self.toast("Sign in to Google again in Settings → Upload, then Carry on.".into(), true);
+                    self.toast("Sign in to Google again in Record › Upload, then Carry on.".into(), true);
                 } else {
                     let mut back = std::mem::take(&mut *self.uploads.resume.lock_ok());
                     for j in &mut back {
@@ -554,7 +554,9 @@ impl App {
                 }
                 JobState::Uploading => {
                     let f = if j.total > 0 { j.sent as f32 / j.total as f32 } else { 0.0 };
-                    ui.add(egui::ProgressBar::new(f).desired_width(ui.available_width() - 40.0).text(format!("{:.0}% of {}", f * 100.0, crate::util::human_size(j.total))));
+                    // Before its first progress it isn't "0% of 0 KB": it's starting.
+                    let text = if j.total > 0 { format!("{:.0}% of {}", f * 100.0, crate::util::human_size(j.total)) } else { "Starting…".to_string() };
+                    ui.add(egui::ProgressBar::new(f).desired_width(ui.available_width() - 40.0).text(text));
                     if ui.small_button("✕").on_hover_text("Stop this upload").clicked() {
                         j.cancel.store(true, Ordering::Relaxed);
                     }

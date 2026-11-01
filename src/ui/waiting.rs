@@ -166,6 +166,7 @@ impl App {
         let t = r.since.elapsed().as_secs_f32();
         let line = RESCUE_LINES[r.line];
         let mut close = false;
+        let mut to_takes = false;
         egui::Area::new(egui::Id::unique("rescue")).order(egui::Order::Foreground).anchor(Align2::CENTER_TOP, vec2(0.0, 90.0)).show(ctx, |ui| {
             egui::Frame::new()
                 .fill(RAISED)
@@ -226,10 +227,18 @@ impl App {
                                     close = true;
                                 }
                             }
+                            // It's in Record › Takes too, marked Recovered.
+                            if saved > 0 && ui.add(egui::Button::new("See it in Takes").min_size(vec2(0.0, 28.0))).clicked() {
+                                to_takes = true;
+                                close = true;
+                            }
                         });
                     }
                 });
         });
+        if to_takes {
+            self.go("record/takes/takes");
+        }
         if close {
             self.rescue = None;
         } else if !st.finished {

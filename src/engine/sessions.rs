@@ -253,6 +253,86 @@ pub fn install_resolve_script() -> Result<PathBuf> {
     Ok(path)
 }
 
+/// The places DaVinci Resolve (free or Studio) installs itself, most likely
+/// first: the app on a Mac, Resolve.exe on Windows, the binary on Linux.
+pub fn resolve_app_candidates() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if cfg!(target_os = "macos") {
+        let home = crate::config::home_dir();
+        for root in [PathBuf::from("/Applications"), home.join("Applications")] {
+            for (dir, app) in [("DaVinci Resolve", "DaVinci Resolve.app"), ("DaVinci Resolve Studio", "DaVinci Resolve Studio.app"), ("DaVinci Resolve", "DaVinci Resolve Studio.app")] {
+                out.push(root.join(dir).join(app));
+            }
+            out.push(root.join("DaVinci Resolve.app"));
+        }
+    } else if cfg!(windows) {
+        // Program Files (64-bit Resolve, whatever the process is).
+        let mut roots: Vec<PathBuf> = ["ProgramW6432", "ProgramFiles"].iter().filter_map(std::env::var_os).map(PathBuf::from).collect();
+        roots.push(PathBuf::from("C:\\Program Files"));
+        roots.dedup();
+        for r in roots {
+            out.push(r.join("Blackmagic Design").join("DaVinci Resolve").join("Resolve.exe"));
+        }
+    } else {
+        out.push(PathBuf::from("/opt/resolve/bin/resolve"));
+    }
+    out
+}
+
+/// Where DaVinci Resolve is installed, if it's in one of the usual places.
+pub fn find_resolve() -> Option<PathBuf> {
+    resolve_app_candidates().into_iter().find(|p| p.exists())
+}
+
+/// The take's live-edit timeline for Resolve (`<take>.fcpxml`), if it was saved.
+pub fn take_timeline(folder: &Path) -> Option<PathBuf> {
+    let mut found: Vec<PathBuf> = std::fs::read_dir(folder).ok()?.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("fcpxml"))).collect();
+    found.sort();
+    found.into_iter().next()
+}
+
+/// Start DaVinci Resolve, handing it `file` (the take's timeline) when
+/// there is one. Fails when Resolve isn't installed (or won't start).
+pub fn open_in_resolve(file: Option<&Path>) -> Result<()> {
+    use std::process::Command;
+    let app = find_resolve();
+    #[cfg(target_os = "macos")]
+    {
+        let mut cmd = Command::new("open");
+        match &app {
+            Some(a) => cmd.arg("-a").arg(a),
+            // Somewhere else: Launch Services knows it by name (and says
+            // straight away when it doesn't).
+            None => cmd.args(["-a", "DaVinci Resolve"]),
+        };
+        if let Some(f) = file {
+            cmd.arg(f);
+        }
+        if app.is_some() {
+            cmd.spawn().context("starting DaVinci Resolve")?;
+        } else {
+            let ok = cmd.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success());
+            if !ok {
+                anyhow::bail!("DaVinci Resolve isn't installed");
+            }
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let Some(exe) = app else { anyhow::bail!("DaVinci Resolve isn't installed") };
+        let mut cmd = Command::new(&exe);
+        if let Some(dir) = exe.parent() {
+            cmd.current_dir(dir);
+        }
+        if let Some(f) = file {
+            cmd.arg(f);
+        }
+        cmd.spawn().context("starting DaVinci Resolve")?;
+        Ok(())
+    }
+}
+
 /// Where Cutaway notes the latest take, for the Resolve script's default.
 pub fn last_take_file(config_dir: &Path) -> PathBuf {
     config_dir.join("last-take.txt")
@@ -326,5 +406,24 @@ mod tests {
         assert_eq!(track_name("Audio_01_DAW.wav"), "DAW");
         assert_eq!(track_name("Audio_03_Host_Mic_ch2.wav"), "Host Mic 2");
         assert_eq!(track_name("Mix.wav"), "Mix");
+    }
+
+    /// Open in Resolve hands Resolve the take's .fcpxml, and knows where
+    /// Resolve lives on this platform.
+    #[test]
+    fn finds_the_timeline_for_resolve() {
+        let (folder, _) = take("resolve");
+        assert_eq!(take_timeline(&folder), None, "no timeline saved");
+        std::fs::write(folder.join("Take_2026-10-18_20-00-00 (Premiere).xml"), "x").unwrap();
+        std::fs::write(folder.join("Take_2026-10-18_20-00-00.fcpxml"), "x").unwrap();
+        assert_eq!(take_timeline(&folder), Some(folder.join("Take_2026-10-18_20-00-00.fcpxml")));
+        let places = resolve_app_candidates();
+        assert!(!places.is_empty());
+        if cfg!(target_os = "macos") {
+            assert!(places[0].ends_with("DaVinci Resolve/DaVinci Resolve.app"));
+        } else if cfg!(windows) {
+            assert!(places.iter().all(|p| p.ends_with("Resolve.exe")));
+        }
+        let _ = std::fs::remove_dir_all(folder.parent().unwrap());
     }
 }

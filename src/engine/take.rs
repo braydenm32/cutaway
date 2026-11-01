@@ -299,7 +299,10 @@ impl Engine {
             folder: folder.clone(),
             t0,
             t1,
-            started: Instant::now(),
+            // The REC clock counts from the files' first frame (t0), as the
+            // markers and the take's length do, not from when the encoders
+            // finished opening.
+            started: instant_at(t0),
             wall,
             first_scene: live.name.clone(),
             first_angle: self.switcher.angle_now(),
@@ -793,6 +796,18 @@ fn graphics_log(t0: Ns, fps: u32, on_air: &[super::graphics::OnAir]) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// The `Instant` of a moment on the media clock (now or earlier; a moment
+/// still ahead is fine too).
+fn instant_at(t: Ns) -> Instant {
+    let (now, now_ns) = (Instant::now(), clock::now());
+    let ago = now_ns - t;
+    if ago >= 0 {
+        now.checked_sub(Duration::from_nanos(ago as u64)).unwrap_or(now)
+    } else {
+        now + Duration::from_nanos(ago.unsigned_abs())
+    }
+}
+
 fn take_info(setup: &str, report: &recorder::TakeReport, markers: &[Marker], tc_seconds: f64, recorded: chrono::DateTime<chrono::Local>, cfg: &crate::config::Config, timelines: bool, chapters: bool) -> String {
     let timecode_on = cfg.output.timecode;
     let mut s = format!("Cutaway take\nRecorded: {}\nLength: {}\n", recorded.format("%Y-%m-%d %H:%M"), fmt_duration(report.duration));
@@ -861,6 +876,16 @@ mod tests {
         assert_eq!(timecode(0, 30), "00:00:00:00");
         assert_eq!(timecode(1_500_000_000, 30), "00:00:01:15");
         assert_eq!(timecode(3_661_000_000_000, 25), "01:01:01:00");
+    }
+
+    /// The REC clock's zero is the files' first frame: a take whose first
+    /// frame was 2 s ago reads 2 s, whenever the encoders finished opening.
+    #[test]
+    fn rec_clock_counts_from_the_first_frame() {
+        let ago = instant_at(clock::now() - 2 * NS_PER_SEC).elapsed().as_secs_f64();
+        assert!((ago - 2.0).abs() < 0.05, "{ago}");
+        let ahead = instant_at(clock::now() + NS_PER_SEC / 2);
+        assert_eq!(ahead.elapsed(), Duration::ZERO, "not started yet: 0, not negative");
     }
 
     #[test]

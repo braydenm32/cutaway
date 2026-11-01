@@ -1093,6 +1093,9 @@ impl App {
                 if AREAS[a].tabs[t].sections[s].id == "general" {
                     self.clock_choice(ui);
                 }
+                if AREAS[a].tabs[t].id == "screens" {
+                    self.second_screen_now(ui);
+                }
                 if page == Section::Sources {
                     let view = match AREAS[a].tabs[t].id {
                         "closeups" => crate::settings::SourcesView::CloseUps,
@@ -1134,6 +1137,44 @@ impl App {
         ui.separator();
     }
 
+    /// The second screen as it is now, with what its window's own corner
+    /// buttons do (open, full screen, close), above its settings.
+    fn second_screen_now(&mut self, ui: &mut egui::Ui) {
+        use crate::config::DisplayOutput;
+        let shown = match self.cfg.display.output {
+            DisplayOutput::Off => None,
+            DisplayOutput::Program => Some("the program"),
+            DisplayOutput::Multiview => Some("the multiview"),
+            DisplayOutput::Prompter => Some("the teleprompter"),
+        };
+        ui.horizontal(|ui| {
+            let (rect, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
+            ui.painter().circle_filled(rect.center(), 4.5, if shown.is_some() { GREEN } else { LINE });
+            match shown {
+                Some(what) => {
+                    let how = if self.display_fullscreen { "full screen" } else { "in a window" };
+                    ui.label(RichText::new(format!("Second screen: showing {what}, {how}")).size(TEXT_BODY));
+                    let full = if self.display_fullscreen { "Leave full screen" } else { "Full screen" };
+                    if ui.button(full).on_hover_text("F, or double-click the picture, does this on the screen itself").clicked() {
+                        self.display_toggle_full = true;
+                    }
+                    if ui.button("Close").on_hover_text("Esc on the screen itself (twice from full screen)").clicked() {
+                        self.cfg.display.output = DisplayOutput::Off;
+                        self.cfg_dirty = true;
+                    }
+                }
+                None => {
+                    ui.label(RichText::new("Second screen: off").size(TEXT_BODY).color(TEXT_DIM));
+                    if ui.button("Show the program there").on_hover_text("Or pick what it shows below").clicked() {
+                        self.cfg.display.output = DisplayOutput::Program;
+                        self.cfg_dirty = true;
+                    }
+                }
+            }
+        });
+        ui.separator();
+    }
+
     /// The Settings page in the area page, and what it asked for.
     fn settings_page(&mut self, ui: &mut egui::Ui) {
         let info = self.settings_info(ui.ctx());
@@ -1170,8 +1211,8 @@ impl App {
             self.shell.takes_looked = Some(Instant::now());
         }
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            ui.set_max_width(720.0);
-            self.recent_takes_menu(ui);
+            ui.set_max_width(900.0);
+            self.takes_list(ui);
         });
         ui.ctx().request_repaint_after(Duration::from_secs(1));
     }
@@ -1336,7 +1377,7 @@ mod tests {
     fn code_goes_only_to_real_places() {
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut seen = 0;
-        for f in ["ui.rs", "ui/shell.rs", "ui/guide.rs", "ui/panels.rs", "ui/takes.rs"] {
+        for f in ["ui.rs", "ui/shell.rs", "ui/guide.rs", "ui/panels.rs", "ui/takes.rs", "ui/waiting.rs"] {
             let text = std::fs::read_to_string(src.join(f)).unwrap();
             // (Split so this test's own text doesn't match.)
             for piece in text.split(concat!(".go", "(\"")).skip(1) {

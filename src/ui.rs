@@ -464,6 +464,10 @@ pub struct App {
     /// A marker's name being changed in the list under ◆ Marker ▾.
     marker_edit: Option<(crate::media::Ns, String)>,
     display_fullscreen: bool,
+    /// Full screen on or off asked for from Record › Screens & webcam.
+    display_toggle_full: bool,
+    /// The write rate expected for the settings the take in progress started with.
+    take_rate_estimate: Option<f64>,
     /// The output window's corner button shows until then (after the
     /// mouse moves over the window), like a video player's controls.
     display_controls_until: Option<Instant>,
@@ -545,6 +549,8 @@ impl App {
             talk_held: false,
             scenes: cfg.effective_scenes(),
             display_fullscreen: cfg.display.fullscreen,
+            display_toggle_full: false,
+            take_rate_estimate: None,
             display_controls_until: None,
             display_focus_frames: 0,
             display_was_open: false,
@@ -638,7 +644,7 @@ impl App {
                 Some(Outcome::Updated { from }) => {
                     let mut text = format!("Updated to {} (from {from})", env!("CARGO_PKG_VERSION"));
                     if crate::platform::vcam::needs_reinstall() {
-                        text.push_str(". The virtual camera changed too: reinstall it in Settings → Screens & webcam");
+                        text.push_str(". The virtual camera changed too: reinstall it in Record › Screens & webcam");
                     }
                     app.toast(text, false);
                     app.settle_at = Some(Instant::now() + crate::net::self_update::SETTLE);
@@ -2172,7 +2178,7 @@ impl App {
             return;
         }
         if !self.cfg.streaming.destinations.iter().any(|d| d.enabled) {
-            self.toast("It's the scheduled start time, but there's nowhere to stream to: add a destination in Settings → Streaming".into(), true);
+            self.toast("It's the scheduled start time, but there's nowhere to stream to: add one in Record › Streaming".into(), true);
             return;
         }
         self.toast("Going live: it's the scheduled start time".into(), false);
@@ -2417,21 +2423,31 @@ impl App {
             }
             // Stop, to show the "Take saved" card.
             3 if t > 7.0 && std::env::var_os("CUTAWAY_UI_TEST_STOP").is_some() => {
-                self.toggle_record();
+                // Two named markers, then stopped straight away (the key would ask first).
+                for name in ["Guest arrives", "Big laugh"] {
+                    let _ = self.add_marker(Some(name.into()));
+                }
+                if let Some(e) = &self.engine {
+                    e.stop_recording();
+                }
                 5
             }
-            // STOP=takes: then the Recent takes menu.
+            // STOP=takes: then Record › Takes.
             5 if t > 11.0 && std::env::var("CUTAWAY_UI_TEST_STOP").is_ok_and(|v| v == "takes") => {
                 self.go("record/takes/takes");
                 6
             }
             // STOP=resolve: then its Open in Resolve.
             5 if t > 11.0 && std::env::var("CUTAWAY_UI_TEST_STOP").is_ok_and(|v| v == "resolve") => {
+                // (Once the take is saved.)
                 let folder = self.engine.as_ref().and_then(|e| e.status.lock_ok().last_take.as_ref().map(|r| r.folder.clone()));
-                if let Some(f) = folder {
-                    self.take_action(takes::TakeAction::Resolve(f), ctx);
+                match folder {
+                    Some(f) => {
+                        self.take_action(takes::TakeAction::Resolve(f), ctx);
+                        6
+                    }
+                    None => 5,
                 }
-                6
             }
             s => s,
         };
@@ -2447,6 +2463,9 @@ impl App {
         let recording = e.is_recording();
         if recording && !self.was_recording {
             self.takes_made += 1;
+            // What these settings were expected to write, for the
+            // Recording page's "writes about X/hour".
+            self.take_rate_estimate = Some(crate::engine::health::estimate_for(&self.cfg));
         }
         self.was_recording = recording;
         let failed = e.status.lock_ok().rec_failed.take();
@@ -2817,8 +2836,8 @@ impl App {
         painter.rect_filled(badge, 3.0, Color32::from_black_alpha(170));
         painter.text(badge.center(), Align2::CENTER_CENTER, "9:16", FontId::proportional(TEXT_SMALL), Color32::WHITE);
         let r = ui.interact(rect, ui.scope_id().with("tall_monitor"), Sense::click());
-        if r.on_hover_text("The vertical version (click to set its layouts and framing)").clicked() {
-            self.settings = Some(self.new_settings().open_at(Section::Vertical));
+        if r.on_hover_text("The vertical version (click to set its layouts and framing in Record › Vertical version)").clicked() {
+            self.go("record/vertical/vertical");
         }
     }
 
@@ -4088,6 +4107,12 @@ impl App {
         }
         let Some(engine) = &self.engine else { return };
         let stream = engine.status.lock_ok().stream.clone();
+        // A stream scheduled within the day (set in Record › Scheduled).
+        if !engine.is_streaming() {
+            if let Some((text, color)) = self.scheduled_line() {
+                ui.add(egui::Label::new(RichText::new(text).size(TEXT_BODY).color(color)).wrap());
+            }
+        }
         let dot = |ui: &mut egui::Ui, color: Color32| {
             let (r, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
             ui.painter().circle_filled(r.center(), 4.5, color);
@@ -4132,10 +4157,7 @@ impl App {
                         if d.state == DestState::Live {
                             ui.label(RichText::new(format!("{:.1} Mbps", d.kbps / 1000.0)).size(TEXT_BODY).monospace());
                         } else {
-                            let mut text = streamer::describe(&d.state);
-                            if d.attempts > 1 && matches!(d.state, DestState::Retrying { .. }) {
-                                text = format!("{text} (try {})", d.attempts + 1);
-                            }
+                            let text = streamer::describe_dest(d);
                             ui.label(RichText::new(text).size(TEXT_BODY).color(color));
                         }
                     });
@@ -5040,6 +5062,7 @@ impl App {
     fn display_window(&mut self, ctx: &egui::Context) {
         if self.cfg.display.output == DisplayOutput::Off || self.engine.is_none() {
             self.display_was_open = false;
+            self.display_toggle_full = false;
             return;
         }
         if self.display_was_open && self.display_screen_applied != self.cfg.display.screen {
@@ -5108,7 +5131,7 @@ impl App {
             (segment, rec)
         });
         let mut close = false;
-        let mut toggle_full = false;
+        let mut toggle_full = std::mem::take(&mut self.display_toggle_full);
         ctx.show_viewport_immediate(viewport, builder, |ui, _class| {
             let ctx = ui.ctx().clone();
             // Full screen as the window really is (macOS can also leave it
@@ -5310,7 +5333,7 @@ impl App {
             }
             None => (None, Vec::new()),
         };
-        let disk_rate = self.engine.as_ref().and_then(|e| e.status.lock_ok().disk.clone()).filter(|d| d.measured).map(|d| d.rate);
+        let disk_rate = self.engine.as_ref().and_then(|e| e.status.lock_ok().disk.clone()).filter(|d| d.measured).zip(self.take_rate_estimate).map(|(d, e)| (d.rate, e));
         SettingsContext {
             recording,
             streaming,
