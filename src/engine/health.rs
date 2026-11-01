@@ -130,6 +130,11 @@ pub fn disk_space(path: &Path) -> Option<(u64, u64)> {
 }
 
 /// Bytes per second a take writes with these settings (main drive).
+/// `estimate_rate` for a config's own audio inputs.
+pub fn estimate_for(cfg: &Config) -> f64 {
+    estimate_rate(cfg, &cfg.audio.iter().map(|a| (a.channels, a.record)).collect::<Vec<_>>())
+}
+
 pub fn estimate_rate(cfg: &Config, wav_channels: &[(u32, bool)]) -> f64 {
     let out = &cfg.output;
     let codec = out.codec.video_codec();

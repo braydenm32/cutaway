@@ -198,7 +198,7 @@ and [Install on Windows](#install-on-windows).
   **DAWproject** (opens in **Fender Studio Pro**/Studio One, Bitwig and
   Cubase) with every WAV on its own track, lined up, with the markers.
 - **DaVinci Resolve project in one click:** install Cutaway's Resolve script
-  (Settings → Recording) and run **Workspace → Scripts → Cutaway - Build
+  (Record › Recording › Editing) and run **Workspace → Scripts → Cutaway - Build
   project from a take**: a new project at the take's frame rate and size, with bins
   for the cameras and the audio, proxies linked and the live edit as a
   timeline.
@@ -236,15 +236,23 @@ and [Install on Windows](#install-on-windows).
 - **Saving files** after you stop shows what it's finishing (each video, the
   sound, the timeline) and how far along it is, on the Record button.
 - **Take saved:** once it's done, a card under the Record button says how
-  long the take is, how big, and either ✓ All files saved or ⚠ what went
-  wrong (dropped or repeated frames, a file that failed, a backup copy that
-  didn't finish). Its buttons: **Show in Finder** (Explorer on Windows),
-  **Open in Resolve** (see [Editing your takes](#editing-your-takes)) and
-  **Upload** (when uploads are set up). ✕ puts it away; the next recording
-  does too. The time left on the drive stays in view at the top right.
-- **Recent takes:** **Record › Takes** lists the last ten takes in the
-  recording folder (date, length, size, ⚠ if Take.txt notes a problem), each
-  with the same buttons: Finder/Explorer, Resolve and Upload….
+  long the take is, how big (the files it recorded), how many markers it has
+  (click them to see them in **Record › Takes**), and either ✓ All files
+  saved or ⚠ what went wrong (dropped or repeated frames, a file that failed,
+  a backup copy that didn't finish). Its buttons: **Open in Resolve** (see
+  [Editing your takes](#editing-your-takes)), **Show in Finder** (Explorer on
+  Windows) and **Upload** (when uploads are set up). ✕ only hides the card
+  (the take stays first in Record › Takes); the next recording hides it too.
+  The time left on the drive stays in view at the top right.
+- **Record › Takes:** the last ten takes in the recording folder, newest
+  first: date, length, size and file count (the same figures as the card),
+  how many markers, and ⚠ whatever Take.txt notes went wrong. Each take's
+  markers are listed under it (the newest take's open), so they're still
+  there after you stop. A take rescued after a crash is listed too, marked
+  **Recovered**. Each has the card's buttons: Open in Resolve, Finder/Explorer
+  and Upload.
+- **The REC clock** counts from the take's first frame, the same moment the
+  files, the markers and the take's length count from.
 
 A take looks like this:
 
@@ -466,6 +474,8 @@ Takes start with the **Take name** from Settings → Recording. Leave it as
   picture of your displays (or leave it on Automatic: any screen but
   Cutaway's). It never fills the screen Cutaway is on by itself, and Esc
   always gets you out: once to leave full screen, twice to close it.
+  **Record › Screens & webcam** says what it's showing, with **Full screen**
+  and **Close** buttons (and **Show the program there** while it's off).
 - **Live captions:** speech recognised on the Mac (nothing leaves it),
   shown on the stream (and optionally burned into the recording), from the
   mix or any one input.
@@ -718,7 +728,7 @@ Video Extensions** on some PCs.
   lights up for a moment. A desk button is shown, never pressed, so nothing
   goes on air from search. ⌘K works even while you're typing in a box; Esc
   (or ⌘K again) closes it, and what you typed is still there next time.
-- **Changes save as you go** in Sources and Sound (the other areas follow): what you
+- **Changes save as you go** in Sources, Sound, and Record › Recording and Streaming (the other areas follow): what you
   change applies straight away and is saved, a box when you press Enter or
   click elsewhere. **↶ Undo** and **↷ Redo** at the bottom of the page (or ⌘Z
   when you're not typing in a box) take it back. Changes that would add,
@@ -821,7 +831,7 @@ Video Extensions** on some PCs.
 | Audio strip | Always at the bottom of the column, under a fixed AUDIO heading, with room kept for it. Fader beside each meter = level, −60 to +12 dB (double-click resets), **ON** = in the mixes, 🎧 = solo in the headphones |
 | Fold or move a panel on the right | Click its heading (▾) to fold it down to one line, again to open it. Drag a heading by its ⠿ dots onto another panel's heading to move it above that one, or use **⋯ › Arrange panels…** at the top of the column (↑ ↓, Open, and **Reset order, folds and width**). Hovering a heading shows **Set up ›** for that panel; ⋯ lists them all. When panels go on below what fits, a line at the bottom says which (click it to scroll). Each show remembers its own |
 | Widen the column on the right | Drag its left edge (the three dots), up to about 60% of the window. Each show remembers its width |
-| Second screen | **Second screen** under the status light (set it up in Record › More ▾ › Screens & webcam). On that window: double-click or `F` for full screen, Esc to leave full screen, Esc again (or ✕, or Cmd/Ctrl+W) to close |
+| Second screen | **Second screen** under the status light (set it up in Record › More ▾ › Screens & webcam, which also has Full screen and Close buttons). On that window: double-click or `F` for full screen, Esc to leave full screen, Esc again (or ✕, or Cmd/Ctrl+W) to close |
 | Webcam (virtual camera) | **Webcam** under the status light |
 | Switch show | The show's name at the top of the rail, under the logo |
 | Time left on the drive | Top right, beside the clock: **2 h 40 min left**, with **412 GB free** under it (hover for the drive and whether the time is from this take's real write rate or estimated). It turns amber under 30 minutes, the same limit as the status light and the pre-show check |
@@ -840,12 +850,16 @@ TALK, Undo, the graphics) always show the key as it's set now.
 
 1. **Add destinations:** open **Record › Streaming** (or **⋯ › Stream ›** at
    the top of the column of panels; the Stream panel appears once you have a
-   destination), click **＋ Add** and pick a service. Paste the stream key
+   destination). A show that only records has nothing about streaming on the
+   desk, and this tab just says so, with one **＋ Add a destination** button:
+   click it (or **＋ Add** once there's one) and pick a service. Paste the stream key
    from that platform's dashboard. Add as many destinations as you like and
    tick the ones to use.
 2. **Set the quality:** set the stream size, frame rate and bitrate. The
    settings show typical bitrates for the size you pick and how much upload
-   speed you need in total. Keep the total under about 70% of your measured
+   speed you need in total. A stream is never faster than the program, so a
+   frame rate above the program's is sent at the program's (the Quality line
+   shows what's really sent). Keep the total under about 70% of your measured
    upload speed.
 3. **Go live:** press **◉ GO LIVE**. With **Pre-show check** turned on in
    Settings → General & shows, the check runs first and only stops you if
@@ -854,7 +868,8 @@ TALK, Undo, the graphics) always show the key as it's set now.
      it names where to), turns pink with a timer once you're live, and
      orange if any destination isn't live.
    - The **Stream** panel shows each destination's state and bitrate, and why
-     a destination is reconnecting.
+     a destination is reconnecting ("Retrying in 4 s (try 2)", counted up so
+     it never says 0 s). Before a scheduled stream, it shows when that is.
 4. **End the stream:** press the button again. By default it asks first.
 
 ![Streaming settings](docs/settings-streaming.png)
@@ -1393,9 +1408,14 @@ Cutaway only sees the Drive files it made.
   rate and picture size, with bins for the cameras and the audio, proxies
   linked and the live edit as a timeline with the markers. A take moved or
   copied to another drive still works: pick it where it is now.
-  **Open in Resolve** on the Take saved card copies the take's folder and
-  starts the script there; without the script it opens the settings to
-  install it.
+  **Open in Resolve** (on the Take saved card and in Record › Takes) starts
+  DaVinci Resolve with the take's `.fcpxml` timeline and copies the
+  timeline's path, so if Resolve doesn't bring it in by itself it's
+  File → Import → Timeline and paste. With the script installed, it starts
+  Resolve instead and the script starts at that take. If Resolve isn't
+  installed in the usual place (`/Applications` on a Mac,
+  `Program Files\Blackmagic Design` on Windows), the path is still copied
+  and a line says so.
 - **REAPER:** open the take's `.rpp`: every WAV is on its own track, lined
   up, with the markers.
 - **Fender Studio Pro (Studio One), Bitwig, Cubase:** open (or import) the

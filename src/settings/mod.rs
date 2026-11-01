@@ -246,8 +246,10 @@ pub enum SettingsAction {
 pub struct SettingsContext {
     pub recording: bool,
     pub streaming: bool,
-    /// Bytes per second the take in progress writes, once settled (None: not recording or too early).
-    pub disk_rate: Option<f64>,
+    /// Bytes per second the take in progress writes, once settled (None:
+    /// not recording or too early), with the estimate for the settings that
+    /// take started with (so it's only quoted for those settings).
+    pub disk_rate: Option<(f64, f64)>,
     pub engine_facts: Vec<(String, String)>,
     pub log: Vec<LogLine>,
     pub config_path: Option<PathBuf>,
@@ -1421,12 +1423,17 @@ impl SettingsUi {
         });
         {
             let cfg = &self.draft;
-            let rate = info.disk_rate.unwrap_or_else(|| crate::engine::health::estimate_rate(cfg, &cfg.audio.iter().map(|a| (a.channels, a.record)).collect::<Vec<_>>()));
+            // The take's measured rate only for the settings it's recording
+            // with; for any others, the estimate for them (numbers audit #13).
+            let draft_rate = crate::engine::health::estimate_for(cfg);
+            let measured = info.disk_rate.filter(|(_, take)| *take == draft_rate).map(|(r, _)| r);
+            let rate = measured.unwrap_or(draft_rate);
             let free = crate::engine::health::disk_space(&cfg.output.folder).map(|(f, _)| f);
             ui.add_space(4.0);
             hint(ui, &format!(
-                "These settings write about {}/hour{}.",
+                "These settings write about {}/hour ({}){}.",
                 crate::util::human_size((rate * 3600.0) as u64),
+                if measured.is_some() { "measured on this take" } else { "estimated" },
                 free.map(|f| format!(" — the drive has room for about {}", crate::engine::health::fmt_left(f as f64 / rate.max(1.0)))).unwrap_or_default()
             ));
             hint(ui, "Takes are written so that after a crash or a power cut they keep everything up to the last second; Cutaway mends them next time it opens.");
@@ -1637,6 +1644,11 @@ impl SettingsUi {
     // ---- Streaming ----------------------------------------------------------------
 
     fn streaming(&mut self, ui: &mut egui::Ui) {
+        let scheduled = self.draft.schedule.start_time().is_some() || !self.draft.schedule.youtube_id.is_empty();
+        if self.draft.streaming.destinations.is_empty() && !scheduled {
+            self.streaming_empty(ui);
+            return;
+        }
         title(ui, "Streaming", "Go live to any number of places at once: the program is encoded once and sent to each.");
         let scan = self.encoders.lock_ok().clone();
         let n = self.draft.streaming.destinations.len();
@@ -1666,20 +1678,7 @@ impl SettingsUi {
                     egui::ComboBox::from_id_salt("add_dest").selected_text("＋ Add").width(90.0).show_ui(ui, |ui| {
                         for s in Service::ALL {
                             if ui.selectable_label(false, s.label()).clicked() {
-                                let names = self.draft.streaming.destinations.iter().map(|d| d.name.clone()).collect();
-                                let base = match s {
-                                    Service::CustomRtmp => "Custom",
-                                    other => other.label(),
-                                };
-                                self.draft.streaming.destinations.push(StreamDestination {
-                                    name: unique(names, base),
-                                    service: s,
-                                    server: s.default_server().into(),
-                                    key: String::new(),
-                                    enabled: true,
-                                    vertical: false,
-                                });
-                                self.sel_dest = self.draft.streaming.destinations.len() - 1;
+                                self.add_destination(s);
                             }
                         }
                     });
@@ -1765,14 +1764,23 @@ impl SettingsUi {
         let s = &mut self.draft.streaming;
         let up = (s.video_bitrate_kbps + s.audio_bitrate_kbps) as f64 / 1000.0;
         let enabled = s.destinations.iter().filter(|d| d.enabled).count();
-        let state = format!("{}×{} · {} fps · {:.1} Mbps", s.width, s.height, s.fps, up);
+        // The frame rate it's really sent at: never faster than the program's
+        // (numbers audit #20).
+        let program_fps = self.draft.program.fps;
+        let sent_fps = s.fps.min(program_fps).max(1);
+        let state = format!("{}×{} · {} fps · {:.1} Mbps", s.width, s.height, sent_fps, up);
         part(ui, "stream_quality", "Quality", &state, false, |ui| {
             egui::Grid::new("stream_quality_grid").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "Size");
                 size_combo(ui, "stream_size", &mut s.width, &mut s.height, (3840, 2160));
                 ui.end_row();
                 label(ui, "Frame rate");
-                fps_picker(ui, "stream_fps", &mut s.fps, None);
+                ui.horizontal(|ui| {
+                    fps_picker(ui, "stream_fps", &mut s.fps, None);
+                    if s.fps > program_fps {
+                        hint(ui, &format!("sent at {program_fps} fps: the program's own rate (Scenes › Program picture)"));
+                    }
+                });
                 ui.end_row();
                 label(ui, "Video bitrate");
                 ui.horizontal(|ui| {
@@ -1824,6 +1832,52 @@ impl SettingsUi {
             });
         });
         self.scheduled(ui);
+    }
+
+    /// A new destination of this service, picked.
+    fn add_destination(&mut self, s: Service) {
+        let names = self.draft.streaming.destinations.iter().map(|d| d.name.clone()).collect();
+        let base = match s {
+            Service::CustomRtmp => "Custom",
+            other => other.label(),
+        };
+        self.draft.streaming.destinations.push(StreamDestination {
+            name: unique(names, base),
+            service: s,
+            server: s.default_server().into(),
+            key: String::new(),
+            enabled: true,
+            vertical: false,
+        });
+        self.sel_dest = self.draft.streaming.destinations.len() - 1;
+    }
+
+    /// Record › Streaming for a show that only records: what streaming
+    /// would add, and one way to start (nothing about it shows on the desk
+    /// until then).
+    fn streaming_empty(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(24.0);
+        ui.vertical_centered(|ui| {
+            ui.set_max_width(520.0);
+            ui.label(RichText::new("Nowhere to stream to yet").size(TEXT_HEADING).color(Color32::WHITE));
+            ui.add_space(6.0);
+            ui.add(egui::Label::new(RichText::new("This show records only, so the desk shows nothing about streaming. Add where to go live (YouTube, Twitch, Facebook, Kick, any RTMP server or an SRT receiver) and GO LIVE appears beside REC.").color(TEXT_DIM)).wrap());
+            ui.add_space(14.0);
+            let add = ui.add(egui::Button::new(RichText::new("＋ Add a destination").size(TEXT_STATE).color(Color32::WHITE)).fill(ACCENT.gamma_multiply(0.55)).min_size(vec2(220.0, 40.0)));
+            let mut picked = None;
+            egui::Popup::from_toggle_button_response(&add).show(|ui| {
+                ui.set_min_width(220.0);
+                for s in Service::ALL {
+                    if ui.add(egui::Button::new(RichText::new(s.label()).size(TEXT_BODY)).frame(false).min_size(vec2(210.0, 30.0))).clicked() {
+                        picked = Some(s);
+                        ui.close();
+                    }
+                }
+            });
+            if let Some(s) = picked {
+                self.add_destination(s);
+            }
+        });
     }
 
     // ---- Diagnostics ----------------------------------------------------------------

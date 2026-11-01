@@ -39,7 +39,7 @@ use super::*;
 use std::time::{Duration, Instant};
 
 /// The pages that save as you go.
-pub const LIVE: &[Section] = &[Section::Sources, Section::Guests, Section::Audio, Section::Mixing, Section::Pads, Section::Syrinscape];
+pub const LIVE: &[Section] = &[Section::Sources, Section::Guests, Section::Audio, Section::Mixing, Section::Pads, Section::Syrinscape, Section::Recording, Section::Streaming];
 
 /// Whether a page saves as you go.
 pub fn is_live(s: Section) -> bool {
@@ -570,11 +570,11 @@ mod tests {
     #[test]
     fn old_pages_wait_for_apply() {
         let applied = two();
-        let mut win = SettingsUi::new(applied.clone()).open_at(Section::Recording);
-        win.draft.output.export_timelines = !win.draft.output.export_timelines;
+        let mut win = SettingsUi::new(applied.clone()).open_at(Section::Prompter);
+        win.draft.prompter.mirror = !win.draft.prompter.mirror;
         assert!(win.live_step(&egui::Context::default()).is_none());
         assert!(win.unapplied());
-        assert!(!is_live(Section::Recording));
+        assert!(!is_live(Section::Prompter));
     }
 
     fn with_mics() -> Config {
