@@ -118,8 +118,7 @@ impl Chat {
         (st.twitch.clone(), st.youtube.clone())
     }
 
-    /// For tests: a message as if it came from the chat.
-    #[cfg(test)]
+    /// For tests and the UI test: a message as if it came from the chat.
     pub fn inject(&self, platform: Platform, author: &str, text: &str) {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         add(&self.state, ChatMessage { id, platform, author: author.into(), text: text.into(), color: None, at: Instant::now() });

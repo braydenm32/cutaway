@@ -458,11 +458,14 @@ Takes start with the **Take name** from Settings → Recording. Leave it as
   an undo that would take out or restart sources, or switch shows, says so
   and waits until you've stopped.
 - **Phone and tablet remote:** a web page served by Cutaway, on any device on
-  the same network, with a PIN. Program picture, scenes, take/cut, record,
-  live, markers, clips, replay, fade to black, graphics, macros, PTZ presets
-  and moves, the teleprompter, viewer comments, timers, the rundown, sound
-  pads, mics and the media player, plus **tally pages** for phones mounted on
-  cameras and a **prompter page** for a tablet. **Settings → Remote & MIDI**
+  the same network, with a PIN, laid out for one hand: **Scenes | Sound |
+  Titles | More** tabs at the bottom, record and live at the top. Program
+  picture, scenes, take/cut, record, live (with each destination's state),
+  markers, clips, replay, fade to black, graphics, macros, PTZ presets and
+  moves, the teleprompter, viewer comments (read them before one goes on
+  air), timers, the rundown, sound pads, mics with faders and the media
+  player, plus **tally pages** for phones mounted on cameras and a **prompter
+  page** for a tablet. **Settings → Remote & MIDI**
   shows a QR code for the remote's address with the PIN in it: scan it with
   the phone's camera and the remote opens already signed in.
 - **Stream Deck plugin:** keys with live pictures of every scene and source,
@@ -859,12 +862,38 @@ network and type the PIN. The remote always has one (Cutaway makes a
 four-digit PIN if you don't set your own), and a device that gets it wrong
 five times in a row waits a minute before it can try again.
 
-To stop a recording or end the stream from the phone, hold the REC (or pink LIVE)
-button for a second: a fill grows across it, and letting go sooner does
-nothing (a quick tap says **Hold to stop**), so a stray tap can't split the
-show. Starting is one tap. When the pre-show check is turned on
-(Settings → General → **Pre-show check**), starting from the phone, the Stream Deck, MIDI or OSC runs
-the check on the desk first, the same as the Record button.
+The remote has four tabs at the bottom, and it remembers the last one you
+used on that phone:
+
+- **Scenes:** the program picture, **Mix / Cut / ⟲ Back** (with Preview on:
+  **Cut / Take / ⟲ Back**), the scenes in two columns with their key number
+  and an **ON AIR** or **NEXT** tag, and, folded below them, the other
+  transitions, Auto switching, captions and **Fade to black**.
+- **Sound:** sound pads, Syrinscape, talkback, and each mic or input with ON /
+  OFF, its level and a fader (−60 to +12 dB, the same range as `gain`
+  commands and MIDI faders).
+- **Titles:** graphics, rotations and timers.
+- **More:** each stream destination, viewer comments, replay, the rundown,
+  macros, media players, PTZ, the teleprompter and the tally-light links.
+
+Along the top, always: the show's name, one status light (**All good**, or
+**2 to check**: tap it for the list, which includes stream destinations that
+are down and a recording that failed), the recording time left on the drive,
+and the **REC** and **LIVE** buttons. LIVE says how it really is: **GOING
+LIVE…** while it connects, **LIVE 1 of 2** with each destination's state when
+one isn't up. Along the bottom, above the tabs: **Names**, **◆ Marker** and
+**✂ Clip**.
+
+Taps you can't take back need a one-second hold (a fill grows across the
+button, and letting go sooner only says **Hold to…**): stopping the recording,
+going live and ending the stream, fade to black, and turning a mic off.
+Starting a recording, turning a mic on and coming back from black are one tap.
+When the pre-show check is turned on (Settings → General → **Pre-show
+check**), starting from the phone, the Stream Deck, MIDI or OSC runs the check
+on the desk first, the same as the Record button; the phone shows that it's
+waiting on the desk, what the check found, and whether it started.
+
+The remote keeps updating while the Cutaway window is minimised or hidden.
 
 <img src="docs/remote.png" alt="The phone remote" width="300">
 
@@ -875,7 +904,8 @@ the check on the desk first, the same as the Record button.
   `http://<address>:8790/api/action?do=<command>&pin=<PIN>`. In Companion,
   use the Generic HTTP module (or OSC, below).
 - **Other endpoints:** `/api/state` (JSON: scenes, tally, recording, live,
-  inputs, levels, players, captions, disk, problems), `/api/program.jpg`
+  each stream destination, inputs, levels, players, captions, disk, problems,
+  the pre-show check while it's open, recent viewer comments), `/api/program.jpg`
   (the program picture), `/api/tally/<n>` (`program`, `preview` or `off`),
   `/api/key/scene/<n>.png` and `/api/key/source/<n>.png` (key pictures with
   tally, `?size=144`).
@@ -948,7 +978,7 @@ for button feedback.
 | `wait:2.5` | In macros and cues: wait 2.5 seconds before the next command |
 | `ptz:Cam 2:preset:1`, `ptz:2:home`, `ptz:2:left:0.5`, `ptz:2:in`, `ptz:2:stop`, `ptz:2:store:3` | PTZ cameras: presets, home, moves (`left`, `right`, `up`, `down`, `in`, `out`, with a speed) until `stop` |
 | `prompter`, `prompter:faster`, `prompter:slower`, `prompter:back`, `prompter:forward`, `prompter:top` | The teleprompter |
-| `comment:next`, `comment:hide`, `comment` | Viewer comments on screen |
+| `comment:next`, `comment:hide`, `comment`, `comment:<n>` | Viewer comments on screen (`<n>` is a comment's number from `/api/state`) |
 
 A number picks by position, unless something is named that number (a scene
 called "2"). A macro that runs itself is stopped there, with a message.
