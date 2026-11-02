@@ -395,6 +395,9 @@ pub struct App {
     fit_window: bool,
     /// A recording was started (the guide's last step).
     guide_recorded: bool,
+    /// The scene on air when the guide first looked, to tick "Your scenes"
+    /// once another is taken.
+    guide_first_scene: Option<String>,
     /// The Settings page last open, so the window comes back to it (this run only).
     settings_page: Option<Section>,
     /// The input the guide heard sound on once while it was open (its
@@ -626,6 +629,7 @@ impl App {
             search: search::Search::default(),
             fit_window: false,
             guide_recorded: false,
+            guide_first_scene: None,
             settings_page: None,
             guide_heard: 0,
             guide_checked: false,
@@ -1023,8 +1027,8 @@ impl App {
     }
 
     fn toast(&mut self, text: String, error: bool) {
-        // One passing message at a time; errors pile up until they're read.
-        self.toasts.retain(|t| t.error || t.until.is_none());
+        // One passing message at a time; errors pile up (for a while).
+        self.toasts.retain(|t| t.error);
         self.toasts.retain(|t| t.text != text);
         if error {
             // Errors go in the log too, to look back at (and for problem reports).
@@ -1040,7 +1044,10 @@ impl App {
                 }
             }
         }
-        let until = (!error).then(|| Instant::now() + Duration::from_secs(6));
+        // Errors stay longer, then go too, so they never sit over the
+        // pictures for the rest of the show (they're in the Log, and the
+        // status light keeps them).
+        let until = Some(Instant::now() + Duration::from_secs(if error { 30 } else { 6 }));
         self.toasts.push(Toast { text, until, error });
     }
 
@@ -1146,17 +1153,20 @@ impl App {
     fn restore(&mut self, s: &undo::Snapshot, ctx: &egui::Context) -> Result<(), String> {
         match s.kind {
             undo::Kind::Settings if s.settings_differ(&self.cfg) => {
+                // Only what that step changed: faders, mic ON/OFF, the
+                // transition and the like moved on the desk since stay put.
+                let target = s.settings_onto(&self.live_settings());
                 // While recording or live, the same care as Settings and the
                 // show list: no sources taken out or restarted, no other show.
                 if self.engine.as_ref().is_some_and(|e| e.is_recording() || e.is_streaming()) {
-                    if s.cfg.ui.profile != self.cfg.ui.profile {
+                    if target.ui.profile != self.cfg.ui.profile {
                         return Err("stop recording and streaming before switching shows".into());
                     }
-                    if s.cfg.lineup_changed(&self.cfg) {
+                    if target.lineup_changed(&self.cfg) {
                         return Err("it changes the sources or inputs: stop recording and streaming first, then Undo again".into());
                     }
                 }
-                self.apply_settings_as(s.cfg.clone(), ctx, true)?;
+                self.apply_settings_as(target, ctx, true)?;
                 let now = self.live_settings();
                 if let Some(win) = self.settings.as_mut() {
                     win.restored(&now);
@@ -1223,6 +1233,22 @@ impl App {
 
     fn preview_mode(&self) -> bool {
         self.cfg.transition.preview_mode
+    }
+
+    /// Preview on or off, from the bank's Preview button or a controller.
+    /// Turned off, nothing is left waiting in preview.
+    fn set_preview_mode(&mut self, on: bool) {
+        if self.cfg.transition.preview_mode == on {
+            return;
+        }
+        self.cfg.transition.preview_mode = on;
+        self.cfg_dirty = true;
+        if !on {
+            if let Some(e) = &self.engine {
+                e.switcher.set_preview(None);
+            }
+        }
+        self.mv_selected = None;
     }
 
     /// A scene button or number key: to preview (in preview mode) or air.
@@ -1323,6 +1349,15 @@ impl App {
             self.toast(msg, true);
         } else {
             self.guide_recorded = true;
+            self.warn_fat_drive();
+        }
+    }
+
+    /// A take just started on a FAT32 drive: say so while it's early.
+    fn warn_fat_drive(&mut self) {
+        let folder = self.cfg.output.folder.clone();
+        if crate::engine::health::fat_drive(&folder) {
+            self.toast(crate::engine::health::fat_warning(&folder), true);
         }
     }
 
@@ -1432,6 +1467,38 @@ impl App {
                 }
                 Ok(format!("{} in preview", s.name))
             }
+            Action::Press(t) => {
+                let i = find_scene(&t)?;
+                let name = self.scenes[i].name.clone();
+                let to_preview = self.preview_mode();
+                self.press_scene(i, false);
+                Ok(if to_preview { format!("{name} in preview") } else { format!("Took {name}") })
+            }
+            Action::PreviewMode(t) => {
+                let on = toggle(&t, self.preview_mode());
+                self.set_preview_mode(on);
+                Ok(format!("Preview {}", if on { "on" } else { "off" }))
+            }
+            Action::Precheck(start) => {
+                let pc = self.precheck.as_ref().ok_or("there's no pre-show check open")?;
+                if !start {
+                    self.precheck = None;
+                    return Ok("Pre-show check closed".into());
+                }
+                let then = pc.then.ok_or("this pre-show check has nothing to start: close it instead")?;
+                if pc.waiting > 0 {
+                    return Err("the pre-show check is still checking: wait a moment".into());
+                }
+                self.precheck = None;
+                match then {
+                    Then::Record => self.start_recording_now(),
+                    Then::Live => self.start_stream_now(),
+                }
+                Ok(match then {
+                    Then::Record => "Recording".into(),
+                    Then::Live => "Going live".into(),
+                })
+            }
             Action::Back => {
                 let name = self.back_to_last_scene()?;
                 Ok(format!("Back to {name}"))
@@ -1462,6 +1529,7 @@ impl App {
                     let e = self.engine.as_ref().ok_or("the engine isn't running")?;
                     if want {
                         e.start_recording().map_err(|e| format!("{e:#}"))?;
+                        self.warn_fat_drive();
                     } else {
                         e.stop_recording();
                     }
@@ -1705,10 +1773,14 @@ impl App {
     fn handle_requests(&mut self) {
         while let Ok(r) = self.requests_rx.try_recv() {
             let result = self.run_action(r.action);
+            // What couldn't be done shows here too, whoever asked (the phone,
+            // a Stream Deck key, MIDI): the person at the laptop needs to
+            // know REC didn't start, not only the key that was pressed.
+            if let Err(e) = &result {
+                self.toast(format!("Couldn't do what a controller asked: {e}"), true);
+            }
             if let Some(reply) = r.reply {
                 let _ = reply.send(result);
-            } else if let Err(e) = result {
-                self.toast(e, true);
             }
         }
     }
@@ -1785,6 +1857,7 @@ impl App {
             program: live.name.clone(),
             preview: preview.as_ref().map(|p| p.name.clone()),
             preview_mode: self.cfg.transition.preview_mode,
+            marker_labels: self.cfg.remote.marker_labels(),
             transition: self.cfg.transition.mode.name().into(),
             auto: e.auto_switch_enabled(),
             captions: e.captions().is_some_and(|c| c.showing()),
@@ -1965,7 +2038,7 @@ impl App {
                 let Some(msg) = midi::Msg::parse(&map.message) else { continue };
                 let Ok(action) = Action::parse(&map.action) else { continue };
                 let value = match &action {
-                    Action::Scene(t) | Action::CutTo(t) | Action::Preview(t) => match t.find(&scene_names).map(|i| &state.scenes[i]) {
+                    Action::Scene(t) | Action::CutTo(t) | Action::Preview(t) | Action::Press(t) => match t.find(&scene_names).map(|i| &state.scenes[i]) {
                         Some(sc) if sc.program => 127,
                         Some(sc) if sc.preview => 32,
                         _ => 0,
@@ -1977,6 +2050,7 @@ impl App {
                     },
                     Action::Record(_) => lit(state.recording),
                     Action::Live(_) => lit(state.live),
+                    Action::PreviewMode(_) => lit(state.preview_mode),
                     Action::Auto(_) => lit(state.auto),
                     Action::Graphic(t, _) => lit(t.find(&gnames).is_some_and(|i| state.graphics[i].on)),
                     Action::Rotation(t, _) => {
@@ -2013,7 +2087,12 @@ impl App {
     fn handle_keys(&mut self, ctx: &egui::Context) {
         // Let go of held shortcuts (talkback, sound pads), even if a window
         // opened while the key was down.
-        let ups: Vec<Key> = ctx.input(|i| i.events.iter().filter_map(|e| if let egui::Event::Key { key, pressed: false, .. } = e { Some(*key) } else { None }).collect());
+        let mut ups: Vec<Key> = ctx.input(|i| i.events.iter().filter_map(|e| if let egui::Event::Key { key, pressed: false, .. } = e { Some(*key) } else { None }).collect());
+        // The window losing focus (another app, ⌘Tab) never sends the key's
+        // release: let go of everything held then.
+        if ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::WindowFocused(false)))) {
+            ups.extend(self.held_keys.iter().map(|(k, _)| *k));
+        }
         for k in ups {
             let (go, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut self.held_keys).into_iter().partition(|(h, _)| *h == k);
             self.held_keys = keep;
@@ -2115,13 +2194,15 @@ impl App {
         if label.is_empty() { label } else { format!(" ({label})") }
     }
 
-    /// 1–9 take a scene (Shift cuts straight to it), Alt/Option + 1–9 show a
-    /// graphic, F1–F12 play sound pads.
+    /// 1–9 and 0 (the tenth) take a scene (Shift cuts straight to it),
+    /// Alt/Option + 1–9 and 0 show a graphic, F1–F12 play sound pads.
     fn numbered_key(&mut self, combo: KeyCombo) {
         if combo.command {
             return;
         }
-        if let Some(i) = shortcuts::DIGITS.iter().position(|k| *k == combo.key) {
+        // 1–9, and 0 for the tenth.
+        let digit = shortcuts::DIGITS.iter().position(|k| *k == combo.key).or((combo.key == shortcuts::TENTH).then_some(9));
+        if let Some(i) = digit {
             match (combo.shift, combo.alt) {
                 (_, false) => self.press_scene(i, combo.shift),
                 (false, true) => self.toggle_graphic(i, None),
@@ -2153,6 +2234,10 @@ impl App {
             // On an area page: Show › Edit layout (it was switched on out of sight).
             Builtin::Edit if !self.on_show() => self.go("show/edit/canvas"),
             Builtin::Edit => self.edit_mode = !self.edit_mode,
+            // (A key pressed between takes is a hint, not an error.)
+            Builtin::Marker | Builtin::NamedMarker if !self.engine.as_ref().is_some_and(|e| e.is_recording()) => {
+                self.toast("Markers work while recording: start recording first".into(), false);
+            }
             Builtin::Marker => match self.add_marker(None) {
                 Ok(n) => self.toast(format!("{n} added"), false),
                 Err(err) => self.toast(err, true),
@@ -2733,6 +2818,7 @@ impl App {
         }
         match profiles::load(&dir, name) {
             Ok(mut cfg) => {
+                cfg.ui.keep_this_computers(&self.cfg.ui);
                 let before = self.snapshot(undo::Kind::Settings, format!("Switch to \"{name}\""));
                 // Its own scenes (settings without any would keep this show's).
                 if cfg.scenes.is_empty() {
@@ -3523,6 +3609,7 @@ impl App {
         let left = area.center().x - total_w / 2.0;
         // Offline as everywhere else says it (numbers audit #29): marked by
         // the watchdog and still not delivering.
+        let why_offline = engine.status.lock_ok().why_offline.clone();
         let infos: Vec<(String, Arc<FrameSlot>, f32, bool, Option<String>)> = engine
             .sources
             .iter()
@@ -3567,7 +3654,9 @@ impl App {
             }
             let wait = waiting::TileWait::of(slot, *offline, detail.is_some());
             if wait != waiting::TileWait::Fine {
-                waiting::draw_tile_wait(&painter, pic, wait, detail.as_deref(), ctx.input(|i| i.time) as f32);
+                // A camera that isn't allowed says so on its tile, not just NO SIGNAL.
+                let why = if wait == waiting::TileWait::NoSignal { why_offline.get(name.as_str()).cloned() } else { None };
+                waiting::draw_tile_wait(&painter, pic, wait, detail.as_deref().or(why.as_deref()), ctx.input(|i| i.time) as f32);
                 if wait != waiting::TileWait::NoSignal {
                     ctx.request_repaint_after(Duration::from_millis(50));
                 }
@@ -3960,17 +4049,9 @@ impl App {
     /// Under the transitions: Preview, AUTO, CC and ⟲ Back. (Edit layout is
     /// Show's second tab, and E.)
     fn bank_toggles(&mut self, ui: &mut egui::Ui) {
-        let mut pv = self.cfg.transition.preview_mode;
+        let pv = self.cfg.transition.preview_mode;
         if ui.add(egui::Button::selectable(pv, "Preview")).on_hover_text(format!("Pick the next scene in preview, then Take{} or Cut{}", self.key_hint(Builtin::Take), self.key_hint(Builtin::CutPreview))).clicked() {
-            pv = !pv;
-            self.cfg.transition.preview_mode = pv;
-            self.cfg_dirty = true;
-            if !pv {
-                if let Some(e) = &self.engine {
-                    e.switcher.set_preview(None);
-                }
-            }
-            self.mv_selected = None;
+            self.set_preview_mode(!pv);
         }
         // AUTO: greyed until it has rules (forensics bank #5); a click then
         // says why and links to them. The A key still turns it on and off.
@@ -4037,7 +4118,7 @@ impl App {
     /// on big buttons also a live picture of the scene (its sources'
     /// multiview pictures where its frames are). Some((i, cut)) when pressed.
     fn scene_button(&mut self, ui: &mut egui::Ui, i: usize, s: &Scene, (is_live, is_preview): (bool, bool), missing: Option<&Vec<String>>, layout: BankLayout) -> Option<(usize, bool)> {
-        let key = if i < 9 { format!("{}", i + 1) } else { String::new() };
+        let key = shortcuts::number_label(i).unwrap_or_default();
         // In Edit layout the buttons can be dragged into another order (never
         // during the show otherwise, so a slip can't upset it).
         let (rect, resp) = ui.allocate_exact_size(layout.button, if self.edit_mode { Sense::click_and_drag() } else { Sense::click() });
@@ -4147,9 +4228,9 @@ impl App {
         let top = if name_y.is_nan() { rect.center().y - galley.size().y / 2.0 } else { name_y - galley.size().y };
         painter.galley(pos2(name_left, top), galley, Color32::WHITE);
         let press = resp.clicked().then(|| (i, ui.input(|inp| inp.modifiers.shift)));
-        let tip = match (i < 9, self.cfg.transition.preview_mode) {
-            (true, true) => format!("Press {} to preview (Shift+{} cuts to program)", i + 1, i + 1),
-            (true, false) => format!("Press {} (Shift+{} to cut)", i + 1, i + 1),
+        let tip = match (shortcuts::number_label(i), self.cfg.transition.preview_mode) {
+            (Some(k), true) => format!("Press {k} to preview (Shift+{k} cuts to program)"),
+            (Some(k), false) => format!("Press {k} (Shift+{k} to cut)"),
             _ => "Click to take".into(),
         };
         let tip = if elided { format!("{}\n{tip}", s.name) } else { tip };
@@ -4341,10 +4422,14 @@ impl App {
             }
             return;
         }
+        if let Some(e) = &stream.error {
+            ui.add(egui::Label::new(RichText::new(e).size(TEXT_BODY).color(ERROR)).wrap());
+        }
         if let Some(kbps) = stream.lowered_kbps {
             ui.label(RichText::new(format!("⚠ bitrate lowered to {:.1} Mbps while the connection catches up", kbps as f64 / 1000.0)).size(TEXT_BODY).color(AMBER))
                 .on_hover_text(format!("Set: {:.1} Mbps. It comes back by itself once every destination keeps up.", self.cfg.streaming.video_bitrate_kbps as f64 / 1000.0));
         }
+        let mut open_settings = false;
         for d in &stream.destinations {
             if d.state == DestState::Off {
                 continue;
@@ -4373,13 +4458,21 @@ impl App {
                 ui.label(RichText::new("   ⚠ connection too slow — dropping frames").size(TEXT_BODY).color(AMBER));
             }
             if let Some(m) = &d.message {
-                if d.state != DestState::Live {
-                    ui.label(RichText::new(format!("   {m}")).size(TEXT_SMALL).color(TEXT_DIM));
+                // The encoder's own failure is already said once above.
+                if d.state != DestState::Live && stream.error.as_deref() != Some(m.as_str()) {
+                    let tone = if d.state == DestState::Failed { ERROR } else { TEXT_DIM };
+                    ui.add(egui::Label::new(RichText::new(m).size(TEXT_BODY).color(tone)).wrap());
+                }
+                if d.state == DestState::Failed && m.contains("Record › Streaming") && ui.small_button("Open streaming settings").clicked() {
+                    open_settings = true;
                 }
                 resp.on_hover_text(format!("{} — {m}", d.service.label()));
             } else {
                 resp.on_hover_text(d.service.label());
             }
+        }
+        if open_settings {
+            self.open_page(Section::Streaming, None);
         }
     }
 
@@ -4430,9 +4523,34 @@ impl App {
                     None => name.clone(),
                 };
                 let over = clock.as_ref().is_some_and(|c| c.1);
-                let text = RichText::new(shown).strong().size(TEXT_BODY).color(if *on { Color32::BLACK } else if over { ERROR } else { Color32::WHITE });
-                let b = egui::Button::new(text).fill(if *on { AMBER } else { RAISED }).min_size(vec2(64.0, 28.0));
+                // A title that follows whoever is on air: amber only while
+                // it's really on screen, an amber edge while it's switched on
+                // but waiting for a named person, and whose name it shows.
+                let follow = self.engine.as_ref().and_then(|e| e.graphics.follow_state(i));
+                let (lit, armed, shown) = match &follow {
+                    Some((visible, wanted, who)) => (*visible, *wanted && !*visible, match who {
+                        Some(w) => format!("{name}: {w}"),
+                        None => shown,
+                    }),
+                    None => (*on, false, shown),
+                };
+                let text = RichText::new(shown).strong().size(TEXT_BODY).color(if lit { Color32::BLACK } else if over { ERROR } else { Color32::WHITE });
+                let mut b = egui::Button::new(text).fill(if lit { AMBER } else { RAISED }).min_size(vec2(64.0, 28.0));
+                if armed {
+                    b = b.stroke(egui::Stroke::new(1.5, AMBER));
+                }
                 let mut r = ui.add(b);
+                if let Some((visible, wanted, who)) = &follow {
+                    let state = match (visible, wanted, who) {
+                        (true, _, Some(w)) => format!("On screen now: {w}."),
+                        (true, _, None) => "On screen now.".to_string(),
+                        (false, true, Some(_)) => "Switched on: coming on now.".to_string(),
+                        (false, true, None) => "Switched on: it comes on when someone with a name is on air (Sources › People & names).".to_string(),
+                        (false, false, Some(w)) => format!("Off. Click to show {w}'s name."),
+                        (false, false, None) => "Off. Nobody with a name is on air right now.".to_string(),
+                    };
+                    r = r.on_hover_text(state);
+                }
                 let is_timer = self.cfg.graphics.get(i).is_some_and(|g| g.kind == crate::config::GraphicKind::Clock && g.clock.is_timer());
                 let shown = on_air.iter().find(|o| o.name == *name).zip(since).map(|(o, (_, when))| {
                     let n = o.showings.len();
@@ -4441,7 +4559,7 @@ impl App {
                 r = r.on_hover_text(match problem {
                     Some(p) => format!("⚠ {p}"),
                     None if is_timer => "Show / hide. ▶ starts it and ⟲ puts it back to the start (right-click for more).".into(),
-                    None if i < 9 => format!("Show / hide ({})", shortcuts::KeyCombo { alt: true, ..shortcuts::KeyCombo::plain(shortcuts::DIGITS[i]) }.label()),
+                    None if shortcuts::number_key(i).is_some() => format!("Show / hide ({})", shortcuts::KeyCombo { alt: true, ..shortcuts::KeyCombo::plain(shortcuts::number_key(i).unwrap_or(shortcuts::TENTH)) }.label()),
                     None => "Show / hide".into(),
                 } + &shown.unwrap_or_default());
                 if r.clicked() {
@@ -5025,11 +5143,17 @@ impl App {
             self.toast("The engine isn't running".into(), true);
             return;
         };
-        let items = e.local_checks();
+        let mut items = e.local_checks();
         let dests: Vec<_> = self.cfg.streaming.destinations.iter().filter(|d| d.enabled).cloned().collect();
         let check_streams = then != Some(Then::Record) && !dests.is_empty() && !e.is_streaming();
-        let waiting = if check_streams { dests.len() } else { 0 };
-        let rx = check_streams.then(|| precheck::check_destinations(dests));
+        let dests = if check_streams { dests } else { Vec::new() };
+        // Opening every encoder at once takes a moment: off the UI thread.
+        let plan = e.encoder_plan();
+        if plan.is_none() {
+            items.push(CheckItem { level: Level::Ok, what: "Encoders".into(), detail: format!("{} · in use now", e.encoder_description()) });
+        }
+        let waiting = dests.len() + plan.is_some() as usize;
+        let rx = (waiting > 0).then(|| precheck::check_in_background(plan, dests));
         self.precheck = Some(Precheck { items, rx, waiting, then, started: Instant::now() });
     }
 
@@ -5052,7 +5176,7 @@ impl App {
             }
             if pc.waiting > 0 && pc.started.elapsed() > Duration::from_secs(20) {
                 // Don't wait for ever on a server that never answers.
-                pc.items.push(CheckItem { level: Level::Warn, what: "Streaming".into(), detail: format!("{} destination(s) didn't answer in time", pc.waiting) });
+                pc.items.push(CheckItem { level: Level::Warn, what: "Pre-show check".into(), detail: format!("{} check(s) didn't answer in time", pc.waiting) });
                 pc.waiting = 0;
             }
             if pc.waiting == 0 {
@@ -5326,6 +5450,20 @@ impl App {
         if self.self_test.is_some() {
             // Screenshots: beside the main window rather than under it.
             builder = builder.with_position([1500.0, 60.0]);
+        }
+        // The pictures are normally brought in by Show's monitors and
+        // multiview; on any other area the output would freeze, so bring them
+        // in here too (a second call in the same frame costs nothing).
+        {
+            let engine = self.engine.as_ref().unwrap();
+            let program_slot = engine.program_preview.clone();
+            let preview_slot = engine.preview_bus.clone();
+            let sources: Vec<Arc<FrameSlot>> = if multiview { engine.sources.iter().map(|s| s.preview.clone()).collect() } else { Vec::new() };
+            self.texture(ctx, "program", &program_slot);
+            self.texture(ctx, "previewbus", &preview_slot);
+            for (i, slot) in sources.iter().enumerate() {
+                self.texture(ctx, &format!("src{i}"), slot);
+            }
         }
         let program = self.textures.get("program").map(|t| t.1.id());
         let preview = self.textures.get("previewbus").map(|t| t.1.id());
@@ -5647,7 +5785,9 @@ impl App {
                 self.quiet_save = true;
                 let result = self.apply_settings(merged, ctx);
                 self.quiet_save = false;
-                if result.is_ok() && before.settings_differ(&self.cfg) {
+                // (Scenes renamed, moved, added or deleted on Scenes › Scenes
+                // are a step too.)
+                if result.is_ok() && (before.settings_differ(&self.cfg) || before.scenes != self.scenes) {
                     self.history.record(before);
                 }
                 let now = self.live_settings();
@@ -5722,8 +5862,10 @@ impl App {
         if cfg.scenes.is_empty() {
             cfg.scenes = cfg.effective_scenes();
         }
-        // The show it's saved as stays this one.
+        // The show it's saved as stays this one, and this computer's own
+        // settings (interface size, updates) stay as they are.
         cfg.ui.profile = self.cfg.ui.profile.clone();
+        cfg.ui.keep_this_computers(&self.cfg.ui);
         match self.apply_settings_as(cfg, ctx, true) {
             Ok(()) => {
                 self.history.record(before);
@@ -5975,6 +6117,10 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.confirm = Some(Confirm::Quit);
         }
+        // The latest settings step's result, for an Undo of only that step.
+        self.history.settle(&self.cfg);
+        // No sleeping (computer or screens) while recording or live.
+        crate::platform::awake::keep_awake(self.engine.as_ref().is_some_and(|e| e.is_recording() || e.is_streaming()));
         self.fit_first_window(&ctx);
         self.tick_starting(&ctx);
         self.autosave();

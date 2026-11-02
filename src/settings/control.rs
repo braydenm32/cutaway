@@ -94,7 +94,7 @@ impl SettingsUi {
         control_part(ui, "remote", only, "Phone and tablet remote", &state, true, |ui| {
             egui::Grid::new("remote").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "Remote control");
-                ui.checkbox(&mut r.enabled, "devices on this network can run the show");
+                ui.checkbox(&mut r.enabled, "devices on this network can run the show (the phone remote and the Stream Deck both use it)");
                 ui.end_row();
                 label(ui, "Port");
                 ui.add(egui::DragValue::new(&mut r.port).range(1024..=65535));
@@ -107,10 +107,13 @@ impl SettingsUi {
                     }
                     if r.enabled && r.pin.trim().is_empty() {
                         ui.label(RichText::new("a PIN is made as it turns on").color(TEXT_DIM).size(TEXT_BODY));
-                    } else if r.pin.trim().chars().count() < 4 {
+                    } else if !r.pin.trim().is_empty() && r.pin.trim().chars().count() < 4 {
                         ui.label(RichText::new("short PINs are easy to guess: use 4 or more").color(AMBER).size(TEXT_BODY));
                     }
                 });
+                ui.end_row();
+                label(ui, "Quick marker names");
+                ui.add(egui::TextEdit::singleline(&mut r.marker_labels).desired_width(260.0).hint_text("Good, Retake, Cut here"));
                 ui.end_row();
             });
             if !r.enabled {
@@ -127,6 +130,9 @@ impl SettingsUi {
                     ui.ctx().copy_text(url.clone());
                 }
             });
+            if cfg!(windows) {
+                hint(ui, "Phone can't connect? Windows Firewall may be blocking it: in Windows Security › Firewall & network protection › Allow an app through firewall, tick Private for Cutaway.");
+            }
             ui.horizontal(|ui| {
                 qr_code(ui, &remote_link(&url, &r.pin), 132.0);
                 ui.vertical(|ui| {
@@ -198,7 +204,7 @@ impl SettingsUi {
                 }
             });
             if !remote_on {
-                ui.label(RichText::new("The plugin talks to Cutaway through the phone remote: turn it on in More › Control › Phone remote.").color(AMBER));
+                ui.label(RichText::new("The plugin needs Remote control, the same switch as the phone remote: turn it on in More › Control › Phone remote.").color(AMBER));
             } else {
                 let ip = crate::engine::netsrc::local_ip().unwrap_or_else(|| "this-computer".into());
                 hint(ui, &format!("In a key's settings, use address 127.0.0.1:{port} on this computer ({ip}:{port} from another one), and the PIN."));

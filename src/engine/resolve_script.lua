@@ -3,7 +3,9 @@
 -- In DaVinci Resolve: Workspace > Scripts > Cutaway - Build project from a take.
 -- After Open in Resolve in Cutaway it builds that take straight away;
 -- otherwise pick a take folder recorded by Cutaway (it starts at the latest take).
--- You get a new project named after the take, at the take's frame rate and size,
+-- You get a new project named after the take, at the take's frame rate and size
+-- (or, when a project from the same show and day is open, the choice to add the
+-- take to it, in a bin of its own),
 -- with bins for the cameras, the program and the audio, proxies linked,
 -- and the live edit as a timeline: your cuts on V1, every camera (and the
 -- program) full length on its own track above, switched off, all in sync,
@@ -20,8 +22,29 @@ end
 local fusion = fu or resolve:Fusion()
 local sep = package.config:sub(1, 1)
 
-local function say(text)
+-- A box in Resolve with the message (Resolve's Console is out of sight, so
+-- what happened, and above all what went wrong, would go unseen).
+local function popup(text)
+  local ui = fusion.UIManager
+  local disp = bmd.UIDispatcher(ui)
+  local win = disp:AddWindow({ ID = "CutawayMessage", WindowTitle = "Cutaway", Geometry = { 300, 300, 520, 150 } }, ui:VGroup({
+    ui:Label({ ID = "Text", Text = text, WordWrap = true }),
+    ui:HGroup({ Weight = 0, ui:HGap(0, 1), ui:Button({ ID = "OK", Text = "OK" }) }),
+  }))
+  win.On.OK.Clicked = function() disp:ExitLoop() end
+  win.On.CutawayMessage.Close = function() disp:ExitLoop() end
+  win:Show()
+  disp:RunLoop()
+  win:Hide()
+end
+
+-- `show`: also in a box (the outcome; progress notes only go to the Console).
+local function say(text, show)
   print("Cutaway: " .. text)
+  if show then
+    local text_shown = text:sub(1, 1):upper() .. text:sub(2)
+    pcall(popup, text_shown)
+  end
 end
 
 -- Where Cutaway keeps its notes (next to its settings).
@@ -107,6 +130,12 @@ local function file_name(path)
   return (tostring(path):match("[^/\\]+$")) or tostring(path)
 end
 
+-- Rescued after a crash (its Take.txt says so).
+local function rescued_take(dir)
+  local first = first_lines(dir .. sep .. "Take.txt")
+  return first ~= nil and first:find("(recovered)", 1, true) ~= nil
+end
+
 -- A take without Cutaway's take file: its videos, sound and .fcpxml.
 local function take_from_folder(folder)
   local t = { name = file_name(folder), folder = folder, cameras = {}, audio = {}, proxies = {}, markers = {} }
@@ -156,14 +185,14 @@ local file = take_file(folder)
 if file then
   local ok, t = pcall(dofile, file)
   if not ok or type(t) ~= "table" then
-    say("couldn't read " .. file)
+    say("couldn't read " .. file, true)
     return
   end
   take = t
 else
   take = take_from_folder(folder)
   if not take then
-    say("that folder isn't a Cutaway take (there are no videos in it). Pick the take's own folder, the one with Program.mp4 in it.")
+    say("that folder isn't a Cutaway take (there are no videos in it). Pick the take's own folder, the one with Program.mp4 in it.", true)
     return
   end
 end
@@ -210,29 +239,91 @@ end
 take.proxies = proxies
 
 local pm = resolve:GetProjectManager()
+
+-- "My_Show_2026-11-01_20-04-12" -> "My_Show", "2026-11-01": the show and the day.
+local function show_and_day(n)
+  if type(n) ~= "string" then
+    return nil
+  end
+  local show, day = n:match("^(.-)_(%d%d%d%d%-%d%d%-%d%d)_%d%d%-%d%d%-%d%d")
+  return show, day
+end
+
+-- A question with two answers, in a box in Resolve. nil when there's no box.
+local function ask(text, first, second)
+  local test = rawget(_G, "cutaway_test_choose")
+  if test then
+    return test(text, first, second)
+  end
+  local ui = fusion.UIManager
+  local disp = bmd.UIDispatcher(ui)
+  local answer = nil
+  local win = disp:AddWindow({ ID = "CutawayAsk", WindowTitle = "Cutaway", Geometry = { 300, 300, 520, 160 } }, ui:VGroup({
+    ui:Label({ ID = "Text", Text = text, WordWrap = true }),
+    ui:HGroup({ Weight = 0, ui:HGap(0, 1), ui:Button({ ID = "Second", Text = second }), ui:Button({ ID = "First", Text = first }) }),
+  }))
+  win.On.First.Clicked = function()
+    answer = first
+    disp:ExitLoop()
+  end
+  win.On.Second.Clicked = function()
+    answer = second
+    disp:ExitLoop()
+  end
+  win.On.CutawayAsk.Close = function() disp:ExitLoop() end
+  win:Show()
+  disp:RunLoop()
+  win:Hide()
+  return answer
+end
+
+-- A project Cutaway made for the same show on the same day is open (an
+-- earlier take, before a break): offer to add this take to it.
+local project = nil
+local adding = false
+local open = pm.GetCurrentProject and pm:GetCurrentProject() or nil
+local open_name = open and open.GetName and open:GetName() or nil
+local show, day = show_and_day(take.name)
+local open_show, open_day = show_and_day(open_name)
+if show and open_show == show and open_day == day and open_name ~= take.name then
+  local ok, answer = pcall(ask, "The project \"" .. open_name .. "\" (the same show, the same day) is open. Add this take to it, or make a new project?", "Add to this project", "New project")
+  if ok and answer == "Add to this project" then
+    project = open
+    adding = true
+  end
+end
 local name = take.name
-local project = pm:CreateProject(name)
-if not project then
-  name = take.name .. " " .. os.date("%H%M%S")
+if adding then
+  name = open_name
+else
   project = pm:CreateProject(name)
+  if not project then
+    name = take.name .. " " .. os.date("%H%M%S")
+    project = pm:CreateProject(name)
+  end
 end
 if not project then
-  say("Resolve couldn't make a project called " .. name)
+  say("Resolve couldn't make a project called " .. name, true)
   return
 end
--- The take's frame rate and picture size, before any media or timeline.
-if take.fps then
+-- The take's frame rate and picture size, before any media or timeline
+-- (a project being added to keeps its own).
+if take.fps and not adding then
   local fps = tostring(take.fps)
   project:SetSetting("timelineFrameRate", fps)
   project:SetSetting("timelinePlaybackFrameRate", fps)
 end
-if take.width and take.height then
+if take.width and take.height and not adding then
   project:SetSetting("timelineResolutionWidth", tostring(take.width))
   project:SetSetting("timelineResolutionHeight", tostring(take.height))
 end
 
 local pool = project:GetMediaPool()
 local root = pool:GetRootFolder()
+if adding then
+  -- This take's own bin, with its cameras, audio and live edit inside.
+  root = pool:AddSubFolder(root, take.name) or root
+end
 local function bin(title, files)
   if #files == 0 then
     return nil, {}
@@ -344,7 +435,8 @@ local function build_live_edit()
   pcall(function()
     tl:SetTrackName("video", 1, "Live edit")
   end)
-  -- Every angle, full length, from the start: in parallel, in sync.
+  -- Every angle, full length, from where it starts (the start, unless its
+  -- camera joined during the take): in parallel, in sync.
   for k, a in ipairs(take.angles or {}) do
     local item = item_for(a.file)
     if item and a.frames and a.frames > 0 then
@@ -355,7 +447,7 @@ local function build_live_edit()
         end
       end
       if (tl:GetTrackCount("video") or 0) >= track then
-        local placed = place(item, 0, a.frames, 0, track, 1)
+        local placed = place(item, 0, a.frames, a.at or 0, track, 1)
         if placed then
           pcall(function()
             tl:SetTrackName("video", track, a.name)
@@ -390,6 +482,7 @@ local function build_live_edit()
 end
 
 local timeline = nil
+local why_failed = nil
 local ok, built, why = pcall(build_live_edit)
 if ok and built then
   timeline = built
@@ -408,6 +501,7 @@ else
   if take.edit then
     say("building the live edit clip by clip didn't work (" .. tostring(why) .. "); importing the .fcpxml instead.")
   end
+  why_failed = why
 end
 
 -- Otherwise: the .fcpxml (Resolve brings in the live edit and every angle).
@@ -456,7 +550,27 @@ if how == "api" then
 elseif how == "fcpxml" then
   table.insert(parts, "the live edit")
 end
-say("made the project \"" .. name .. "\" with " .. table.concat(parts, ", ") .. ".")
-if not timeline then
-  say("there's no live edit for this take (Cutaway saves it when Record > Recording > Editing > Editor timelines is on).")
+local done
+if adding then
+  done = "added " .. take.name .. " to the project \"" .. name .. "\" (in its own bin) with " .. table.concat(parts, ", ") .. "."
+else
+  done = "made the project \"" .. name .. "\" with " .. table.concat(parts, ", ") .. "."
 end
+say(done)
+if not timeline then
+  local why
+  if take.edit or take.timeline then
+    why = "Resolve couldn't build the live edit" .. (why_failed and (" (" .. tostring(why_failed) .. ")") or "") .. ". The cameras, program and sound are all in the project's bins"
+    if take.timeline then
+      why = why .. "; you can try File > Import > Timeline with " .. file_name(take.timeline)
+    end
+    why = why .. "."
+  elseif rescued_take(folder) then
+    why = "this take was rescued after Cutaway stopped while recording, and its switches weren't saved (it was recorded with an older Cutaway), so there's no live edit to build. The cameras, program and sound are all in the project's bins."
+  else
+    why = "there's no live edit for this take (Cutaway saves it when Record > Recording > Editing > Editor timelines is on). The cameras, program and sound are all in the project's bins."
+  end
+  say(why)
+  done = done .. "\n\n" .. why:sub(1, 1):upper() .. why:sub(2)
+end
+pcall(popup, done:sub(1, 1):upper() .. done:sub(2))

@@ -140,8 +140,54 @@ pub fn resolve_backend(codec: VideoCodec, wanted: &str) -> Result<&'static str> 
         .ok_or_else(|| anyhow::anyhow!("encoder \"{wanted}\" isn't available for {}", codec_name(codec)))
 }
 
+/// Whether a backend setting means "pick for me".
+pub fn is_auto(wanted: &str) -> bool {
+    wanted.is_empty() || wanted.eq_ignore_ascii_case("auto")
+}
+
 pub fn create_video(s: &VideoSettings, sink: VideoSink) -> Result<Box<dyn VideoEncoder>> {
-    let backend = resolve_backend(s.codec, &s.backend)?;
+    create_video_noting(s, sink).map(|(e, _)| e)
+}
+
+/// An encoder that started, the backend it runs on, and a note when
+/// "auto" had to hand over to another one.
+pub type Started = (Box<dyn VideoEncoder>, &'static str, Option<String>);
+
+/// Like [`create_video`], but with "auto" a backend that won't start (a
+/// graphics card out of encoder sessions, a driver that refuses another
+/// 4K encode) hands over to the next one in the list instead of failing
+/// the file. The note says what happened, for the status log.
+pub fn create_video_noting(s: &VideoSettings, sink: VideoSink) -> Result<(Box<dyn VideoEncoder>, Option<String>)> {
+    start_video(s, sink).map(|(e, _, note)| (e, note))
+}
+
+/// [`create_video_noting`], also saying which backend it ended up on.
+pub fn start_video(s: &VideoSettings, sink: VideoSink) -> Result<Started> {
+    if !is_auto(&s.backend) {
+        let b = resolve_backend(s.codec, &s.backend)?;
+        return Ok((create_backend(s, b, sink)?, b, None));
+    }
+    let list = video_backends(s.codec);
+    let Some(first) = list.first().copied() else {
+        anyhow::bail!("no {} encoder is available in this build", codec_name(s.codec));
+    };
+    let first_err = match create_backend(s, first, sink.clone()) {
+        Ok(e) => return Ok((e, first, None)),
+        Err(e) => e,
+    };
+    for b in list.iter().skip(1).copied() {
+        if let Ok(e) = create_backend(s, b, sink.clone()) {
+            let mut note = format!("{} couldn't start ({first_err:#}), so {} is used instead", describe_backend(first), describe_backend(b));
+            if !is_hardware(b) {
+                note.push_str(". The software encoder may not keep up with several files or 4K");
+            }
+            return Ok((e, b, Some(note)));
+        }
+    }
+    Err(first_err)
+}
+
+fn create_backend(s: &VideoSettings, backend: &'static str, sink: VideoSink) -> Result<Box<dyn VideoEncoder>> {
     match backend {
         #[cfg(target_os = "macos")]
         "videotoolbox" => Ok(Box::new(crate::platform::macos::vt::VtEncoder::new(s, sink)?)),

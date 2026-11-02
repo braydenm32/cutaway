@@ -8,6 +8,9 @@
 //! scene:3  scene:Host        take a scene (with the current transition)
 //! cut:3                      take a scene with a cut
 //! preview:3                  put a scene in preview      take / cut   preview to program
+//! press:3                    as the desk's scene button: preview with Preview on, else take
+//! preview:on  preview:off  preview:toggle   Preview mode on or off
+//! scene:#3                   (#: always the third button, even if a scene is called "3")
 //! back                       back to the scene on air before this one
 //! transition:mix             cut, mix, wipe, push or dip
 //! record  record:on  record:off       live  live:on  live:off
@@ -33,6 +36,7 @@
 //! macro:Intro  macro:2       run a macro          wait:1.5   (in macros and cues)
 //! prompter:play / pause / toggle / faster / slower / top / back / forward
 //! comment:next  comment:hide  comment:toggle        viewer comments on screen
+//! precheck:start  precheck:cancel   answer the pre-show check open on the desk
 //! ```
 
 pub mod keys;
@@ -59,14 +63,18 @@ pub enum Toggle {
 /// A scene, source, graphic or input: by number (from 1) or by name.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Target {
+    /// A number: a position, unless something is named that number.
     Index(usize),
     Name(String),
+    /// `#3`: always the position, whatever the names. The phone remote and
+    /// the Stream Deck send these, since their buttons mean a place.
+    Place(usize),
 }
 
 impl std::fmt::Display for Target {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Target::Index(i) => write!(f, "{}", i + 1),
+            Target::Index(i) | Target::Place(i) => write!(f, "{}", i + 1),
             Target::Name(n) => write!(f, "{n}"),
         }
     }
@@ -74,9 +82,13 @@ impl std::fmt::Display for Target {
 
 impl Target {
     pub fn parse(s: &str) -> Target {
-        match s.trim().parse::<usize>() {
+        let s = s.trim();
+        if let Some(n) = s.strip_prefix('#').and_then(|n| n.trim().parse::<usize>().ok()).filter(|&n| n >= 1) {
+            return Target::Place(n - 1);
+        }
+        match s.parse::<usize>() {
             Ok(n) if n >= 1 => Target::Index(n - 1),
-            _ => Target::Name(s.trim().to_string()),
+            _ => Target::Name(s.to_string()),
         }
     }
 
@@ -86,6 +98,7 @@ impl Target {
         match self {
             Target::Index(i) => names.iter().position(|x| x.trim() == (i + 1).to_string()).or((*i < names.len()).then_some(*i)),
             Target::Name(n) => names.iter().position(|x| x.eq_ignore_ascii_case(n)),
+            Target::Place(i) => (*i < names.len()).then_some(*i),
         }
     }
 }
@@ -195,6 +208,10 @@ pub enum Action {
     Scene(Target),
     CutTo(Target),
     Preview(Target),
+    /// As the desk's scene button: to preview with Preview on, else on air.
+    Press(Target),
+    /// Preview mode on or off.
+    PreviewMode(Toggle),
     /// Preview to program with the transition.
     Take,
     /// Preview to program, instantly.
@@ -213,7 +230,8 @@ pub enum Action {
     /// Input level in dB (MIDI faders).
     Gain(Target, f64),
     Media(Target, MediaCmd),
-    /// A source full screen, like clicking it in the multiview.
+    /// A source full screen: straight on air (to preview with Preview on),
+    /// like Shift+clicking its tile on the desk.
     Source(Target),
     /// Live captions on screen.
     Captions(Toggle),
@@ -237,6 +255,9 @@ pub enum Action {
     Wait(f32),
     Prompter(PrompterCmd),
     Comment(CommentCmd),
+    /// Answer the pre-show check open on the desk: true starts (anyway),
+    /// false cancels.
+    Precheck(bool),
 }
 
 /// A fader position (0..1) as a level: 0 is silence (-60 dB), 0.79 is
@@ -275,7 +296,17 @@ impl Action {
             "back" | "last" => Action::Back,
             "cut" if rest.is_some() => Action::CutTo(Target::parse(need(rest, &verb)?)),
             "cut" => Action::Cut,
-            "preview" | "pvw" => Action::Preview(Target::parse(need(rest, &verb)?)),
+            "preview" | "pvw" => {
+                let r = need(rest, &verb)?;
+                // (Words, not 1 and 0: preview:1 is the first scene.)
+                match r.trim().to_lowercase().as_str() {
+                    "on" => Action::PreviewMode(Toggle::On),
+                    "off" => Action::PreviewMode(Toggle::Off),
+                    "toggle" => Action::PreviewMode(Toggle::Toggle),
+                    _ => Action::Preview(Target::parse(r)),
+                }
+            }
+            "press" | "button" => Action::Press(Target::parse(need(rest, &verb)?)),
             "transition" => {
                 let m = need(rest, &verb)?.trim().to_lowercase();
                 Action::Transition(TransitionMode::ALL.into_iter().find(|t| t.name() == m).ok_or_else(|| format!("unknown transition \"{m}\""))?)
@@ -447,6 +478,11 @@ impl Action {
                     Err(_) => return Err(format!("unknown comment command \"{other}\" (next, hide, toggle or a comment's number)")),
                 },
             }),
+            "precheck" | "check" => match rest.unwrap_or("").trim().to_lowercase().as_str() {
+                "start" | "go" | "ok" | "yes" => Action::Precheck(true),
+                "cancel" | "close" | "no" | "stop" => Action::Precheck(false),
+                other => return Err(format!("unknown pre-show check command \"{other}\" (start or cancel)")),
+            },
             other => return Err(format!("unknown command \"{other}\"")),
         })
     }
@@ -464,6 +500,8 @@ impl Action {
             Action::Scene(x) => format!("Take scene {x}"),
             Action::CutTo(x) => format!("Cut to scene {x}"),
             Action::Preview(x) => format!("Preview scene {x}"),
+            Action::Press(x) => format!("Scene {x} (as the desk: preview with Preview on)"),
+            Action::PreviewMode(x) => t(x, "Preview on", "Preview off", "Preview on/off"),
             Action::Take => "Take".into(),
             Action::Cut => "Cut".into(),
             Action::Back => "Back to the last scene".into(),
@@ -544,6 +582,8 @@ impl Action {
                 CommentCmd::Toggle => "Comment on/off".into(),
                 CommentCmd::Show(id) => format!("Show comment {id}"),
             },
+            Action::Precheck(true) => "Pre-show check: start".into(),
+            Action::Precheck(false) => "Pre-show check: cancel".into(),
         }
     }
 }
@@ -627,7 +667,7 @@ pub fn scene_renames(before: &[String], after: &[String]) -> Vec<(String, String
 /// it doesn't pick a scene, or still picks the same one).
 fn follow_command(c: &str, before: &[String], new_pos: &dyn Fn(usize) -> Option<usize>, new_name: &dyn Fn(&str) -> Option<String>) -> Option<String> {
     let (verb, rest) = c.split_once(':')?;
-    if !matches!(verb.trim().to_lowercase().as_str(), "scene" | "take" | "cut" | "preview" | "pvw") || rest.trim().is_empty() {
+    if !matches!(verb.trim().to_lowercase().as_str(), "scene" | "take" | "cut" | "preview" | "pvw" | "press" | "button") || rest.trim().is_empty() {
         return None;
     }
     match Target::parse(rest) {
@@ -645,7 +685,7 @@ fn follow_command(c: &str, before: &[String], new_pos: &dyn Fn(usize) -> Option<
 pub fn scene_uses(cfg: &Config, names: &[String], i: usize) -> Vec<String> {
     let Some(name) = names.get(i) else { return Vec::new() };
     let picks = |c: &str| match Action::parse(c) {
-        Ok(Action::Scene(t) | Action::CutTo(t) | Action::Preview(t)) => t.find(names) == Some(i),
+        Ok(Action::Scene(t) | Action::CutTo(t) | Action::Preview(t) | Action::Press(t)) => t.find(names) == Some(i),
         _ => false,
     };
     let mut out = Vec::new();
@@ -695,6 +735,7 @@ pub fn suggestions(cfg: &Config) -> Vec<(String, String)> {
             ("take", "Take (preview to program)"),
             ("cut", "Cut (preview to program)"),
             ("back", "Back to the last scene"),
+            ("preview:toggle", "Preview on/off"),
             ("record", "Record on/off"),
             ("live", "Go live / end stream"),
             ("marker", "Add a marker"),
@@ -706,6 +747,7 @@ pub fn suggestions(cfg: &Config) -> Vec<(String, String)> {
             ("transition:wipe", "Transition: wipe"),
             ("transition:push", "Transition: push"),
             ("transition:dip", "Transition: dip"),
+            ("transition:stinger", "Transition: stinger"),
             ("ftb", "Fade to black / back up"),
             ("replay", "Instant replay"),
             ("replay:slow", "Instant replay in slow motion"),
@@ -764,6 +806,43 @@ pub fn suggestions(cfg: &Config) -> Vec<(String, String)> {
 
 #[cfg(test)]
 mod tests {
+    /// The packed plugin people install (and the release carries) is the
+    /// plugin folder as it is now: change the folder, run streamdeck/pack.sh.
+    #[test]
+    fn streamdeck_plugin_is_packed_from_the_folder() {
+        use std::io::Read;
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("streamdeck");
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(root.join("Cutaway.streamDeckPlugin")).unwrap()).unwrap();
+        let mut packed = std::collections::BTreeMap::new();
+        for i in 0..zip.len() {
+            let mut f = zip.by_index(i).unwrap();
+            if f.is_dir() {
+                continue;
+            }
+            let mut bytes = Vec::new();
+            f.read_to_end(&mut bytes).unwrap();
+            packed.insert(f.name().map(|n| n.to_string()).unwrap_or_default(), bytes);
+        }
+        let mut on_disk = std::collections::BTreeMap::new();
+        let mut dirs = vec![root.join("app.cutaway.streamdeck.sdPlugin")];
+        while let Some(d) = dirs.pop() {
+            for e in std::fs::read_dir(&d).unwrap() {
+                let p = e.unwrap().path();
+                if p.is_dir() {
+                    dirs.push(p);
+                } else if p.file_name().is_some_and(|n| n != ".DS_Store") {
+                    let name = p.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
+                    on_disk.insert(name, std::fs::read(&p).unwrap());
+                }
+            }
+        }
+        let names = |m: &std::collections::BTreeMap<String, Vec<u8>>| m.keys().cloned().collect::<Vec<_>>();
+        assert_eq!(names(&packed), names(&on_disk), "streamdeck/Cutaway.streamDeckPlugin is out of date: run streamdeck/pack.sh");
+        for (name, bytes) in &on_disk {
+            assert!(packed[name] == *bytes, "{name} differs in streamdeck/Cutaway.streamDeckPlugin: run streamdeck/pack.sh");
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -874,6 +953,9 @@ mod tests {
         assert_eq!(Action::parse("comment:next"), Ok(Action::Comment(CommentCmd::Next)));
         assert_eq!(Action::parse("comment:12"), Ok(Action::Comment(CommentCmd::Show(12))));
         assert!(Action::parse("comment:bogus").is_err());
+        assert_eq!(Action::parse("precheck:start"), Ok(Action::Precheck(true)));
+        assert_eq!(Action::parse("precheck:Cancel"), Ok(Action::Precheck(false)));
+        assert!(Action::parse("precheck").is_err());
         assert_eq!(Action::parse("ptz:Cam 2:preset:Wide").unwrap().describe(), "Cam 2: go to preset Wide");
         assert!(Action::parse("explode").is_err());
         assert_eq!(fader_db(0.0), -60.0);
@@ -881,5 +963,34 @@ mod tests {
         assert!((fader_db(1.0) - 12.0).abs() < 1e-9);
         assert!(Action::parse("scene:").is_err());
         assert_eq!(Target::Name("host".into()).find(&["Wide".into(), "Host".into()]), Some(1));
+    }
+
+    #[test]
+    fn preview_mode_and_the_desk_button() {
+        assert_eq!(Action::parse("preview:on"), Ok(Action::PreviewMode(Toggle::On)));
+        assert_eq!(Action::parse("Preview: OFF"), Ok(Action::PreviewMode(Toggle::Off)));
+        assert_eq!(Action::parse("preview:toggle"), Ok(Action::PreviewMode(Toggle::Toggle)));
+        // 1 is the first scene here, not "on".
+        assert_eq!(Action::parse("preview:1"), Ok(Action::Preview(Target::Index(0))));
+        assert_eq!(Action::parse("press:2"), Ok(Action::Press(Target::Index(1))));
+        assert_eq!(Action::parse("press:Host"), Ok(Action::Press(Target::Name("Host".into()))));
+        assert!(Action::parse("press").is_err());
+        assert_eq!(Action::parse("preview:on").unwrap().describe(), "Preview on");
+    }
+
+    #[test]
+    fn a_hash_number_is_always_a_place() {
+        // Scenes called "2" and "1" after a reorder: the phone's second
+        // button means the second scene, not the one named 2.
+        let names: Vec<String> = ["2", "1", "Wide"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(Action::parse("scene:#2"), Ok(Action::Scene(Target::Place(1))));
+        assert_eq!(Target::parse("#2").find(&names), Some(1));
+        assert_eq!(Target::parse("2").find(&names), Some(0), "typed numbers still find a scene named that number first");
+        assert_eq!(Target::parse("#4").find(&names), None);
+        assert_eq!(Target::parse("#0"), Target::Name("#0".into()));
+        assert_eq!(Target::parse("#Host"), Target::Name("#Host".into()));
+        assert_eq!(Action::parse("graphic:#3:on"), Ok(Action::Graphic(Target::Place(2), Toggle::On)));
+        assert_eq!(Action::parse("pad:#1:press"), Ok(Action::Pad(Target::Place(0), PadCmd::Press)));
+        assert_eq!(Target::Place(1).to_string(), "2");
     }
 }

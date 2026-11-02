@@ -457,6 +457,15 @@ impl Graphics {
         }
     }
 
+    /// For a title that follows whoever is on air: (on screen now, switched
+    /// on, the name it shows now). None for any other graphic.
+    pub fn follow_state(&self, index: usize) -> Option<(bool, bool, Option<String>)> {
+        let who = self.follow.lock_ok().on_air.as_ref().map(|(name, _)| name.clone());
+        let items = self.items.lock_ok();
+        let it = items.get(index).filter(|i| i.follows())?;
+        Some((it.visible, it.wanted, who))
+    }
+
     pub fn is_visible(&self, index: usize) -> bool {
         self.items.lock_ok().get(index).is_some_and(|i| i.visible || i.wanted)
     }
