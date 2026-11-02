@@ -220,9 +220,11 @@ and [Install on Windows](#install-on-windows).
   Windows) and **Upload** (when uploads are set up). ✕ only hides the card
   (the take stays first in Record › Takes); the next recording hides it too.
   The time left on the drive stays in view at the top right.
-- **Record › Takes:** the last ten takes in the recording folder, newest
-  first: date, length, size and file count (the same figures as the card),
-  how many markers, and ⚠ whatever Take.txt notes went wrong. Each take's
+- **Record › Takes:** the last ten takes, newest first, from the recording
+  folder and the folders you recorded to before (and the backup drive), so
+  last week's takes stay when you record somewhere else; a take from
+  another folder says which. For each: date, length, size and file count
+  (the same figures as the card), how many markers, and ⚠ whatever Take.txt notes went wrong. Each take's
   markers are listed under it (the newest take's open), so they're still
   there after you stop. A take rescued after a crash is listed too, marked
   **Recovered**. Each has the card's buttons: Open in Resolve, Finder/Explorer

@@ -25,6 +25,34 @@ pub fn folders(cfg: &crate::config::Config) -> Vec<PathBuf> {
     folders
 }
 
+/// Where Cutaway notes the folders takes were recorded to (newest first),
+/// so Record › Takes lists last week's takes after the folder changes.
+fn folders_file(config_dir: &Path) -> PathBuf {
+    config_dir.join("take-folders.txt")
+}
+
+/// How many recording folders are remembered.
+const REMEMBERED: usize = 8;
+
+/// Note that takes go to `folders` (the recording folder, then its backup).
+pub fn remember_folders(config_dir: &Path, folders: &[PathBuf]) {
+    let mut list: Vec<PathBuf> = folders.to_vec();
+    for f in remembered_folders(config_dir) {
+        if !list.contains(&f) {
+            list.push(f);
+        }
+    }
+    list.truncate(REMEMBERED);
+    let text: String = list.iter().map(|p| format!("{}\n", p.display())).collect();
+    let _ = fs::create_dir_all(config_dir);
+    let _ = fs::write(folders_file(config_dir), text);
+}
+
+/// The folders takes were recorded to, newest first.
+pub fn remembered_folders(config_dir: &Path) -> Vec<PathBuf> {
+    fs::read_to_string(folders_file(config_dir)).unwrap_or_default().lines().map(str::trim).filter(|l| !l.is_empty()).map(PathBuf::from).collect()
+}
+
 /// A take that was never stopped properly, and its media files.
 pub struct Unfinished {
     pub dir: PathBuf,
@@ -194,6 +222,22 @@ mod tests {
         assert!(note.contains("Audio_01_DAW.wav"), "{note}");
         assert!(recover_unfinished(&root).is_empty(), "second pass leaves finished takes alone");
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn remembers_where_takes_went() {
+        let dir = std::env::temp_dir().join(format!("cutaway-folders-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        assert!(remembered_folders(&dir).is_empty());
+        remember_folders(&dir, &[PathBuf::from("/a"), PathBuf::from("/backup")]);
+        remember_folders(&dir, &[PathBuf::from("/b")]);
+        remember_folders(&dir, &[PathBuf::from("/a")]);
+        assert_eq!(remembered_folders(&dir), vec![PathBuf::from("/a"), PathBuf::from("/b"), PathBuf::from("/backup")]);
+        for i in 0..20 {
+            remember_folders(&dir, &[PathBuf::from(format!("/{i}"))]);
+        }
+        assert_eq!(remembered_folders(&dir).len(), REMEMBERED);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

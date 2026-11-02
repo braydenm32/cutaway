@@ -71,6 +71,10 @@ impl Engine {
         if let Some(problem) = self.disk_status().as_ref().and_then(space_problem) {
             bail!("{problem}");
         }
+        // Record › Takes lists takes from the folders used before, too.
+        if let Some(dir) = crate::config::default_config_path().parent() {
+            crate::recovery::remember_folders(dir, &crate::recovery::folders(&cfg));
+        }
         let codec = out.codec.video_codec();
         if let Some(p) = encode::codec_problem(codec) {
             bail!("{p}; choose H.264 or HEVC in Record › Recording");
