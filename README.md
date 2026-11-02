@@ -415,9 +415,8 @@ Takes start with the **Take name** from Record › Recording. Leave it as
   just for the presenters.
 - **One clock format:** 24-hour or 12-hour is one setting for the whole
   show: the top bar's clock, clock graphics, the second screen and
-  scheduled times all follow it. Click the clock in the top bar, or choose
-  at the top of **Graphics › More ▾ › Clocks & timers** or in **More › App ›
-  General**. (A show from before this keeps the format its on-air clock
+  scheduled times all follow it. Choose under the status light, at the top
+  of **Graphics › More ▾ › Clocks & timers** or in **More › App › General**. (A show from before this keeps the format its on-air clock
   had.)
 - **The Graphics area:** **Titles & overlays** lists every graphic in the
   order of their Alt (⌥) keys, with a preview of the one you pick beside
@@ -945,7 +944,7 @@ Video Extensions** on some PCs.
 | Timers | **▶ / ⏸** and **⟲** beside a countdown or stopwatch's graphic button: start, pause, back to the start (right-click it for Stop and reset too) |
 | Graphics 1–10 | Alt/Option + number (0 for the tenth), or the graphic buttons; ✎ edits a title's text live |
 | Media player | ⟲ ⏯ ⏭ on its tile; **⋯** (or right-click) for the playlist |
-| Record / stop | ⌘R, or **● Record** at the top right. While recording, the **REC** pill (dark, with a pulsing red dot) shows the time with **hold to stop** under it: hold it for a second to stop (a red fill grows across it; a quick click does nothing but light up the hint). ⌘R asks "Stop recording?" first, so a stray click or key can't split the take |
+| Record / stop | ⌘R, or **● Record** at the top right (grey until you record: red means recording or on air). While recording, the **REC** pill turns solid red, with a pulsing dot, and shows the time with **hold to stop** under it: hold it for a second to stop (a dark fill grows across it; a quick click does nothing but light up the hint). A red **● REC 00:12:41** chip on the program picture says it too, where your eyes are. ⌘R asks "Stop recording?" first, so a stray click or key can't split the take |
 | Go live / end stream | **◉ Go live** at the top right, once there's somewhere to stream to (set that up in **Record › Streaming**). It says **Going live…** until a destination is really on air, and the **LIVE** time counts from then, the same on the desk, the phone and OSC. It has no key unless you give it one in More › Control › Shortcuts, so a stray key can't start or end a broadcast (a key gets the same checks and "are you sure?" as the button) |
 | Put scenes in order | In **Edit layout**, drag a scene button along the bank (a bar shows where it goes). Only in Edit layout, so a slip during the show can't move one. Or ↑ ↓ in **Scenes › Scenes**, which also renames, duplicates, deletes (it asks first, and says what uses the scene) and starts new scenes. Changes there save as you make them (↶ Undo at the bottom, or ⌘Z); **Edit its layout ›** opens the picked scene in Edit layout (in preview with Preview on) |
 | New scene | **＋ New scene** in Edit layout (or Scenes › Scenes): **Blank**, or from a layout (a source full screen, side by side, picture in picture, grid). It goes at the end of the bank, so no other scene's number changes. With Preview on it goes in preview to edit; otherwise take it to edit it |
@@ -957,7 +956,7 @@ Video Extensions** on some PCs.
 | Webcam (virtual camera) | **Webcam** under the status light (Windows 11; not in the Mac download yet) |
 | Switch show | The show's name at the top of the rail, under the logo |
 | Time left on the drive | Top right, beside the clock: **2 h 40 min left**, with **412 GB free** under it (hover for the drive and whether the time is from this take's real write rate or estimated). It turns amber under 30 minutes, the same limit as the status light and the pre-show check |
-| Time of day | The clock at the top right. Click it to switch between 24-hour and 12-hour time, or choose in **More › App › General**, **Graphics › Clocks & timers** or under the status light; each show remembers which, and clock graphics, the second screen and scheduled times follow it |
+| Time of day | The clock at the top right. Choose 24-hour or 12-hour time under the status light, in **More › App › General** or in **Graphics › Clocks & timers** (clicking the clock does nothing, so a slip can't change it); each show remembers which, and clock graphics, the second screen and scheduled times follow it |
 | Areas | ⌘1–⌘7 (Ctrl+1–7 on Windows): Show, Sources, Scenes, Sound, Graphics, Record, More. **Esc** goes back to Show (not while typing) |
 | Settings pages | ⌘, opens the area you last had open (Sources the first time) |
 | Search | ⌘K (Ctrl+K on Windows), or the magnifier in the top bar: settings, pages and desk buttons by name. ↑ ↓ and Enter to go, Esc to close |

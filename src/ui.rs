@@ -53,20 +53,24 @@ pub mod theme {
     /// what's typed.
     pub const PLACEHOLDER: Color32 = Color32::from_rgb(118, 124, 136);
     /// On air: the program, the scene and sources on it, tally. Red means
-    /// this and nothing else that sits beside it (REC is a dark pill with a
-    /// red dot, LIVE has its own pink, buttons like TAKE and FTB aren't red).
+    /// this and recording, nothing else that sits beside it (REC is a solid
+    /// red pill while recording and grey otherwise, LIVE has its own pink,
+    /// buttons like TAKE and FTB aren't red).
     pub const ON_AIR: Color32 = Color32::from_rgb(232, 52, 64);
     pub const ON_AIR_DIM: Color32 = Color32::from_rgb(120, 30, 38);
     /// Errors, failures, clipping and things that can't be undone (the
     /// same red: never next to the on-air ones in a way that mixes them up).
     pub const ERROR: Color32 = ON_AIR;
     pub const ERROR_DIM: Color32 = ON_AIR_DIM;
-    /// The recording light: the dot on the dark REC pill.
+    /// Recording: the REC pill is solid this red while a take runs (and
+    /// grey, with a grey dot, when it isn't), as is the ● REC chip on the
+    /// program picture.
+    pub const REC_LIVE: Color32 = Color32::from_rgb(204, 38, 48);
+    /// A red recording dot (on a dark background).
     pub const REC_DOT: Color32 = Color32::from_rgb(255, 64, 64);
-    pub const REC_PILL: Color32 = Color32::from_rgb(40, 30, 34);
-    pub const REC_EDGE: Color32 = Color32::from_rgb(120, 44, 50);
-    /// Pressed-and-held across the REC pill (to stop): a see-through red.
-    pub const REC_HOLD: Color32 = Color32::from_rgba_premultiplied(110, 26, 30, 110);
+    pub const REC_EDGE: Color32 = Color32::from_rgb(255, 110, 110);
+    /// Pressed-and-held across the REC pill (to stop): a see-through dark.
+    pub const REC_HOLD: Color32 = Color32::from_rgba_premultiplied(0, 0, 0, 110);
     /// Pressed-and-held across the other hold buttons (Fade to black, a mic
     /// OFF, disconnecting a guest): see-through white, not red.
     pub const HOLD_FILL: Color32 = Color32::from_rgba_premultiplied(70, 70, 70, 70);
@@ -3050,8 +3054,16 @@ impl App {
         // Status chips after the scene name (the top right is where logos usually sit).
         let mut x = name_chip.right() + 8.0;
         let auto = engine.auto_switch_enabled();
-        let auto_st = engine.status.lock_ok().auto_switch.clone();
+        let (auto_st, rec_since) = {
+            let st = engine.status.lock_ok();
+            (st.auto_switch.clone(), if let RecState::Recording { since, .. } = &st.rec { Some(*since) } else { None })
+        };
         let mut chips: Vec<(String, Color32)> = Vec::new();
+        // Recording, where your eyes are (REC itself is at the far right).
+        if let Some(since) = rec_since {
+            chips.push((format!("● REC {}", fmt_clock(since.elapsed())), REC_LIVE));
+            ui.ctx().request_repaint_after(Duration::from_millis(250));
+        }
         // A source on air with no signal, first.
         for i in self.scene_offline(&live) {
             if let Some(src) = engine.sources.get(i) {

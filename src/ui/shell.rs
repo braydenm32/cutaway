@@ -749,11 +749,10 @@ impl App {
         // ---- the clock
         ui.add_space(4.0);
         let clock = super::clock_text(chrono::Local::now().naive_local().time(), self.cfg.ui.clock_12h);
-        let b = egui::Button::new(RichText::new(clock).size(TEXT_STATE).color(TEXT_DIM)).frame(false);
-        let tip = if self.cfg.ui.clock_12h { "The time here. Click for 24-hour time (clock graphics and the second screen follow)" } else { "The time here. Click for 12-hour time (clock graphics and the second screen follow)" };
-        if ui.add(b).on_hover_text(tip).clicked() {
-            self.set_clock_12h(!self.cfg.ui.clock_12h);
-        }
+        // A plain label: 12- or 24-hour time is under the status light and
+        // in More › App (a stray click here mustn't change it).
+        ui.add(egui::Label::new(RichText::new(clock).size(TEXT_STATE).color(TEXT_DIM)).selectable(false))
+            .on_hover_text("The time here. 12- or 24-hour time: under the status light, or More › App › General");
 
         // ---- the time left on the drive
         if let Some(d) = &disk {
@@ -848,10 +847,11 @@ impl App {
         match rec {
             RecState::Recording { since, folder } => {
                 let t = since.elapsed();
-                p.rect_filled(rect, radius, REC_PILL);
+                // Solid red while recording, so it's obvious at a glance.
+                p.rect_filled(rect, radius, REC_LIVE);
                 p.rect_stroke(rect, radius, Stroke::new(1.5, REC_EDGE), StrokeKind::Inside);
                 let pulse = 0.55 + 0.45 * ((t.as_secs_f32() * std::f32::consts::PI).cos() * 0.5 + 0.5);
-                p.circle_filled(rect.left_center() + vec2(18.0, 0.0), 6.0, REC_DOT.gamma_multiply(pulse));
+                p.circle_filled(rect.left_center() + vec2(18.0, 0.0), 6.0, Color32::WHITE.gamma_multiply(pulse));
                 let fill_to = |f: f32| {
                     // A red fill grows across the pill while it's held (see-through, so the text reads).
                     let fill = Rect::from_min_size(rect.min, vec2(rect.width() * f, rect.height()));
@@ -875,7 +875,7 @@ impl App {
                 let text_x = rect.left() + 32.0;
                 super::bold_text(&p, pos2(text_x, rect.center().y - 7.0), Align2::LEFT_CENTER, &format!("REC {}", fmt_clock(t)), TEXT_STATE, Color32::WHITE);
                 let hint_lit = self.rec_hold.active() || self.rec_hint_until.is_some_and(|u| Instant::now() < u);
-                p.text(pos2(text_x, rect.center().y + 9.0), Align2::LEFT_CENTER, "hold to stop", FontId::proportional(TEXT_SMALL), if hint_lit { Color32::WHITE } else { TEXT_DIM });
+                p.text(pos2(text_x, rect.center().y + 9.0), Align2::LEFT_CENTER, "hold to stop", FontId::proportional(TEXT_SMALL), if hint_lit { Color32::WHITE } else { Color32::from_white_alpha(190) });
                 ui.ctx().request_repaint_after(Duration::from_millis(50));
                 r.on_hover_text(format!("Hold for a second to stop recording (the key{} asks first)\nRecording to {}", self.key_hint(Builtin::Record), folder.display()));
             }
@@ -891,9 +891,10 @@ impl App {
             RecState::Idle => {
                 self.rec_hold.reset();
                 let fill = if r.hovered() { NEUTRAL_HOVER } else { RAISED };
+                // Grey when idle: red means recording (and on air) only.
                 p.rect_filled(rect, radius, fill);
-                p.rect_stroke(rect, radius, Stroke::new(1.5, REC_EDGE), StrokeKind::Inside);
-                p.circle_filled(rect.left_center() + vec2(18.0, 0.0), 6.0, REC_DOT);
+                p.rect_stroke(rect, radius, Stroke::new(1.5, LINE), StrokeKind::Inside);
+                p.circle_filled(rect.left_center() + vec2(18.0, 0.0), 6.0, TEXT_DIM);
                 super::bold_text(&p, pos2(rect.left() + 32.0, rect.center().y), Align2::LEFT_CENTER, "Record", TEXT_STATE, Color32::WHITE);
                 if r.on_hover_text(format!("Record every source, the program and the audio{}", self.key_hint(Builtin::Record))).clicked() {
                     self.toggle_record();
@@ -1296,8 +1297,8 @@ impl App {
         }
     }
 
-    /// The show's one clock format, 12 or 24 hours (as clicking the clock
-    /// in the top bar does).
+    /// The show's one clock format, 12 or 24 hours (as the checkbox under
+    /// the status light).
     fn clock_choice(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("Times of day").color(TEXT_DIM));
@@ -1307,7 +1308,7 @@ impl App {
                     self.set_clock_12h(twelve);
                 }
             }
-            ui.label(RichText::new("the top bar, clock graphics, the second screen and scheduled times; clicking the clock switches it too").size(TEXT_SMALL).color(TEXT_DIM));
+            ui.label(RichText::new("the top bar, clock graphics, the second screen and scheduled times").size(TEXT_SMALL).color(TEXT_DIM));
         });
         ui.separator();
     }
