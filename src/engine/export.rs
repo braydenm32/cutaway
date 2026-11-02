@@ -17,7 +17,7 @@ use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ExportFile {
     pub path: PathBuf,
     /// Angle name (source name, or "Program").
@@ -37,6 +37,11 @@ pub struct ExportFile {
     /// to it, so the whole edit is free of graphics like the cameras' own
     /// files, ready for new titles.
     pub clean: bool,
+    /// Where the file starts (from the start of the take): 0, unless its
+    /// source joined or restarted during the take and got a file of its
+    /// own from then on.
+    #[serde(default)]
+    pub start: Ns,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -211,10 +216,16 @@ impl TakeExport {
     }
 
     /// Length of a file in its own frames (the take's length, unless its
-    /// source left early).
+    /// source left early or joined late).
     pub fn file_frames(&self, f: &ExportFile) -> i64 {
-        let full = (self.frames * f.fps as i64 + self.fps as i64 / 2) / self.fps as i64;
-        f.length.map_or(full, |ns| ns_to_frame(ns, f.fps).clamp(0, full))
+        let start = self.file_start(f);
+        let full = ((self.frames - start).max(0) * f.fps as i64 + self.fps as i64 / 2) / self.fps as i64;
+        f.length.map_or(full, |ns| ns_to_frame(ns - f.start, f.fps).clamp(0, full))
+    }
+
+    /// Where a file starts, in program frames.
+    pub fn file_start(&self, f: &ExportFile) -> i64 {
+        ns_to_frame(f.start, self.fps).clamp(0, self.frames)
     }
 
     /// Where a file ends, in program frames.
@@ -238,17 +249,39 @@ impl TakeExport {
 
     /// The live edit, shot by shot (see `EditShot`). A source that left
     /// the show: its shot stops with its file (a gap till the next; the
-    /// program's sound carries on below).
+    /// program's sound carries on below). A source with more than one
+    /// file (it restarted during the take): each part of the shot comes
+    /// from the file that has it.
     pub fn edit(&self) -> Vec<EditShot> {
-        let in_file = |f: &ExportFile, seq_frame: i64| (seq_frame * f.fps as i64 + self.fps as i64 / 2) / self.fps as i64;
+        let in_file = |f: &ExportFile, seq_frame: i64| ((seq_frame - self.file_start(f)) * f.fps as i64 + self.fps as i64 / 2) / self.fps as i64;
         let mut out = Vec::new();
         for (start, end, f, scene) in self.shots() {
-            let end = end.min(self.file_end(f));
-            if end <= start {
-                continue;
+            // The files of that angle (one, unless it restarted).
+            let files: Vec<usize> = match f.source {
+                Some(src) => (0..self.files.len()).filter(|&i| self.files[i].source == Some(src)).collect(),
+                None => vec![self.files.iter().position(|g| std::ptr::eq(g, f)).unwrap_or(0)],
+            };
+            for i in files {
+                let g = &self.files[i];
+                let (a, b) = (start.max(self.file_start(g)), end.min(self.file_end(g)));
+                if b <= a {
+                    continue;
+                }
+                out.push(EditShot { start: a, end: b, file: i, src_in: in_file(g, a), src_out: in_file(g, b), scene: scene.to_string() });
             }
-            let file = self.files.iter().position(|g| std::ptr::eq(g, f)).unwrap_or(0);
-            out.push(EditShot { start, end, file, src_in: in_file(f, start), src_out: in_file(f, end), scene: scene.to_string() });
+        }
+        out
+    }
+
+    /// The angles of the multicam: one per recorded source (all of its
+    /// files), and one each for the program files. File indices.
+    fn angles(&self) -> Vec<Vec<usize>> {
+        let mut out: Vec<Vec<usize>> = Vec::new();
+        for (i, f) in self.files.iter().enumerate() {
+            match f.source.and_then(|s| out.iter_mut().find(|a| self.files[a[0]].source == Some(s))) {
+                Some(a) => a.push(i),
+                None => out.push(vec![i]),
+            }
         }
         out
     }
@@ -296,21 +329,28 @@ pub fn fcpxml(t: &TakeExport) -> String {
     }
     let _ = writeln!(x, "    <media id=\"m1\" name=\"{} Multicam\">", esc(&t.name));
     let _ = writeln!(x, "      <multicam format=\"{}\" tcStart=\"{}\" tcFormat=\"NDF\">", fmt_id(t.width, t.height, t.fps), rt(mc_start.0, mc_start.1));
-    for (i, f) in t.files.iter().enumerate() {
-        let (sn, sd) = asset_start(f);
-        let _ = writeln!(x, "        <mc-angle name=\"{}\" angleID=\"angle{i}\">", esc(&f.name));
-        let _ = writeln!(
-            x,
-            "          <asset-clip ref=\"a{}\" name=\"{}\" offset=\"{}\" start=\"{}\" duration=\"{}\" format=\"{}\" tcFormat=\"NDF\"/>",
-            i + 1,
-            esc(&f.name),
-            rt(mc_start.0, mc_start.1),
-            rt(sn, sd),
-            rt(t.file_frames(f), f.fps as i64),
-            fmt_id(f.width, f.height, f.fps)
-        );
+    // One angle per source: a source that restarted has its files one
+    // after the other in its angle, each where it starts.
+    let angles = t.angles();
+    for (k, files) in angles.iter().enumerate() {
+        let _ = writeln!(x, "        <mc-angle name=\"{}\" angleID=\"angle{k}\">", esc(&t.files[files[0]].name));
+        for &i in files {
+            let f = &t.files[i];
+            let (sn, sd) = asset_start(f);
+            let _ = writeln!(
+                x,
+                "          <asset-clip ref=\"a{}\" name=\"{}\" offset=\"{}\" start=\"{}\" duration=\"{}\" format=\"{}\" tcFormat=\"NDF\"/>",
+                i + 1,
+                esc(&f.name),
+                rt(mc_start.0 + t.file_start(f), mc_start.1),
+                rt(sn, sd),
+                rt(t.file_frames(f), f.fps as i64),
+                fmt_id(f.width, f.height, f.fps)
+            );
+        }
         x += "        </mc-angle>\n";
     }
+    let angle_of = |i: usize| angles.iter().position(|a| a.contains(&i)).unwrap_or(0);
     x += "      </multicam>\n    </media>\n  </resources>\n";
     let _ = writeln!(x, "  <library>\n    <event name=\"Cutaway\">\n      <project name=\"{}\">", esc(&t.name));
     let _ = writeln!(
@@ -319,9 +359,9 @@ pub fn fcpxml(t: &TakeExport) -> String {
         fmt_id(t.width, t.height, t.fps),
         rt(t.frames, fps)
     );
-    let audio_angle = t.files.iter().position(|f| f.source.is_none() && f.has_audio).or_else(|| t.files.iter().position(|f| f.has_audio));
+    let audio_angle = t.files.iter().position(|f| f.source.is_none() && f.has_audio).or_else(|| t.files.iter().position(|f| f.has_audio)).map(angle_of);
     for (start, end, f, scene) in t.shots() {
-        let angle = t.files.iter().position(|g| std::ptr::eq(g, f)).unwrap_or(0);
+        let angle = angle_of(t.files.iter().position(|g| std::ptr::eq(g, f)).unwrap_or(0));
         let _ = writeln!(
             x,
             "            <mc-clip ref=\"m1\" name=\"{}\" offset=\"{}\" start=\"{}\" duration=\"{}\">",
@@ -339,11 +379,13 @@ pub fn fcpxml(t: &TakeExport) -> String {
                 let _ = writeln!(x, "              <mc-source angleID=\"angle{angle}\" srcEnable=\"all\"/>");
             }
         }
-        // Every angle full length on its own lane above the edit (attached to
-        // the first shot, starting with the take), switched off like the
-        // Premiere timeline's tracks: in parallel and in sync, to swap shots.
-        if start == 0 {
-            for (i, g) in t.files.iter().enumerate() {
+        // Every file full length on its own lane above the edit (attached to
+        // the shot it starts in: the first, but for a file started during
+        // the take), switched off like the Premiere timeline's tracks: in
+        // parallel and in sync, to swap shots.
+        for (i, g) in t.files.iter().enumerate() {
+            let at = t.file_start(g);
+            if at == start || (at > start && at < end) {
                 let (sn, sd) = asset_start(g);
                 let _ = writeln!(
                     x,
@@ -351,7 +393,7 @@ pub fn fcpxml(t: &TakeExport) -> String {
                     i + 1,
                     i + 1,
                     esc(&g.name),
-                    rt(prog_tc, fps),
+                    rt(prog_tc + at, fps),
                     rt(sn, sd),
                     rt(t.file_frames(g), g.fps as i64),
                     fmt_id(g.width, g.height, g.fps)
@@ -442,10 +484,11 @@ pub fn premiere_xml(t: &TakeExport) -> String {
         clip_id += 1;
         let _ = writeln!(
             x,
-            "        <track><enabled>FALSE</enabled><clipitem id=\"clipitem-{clip_id}\"><name>{}</name><enabled>TRUE</enabled><duration>{}</duration>{}<start>0</start><end>{}</end><in>0</in><out>{}</out>{}</clipitem></track>",
+            "        <track><enabled>FALSE</enabled><clipitem id=\"clipitem-{clip_id}\"><name>{}</name><enabled>TRUE</enabled><duration>{}</duration>{}<start>{}</start><end>{}</end><in>0</in><out>{}</out>{}</clipitem></track>",
             esc(&f.name),
             t.file_frames(f),
             xm_rate(f.fps),
+            t.file_start(f),
             t.file_end(f),
             t.file_frames(f),
             file_el(f, &mut described)
@@ -533,6 +576,7 @@ mod tests {
             tc_frame: Some(37230 * fps),
             length: None,
             clean: false,
+            start: 0,
         };
         TakeExport {
             name: "Take & Co".into(),
@@ -627,6 +671,36 @@ mod tests {
         assert_eq!(f.matches("<mc-clip ").count(), 3);
         xml_balanced(&x);
         xml_balanced(&f);
+    }
+
+    /// Host restarted 7 s in: its first file ends there, a second starts
+    /// at 7 s. Its shot (from 6 s) takes each part from the file that has
+    /// it; the multicam keeps one Host angle with both files in place.
+    #[test]
+    fn a_source_that_restarted() {
+        let mut t = sample();
+        t.files[2].length = Some(7 * NS_PER_SEC);
+        let mut again = t.files[2].clone();
+        again.path = PathBuf::from("/tmp/Take 1/Host (from 00-00-07).mp4");
+        again.length = None;
+        again.start = 7 * NS_PER_SEC;
+        again.tc_frame = Some((37230 + 7) * 25);
+        t.files.push(again);
+        let e = t.edit();
+        let host: Vec<_> = e.iter().filter(|s| s.scene == "Host").map(|s| (s.start, s.end, s.file, s.src_in, s.src_out)).collect();
+        // Program frames 180..210 from the first file (its frames 150..175), 210..300 from the second (0..75).
+        assert_eq!(host, vec![(180, 210, 2, 150, 175), (210, 300, 3, 0, 75)]);
+        assert_eq!((t.file_start(&t.files[3]), t.file_frames(&t.files[3])), (210, 75));
+        let x = premiere_xml(&t);
+        assert!(x.contains("<start>210</start><end>300</end><in>0</in><out>75</out>"), "{x}");
+        xml_balanced(&x);
+        let f = fcpxml(&t);
+        assert_eq!(f.matches("<mc-angle ").count(), 3, "one Host angle: {f}");
+        assert!(f.contains("<asset-clip ref=\"a4\" name=\"Host\" offset=\"37237s\" start=\"37237s\""), "{f}");
+        assert!(f.contains("<asset-clip ref=\"a4\" lane=\"4\" name=\"Host\" offset=\"37237s\""), "its lane where it starts: {f}");
+        xml_balanced(&f);
+        let r = crate::engine::sessions::ResolveEdit::from_export(&t, true);
+        assert_eq!((r.angles[3].at, r.angles[3].frames), (210, 75));
     }
 
     #[test]

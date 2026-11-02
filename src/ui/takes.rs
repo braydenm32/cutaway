@@ -110,15 +110,25 @@ fn files_in(dir: &Path, out: &mut Vec<(PathBuf, u64)>, depth: usize) {
 }
 
 /// The newest `n` takes in the recording folder (folders with a Take.txt).
+#[cfg(test)]
 pub(super) fn recent_takes(output: &Path, n: usize) -> Vec<RecentTake> {
-    let Ok(rd) = std::fs::read_dir(output) else { return Vec::new() };
-    let mut found: Vec<(std::time::SystemTime, PathBuf)> = rd
-        .flatten()
-        .filter_map(|e| {
-            let m = std::fs::metadata(e.path().join("Take.txt")).and_then(|m| m.modified()).ok()?;
-            Some((m, e.path()))
-        })
-        .collect();
+    recent_takes_in(&[output.to_path_buf()], n)
+}
+
+/// The newest `n` takes in these folders, newest first. A take found in
+/// more than one (its backup copy) is listed once, from the first folder.
+pub(super) fn recent_takes_in(folders: &[PathBuf], n: usize) -> Vec<RecentTake> {
+    let mut seen = std::collections::HashSet::new();
+    let mut found: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
+    for output in folders {
+        let Ok(rd) = std::fs::read_dir(output) else { continue };
+        for e in rd.flatten() {
+            let Ok(m) = std::fs::metadata(e.path().join("Take.txt")).and_then(|m| m.modified()) else { continue };
+            if seen.insert(e.file_name()) {
+                found.push((m, e.path()));
+            }
+        }
+    }
     found.sort_by(|a, b| b.0.cmp(&a.0));
     found
         .into_iter()
@@ -313,7 +323,16 @@ impl App {
     pub(super) fn takes_list(&mut self, ui: &mut egui::Ui) {
         let frame = ui.ctx().cumulative_frame_nr();
         if frame > self.takes.recent_frame + 1 {
-            self.takes.recent = recent_takes(&self.cfg.output.folder, 10);
+            // The recording folder (and its backup), then the folders used before.
+            let mut folders = crate::recovery::folders(&self.cfg);
+            if let Some(dir) = crate::config::default_config_path().parent() {
+                for f in crate::recovery::remembered_folders(dir) {
+                    if !folders.contains(&f) {
+                        folders.push(f);
+                    }
+                }
+            }
+            self.takes.recent = recent_takes_in(&folders, 10);
         }
         self.takes.recent_frame = frame;
         let folder = self.cfg.output.folder.clone();
@@ -323,8 +342,8 @@ impl App {
             let n = self.takes.recent.len();
             let what = match n {
                 0 => "No takes yet in".to_string(),
-                1 => "1 take in".to_string(),
-                n => format!("The last {n} takes in"),
+                1 => "1 take · recording to".to_string(),
+                n => format!("The last {n} takes · recording to"),
             };
             ui.label(RichText::new(what).color(TEXT_DIM));
             ui.add(egui::Label::new(RichText::new(folder.display().to_string()).color(TEXT_DIM)).truncate());
@@ -370,6 +389,10 @@ impl App {
                         line.push(take_line(t.length, t.size, t.files));
                         line.push(markers_text(t.markers.len()));
                         ui.label(RichText::new(line.join(" · ")).size(TEXT_BODY).color(TEXT_DIM));
+                        // From another folder (one used before, or the backup drive): which.
+                        if let Some(dir) = t.folder.parent().filter(|d| *d != folder.as_path()) {
+                            ui.add(egui::Label::new(RichText::new(format!("in {}", dir.display())).size(TEXT_SMALL).color(TEXT_DIM)).truncate());
+                        }
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let button = |text: &str| egui::Button::new(text).min_size(vec2(0.0, 30.0));
@@ -587,6 +610,26 @@ mod tests {
         assert!(r.files.iter().any(|f| f.0 == list[0].folder.join("Program.mp4") && f.1 == 3000));
         assert_eq!(r.duration, Duration::from_secs(2530));
         assert!(r.recorded_at.is_some() && !r.podcast_pending);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Takes from the folders used before are listed too, newest first;
+    /// a take's backup copy only once.
+    #[test]
+    fn takes_from_every_folder() {
+        let root = std::env::temp_dir().join(format!("cutaway-folders-list-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let take = |dir: &str, name: &str| {
+            let d = root.join(dir).join(name);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("Take.txt"), "Cutaway take\nRecorded: 2026-10-20 19:00\nLength: 00:01:00\n").unwrap();
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        take("old", "Show_2026-10-20_19-00-00");
+        take("backup", "Show_2026-10-20_19-00-00");
+        take("now", "Show_2026-10-27_19-00-00");
+        let list = recent_takes_in(&[root.join("now"), root.join("backup"), root.join("old"), root.join("gone")], 10);
+        assert_eq!(list.iter().map(|t| t.folder.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/")).collect::<Vec<_>>(), vec!["now/Show_2026-10-27_19-00-00", "backup/Show_2026-10-20_19-00-00"]);
         let _ = std::fs::remove_dir_all(root);
     }
 

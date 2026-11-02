@@ -138,6 +138,13 @@ def glyph(d, kind, box, color, accent=None):
         d.rounded_rectangle([p(3, 2), p(17, 18)], radius=1.5 * u, outline=color, width=lw)
         for y, w in ((6, 10), (9.5, 8), (13, 9)):
             d.rounded_rectangle([p(5.5, y), p(5.5 + w, y + 1.6)], radius=0.6 * u, fill=color)
+    elif kind == "preview":
+        d.rounded_rectangle([p(2, 4), p(18, 16)], radius=1.5 * u, outline=color, width=lw)
+        # (Green, as preview is everywhere: never the red of on air.)
+        d.rounded_rectangle([p(5, 7), p(15, 13)], radius=1 * u, fill=color if accent == color else (47, 191, 91, 255))
+    elif kind == "back":
+        d.arc([p(3, 3), p(17, 17)], 200, 520, fill=color, width=lw)
+        d.polygon([p(1.5, 5), p(7.5, 4), p(4, 10)], fill=color)
     elif kind == "comment":
         d.rounded_rectangle([p(2, 3), p(18, 13.5)], radius=2.5 * u, fill=color)
         d.polygon([p(5, 13), p(10, 13), p(5, 17.5)], fill=color)
@@ -187,6 +194,8 @@ ACTIONS = {
     "scene": "Scene",
     "source": "Source",
     "take": "Take",
+    "preview": "Preview",
+    "back": "Back",
     "transition": "Transition",
     "record": "Record",
     "live": "Go live",

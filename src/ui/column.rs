@@ -305,7 +305,7 @@ impl App {
                     if named == 0 {
                         format!("Made \"{name}\". Now say who's in each picture: Sources › People & names")
                     } else {
-                        format!("Made \"{name}\": it names whoever is on air. Click it to show it")
+                        format!("Made \"{name}\": whoever is on air is named for 6 s after each cut. Click it to keep it on")
                     },
                     false,
                 );

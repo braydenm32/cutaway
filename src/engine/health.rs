@@ -129,6 +129,68 @@ pub fn disk_space(path: &Path) -> Option<(u64, u64)> {
     }
 }
 
+/// Whether the drive holding `path` is FAT (FAT32 and older), where no
+/// file can be bigger than 4 GB: one file reaching that stops the take.
+pub fn fat_drive(path: &Path) -> bool {
+    let mut p = path.to_path_buf();
+    while !p.exists() {
+        let Some(up) = p.parent() else { return false };
+        p = up.to_path_buf();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::ffi::{CStr, CString};
+        use std::os::unix::ffi::OsStrExt;
+        let Ok(c) = CString::new(p.as_os_str().as_bytes()) else { return false };
+        let mut st: libc::statfs = unsafe { std::mem::zeroed() };
+        if unsafe { libc::statfs(c.as_ptr(), &mut st) } != 0 {
+            return false;
+        }
+        // "msdos" is FAT12/16/32 ("exfat" has no 4 GB limit).
+        let kind = unsafe { CStr::from_ptr(st.f_fstypename.as_ptr()) };
+        kind.to_bytes() == b"msdos"
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        let Ok(c) = CString::new(p.as_os_str().as_bytes()) else { return false };
+        let mut st: libc::statfs = unsafe { std::mem::zeroed() };
+        if unsafe { libc::statfs(c.as_ptr(), &mut st) } != 0 {
+            return false;
+        }
+        st.f_type as i64 == 0x4d44 // MSDOS_SUPER_MAGIC
+    }
+    #[cfg(windows)]
+    {
+        use windows::core::HSTRING;
+        use windows::Win32::Storage::FileSystem::{GetVolumeInformationW, GetVolumePathNameW};
+        let mut root = [0u16; 261];
+        // SAFETY: plain calls with valid buffers.
+        if unsafe { GetVolumePathNameW(&HSTRING::from(p.as_os_str()), &mut root) }.is_err() {
+            return false;
+        }
+        let mut fs = [0u16; 32];
+        if unsafe { GetVolumeInformationW(windows::core::PCWSTR(root.as_ptr()), None, None, None, None, Some(&mut fs)) }.is_err() {
+            return false;
+        }
+        let name = String::from_utf16_lossy(&fs[..fs.iter().position(|&c| c == 0).unwrap_or(fs.len())]);
+        name.eq_ignore_ascii_case("FAT32") || name.eq_ignore_ascii_case("FAT")
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    {
+        false
+    }
+}
+
+/// What to tell someone recording to a FAT drive.
+pub fn fat_warning(path: &Path) -> String {
+    format!(
+        "The recording drive ({}) is formatted as FAT32, where no file can be bigger than 4 GB: a take stops when its first file gets there (often 20 to 40 minutes). Record to another drive, or reformat this one as exFAT (or APFS / NTFS)",
+        path.display()
+    )
+}
+
 /// Bytes per second a take writes with these settings (main drive).
 /// `estimate_rate` for a config's own audio inputs.
 pub fn estimate_for(cfg: &Config) -> f64 {
@@ -153,6 +215,15 @@ pub fn estimate_rate(cfg: &Config, wav_channels: &[(u32, bool)]) -> f64 {
         }
         if out.proxies {
             kbps += proxy_kbps;
+        }
+    }
+    // The program without graphics: a second program file, with the mix (and its proxy).
+    if out.clean_program {
+        kbps += encode::record_bitrate_kbps(codec, out.program_bitrate_kbps, p.width, p.height, p.fps) as f64;
+        files_with_audio += 1.0;
+        if out.proxies {
+            kbps += proxy_kbps;
+            files_with_audio += 1.0;
         }
     }
     if cfg.vertical.enabled && cfg.vertical.record {
@@ -355,6 +426,12 @@ pub struct TakeMonitor {
 }
 
 impl TakeMonitor {
+    /// A file started during the take.
+    pub fn add_file(&mut self, name: String, stats: Arc<VideoStats>) {
+        self.stats.push((name, stats));
+        self.recent.push(Default::default());
+    }
+
     pub fn new(folder: PathBuf, backup: Option<PathBuf>, stats: Vec<(String, Arc<VideoStats>)>) -> Self {
         let recent = vec![Default::default(); stats.len()];
         TakeMonitor { folder, backup, stats, sizes: VecDeque::new(), warned: 0, backup_warned: false, started: Instant::now(), recent }
@@ -596,6 +673,11 @@ mod tests {
         let r = estimate_rate(&cfg, &[(2, true)]);
         // Program + one ISO at ~12 Mbps each, AAC, 24-bit stereo WAV: ~3.3 MB/s.
         assert!(r > 3.0e6 && r < 3.8e6, "{r}");
+        // The program without graphics is a second program file.
+        cfg.output.clean_program = true;
+        let program = encode::record_bitrate_kbps(cfg.output.codec.video_codec(), cfg.output.program_bitrate_kbps, cfg.program.width, cfg.program.height, cfg.program.fps) as f64;
+        let with_clean = estimate_rate(&cfg, &[(2, true)]);
+        assert_eq!(with_clean - r, (program + cfg.output.audio_bitrate_kbps as f64) * 1000.0 / 8.0);
         assert_eq!(fmt_left(45.0 * 60.0), "45 min");
         assert_eq!(fmt_left(125.0 * 60.0), "2 h 5 min");
         assert_eq!(fmt_left(40.0), "under 1 min");

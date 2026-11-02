@@ -148,7 +148,11 @@ impl SettingsUi {
                     if ui.button("Rescan devices").clicked() {
                         self.video = devices::list(Kind::Video);
                     }
-                    hint(ui, &format!("{} camera(s) / capture card(s) found", self.video.len()));
+                    hint(ui, &match self.video.len() {
+                        0 => "No cameras or capture cards found on this computer".to_string(),
+                        1 => "1 camera or capture card found on this computer".to_string(),
+                        n => format!("{n} cameras or capture cards found on this computer"),
+                    });
                 });
             }
             SourcesView::CloseUps => self.closeup_guide(ui),
@@ -217,32 +221,67 @@ impl SettingsUi {
         });
     }
 
-    /// ＋ Add, Duplicate, Remove, ↑ ↓ and Split… under the full list.
+    /// ＋ Add (a small menu of what to add), Duplicate, Remove, ↑ ↓ and
+    /// Split… under the full list.
     fn camera_list_buttons(&mut self, ui: &mut egui::Ui) {
         let n = self.draft.sources.len();
-        if let Some(edit) = list_buttons(ui, n, self.sel_source, Some("＋ Add")) {
-            let video = &self.video;
+        let mut add = None;
+        ui.menu_button("＋ Add", |ui| {
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+            let free = self.video.iter().any(|d| !self.draft.sources.iter().any(|s| s.device == d.name));
+            let camera = ui.add_enabled(free, egui::Button::new("Camera or capture card"));
+            let camera = if free { camera } else { camera.on_disabled_hover_text("Every camera this computer has is already a source. Plug another one in, or change a source's Device.") };
+            if camera.clicked() {
+                add = Some(SourceKind::Device);
+            }
+            if ui.button("Screen, window or app").on_hover_text("Share your screen, one window or one app, like in a video call").clicked() {
+                add = Some(SourceKind::Screen);
+            }
+            if ui.button("Test picture").on_hover_text("Colour bars or a pattern, to try things without a camera").clicked() {
+                add = Some(SourceKind::Test);
+            }
+            if ui.button("Media player").on_hover_text("Play videos, pictures and music from a playlist").clicked() {
+                add = Some(SourceKind::Media);
+            }
+        });
+        match add {
+            Some(SourceKind::Device) => {
+                let used: Vec<&str> = self.draft.sources.iter().map(|s| s.device.as_str()).collect();
+                if let Some(device) = self.video.iter().find(|d| !used.contains(&d.name.as_str())).map(|d| d.name.clone()) {
+                    self.add_source(SourceKind::Device, "Cam");
+                    if let Some(s) = self.draft.sources.last_mut() {
+                        s.device = device;
+                    }
+                }
+            }
+            Some(SourceKind::Screen) => self.add_source(SourceKind::Screen, "Screen"),
+            Some(SourceKind::Test) => self.add_source(SourceKind::Test, "Test picture"),
+            Some(SourceKind::Media) => self.add_source(SourceKind::Media, "Media"),
+            _ => {}
+        }
+        if let Some(edit) = list_buttons(ui, n, self.sel_source, None) {
             apply_list_edit(
                 &mut self.draft.sources,
                 &mut self.sel_source,
                 edit,
                 false,
-                |list| {
-                    let used: Vec<&str> = list.iter().map(|s| s.device.as_str()).collect();
-                    let device = video.iter().find(|d| !used.contains(&d.name.as_str())).map(|d| d.name.clone()).unwrap_or("test".into());
-                    let name = unique(list.iter().map(|s| s.name.clone()).collect(), "Cam");
-                    Some(SourceConfig { name, device, ..Default::default() })
-                },
+                |_| None, // ＋ Add is the menu above
                 |s, list| SourceConfig { name: unique(list.iter().map(|s| s.name.clone()).collect(), &s.name), ..s.clone() },
             );
         }
         let can_split = self.draft.sources.get(self.sel_source).is_some_and(|s| s.framed_from().is_none() && s.virtual_ptz_of().is_none());
         ui.add_enabled_ui(can_split, |ui| {
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+            let sel = self.draft.sources.get(self.sel_source).map(|s| s.name.clone()).unwrap_or_default();
+            let cuts = self.draft.sources.iter().filter(|c| c.virtual_ptz_of().is_some_and(|f| f.trim().eq_ignore_ascii_case(sel.trim()))).count();
             ui.menu_button("Split…", |ui| {
                 ui.label(RichText::new("Close-ups of the people in it, each its own source").color(TEXT_DIM).size(TEXT_BODY));
+                if cuts > 0 {
+                    ui.label(RichText::new(format!("It has {cuts} close-ups already: these replace them.")).color(TEXT_DIM).size(TEXT_BODY));
+                }
                 for n in [2, 3] {
-                    if ui.button(format!("Into {n} close-ups")).clicked() {
+                    let text = if cuts > 0 { format!("Replace the close-ups with {n}") } else { format!("Into {n} close-ups") };
+                    if ui.button(text).clicked() {
                         self.split_source(self.sel_source, n);
                         ui.close();
                     }
@@ -304,9 +343,15 @@ impl SettingsUi {
                         ui.selectable_value(&mut from, *i, text);
                     }
                 });
+                let has = wides.iter().find(|w| w.0 == from).map(|w| w.2).unwrap_or(0) > 0;
                 for n in [2, 3] {
-                    let b = egui::Button::new(RichText::new(format!("＋ {n} close-ups")).color(Color32::WHITE)).fill(ACCENT.gamma_multiply(0.55));
-                    if ui.add(b).on_hover_text(format!("{n} virtual PTZ cameras cut from it, one box per person to drag into place")).clicked() {
+                    let (text, tip) = if has {
+                        (format!("Replace the close-ups with {n}"), format!("{n} close-ups in place of the ones it has, one box per person to drag into place"))
+                    } else {
+                        (format!("＋ {n} close-ups"), format!("{n} virtual PTZ cameras cut from it, one box per person to drag into place"))
+                    };
+                    let b = egui::Button::new(RichText::new(text).color(Color32::WHITE)).fill(ACCENT.gamma_multiply(0.55));
+                    if ui.add(b).on_hover_text(tip).clicked() {
                         self.split_source(from, n);
                     }
                 }
@@ -317,6 +362,10 @@ impl SettingsUi {
 
     fn source_detail(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
         self.source_picture(ui, info);
+        if let Some((size, detail)) = self.draft.sources.get(self.sel_source).and_then(|s| s.oversized(&self.draft.sources)) {
+            let name = self.draft.sources[self.sel_source].name.clone();
+            ui.add(egui::Label::new(RichText::new(format!("⚠ {}.", crate::config::oversized_note(&name, size, detail))).color(AMBER)).wrap());
+        }
         let applied: Vec<String> = self.original.sources.iter().map(|s| s.device.trim().to_string()).collect();
         let mut guests_on = false;
         let ndi = self.ndi_found.lock_ok().clone();
@@ -450,9 +499,9 @@ impl SettingsUi {
                 SourceKind::Test => {
                     label(ui, "Pattern");
                     let current = src.device.strip_prefix("test:").unwrap_or("smpte").to_string();
-                    egui::ComboBox::from_id_salt("pattern").selected_text(&current).show_ui(ui, |ui| {
+                    egui::ComboBox::from_id_salt("pattern").selected_text(crate::media::testsrc::pattern_label(&current)).show_ui(ui, |ui| {
                         for p in TEST_PATTERN_NAMES {
-                            if ui.selectable_label(current == *p, *p).clicked() {
+                            if ui.selectable_label(current == *p, crate::media::testsrc::pattern_label(p)).clicked() {
                                 src.device = format!("test:{p}");
                             }
                         }
@@ -764,21 +813,32 @@ impl SettingsUi {
     /// cameras cut from it, each with one preset over its part of the
     /// picture, named for where they are, for the boxes to be dragged onto
     /// the people. The first is picked (its picture shows the boxes).
+    /// Close-ups already split from it are replaced (keeping their names
+    /// where they fit, so scenes still find them), never added to.
     pub fn split_source(&mut self, i: usize, n: usize) {
         let Some(wide) = self.draft.sources.get(i).cloned() else { return };
         if wide.framed_from().is_some() || wide.virtual_ptz_of().is_some() || n < 2 {
             return;
         }
         let places: &[&str] = if n == 2 { &["left", "right"] } else { &["left", "middle", "right"] };
-        let mut at = i + 1;
-        // After close-ups already cut from it.
-        while self.draft.sources.get(at).is_some_and(|s| s.virtual_ptz_of().or(s.framed_from()).is_some_and(|f| f.trim().eq_ignore_ascii_case(wide.name.trim()))) {
+        // The close-ups split from it before: they make way for the new ones.
+        let of_wide = |s: &SourceConfig| s.virtual_ptz_of().is_some_and(|f| f.trim().eq_ignore_ascii_case(wide.name.trim()));
+        let old: Vec<SourceConfig> = self.draft.sources.iter().filter(|s| of_wide(s)).cloned().collect();
+        let mut at = self.draft.sources.iter().position(of_wide).unwrap_or(i + 1);
+        self.draft.sources.retain(|s| !of_wide(s));
+        let i = self.draft.sources.iter().position(|s| s.name == wide.name).unwrap_or(i);
+        at = at.min(self.draft.sources.len()).max(i + 1);
+        // After auto-framed close-ups cut from it.
+        while self.draft.sources.get(at).is_some_and(|s| s.framed_from().is_some_and(|f| f.trim().eq_ignore_ascii_case(wide.name.trim()))) {
             at += 1;
         }
         let first = at;
         for (k, place) in places.iter().enumerate().take(n) {
             let names = self.draft.sources.iter().map(|s| s.name.clone()).collect();
-            let name = unique(names, &format!("{} {place}", wide.name));
+            // "Cam 1 left" again for the one on the left, not "Cam 1 left 2".
+            let base = format!("{} {place}", wide.name);
+            let reused = old.iter().find(|o| o.name.eq_ignore_ascii_case(&base));
+            let name = unique(names, &base);
             let ptz = crate::config::PtzConfig {
                 max_zoom: 3.0,
                 presets: vec![crate::config::PtzPreset { name: place.to_string(), x: (k as f32 + 0.5) / n as f32, y: 0.5, zoom: n as f32 }],
@@ -795,6 +855,8 @@ impl SettingsUi {
                 fps: wide.fps,
                 record: true,
                 ptz,
+                // Kept: the same source to the scenes, the desk and the files.
+                uid: reused.map(|o| o.uid).unwrap_or_default(),
                 ..Default::default()
             };
             self.draft.sources.insert(at, close);

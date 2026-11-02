@@ -7,11 +7,60 @@ use anyhow::{Context, Result};
 use std::fs::{File, Metadata};
 use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub struct MirrorFile {
     main: File,
     backup: Option<(File, PathBuf)>,
     backup_error: Option<String>,
+    /// Second handles to the same files, which a thread of their own puts
+    /// on the disk every few seconds (see `syncer`).
+    _synced: Vec<Arc<File>>,
+}
+
+/// While a take records, every file is put on the disk (`sync_data`) every
+/// few seconds by one thread of its own, so a power cut loses only the
+/// last few seconds, and the writers never wait for it.
+mod syncer {
+    use super::*;
+    use std::sync::{Mutex, OnceLock, Weak};
+
+    pub const EVERY: std::time::Duration = std::time::Duration::from_secs(4);
+
+    fn files() -> &'static Mutex<Vec<Weak<File>>> {
+        static FILES: OnceLock<Mutex<Vec<Weak<File>>>> = OnceLock::new();
+        FILES.get_or_init(|| {
+            let _ = std::thread::Builder::new().name("sync to disk".into()).spawn(|| loop {
+                std::thread::sleep(EVERY);
+                sync_now();
+            });
+            Mutex::new(Vec::new())
+        })
+    }
+
+    /// Puts every open file on the disk now (and forgets closed ones).
+    pub fn sync_now() {
+        let live: Vec<Arc<File>> = {
+            let mut f = files().lock().unwrap_or_else(|e| e.into_inner());
+            f.retain(|w| w.strong_count() > 0);
+            f.iter().filter_map(|w| w.upgrade()).collect()
+        };
+        for f in live {
+            let _ = f.sync_data();
+        }
+    }
+
+    /// Keep `file` synced while the returned handle lives.
+    pub fn watch(file: &File) -> Option<Arc<File>> {
+        let twin = Arc::new(file.try_clone().ok()?);
+        files().lock().unwrap_or_else(|e| e.into_inner()).push(Arc::downgrade(&twin));
+        Some(twin)
+    }
+
+    #[cfg(test)]
+    pub fn watched() -> usize {
+        files().lock().unwrap().iter().filter(|w| w.strong_count() > 0).count()
+    }
 }
 
 impl MirrorFile {
@@ -19,10 +68,13 @@ impl MirrorFile {
     /// is noted (see [`MirrorFile::take_backup_error`]) but isn't an error.
     pub fn create(path: &Path, backup: Option<&Path>) -> Result<MirrorFile> {
         let main = File::create(path).with_context(|| format!("creating {}", path.display()))?;
-        let mut m = MirrorFile { main, backup: None, backup_error: None };
+        let mut m = MirrorFile { _synced: syncer::watch(&main).into_iter().collect(), main, backup: None, backup_error: None };
         if let Some(b) = backup {
             match File::create(b) {
-                Ok(f) => m.backup = Some((f, b.to_path_buf())),
+                Ok(f) => {
+                    m._synced.extend(syncer::watch(&f));
+                    m.backup = Some((f, b.to_path_buf()));
+                }
                 Err(e) => m.backup_error = Some(format!("couldn't create the backup {}: {e}", b.display())),
             }
         }
@@ -116,6 +168,24 @@ mod tests {
         assert!(m.take_backup_error().is_some());
         m.write_all(b"x").unwrap();
         assert!(!m.has_backup());
+        drop(m);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Open files are put on the disk in the background, and let go of once closed.
+    #[test]
+    fn files_are_synced_while_open() {
+        let dir = std::env::temp_dir().join(format!("cutaway-mirror-sync-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut m = MirrorFile::create(&dir.join("a.bin"), Some(&dir.join("b.bin"))).unwrap();
+        assert!(syncer::watched() >= 2);
+        m.write_all(b"hello").unwrap();
+        syncer::sync_now();
+        assert_eq!(std::fs::read(dir.join("a.bin")).unwrap(), b"hello");
+        assert_eq!(m._synced.len(), 2);
+        let twin = Arc::downgrade(&m._synced[0]);
+        drop(m);
+        assert!(twin.upgrade().is_none(), "closed: no longer synced");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

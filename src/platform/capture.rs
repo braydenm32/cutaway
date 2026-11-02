@@ -82,6 +82,42 @@ pub fn short_app(app: &str) -> String {
 }
 
 /// Whether a device is a screen capture.
+/// What a Mac says when Screen Recording hasn't been allowed (the picker
+/// spots it to offer System Settings and a restart).
+pub const SCREEN_NOT_ALLOWED: &str = "Cutaway isn't allowed to record the screen yet. In System Settings → Privacy & Security → Screen Recording, turn on Cutaway, then restart Cutaway";
+
+/// Open the Screen Recording page of System Settings (Mac).
+pub fn open_screen_privacy() {
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture").spawn();
+}
+
+/// Quit and open Cutaway again (macOS only lets a newly allowed app record
+/// the screen after it starts again). Returns false when it can't.
+pub fn relaunch_soon() -> bool {
+    let Ok(exe) = std::env::current_exe() else { return false };
+    // The app bundle when there is one (…/Cutaway.app/Contents/MacOS/cutaway).
+    let bundle = exe.ancestors().find(|p| p.extension().is_some_and(|e| e == "app")).map(|p| p.to_path_buf());
+    #[cfg(target_os = "macos")]
+    let r = match &bundle {
+        // Once this copy has gone: `open -n` starts a fresh one.
+        Some(app) => std::process::Command::new("/bin/sh").arg("-c").arg("sleep 2; open -n \"$0\"").arg(app).spawn(),
+        None => std::process::Command::new("/bin/sh").arg("-c").arg("sleep 2; \"$0\" &").arg(&exe).spawn(),
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let r = {
+        let _ = &bundle;
+        std::process::Command::new("/bin/sh").arg("-c").arg("sleep 2; \"$0\" &").arg(&exe).spawn()
+    };
+    // (Windows asks nothing of the kind: no restart needed there.)
+    #[cfg(windows)]
+    let r: std::io::Result<()> = {
+        let _ = (&bundle, &exe);
+        Err(std::io::ErrorKind::Unsupported.into())
+    };
+    r.is_ok()
+}
+
 pub fn is_screen(device: &str) -> bool {
     ScreenTarget::parse(device).is_some()
 }

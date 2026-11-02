@@ -29,14 +29,22 @@
   <div data-for="scene">
     <div class="row"><label for="scene">Scene</label><div class="field"><select id="scene" data-setting="scene" data-list="scenes"></select></div></div>
     <div class="row"><label for="press">When pressed</label><div class="field"><select id="press" data-setting="press">
-      <option value="take">Take it (with the transition)</option>
-      <option value="preview">Put it in preview</option>
+      <option value="desk">Like the desk (preview when Preview is on)</option>
+      <option value="take">Always take it (with the transition)</option>
+      <option value="preview">Always put it in preview</option>
       <option value="cut">Cut to it</option>
     </select></div></div>
+    <div class="hint">Like the desk: with Preview on it goes in preview (then Take), with Preview off it's taken with the transition, the same as the number keys and the phone.</div>
+  </div>
+  <div data-for="preview">
+    <div class="hint">Turns Preview mode on and off, like the Preview button on the desk. Green while it's on, with the name of the scene in preview.</div>
+  </div>
+  <div data-for="back">
+    <div class="hint">Back to the last scene: the one on air before this one, with the current transition. Press again to go forward.</div>
   </div>
   <div data-for="source">
     <div class="row"><label for="source">Source</label><div class="field"><select id="source" data-setting="source" data-list="sources"></select></div></div>
-    <div class="hint">Shows the source full screen, like clicking it in Cutaway's multiview.</div>
+    <div class="hint">Shows the source full screen, straight on air (into preview with Preview on), like Shift+clicking its tile in Cutaway.</div>
   </div>
   <div data-for="take">
     <div class="row"><label for="how">Button</label><div class="field"><select id="how" data-setting="how">
@@ -57,7 +65,8 @@
     <div class="row"><label></label><div class="field check"><input type="checkbox" id="holdToEnd" data-setting="holdToEnd" data-default="true"><label for="holdToEnd">Hold for a second to end</label></div></div>
   </div>
   <div data-for="marker">
-    <div class="row"><label for="mlabel">Label</label><div class="field"><input type="text" id="mlabel" data-setting="label" placeholder="optional, e.g. Guest arrives"></div></div>
+    <div class="row"><label for="mlabel">Name</label><div class="field"><input type="text" id="mlabel" data-setting="label" list="marklabels" placeholder="optional, e.g. Retake"><datalist id="marklabels"></datalist></div></div>
+    <div class="hint">Leave it empty for a plain marker, or give the key a name: pick one of your quick marker names (set in Cutaway's More › Control › Phone remote) or type your own. The key shows the name.</div>
   </div>
   <div data-for="graphic">
     <div class="row"><label for="graphic">Graphic</label><div class="field"><select id="graphic" data-setting="graphic" data-list="graphics"></select></div></div>
@@ -115,7 +124,7 @@
     <div class="hint">Green when the guest is on, with the name they gave; the border shows the tally.</div>
   </div>
   <div data-for="ftb">
-    <div class="hint">Fades the program's picture and sound to black, and back up (Scenes › Stinger &amp; fade to black sets how long). Red while black.</div>
+    <div class="hint">Fades the program's picture and sound to black, and back up (Scenes › Stinger &amp; fade to black sets how long). Black with an amber edge while it's faded out.</div>
   </div>
   <div data-for="replay">
     <div class="row"><label for="rslow">Slow motion</label><div class="field"><input type="checkbox" id="rslow" data-setting="slow" data-default="false"></div></div>
@@ -166,7 +175,7 @@
     <option value="off">Off (names only)</option>
   </select></div></div>
   <div class="status" id="status">Connecting…</div>
-  <div class="hint">In Cutaway: More › Control › Phone remote, turn on remote control. Use 127.0.0.1 on the same computer, or that computer's address from another one.</div>
+  <div class="hint">In Cutaway: More › Control › Phone remote, turn on Remote control (the phone remote and the Stream Deck both use it). Use 127.0.0.1 on the same computer, or that computer's address from another one.</div>
 
 <script>
   let ws = null, uuid = null, action = null, settings = {}, global = {}, lists = null;
@@ -268,6 +277,9 @@
           showGlobal();
         }
         fillLists();
+        const dl = document.getElementById("marklabels");
+        dl.innerHTML = "";
+        (lists.markerLabels || []).forEach((l) => { const o = document.createElement("option"); o.value = l; dl.appendChild(o); });
         showStatus();
       }
     };

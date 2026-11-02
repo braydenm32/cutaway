@@ -38,6 +38,7 @@ pub mod graphics;
 pub mod guests;
 pub mod health;
 pub mod inputs;
+pub mod journal;
 pub mod lipsync;
 pub mod ndi;
 pub mod netsrc;
@@ -186,6 +187,9 @@ pub struct Status {
     pub last_take: Option<recorder::TakeReport>,
     /// Names of sources/inputs that aren't delivering.
     pub offline: HashSet<String>,
+    /// Why a source couldn't open, when it's something to do (the camera
+    /// isn't allowed), for its tile: by name (review B3).
+    pub why_offline: HashMap<String, String>,
     /// Set when writing a file fails (e.g. disk full); the take should be stopped.
     pub rec_failed: Option<String>,
     /// Unrecoverable engine error.
@@ -596,8 +600,18 @@ impl Engine {
             match opened {
                 Err(e) => {
                     let mut st = status.lock_ok();
-                    st.push(LogLevel::Error, format!("{}: {e:#}. It will connect automatically when available.", sc.name));
+                    // (Screen Recording not allowed won't fix itself: no
+                    // "connects when available" after "restart".)
+                    let msg = format!("{e:#}");
+                    if msg.contains(crate::platform::capture::SCREEN_NOT_ALLOWED) {
+                        st.push(LogLevel::Error, format!("{}: {msg}.", sc.name));
+                    } else {
+                        st.push(LogLevel::Error, format!("{}: {msg}. It will connect automatically when available.", sc.name));
+                    }
                     st.offline.insert(sc.name.clone());
+                    if let Some(why) = tile_reason(&format!("{e:#}")) {
+                        st.why_offline.insert(sc.name.clone(), why);
+                    }
                 }
                 Ok(_) => {
                     if let Some(p) = input.framing().and_then(|f| f.problem.lock_ok().clone()) {
@@ -1388,28 +1402,35 @@ impl Engine {
                 h.slot.stop_iso_tap();
                 if let Some(take) = self.take.lock_ok().as_mut() {
                     let length = clock::now() - take.t0;
-                    for f in take.export_files.iter_mut().filter(|f| f.source == Some(h.uid as usize)) {
+                    // (Its file that's still going: an earlier one may have ended already.)
+                    for f in take.export_files.iter_mut().filter(|f| f.source == Some(h.uid as usize) && f.length.is_none()) {
                         f.length = Some(length);
+                    }
+                    if let Some(j) = &take.journal {
+                        j.add(&journal::Entry::Ends { source: h.uid as usize, length });
                     }
                 }
             }
             if recording && h.record {
                 notes.push(if still {
-                    format!("{}: changed, so its own file in this take ends here (it's recorded again from the next take)", h.name)
+                    format!("{}: changed, so its own file in this take ends here and a new one starts", h.name)
                 } else {
                     format!("{}: removed; its own file in this take ends here", h.name)
                 });
             }
             self.status.lock_ok().offline.remove(&h.name);
         }
+        self.sources = sources;
+        // Sources that joined or restarted get a file of their own at once.
         if recording {
             for (i, sc) in new.sources.iter().enumerate() {
-                if keep[i].is_none() && sc.record && !old.sources.iter().any(|o| o.uid == sc.uid) {
-                    notes.push(format!("{}: recorded to its own file from the next take (it's in the program now)", sc.name));
+                if keep[i].is_none() && sc.record {
+                    if let Some(file) = self.start_late_iso(i) {
+                        notes.push(format!("{}: recorded to its own file from now ({file})", sc.name));
+                    }
                 }
             }
         }
-        self.sources = sources;
         self.masks = masks;
         *self.cutouts.lock_ok() = cutouts;
 
@@ -1541,6 +1562,9 @@ impl Engine {
                         let mut st = status.lock_ok();
                         st.push(LogLevel::Error, format!("{}: {e:#}. It will connect automatically when available.", input.cfg.name));
                         st.offline.insert(input.cfg.name.clone());
+                        if let Some(why) = tile_reason(&format!("{e:#}")) {
+                            st.why_offline.insert(input.cfg.name.clone(), why);
+                        }
                     }
                 }
                 waker();
@@ -1746,7 +1770,7 @@ impl Engine {
                 let names: Vec<String> = angles.iter().map(|a| a.0.clone()).collect();
                 // (By number: the source's place in the show, not among those recorded.)
                 let i = match t {
-                    crate::control::Target::Index(i) => self.sources.get(*i).and_then(|s| names.iter().position(|n| *n == s.name)),
+                    crate::control::Target::Index(i) | crate::control::Target::Place(i) => self.sources.get(*i).and_then(|s| names.iter().position(|n| *n == s.name)),
                     t => t.find(&names),
                 };
                 let Some(i) = i else {
@@ -1933,6 +1957,20 @@ fn apply_scene_audio(inputs: &[(String, Arc<InputShared>)], scene: &crate::scene
     }
 }
 
+/// A source's open error as a line for its tile, when it's something the
+/// person can fix (the camera isn't allowed); None for the rest, which
+/// stay in the status light and the Log.
+pub fn tile_reason(err: &str) -> Option<String> {
+    let l = err.to_lowercase();
+    if l.contains("isn't allowed to use cameras") {
+        Some("Cutaway may not use cameras: System Settings › Privacy & Security › Camera".into())
+    } else if l.contains("windows blocked access") {
+        Some("Windows blocked the camera: Windows Settings › Privacy & security › Camera".into())
+    } else {
+        None
+    }
+}
+
 fn describe_encoder(codec: crate::media::VideoCodec, wanted: &str) -> String {
     match encode::resolve_backend(codec, wanted) {
         Ok(b) => format!("{} · {}", encode::codec_name(codec), encode::describe_backend(b)),
@@ -2071,7 +2109,11 @@ impl CompositorLoop {
                         stream_grid = Some((from, grid_index(t - from + 1, sfps)));
                     }
                 }
-                None => stream_grid = None,
+                None => {
+                    stream_grid = None;
+                    // The next stream warns again if it can't keep up.
+                    warned_stream = false;
+                }
             }
             let canvas = self.comp.canvas_size();
             // (Not when there's something only the stream shows, like
@@ -2177,7 +2219,7 @@ impl CompositorLoop {
                         if let (Some(f), Some((tx, _))) = (stream_frame, stream_now) {
                             if tx.try_send(f).is_err() && !warned_stream {
                                 warned_stream = true;
-                                self.status.lock_ok().push(LogLevel::Warning, "Stream: the encoder can't keep up, frames are being dropped.");
+                                self.status.lock_ok().push(LogLevel::Warning, "Stream: the encoder can't keep up, frames are being dropped. Lower the stream's size, frame rate or bitrate in Record › Streaming.");
                             }
                         }
                         let fresh = r.preview.is_some() || !r.thumbs.is_empty();
@@ -2344,7 +2386,7 @@ mod tests {
         assert_eq!(e.sources.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), vec!["Bars", "Snow", "Flat"]);
         assert_eq!(e.audio.len(), 2);
         assert!(notes.iter().any(|n| n.starts_with("Dark: removed")), "{notes:?}");
-        assert!(notes.iter().any(|n| n.starts_with("Flat: recorded") && n.contains("next take")), "{notes:?}");
+        assert!(notes.iter().any(|n| n.starts_with("Flat: recorded to its own file from now (ISO_04_Flat (from 00-00-0")), "{notes:?}");
         assert!(notes.iter().any(|n| n.starts_with("Tone 2")), "{notes:?}");
         // Still the bars on air, now number 1.
         assert_eq!(e.switcher.live().layers.iter().map(|l| l.source).collect::<Vec<_>>(), vec![0]);
@@ -2365,7 +2407,9 @@ mod tests {
         for want in ["ISO_01_Dark", "ISO_02_Bars", "ISO_03_Snow", "Program", "Audio_01_Tone"] {
             assert!(names.iter().any(|n| n.starts_with(want)), "{want} in {names:?}");
         }
-        assert!(!names.iter().any(|n| n.contains("Flat") || n.contains("Tone_2")), "new ones wait for the next take: {names:?}");
+        assert!(!names.iter().any(|n| n.contains("Tone_2")), "a new input waits for the next take: {names:?}");
+        // Flat, which joined, has its own file from when it joined (numbered after the others).
+        let flat_file = names.iter().find(|n| n.starts_with("ISO_04_Flat (from 00-00-0")).unwrap_or_else(|| panic!("Flat's file in {names:?}")).clone();
         assert!(report.problems.iter().all(|p| !p.contains("crashed")), "{:?}", report.problems);
         // Dark's file ends where it left; the others run to the end.
         let seconds = |want: &str| {
@@ -2375,6 +2419,8 @@ mod tests {
         };
         let (dark, bars) = (seconds("ISO_01_Dark"), seconds("ISO_02_Bars"));
         assert!(dark > 0.6 && dark < bars - 1.5, "Dark {dark:.2} s, Bars {bars:.2} s");
+        let flat = seconds(&flat_file);
+        assert!(flat > 1.0 && flat < bars - 0.5, "Flat {flat:.2} s, Bars {bars:.2} s");
         e.shutdown();
         let _ = std::fs::remove_dir_all(&dir);
     }
