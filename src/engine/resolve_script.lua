@@ -3,7 +3,9 @@
 -- In DaVinci Resolve: Workspace > Scripts > Cutaway - Build project from a take.
 -- After Open in Resolve in Cutaway it builds that take straight away;
 -- otherwise pick a take folder recorded by Cutaway (it starts at the latest take).
--- You get a new project named after the take, at the take's frame rate and size,
+-- You get a new project named after the take, at the take's frame rate and size
+-- (or, when a project from the same show and day is open, the choice to add the
+-- take to it, in a bin of its own),
 -- with bins for the cameras, the program and the audio, proxies linked,
 -- and the live edit as a timeline: your cuts on V1, every camera (and the
 -- program) full length on its own track above, switched off, all in sync,
@@ -237,29 +239,91 @@ end
 take.proxies = proxies
 
 local pm = resolve:GetProjectManager()
+
+-- "My_Show_2026-11-01_20-04-12" -> "My_Show", "2026-11-01": the show and the day.
+local function show_and_day(n)
+  if type(n) ~= "string" then
+    return nil
+  end
+  local show, day = n:match("^(.-)_(%d%d%d%d%-%d%d%-%d%d)_%d%d%-%d%d%-%d%d")
+  return show, day
+end
+
+-- A question with two answers, in a box in Resolve. nil when there's no box.
+local function ask(text, first, second)
+  local test = rawget(_G, "cutaway_test_choose")
+  if test then
+    return test(text, first, second)
+  end
+  local ui = fusion.UIManager
+  local disp = bmd.UIDispatcher(ui)
+  local answer = nil
+  local win = disp:AddWindow({ ID = "CutawayAsk", WindowTitle = "Cutaway", Geometry = { 300, 300, 520, 160 } }, ui:VGroup({
+    ui:Label({ ID = "Text", Text = text, WordWrap = true }),
+    ui:HGroup({ Weight = 0, ui:HGap(0, 1), ui:Button({ ID = "Second", Text = second }), ui:Button({ ID = "First", Text = first }) }),
+  }))
+  win.On.First.Clicked = function()
+    answer = first
+    disp:ExitLoop()
+  end
+  win.On.Second.Clicked = function()
+    answer = second
+    disp:ExitLoop()
+  end
+  win.On.CutawayAsk.Close = function() disp:ExitLoop() end
+  win:Show()
+  disp:RunLoop()
+  win:Hide()
+  return answer
+end
+
+-- A project Cutaway made for the same show on the same day is open (an
+-- earlier take, before a break): offer to add this take to it.
+local project = nil
+local adding = false
+local open = pm.GetCurrentProject and pm:GetCurrentProject() or nil
+local open_name = open and open.GetName and open:GetName() or nil
+local show, day = show_and_day(take.name)
+local open_show, open_day = show_and_day(open_name)
+if show and open_show == show and open_day == day and open_name ~= take.name then
+  local ok, answer = pcall(ask, "The project \"" .. open_name .. "\" (the same show, the same day) is open. Add this take to it, or make a new project?", "Add to this project", "New project")
+  if ok and answer == "Add to this project" then
+    project = open
+    adding = true
+  end
+end
 local name = take.name
-local project = pm:CreateProject(name)
-if not project then
-  name = take.name .. " " .. os.date("%H%M%S")
+if adding then
+  name = open_name
+else
   project = pm:CreateProject(name)
+  if not project then
+    name = take.name .. " " .. os.date("%H%M%S")
+    project = pm:CreateProject(name)
+  end
 end
 if not project then
   say("Resolve couldn't make a project called " .. name, true)
   return
 end
--- The take's frame rate and picture size, before any media or timeline.
-if take.fps then
+-- The take's frame rate and picture size, before any media or timeline
+-- (a project being added to keeps its own).
+if take.fps and not adding then
   local fps = tostring(take.fps)
   project:SetSetting("timelineFrameRate", fps)
   project:SetSetting("timelinePlaybackFrameRate", fps)
 end
-if take.width and take.height then
+if take.width and take.height and not adding then
   project:SetSetting("timelineResolutionWidth", tostring(take.width))
   project:SetSetting("timelineResolutionHeight", tostring(take.height))
 end
 
 local pool = project:GetMediaPool()
 local root = pool:GetRootFolder()
+if adding then
+  -- This take's own bin, with its cameras, audio and live edit inside.
+  root = pool:AddSubFolder(root, take.name) or root
+end
 local function bin(title, files)
   if #files == 0 then
     return nil, {}
@@ -486,7 +550,12 @@ if how == "api" then
 elseif how == "fcpxml" then
   table.insert(parts, "the live edit")
 end
-local done = "made the project \"" .. name .. "\" with " .. table.concat(parts, ", ") .. "."
+local done
+if adding then
+  done = "added " .. take.name .. " to the project \"" .. name .. "\" (in its own bin) with " .. table.concat(parts, ", ") .. "."
+else
+  done = "made the project \"" .. name .. "\" with " .. table.concat(parts, ", ") .. "."
+end
 say(done)
 if not timeline then
   local why
