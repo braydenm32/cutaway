@@ -372,6 +372,12 @@ pub struct TakeMonitor {
 }
 
 impl TakeMonitor {
+    /// A file started during the take.
+    pub fn add_file(&mut self, name: String, stats: Arc<VideoStats>) {
+        self.stats.push((name, stats));
+        self.recent.push(Default::default());
+    }
+
     pub fn new(folder: PathBuf, backup: Option<PathBuf>, stats: Vec<(String, Arc<VideoStats>)>) -> Self {
         let recent = vec![Default::default(); stats.len()];
         TakeMonitor { folder, backup, stats, sizes: VecDeque::new(), warned: 0, backup_warned: false, started: Instant::now(), recent }

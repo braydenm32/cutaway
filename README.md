@@ -78,8 +78,12 @@ and [Install on Windows](#install-on-windows).
 - **Change the line-up mid-show.** Add, remove or change sources and audio
   inputs while recording or live: only what changed opens or closes, and the
   rest never blinks. Removing one while recording or streaming asks first; its
-  own file in that take ends there (timelines know), and one added mid-take is
-  in the program at once and gets its own file from the next take. Only the
+  own file in that take ends there (timelines know). One added mid-take, or
+  one that restarts (a camera plugged back in, renamed or set to another
+  size), is in the program at once and gets a file of its own straight away,
+  named for when it starts (`ISO_04_Cam_2 (from 00-20-14).mp4`) and placed
+  right there in the timelines and the Resolve project. (Those files have no
+  sound of their own; the mix is in the program and Mix.wav.) Only the
   program's size and frame rate still need recording and streaming stopped.
 - **Network sources.** Take a feed from another computer, a phone app or an
   encoder over the network:
@@ -146,7 +150,12 @@ and [Install on Windows](#install-on-windows).
   close-up is sized to the part of the picture it shows (half a 4K camera
   is 1080p), so it stays sharp and is cheap to cut out. Applying also adds
   a scene "Cam 1: both" (or "all three") with the close-ups side by side,
-  unless a scene of that name is already there.
+  unless a scene of that name is already there. Split a camera that has
+  close-ups already and the button says **Replace the close-ups**: the new
+  ones take their place (and their names), rather than adding "Cam 1 left
+  2". A close-up set far bigger than the picture it really holds (a 4K file
+  of a part of a 1080p camera) gets a ⚠ in Sources, and a note when you
+  start recording.
 - **Lists work the same everywhere:** video sources, audio inputs, graphics,
   stream destinations, rundown segments and macros all have the same buttons
   under the list: **＋ Add**, **Duplicate**, **Remove**, **↑** and **↓**
@@ -184,6 +193,23 @@ and [Install on Windows](#install-on-windows).
 - **Every input on its own track:** optionally, the Program file carries
   each audio input as its own (disabled) track after the mix, so an editor
   can re-balance the show without the WAVs.
+- **No sleeping mid-show:** while recording or live, the computer and its
+  screens stay awake, even when you only switch from a Stream Deck or the
+  phone remote and nobody touches the laptop.
+- **Crash rescue:** the video files are written so that if Cutaway closes
+  mid-take everything up to about the last second is still there, and
+  every file is put on the disk every few seconds as it records, so a power
+  cut loses only the last few seconds; next
+  time Cutaway opens it repairs the take (the proxies too, and the files
+  keep their timecode). Cutaway also keeps a small note in the take folder
+  as you record (`.take-journal.jsonl`, hidden): the switches, the markers
+  and the files. So a rescued take gets back what a normal Stop saves: the
+  switch log, the editor timelines with your live edit, the Resolve take
+  file, the markers and the chapters. Its Take.txt says it was rescued,
+  with its date and length. After a normal Stop the note is removed. A
+  file that hit a problem while recording (a drive hiccup, the disk
+  filling at the very end) is repaired when the take stops, so it still
+  plays; the take card says which file and why.
 - **FAT32 drives:** starting a take on a drive formatted as FAT32 (common on
   older USB sticks and SD cards) warns straight away: no file there can be
   bigger than 4 GB, so a long take would stop. Use exFAT, APFS or NTFS.
@@ -239,8 +265,8 @@ Take_2026-10-16_19-30-02/
   Program.mp4                        the switched show (+ program audio)
   Program_Clean.mp4                  the show without graphics (if turned on)
   Program_Vertical.mp4               the 9:16 version (if turned on)
-  ISO_01_Wide.mp4                    each source, full quality (+ program audio)
-  ISO_02_Host.mp4
+  ISO_01_Wide.mp4                    each recorded source, full quality (+ program audio),
+  ISO_02_Host.mp4                      numbered 01, 02, 03… with no gaps
   ISO_03_Guest.mp4
   Audio_01_DAW.wav                   every channel captured from the interface
   Mix.wav                            the recording mix (if turned on, or for the podcast)
@@ -271,7 +297,7 @@ Takes start with the **Take name** from Record › Recording. Leave it as
   save them. Start a new scene blank or from one of those layouts
   (**＋ New scene** in Show › Edit layout or Scenes › Scenes), and put the
   scene buttons in the order you want (drag them in Edit layout, or ↑ ↓ in
-  Scenes › Scenes): keys 1–9 take the first nine. The Scenes pages save as
+  Scenes › Scenes): keys 1–9 take the first nine, and 0 the tenth. The Scenes pages save as
   you go, with Undo.
 - **Fill, crop and zoom per scene.** Each frame in a scene can show the whole
   picture (fit) or fill the frame, cropped to its shape, so a camera in a tall
@@ -320,7 +346,9 @@ Takes start with the **Take name** from Record › Recording. Leave it as
   **Fixed title** is for typed text). It names whoever fills the program, changing at each
   cut, and can come on by itself for a few seconds when someone new is on
   air (not again for the same person for 10 minutes, or as you set). Its
-  button keeps it on for as long as you like. For two people on one camera,
+  button keeps it on for as long as you like, and says whose name it shows:
+  amber while it's on screen, an amber edge while it's switched on but
+  nobody with a name is on air. For two people on one camera,
   make a close-up of each (an auto-framed close-up following the person on
   the left or right, or a virtual PTZ) and name each close-up.
 - **Graphics taking turns:** a group of graphics (sponsors, your social
@@ -495,7 +523,10 @@ Takes start with the **Take name** from Record › Recording. Leave it as
   them to another key or turn one off, and add your own keys for any
   command (a scene, a graphic, a pad, a macro, a camera move) in
   **More › Control › Shortcuts**. A key you pick wins over a built-in
-  one, mistakes like a key given two jobs are flagged as you go, and
+  one (the built-in's row then shows its key struck through, "taken by your
+  own shortcut"), mistakes like a key given two jobs are flagged on the row
+  they belong to as you go, Control isn't taken as a shortcut key on a Mac
+  (⌘ is), and
   **Print a cheat sheet** opens a page of every key to keep by the keyboard.
 - **Undo and redo** (Cmd/Ctrl+Z, Cmd/Ctrl+Shift+Z, or the buttons in Edit
   layout) for what you build: moving, resizing, filling and zooming frames,
@@ -658,6 +689,12 @@ right) are the places to start.
    PC": choose **More info → Run anyway** (once). If cameras or microphones
    don't show, turn on **Windows Settings → Privacy & security → Camera** (and
    **Microphone**) → **Let desktop apps access…**.
+5. **Firewall:** the first time you turn on the phone remote, a network
+   source, the stream server or guests, Windows Defender Firewall asks
+   whether Cutaway may accept connections. Tick **Private networks** and
+   choose **Allow access**. If you pressed Cancel, the phone can't connect:
+   go to **Windows Security → Firewall & network protection → Allow an app
+   through firewall**, find Cutaway and tick **Private**.
 
 Settings are in `%APPDATA%\Cutaway\config.toml`, recordings go to
 `Videos\Cutaway`.
@@ -784,8 +821,9 @@ Video Extensions** on some PCs.
   everything at a glance, **Log** is everything Cutaway has noted this session
   (**Warnings only**, and **Copy** to paste it into a message), and **Run
   pre-show check** runs the check.
-- **Messages:** an error stays at the bottom of the window until you click
-  it, and several stack up rather than replacing each other. Disk-space and
+- **Messages:** an error stays at the bottom of the window for 30 seconds
+  (or until you click it), and several stack up rather than replacing each
+  other; the status light and the Log keep it after that. Disk-space and
   backup-drive warnings show there too, and every error also goes in the Log.
   If a scene key does nothing, check the top bar: **⌨ Typing** means a box has
   the keyboard (Esc).
@@ -821,9 +859,9 @@ Video Extensions** on some PCs.
 
 | Action | How |
 |---|---|
-| Take scene 1–9 | Number keys, or click the scene button |
+| Take scene 1–10 | Number keys 1–9, and 0 for the tenth, or click the scene button (with Preview on, the keys put it in preview) |
 | Scene buttons | Along the bottom, every one in view. Each shows its key number (large), its name, **ON AIR** or **NEXT** (in preview), ♪ when it changes the sound and ⚠ when a source in it has no signal; a long name ends in "…" and shows in full when you hover. With room, each has a live picture of its scene (its sources where its frames are); in a narrower window (a 13" laptop) they become two rows of smaller buttons without pictures, so up to 12 scenes always fit. A bank longer than that scrolls sideways, and the edge says how many more (**+3 ›**: click it). In a window at least 1000 pixels tall they keep their pictures in two rows |
-| Cut straight to a scene | Shift + number, or Shift + click |
+| Cut straight to a scene | Shift + number (Shift+0 for the tenth), or Shift + click |
 | Back to the last scene | **⟲ Back** under the transitions, `Backspace` or the `back` command: the scene on air before this one goes back on air with the current transition and its cues (in Preview mode too, without passing through preview). Press it again to go back the other way |
 | Put a source full screen | With Preview off, click its tile in the multiview to pick it (a blue edge), then **Put on air** on the tile: so clicking a tile to look closer never switches the show. Shift+click a tile cuts to it at once. With Preview on, a click puts it in preview. Each tile shows the source's name and who's in it |
 | Preview, then take | Turn on **Preview**; scene keys then load the preview. Space = Take (with the transition), Enter = Cut |
@@ -831,7 +869,7 @@ Video Extensions** on some PCs.
 | Automatic switching | **AUTO** or `A`. Until it has rules (Scenes › More ▾ › Auto-switching) AUTO is greyed, and a click says so with a **Set up rules ›** link |
 | Captions on screen | **CC** or `C` |
 | Who an auto-framed source follows | **⋯** on its tile (or right-click it): follow and shot size |
-| Marker | `M`, or **◆ Marker** beside REC while recording (just **◆ 3** in a narrow window) |
+| Marker | `M`, or **◆ Marker** beside REC while recording (greyed out between takes, so REC never moves) |
 | Named marker | `Shift+M` while recording, or **▾ › Named marker…** beside ◆: the marker goes in at that moment and a box asks for its name (typing doesn't move it; Cancel keeps "Marker 3") |
 | This take's markers | **▾** beside **◆ Marker**: each marker's time, name and the scene on air. Change a name there, or ✕ to take one out, until the take stops (clips show with ✂ and stay as they are) |
 | Save a clip | `K`, or **✂ Clip** beside REC while recording (the last 30 seconds, or as set); the status light's panel has **✂ Clip the last 10 / 30 / 60 s** |
@@ -839,11 +877,11 @@ Video Extensions** on some PCs.
 | Fade to black | **Fade to black**, at the end of the transitions; it flashes while the program is black, and reads **Fade up**: click it again to come back |
 | Macros, PTZ, teleprompter, comments | Their panels on the right, the Stream Deck, the remote, MIDI or OSC. Set them up in **More › Show tools** |
 | Teleprompter page keys | On the prompter page on a computer: Space rolls or pauses, ← → jump a paragraph, ↑ ↓ change the speed, Home goes to the top (the bar under the script says so) |
-| Sound pads 1–12 | F1–F12, or the pad buttons in the sound panel (hold for "while held" pads) |
+| Sound pads 1–12 | F1–F12, or the pad buttons in the sound panel (hold for "while held" pads). On a MacBook the F-keys change brightness and volume unless you hold **Fn** with them, or turn on "Use F1, F2, etc. keys as standard function keys" in System Settings › Keyboard › Keyboard Shortcuts › Function Keys; the Shortcuts page and the cheat sheet say so on a Mac |
 | Talkback | Hold `B`, or hold **TALK** in the sound panel |
 | Next rundown segment | `N` (Shift+N goes back), or **Next ▶** in the rundown panel |
 | Timers | **▶ / ⏸** and **⟲** beside a countdown or stopwatch's graphic button: start, pause, back to the start (right-click it for Stop and reset too) |
-| Graphics 1–9 | Alt/Option + number, or the graphic buttons; ✎ edits a title's text live |
+| Graphics 1–10 | Alt/Option + number (0 for the tenth), or the graphic buttons; ✎ edits a title's text live |
 | Media player | ⟲ ⏯ ⏭ on its tile; **⋯** (or right-click) for the playlist |
 | Record / stop | ⌘R, or **● Record** at the top right. While recording, the **REC** pill (dark, with a pulsing red dot) shows the time with **hold to stop** under it: hold it for a second to stop (a red fill grows across it; a quick click does nothing but light up the hint). ⌘R asks "Stop recording?" first, so a stray click or key can't split the take |
 | Go live / end stream | **◉ Go live** at the top right, once there's somewhere to stream to (set that up in **Record › Streaming**). It says **Going live…** until a destination is really on air, and the **LIVE** time counts from then, the same on the desk, the phone and OSC. It has no key unless you give it one in More › Control › Shortcuts, so a stray key can't start or end a broadcast (a key gets the same checks and "are you sure?" as the button) |
@@ -976,17 +1014,31 @@ raise it for Wi-Fi or the internet.
 
 Turn on **More › Control › Phone remote › Remote control**. Open the address it
 shows (e.g. `http://192.168.1.20:8790`) on a phone or tablet on the same
-network and type the PIN. The remote always has one (Cutaway makes a
-four-digit PIN if you don't set your own), and a device that gets it wrong
-five times in a row waits a minute before it can try again.
+network and type the PIN (on Windows, allow Cutaway through the firewall
+when asked: see [Install on Windows](#install-on-windows), step 5). The
+remote always has one (Cutaway makes a
+four-digit PIN if you don't set your own), and a device that guesses five
+different wrong PINs in a row waits a minute before it can try again (a
+phone or Stream Deck still using an old PIN after you change it just asks
+for the new one). If the phone or a Stream Deck key asks for something that
+can't be done, the message shows on the laptop too. Talkback, a held pad or
+a camera move started from the phone or Stream Deck lets go by itself if the
+connection drops or the phone locks.
 
 The remote has four tabs at the bottom, and it remembers the last one you
 used on that phone:
 
-- **Scenes:** the program picture, **Mix / Cut / ⟲ Back** (with Preview on:
-  **Cut / Take / ⟲ Back**), the scenes in two columns with their key number
-  and an **ON AIR** or **NEXT** tag, and, folded below them, the other
-  transitions, Auto switching, captions and **Fade to black**.
+- **Scenes:** the program picture, then the same switching buttons as the
+  desk. **TAKE** and **CUT** always mean the same thing: the scene in
+  preview goes on air, with the transition or straight away (they're dimmed
+  while nothing is in preview). Under them, **Preview** turns Preview mode on
+  and off, the transition chip (**Mix ▾**) opens the choice of transitions
+  (Cut, Mix, Wipe, Push, Dip, Stinger), and **⟲ Back** goes back to the last
+  scene. Then the scenes in two columns with their key number and an
+  **ON AIR** or **NEXT** tag. Tapping a scene does what the desk's scene
+  button does (with Preview on it goes in preview, otherwise it's taken with
+  the transition); **holding** one for half a second cuts it straight to
+  air. Folded below: Auto switching, captions and **Fade to black**.
 - **Sound:** sound pads, Syrinscape, talkback, and each mic or input with ON /
   OFF, its level and a fader (−60 to +12 dB, the same range as `gain`
   commands and MIDI faders).
@@ -1000,18 +1052,37 @@ are down and a recording that failed), the recording time left on the drive,
 and the **REC** and **LIVE** buttons. LIVE says how it really is: **GOING
 LIVE…** while it connects, **LIVE 1 of 2** with each destination's state when
 one isn't up. Along the bottom, above the tabs: **Names**, **◆ Marker** and
-**✂ Clip**.
+**✂ Clip**. **◆ ▾** beside the marker lists your quick marker names (set them
+once in More › Control › Phone remote → **Quick marker names**; Good, Retake
+and Cut here to start with): one tap adds a marker with that name, so you
+don't type mid-show. On a short screen (a phone on its side) the bars and
+the picture get smaller, and the top scrolls away with the page; a long
+status list or pre-show check scrolls inside its box.
 
 Taps you can't take back need a one-second hold (a fill grows across the
 button, and letting go sooner only says **Hold to…**): stopping the recording,
 going live and ending the stream, fade to black, and turning a mic off.
 Starting a recording, turning a mic on and coming back from black are one tap.
+Each button sends what it means (start or stop, never "switch over"), so a
+screen that's a moment out of date can't stop a take with a tap. The
+rundown's **◀ Previous** (on the More tab) goes to the previous segment;
+**⟲ Back** is always the last scene.
 When the pre-show check is turned on (More › App › General → **Pre-show
 check**), starting from the phone, the Stream Deck, MIDI or OSC runs the check
-on the desk first, the same as the Record button; the phone shows that it's
-waiting on the desk, what the check found, and whether it started.
+on the desk first, the same as the Record button; the phone shows what the
+check found, with **Start** (or **Start anyway**) and **Cancel** buttons so
+you can answer it from across the room (or answer it on the desk), and
+whether it started.
 
 The remote keeps updating while the Cutaway window is minimised or hidden.
+It keeps the phone's screen on while it's open and showing; turn that off on
+the More tab (**Keep screen on**) to save battery. If nothing has come from
+Cutaway for five seconds (the phone left the Wi-Fi, the laptop went to
+sleep), a **Reconnecting to Cutaway…** strip shows at the top and the
+buttons dim, so a frozen screen never looks live; Cutaway sends a small sign
+of life every two seconds, so a quiet show isn't mistaken for a lost one.
+Coming back to the page (unlocking the phone, switching back to the browser)
+fetches the show and reconnects straight away.
 
 <img src="docs/remote.png" alt="The phone remote" width="300">
 
@@ -1032,7 +1103,8 @@ The remote keeps updating while the Cutaway window is minimised or hidden.
   `/api/key/scene/<n>.png` and `/api/key/source/<n>.png` (key pictures with
   tally, `?size=144`).
 - **WebSocket:** `ws://<address>:8790/api/ws?pin=<PIN>` pushes the state
-  (`{"type":"state","state":{…}}`) whenever it changes, and takes commands
+  (`{"type":"state","state":{…}}`) whenever it changes (and `{"type":"tick"}`
+  after two quiet seconds, so a client can tell it's still connected), and takes commands
   as text (`scene:2`) or JSON (`{"do":"scene:2","id":7}`, answered with
   `{"type":"reply","id":7,"ok":true,…}`).
 
@@ -1040,7 +1112,7 @@ The remote keeps updating while the Cutaway window is minimised or hidden.
 
 Double-click `streamdeck/Cutaway.streamDeckPlugin` (or press **Install the
 Stream Deck plugin…** in More › Control › Stream Deck, which also lists
-all 26 of the plugin's keys and what each does; the Mac app carries it
+all 28 of the plugin's keys and what each does; the Mac app carries it
 inside). Drag Cutaway actions onto keys, and in any key's settings enter the
 address (`127.0.0.1:8790` on the same computer) and the PIN. Needs Stream
 Deck 6.5 or later, on macOS or Windows. See [streamdeck/README.md](streamdeck/README.md).
@@ -1048,9 +1120,14 @@ Deck 6.5 or later, on macOS or Windows. See [streamdeck/README.md](streamdeck/RE
 ![Stream Deck keys](docs/streamdeck.png)
 
 *Scene and source keys show live pictures (red on air); record shows its
-running time; Go Live says GOING LIVE… while it connects and "LIVE 1 of 2"
-while a destination isn't live, as the phone does; graphics, transitions
-and captions light up when on.*
+running time on a dark key with a red dot, an amber edge when something
+needs a look and SAVING 40% while a take is finished; Go Live (pink) says
+GOING LIVE… while it connects and "LIVE 1 of 2" while a destination isn't
+live, as the phone does; graphics, transitions and captions light up when
+on.* A Scene key does what the desk's scene button does unless you set it
+to always take, preview or cut; **Preview** and **Back** keys turn Preview
+mode on and off and go back to the last scene; a **Marker** key can carry a
+name (one of your quick marker names).
 
 ### OSC
 
@@ -1078,6 +1155,8 @@ destinations aren't live, `ending` or `off`), with `/stream/live` as "1 of 2".
 | `scene:2` or `scene:Host` | Take a scene (by number or name) with the current transition |
 | `cut:2` | Cut straight to a scene |
 | `preview:2` | Put a scene in preview |
+| `press:2` | As the desk's scene button: into preview with Preview on, otherwise taken with the transition |
+| `preview:on`, `preview:off`, `preview:toggle` | Preview mode on or off |
 | `take` / `cut` | Take / cut the preview to program |
 | `back` | Back to the last scene: the one on air before this one, with the current transition (again goes forward) |
 | `transition:mix` | Choose `cut`, `mix`, `wipe`, `push` or `dip` |
@@ -1089,7 +1168,7 @@ destinations aren't live, `ending` or `off`), with `/stream/live` as "1 of 2".
 | `mute:Mic`, `unmute:Mic`, `audio:Mic` | An input on / off / toggle |
 | `gain:Mic:-6` | Set an input's level in dB |
 | `media:Clips:play` | Media player: `play`, `pause`, `toggle`, `restart`, `next`, `previous` |
-| `source:2` | A source full screen (like clicking it in the multiview) |
+| `source:2` | A source full screen, straight on air (to preview with Preview on), like Shift+clicking its tile |
 | `captions`, `captions:on`, `captions:off` | Captions on screen |
 | `transition:stinger` | Use the stinger (set in Scenes › More ▾ › Stinger & fade to black) |
 | `pad:1`, `pad:Applause`, `pad:1:stop`, `pads:stop` | Sound pads (press: play, or stop if playing; `play`, `stop`, `release`) |
@@ -1106,9 +1185,13 @@ destinations aren't live, `ending` or `off`), with `/stream/live` as "1 of 2".
 | `ptz:Cam 2:preset:1`, `ptz:2:home`, `ptz:2:left:0.5`, `ptz:2:in`, `ptz:2:stop`, `ptz:2:store:3` | PTZ cameras: presets, home, moves (`left`, `right`, `up`, `down`, `in`, `out`, with a speed) until `stop` |
 | `prompter`, `prompter:faster`, `prompter:slower`, `prompter:back`, `prompter:forward`, `prompter:top` | The teleprompter |
 | `comment:next`, `comment:hide`, `comment`, `comment:<n>` | Viewer comments on screen (`<n>` is a comment's number from `/api/state`) |
+| `precheck:start`, `precheck:cancel` | Answer the pre-show check open on the desk: start (anyway) or cancel |
 
 A number picks by position, unless something is named that number (a scene
-called "2"). A macro that runs itself is stopped there, with a message.
+called "2"). `#` in front always means the position: `scene:#2` is the
+second scene button even if another scene is called "2". The phone remote
+and the Stream Deck send these, so a scene named with a number can't be
+mistaken for a place. A macro that runs itself is stopped there, with a message.
 
 **When scenes move.** `scene:3` means the third scene button, wherever it
 came from: that's what the number keys, Stream Deck scene keys (their
@@ -1661,7 +1744,7 @@ and a software GPU:
 - **Whisper captions:** the streaming logic (partial and settled words,
   timing, long speech) with a stand-in recogniser, and whisper.cpp itself
   loading and running a model.
-- **Unit tests:** `cargo test` (200 tests, plus Windows-only ones that run there), including the compositor's
+- **Unit tests:** `cargo test` (about 380 tests, plus Windows-only ones that run there), including the compositor's
   styling, keying, person masks, transitions and graphics, the voice
   processing, loudness, limiters and leveller, automatic switching,
   auto-framing, captions, lip sync, the podcast, OSC, the WebSocket, the
@@ -1674,7 +1757,10 @@ hasn't run there. The GitHub workflow runs the tests and a test recording on
 Windows; the Media Foundation tests there also measure Windows' AAC encoder
 delay.
 
-**Not yet run on a Mac:** the parts that only exist on macOS compile
+**On a real Mac:** Cutaway is used for real shows on an Apple Silicon Mac
+(cameras, recording, switching), and NDI has been tested there and works.
+
+**Not yet run on a Mac:** the other parts that only exist on macOS compile
 against the macOS frameworks for Apple Silicon but haven't been run on real
 hardware yet. Expect a little tuning on first contact; the status light
 (Now and the Log) is the place to start:
@@ -1683,11 +1769,10 @@ hardware yet. Expect a little tuning on first contact; the status light
   player).
 - Headphone output.
 - MIDI.
-- NDI (needs the NDI runtime).
 - The virtual camera (needs the signing step).
 - Live captions (the Speech framework) and auto-framing and background
   removal (the Vision framework).
 - The Stream Deck plugin in the real Stream Deck app.
-- NDI output and PTZ control on a real network.
+- PTZ control on a real network.
 - Phone cameras from a real iPhone or Android phone, and uploads to the real
   YouTube and Google Drive.

@@ -51,8 +51,8 @@ fn kind_name(g: &Graphic) -> &'static str {
 
 /// "Alt+1" (⌥1 on a Mac): the key that shows and hides the i-th graphic.
 fn graphic_key(i: usize) -> Option<String> {
-    use crate::control::shortcuts::{KeyCombo, DIGITS};
-    (i < 9).then(|| KeyCombo { alt: true, ..KeyCombo::plain(DIGITS[i]) }.label())
+    use crate::control::shortcuts::{number_key, KeyCombo};
+    number_key(i).map(|k| KeyCombo { alt: true, ..KeyCombo::plain(k) }.label())
 }
 
 impl SettingsUi {
