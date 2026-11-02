@@ -359,8 +359,9 @@ Takes start with the **Take name** from Record › Recording. Leave it as
   shows the time left in each segment, what's next, and how far over or
   under the show is running, and marks each segment in the recording as a
   chapter.
-- **Fade to black:** **FTB** fades the picture and the sound out (and back
-  in) over a time you choose; the recording and stream carry on.
+- **Fade to black:** hold **Fade to black** for a second and it fades the
+  picture and the sound out (a click brings them back in) over a time you
+  choose; the recording and stream carry on.
 - **Instant replay:** **⟲ Replay** plays the last few seconds of the program
   again over it, in slow motion if you like, with a "REPLAY" label, then
   fades back to live (while recording). It can show the moment from any
@@ -830,7 +831,7 @@ Video Extensions** on some PCs.
 | This take's markers | **▾** beside **◆ Marker**: each marker's time, name and the scene on air. Change a name there, or ✕ to take one out, until the take stops (clips show with ✂ and stay as they are) |
 | Save a clip | `K`, or **✂ Clip** beside REC while recording (the last 30 seconds, or as set); the status light's panel has **✂ Clip the last 10 / 30 / 60 s** |
 | Instant replay | **⋯** beside CUT / MIX › **⟲ Replay**, or under the status light, while recording: Slow, from the program, one camera or every angle, and the last 5 / 10 / 20 / 30 s |
-| Fade to black | **Fade to black**, at the end of the transitions; it flashes while the program is black, and reads **Fade up**: click it again to come back |
+| Fade to black | Hold **Fade to black** (at the end of the transitions) for a second: a fill grows across it, and a quick click does nothing but say so, so a slip off the transitions can't black out the show. It flashes while the program is black, and reads **Fade up**: one click brings it back |
 | Macros, PTZ, teleprompter, comments | Their panels on the right, the Stream Deck, the remote, MIDI or OSC. Set them up in **More › Show tools** |
 | Teleprompter page keys | On the prompter page on a computer: Space rolls or pauses, ← → jump a paragraph, ↑ ↓ change the speed, Home goes to the top (the bar under the script says so) |
 | Sound pads 1–12 | F1–F12, or the pad buttons in the sound panel (hold for "while held" pads) |
@@ -844,7 +845,7 @@ Video Extensions** on some PCs.
 | Put scenes in order | In **Edit layout**, drag a scene button along the bank (a bar shows where it goes). Only in Edit layout, so a slip during the show can't move one. Or ↑ ↓ in **Scenes › Scenes**, which also renames, duplicates, deletes (it asks first, and says what uses the scene) and starts new scenes. Changes there save as you make them (↶ Undo at the bottom, or ⌘Z); **Edit its layout ›** opens the picked scene in Edit layout (in preview with Preview on) |
 | New scene | **＋ New scene** in Edit layout (or Scenes › Scenes): **Blank**, or from a layout (a source full screen, side by side, picture in picture, grid). It goes at the end of the bank, so no other scene's number changes. With Preview on it goes in preview to edit; otherwise take it to edit it |
 | Edit layout | `E`, or the **Edit layout** tab beside **Switch** at the top of Show. With **Preview** on you edit the scene in preview (click a scene to pick it; the one on air goes there if preview is empty): the program, and so the recording and stream, stays exactly as it is until you **Take** or **Cut** it. With Preview off you edit the scene on air, and a red **ON AIR** label says so, with **Edit in preview** to turn Preview on. **↶ Undo** and **↷ Redo** sit at the top. **Frame**: **Add source**, **Remove**, **To front**, **Full frame**. **Picture** (in the selected frame): **Fit/Fill**, **Zoom**, **✥ Move picture** (drag inside a frame to move its picture; Option/Alt-drag does the same) and **Reset**. **Scene**: its name, **Audio** (inputs it turns on or off), **Cues**, **＋ New scene**, **Duplicate**, **Delete…** (it asks first, says what uses the scene, and Undo brings it back). A line under the bar says what the mouse does: drag frames, drag the corner to resize (Shift keeps shape), scroll to zoom, double-click to fit or fill. **Unsaved** shows until the scenes are written to disk: **Save scenes**, or a few seconds after **Done**. **Done** or Esc goes back to Switch |
-| Audio strip | Always at the bottom of the column, under a fixed AUDIO heading, with room kept for it. Fader beside each meter = level, −60 to +12 dB (double-click resets), **ON** = in the mixes, 🎧 = solo in the headphones |
+| Audio strip | Always at the bottom of the column, under a fixed AUDIO heading, with room kept for it. Fader beside each meter = level, −60 to +12 dB (double-click resets), **ON** = in the mixes (click to turn it off; while you're recording or live, hold it for a second instead, so a slip can't cut a mic mid-show; turning one back on is always a click), 🎧 = solo in the headphones |
 | Fold or move a panel on the right | Click its heading (▾) to fold it down to one line, again to open it. Drag a heading by its ⠿ dots onto another panel's heading to move it above that one, or use **⋯ › Arrange panels…** at the top of the column (↑ ↓, Open, and **Reset order, folds and width**). Hovering a heading shows **Set up ›** for that panel; ⋯ lists them all. When panels go on below what fits, a line at the bottom says which (click it to scroll). Each show remembers its own |
 | Widen the column on the right | Drag its left edge (the three dots), up to about 60% of the window. Each show remembers its width |
 | Second screen | **Second screen** under the status light (set it up in Record › More ▾ › Screens & webcam, which also has Full screen and Close buttons). On that window: double-click or `F` for full screen, Esc to leave full screen, Esc again (or ✕, or Cmd/Ctrl+W) to close |
@@ -1144,8 +1145,9 @@ one in preview, recording, live, auto, graphics and inputs that are on.
    turns green with their name. They hear the show without their own voice,
    your talkback, and see the program.
 4. **During the show:** take their spot like any camera; their level is on
-   their audio strip; **✕** disconnects them. If they reload the page they
-   simply rejoin.
+   their audio strip; hold **✕** for a second to disconnect them (a quick
+   click only says so, so a slip beside **Copy link** can't drop their call).
+   If they reload the page they simply rejoin.
 
 - **Screen share:** tick **Screen share** beside a guest's spot and apply.
   That adds a source called "*Name*'s screen", and their page gets a
