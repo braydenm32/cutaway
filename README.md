@@ -72,7 +72,9 @@ When a newer version comes out, Cutaway shows a blue dot on **More** in the
 rail and says so in **More › App › Updates & about** (it asks GitHub once
 when it starts; turn that off in More › App › General).
 From 0.8 on, **Update now** there downloads it inside Cutaway,
-checks it against the release's fingerprints and makes sure it starts; then
+checks it against the release's fingerprints (and, once updates are signed,
+that those fingerprints are signed by Cutaway's maker) and makes sure it
+starts; then
 **Restart to update** (once recording and streaming have stopped) or **When
 I quit** puts it in place. The previous version is kept until the new one
 has run for a few seconds, and comes back by itself if the new one doesn't
@@ -83,6 +85,8 @@ Mac, say), the notice takes you to the download page instead. On Windows, an
 update that changes the virtual camera asks you to reinstall it (Record ›
 Screens & webcam), which needs administrator rights once.
 Your settings, shows and recordings stay as they are when you update.
+If Cutaway can't reach its releases page at all, **Updates & about** says it
+can't check, rather than that you're up to date.
 To see which version you have, click the logo at the top left (**About
 Cutaway**, with links to what's new and to this guide).
 To build Cutaway yourself instead, see [Install on a Mac](#install-on-a-mac)
@@ -1708,6 +1712,24 @@ cargo check --target aarch64-apple-darwin                               # macOS
 cargo check --target x86_64-pc-windows-msvc --no-default-features        # Windows (without whisper.cpp's C++ build)
 cargo check --target x86_64-pc-windows-msvc --manifest-path windows/vcam/Cargo.toml
 ```
+
+## Signed updates (for whoever publishes releases)
+
+The updater checks each download against the release's `SHA256SUMS.txt`.
+So that only the maker can publish an update, that list is signed with a
+key kept off line (never on GitHub):
+
+1. Once: `cutaway --make-update-key ~/cutaway-update.key` makes the key and
+   prints its public half. Keep the file private (a USB stick and a password
+   manager). The public half goes in `PUBLIC_KEY` in `src/net/signing.rs`.
+2. Each release: the Release workflow then makes a **draft** release. Download
+   its `SHA256SUMS.txt`, run `cutaway --sign-update SHA256SUMS.txt --key
+   ~/cutaway-update.key`, add the `SHA256SUMS.txt.sig` it writes to the draft,
+   and publish it.
+
+From the first version with the public key in it, Cutaway refuses an update
+whose fingerprints aren't signed with that key. Versions before it keep
+updating as they always have.
 
 ## What has been tested
 

@@ -104,6 +104,20 @@ struct Args {
     #[arg(long)]
     list_devices: bool,
 
+    /// Make the key that signs updates (once, kept off line), print its
+    /// public half, then exit.
+    #[arg(long, value_name = "FILE")]
+    make_update_key: Option<PathBuf>,
+
+    /// Sign a release's SHA256SUMS.txt (writes SHA256SUMS.txt.sig beside
+    /// it) with the key given by --key, then exit.
+    #[arg(long, value_name = "SHA256SUMS.txt", requires = "key")]
+    sign_update: Option<PathBuf>,
+
+    /// The update key, for --sign-update.
+    #[arg(long, value_name = "FILE")]
+    key: Option<PathBuf>,
+
     /// Show which video/audio encoders this machine will use, then exit.
     #[arg(long)]
     probe_encoders: bool,
@@ -219,6 +233,22 @@ fn run() -> Result<()> {
     }
     logging::init();
     let args = Args::parse();
+
+    if let Some(path) = &args.make_update_key {
+        let public = net::signing::make_key(path)?;
+        println!("Made the update key: {}", path.display());
+        println!("Keep that file private and off line. Its public key, to build into Cutaway:");
+        println!("{public}");
+        return Ok(());
+    }
+    if let (Some(sums), Some(key)) = (&args.sign_update, &args.key) {
+        let (sig, note) = net::signing::sign_file(sums, key)?;
+        println!("Signed: {}", sig.display());
+        if let Some(n) = note {
+            println!("Note: {n}");
+        }
+        return Ok(());
+    }
 
     if args.list_devices {
         devices::print_devices();

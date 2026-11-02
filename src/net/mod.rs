@@ -9,6 +9,7 @@ pub mod youtube_live;
 pub mod fetch;
 pub mod ndi_install;
 pub mod self_update;
+pub mod signing;
 pub mod update;
 pub mod tunnel;
 
