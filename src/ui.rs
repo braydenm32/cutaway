@@ -37,6 +37,7 @@ mod routes;
 mod shell;
 mod hold;
 mod search;
+mod fonts;
 
 pub mod theme {
     use eframe::egui::Color32;
@@ -526,6 +527,7 @@ impl App {
         // The displays' names (macOS only gives them on this thread; screen
         // captures opened later find their display by name).
         crate::platform::displays::list();
+        fonts::install(&cc.egui_ctx);
         style(&cc.egui_ctx);
         cc.egui_ctx.set_zoom_factor(cfg.ui.scale.clamp(0.5, 3.0));
         let ctx = cc.egui_ctx.clone();
