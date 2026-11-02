@@ -123,6 +123,11 @@ pub fn installed() -> bool {
     find().is_some()
 }
 
+/// Whether this copy carries the camera extension (only a signed build does).
+pub fn included() -> bool {
+    helper().is_some()
+}
+
 /// The helper that asks macOS to install the camera (inside the app).
 fn helper() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
@@ -133,7 +138,7 @@ fn helper() -> Option<PathBuf> {
 /// Install (or remove) the camera extension. Returns what macOS said.
 pub fn install(remove: bool) -> Result<String> {
     let Some(h) = helper() else {
-        bail!("this copy of Cutaway was built without the virtual camera (see \"Virtual camera\" in the README: it needs an Apple Developer signature)");
+        bail!("the virtual camera isn't in this copy of Cutaway (it isn't in the Mac download yet)");
     };
     let out = std::process::Command::new(h).arg(if remove { "uninstall" } else { "install" }).output()?;
     let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
