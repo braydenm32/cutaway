@@ -501,9 +501,23 @@ fn chpl(chapters: &[(Ns, String)]) -> Vec<u8> {
     full(b"chpl", 1, 0, &w.0)
 }
 
-fn moov(tracks: &[TrackInfo], brand: Brand, fragmented: bool) -> Vec<u8> {
-    moov_with(tracks, brand, fragmented, &[], &[])
+/// The header written while recording. It carries the timecode start in a
+/// small box of Cutaway's own (`udta/CWtc`: fps, first frame), which other
+/// readers skip, so a file rescued after a crash gets its timecode back.
+fn moov_fragmented(tracks: &[TrackInfo], brand: Brand, timecode: Option<(u32, u32)>) -> Vec<u8> {
+    let mut mv = moov_with(tracks, brand, true, &[], &[]);
+    if let Some((fps, start)) = timecode {
+        let mut tc = W::new();
+        tc.u32(fps).u32(start);
+        let udta = bx(b"udta", &bx(TIMECODE_NOTE, &tc.0));
+        mv.extend_from_slice(&udta);
+        let len = mv.len() as u32;
+        mv[..4].copy_from_slice(&len.to_be_bytes());
+    }
+    mv
 }
+
+const TIMECODE_NOTE: &[u8; 4] = b"CWtc";
 
 /// `udta/meta/ilst` with iTunes-style text tags.
 fn ilst(tags: &[([u8; 4], String)]) -> Vec<u8> {
@@ -695,7 +709,7 @@ impl Mp4Writer {
             head[8..12].copy_from_slice(&b);
         }
         let moov_at = head.len() as u64;
-        head.extend_from_slice(&moov(&infos, self.brand, true));
+        head.extend_from_slice(&moov_fragmented(&infos, self.brand, self.timecode));
         self.file.write_all(&head)?;
         self.patch_offsets.push(moov_at);
         self.pos = head.len() as u64;
@@ -826,64 +840,71 @@ impl Mp4Writer {
         self.flush_fragment()?;
         let mut infos: Vec<TrackInfo> = self.tracks.iter().map(|t| t.info.clone()).collect();
 
-        // Timecode and chapter tracks: their few bytes of samples go in one
-        // small mdat before the final moov.
-        let movie_ms = infos.iter().map(|t| t.movie_end()).max().unwrap_or(0);
-        let mut extra = Vec::new();
-        let mut end = self.pos;
-        let mdat_payload_at = end + 8;
-        let mut next_id = infos.iter().map(|t| t.id).max().unwrap_or(0) + 1;
-        if let Some((fps, start_frame)) = self.timecode {
-            let frames = (movie_ms * fps as u64).div_ceil(1000).max(1) as u32;
-            let id = next_id;
-            next_id += 1;
-            infos.push(TrackInfo {
-                samples: vec![Sample { size: 4, duration: frames, sync: true }],
-                chunks: vec![Chunk { offset: mdat_payload_at + extra.len() as u64, samples: 1 }],
-                ..TrackInfo::new(id, Handler::Timecode, fps, 0, 0, tmcd_stsd(fps), 0)
-            });
-            extra.extend_from_slice(&start_frame.to_be_bytes());
-            if let Some(v) = infos.iter_mut().find(|t| t.handler == Handler::Video) {
-                v.tref.push((*b"tmcd", id));
-            }
-        }
-        let chapters: Vec<(Ns, String)> = self.chapters.iter().filter(|c| c.0 >= 0 && (c.0 / 1_000_000) < movie_ms as i64).cloned().collect();
-        if !chapters.is_empty() {
-            let id = next_id;
-            let mut samples = Vec::new();
-            let mut first_chunk_at = None;
-            // The first chapter always starts at 0.
-            let mut marks = chapters.clone();
-            if marks[0].0 > 0 {
-                marks.insert(0, (0, "Start".into()));
-            }
-            for (i, (t, title)) in marks.iter().enumerate() {
-                let start_ms = (*t / 1_000_000) as u64;
-                let next_ms = marks.get(i + 1).map(|n| (n.0 / 1_000_000) as u64).unwrap_or(movie_ms);
-                let data = chapter_sample(title);
-                first_chunk_at.get_or_insert(mdat_payload_at + extra.len() as u64);
-                samples.push(Sample { size: data.len() as u32, duration: next_ms.saturating_sub(start_ms).max(1) as u32, sync: true });
-                extra.extend_from_slice(&data);
-            }
-            infos.push(TrackInfo {
-                chunks: vec![Chunk { offset: first_chunk_at.unwrap(), samples: samples.len() as u32 }],
-                samples,
-                ..TrackInfo::new(id, Handler::Chapters, 1000, 0, 0, chapter_stsd(), 0)
-            });
-            let owner = infos.iter().position(|t| t.handler == Handler::Audio && t.enabled).or_else(|| infos.iter().position(|t| t.handler == Handler::Video));
-            if let Some(o) = owner {
-                infos[o].tref.push((*b"chap", id));
-            }
-        }
-        if !extra.is_empty() {
-            self.file.seek(SeekFrom::Start(end))?;
-            self.file.write_all(&((extra.len() + 8) as u32).to_be_bytes())?;
-            self.file.write_all(b"mdat")?;
-            self.file.write_all(&extra)?;
-            end += 8 + extra.len() as u64;
-        }
+        let (end, chapters) = append_extras(&mut self.file, &mut infos, self.pos, self.timecode, &self.chapters)?;
         finalize(&mut self.file, self.brand, &infos, &self.patch_offsets, end, &chapters, &self.metadata)
     }
+}
+
+/// Timecode and chapter tracks: their few bytes of samples go in one small
+/// mdat at `end` (before the final moov). Returns the new end and the
+/// chapters that fall inside the movie.
+fn append_extras(file: &mut impl Out, infos: &mut Vec<TrackInfo>, end: u64, timecode: Option<(u32, u32)>, chapters: &[(Ns, String)]) -> Result<(u64, Vec<(Ns, String)>)> {
+    let movie_ms = infos.iter().map(|t| t.movie_end()).max().unwrap_or(0);
+    let mut extra = Vec::new();
+    let mut end = end;
+    let mdat_payload_at = end + 8;
+    let mut next_id = infos.iter().map(|t| t.id).max().unwrap_or(0) + 1;
+    if let Some((fps, start_frame)) = timecode {
+        let frames = (movie_ms * fps as u64).div_ceil(1000).max(1) as u32;
+        let id = next_id;
+        next_id += 1;
+        infos.push(TrackInfo {
+            samples: vec![Sample { size: 4, duration: frames, sync: true }],
+            chunks: vec![Chunk { offset: mdat_payload_at + extra.len() as u64, samples: 1 }],
+            ..TrackInfo::new(id, Handler::Timecode, fps, 0, 0, tmcd_stsd(fps), 0)
+        });
+        extra.extend_from_slice(&start_frame.to_be_bytes());
+        if let Some(v) = infos.iter_mut().find(|t| t.handler == Handler::Video) {
+            v.tref.push((*b"tmcd", id));
+        }
+    }
+    let mut chapters: Vec<(Ns, String)> = chapters.iter().filter(|c| c.0 >= 0 && (c.0 / 1_000_000) < movie_ms as i64).cloned().collect();
+    chapters.sort_by_key(|c| c.0);
+    if !chapters.is_empty() {
+        let id = next_id;
+        let mut samples = Vec::new();
+        let mut first_chunk_at = None;
+        // The first chapter always starts at 0.
+        let mut marks = chapters.clone();
+        if marks[0].0 > 0 {
+            marks.insert(0, (0, "Start".into()));
+        }
+        for (i, (t, title)) in marks.iter().enumerate() {
+            let start_ms = (*t / 1_000_000) as u64;
+            let next_ms = marks.get(i + 1).map(|n| (n.0 / 1_000_000) as u64).unwrap_or(movie_ms);
+            let data = chapter_sample(title);
+            first_chunk_at.get_or_insert(mdat_payload_at + extra.len() as u64);
+            samples.push(Sample { size: data.len() as u32, duration: next_ms.saturating_sub(start_ms).max(1) as u32, sync: true });
+            extra.extend_from_slice(&data);
+        }
+        infos.push(TrackInfo {
+            chunks: vec![Chunk { offset: first_chunk_at.unwrap(), samples: samples.len() as u32 }],
+            samples,
+            ..TrackInfo::new(id, Handler::Chapters, 1000, 0, 0, chapter_stsd(), 0)
+        });
+        let owner = infos.iter().position(|t| t.handler == Handler::Audio && t.enabled).or_else(|| infos.iter().position(|t| t.handler == Handler::Video));
+        if let Some(o) = owner {
+            infos[o].tref.push((*b"chap", id));
+        }
+    }
+    if !extra.is_empty() {
+        file.seek(SeekFrom::Start(end))?;
+        file.write_all(&((extra.len() + 8) as u32).to_be_bytes())?;
+        file.write_all(b"mdat")?;
+        file.write_all(&extra)?;
+        end += 8 + extra.len() as u64;
+    }
+    Ok((end, chapters))
 }
 
 /// Rename the given boxes to `free` and append a complete `moov`.
@@ -968,13 +989,58 @@ pub enum Recovery {
     NotRecoverable,
 }
 
+/// How long a finished file is, in seconds (from its movie header).
+pub fn duration_secs(path: &Path) -> Option<f64> {
+    let mut file = File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let mut pos = 0u64;
+    let mut found = None;
+    let mut head = [0u8; 16];
+    while pos + 8 <= len {
+        file.seek(SeekFrom::Start(pos)).ok()?;
+        file.read_exact(&mut head[..8]).ok()?;
+        let mut size = u32::from_be_bytes(head[..4].try_into().unwrap()) as u64;
+        let mut hdr = 8;
+        if size == 1 {
+            file.read_exact(&mut head[8..16]).ok()?;
+            size = u64::from_be_bytes(head[8..16].try_into().unwrap());
+            hdr = 16;
+        }
+        if size < hdr || pos + size > len {
+            break;
+        }
+        if &head[4..8] == b"moov" {
+            found = Some((pos + hdr, size - hdr));
+        }
+        pos += size;
+    }
+    let (at, n) = found?;
+    file.seek(SeekFrom::Start(at)).ok()?;
+    let mut body = vec![0u8; n as usize];
+    file.read_exact(&mut body).ok()?;
+    let mvhd = find(&body, b"mvhd")?;
+    let (scale, dur) = if mvhd[0] == 1 { (read_u32(mvhd, 20)?, read_u64(mvhd, 24)?) } else { (read_u32(mvhd, 12)?, read_u32(mvhd, 16)? as u64) };
+    Some(dur as f64 / scale.max(1) as f64)
+}
+
 /// Turn a fragmented MP4 left behind by a crash into a regular one.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn recover(path: &Path) -> Result<Recovery> {
+    recover_with(path, &[])
+}
+
+/// The same, adding chapter marks (ns from the start, title), as a file
+/// that finished normally has. The timecode the file was started with
+/// comes back too.
+pub fn recover_with(path: &Path, chapters: &[(Ns, String)]) -> Result<Recovery> {
     let mut file = OpenOptions::new().read(true).write(true).open(path)?;
     let len = file.metadata()?.len();
     // Walk the top-level boxes.
     let mut pos = 0u64;
+    // The header written while recording (with mvex), and a complete one
+    // after it (the finish got that far).
     let mut moov_box: Option<(u64, Vec<u8>)> = None;
+    let mut complete = false;
     let mut moofs: Vec<(u64, Vec<u8>)> = Vec::new();
     // End of the last complete box (a fragment counts once its mdat is in).
     let mut end_ok = 0u64;
@@ -1011,7 +1077,11 @@ pub fn recover(path: &Path) -> Result<Recovery> {
                 let mut b = vec![0u8; body_len as usize];
                 file.read_exact(&mut b)?;
                 if &kind == b"moov" {
-                    moov_box = Some((pos, b));
+                    if find(&b, b"mvex").is_some() {
+                        moov_box = Some((pos, b));
+                    } else {
+                        complete = true;
+                    }
                 } else {
                     moofs.push((pos, b));
                 }
@@ -1023,16 +1093,17 @@ pub fn recover(path: &Path) -> Result<Recovery> {
         }
         pos += size;
     }
-    let Some((moov_at, moov_body)) = moov_box else { return Ok(Recovery::NotRecoverable) };
-    if find(&moov_body, b"mvex").is_none() {
+    if complete {
         // Finished, but if it was interrupted while renaming the fragment
-        // headers, finish that too.
-        for (at, _) in &moofs {
+        // headers (and the recording header), finish that too.
+        for at in moov_box.iter().map(|m| m.0).chain(moofs.iter().map(|m| m.0)) {
             file.seek(SeekFrom::Start(at + 4))?;
             file.write_all(b"free")?;
         }
         return Ok(Recovery::AlreadyComplete);
     }
+    let Some((moov_at, moov_body)) = moov_box else { return Ok(Recovery::NotRecoverable) };
+    let timecode = find(&moov_body, b"udta").and_then(|u| find(u, TIMECODE_NOTE)).and_then(|b| Some((read_u32(b, 0)?.max(1), read_u32(b, 4)?)));
     // Keep only fragments whose mdat finished.
     moofs.retain(|(at, _)| *at < end_ok);
 
@@ -1099,7 +1170,9 @@ pub fn recover(path: &Path) -> Result<Recovery> {
         .fold(0.0, f64::max);
     let mut patch = vec![moov_at];
     patch.extend(moofs.iter().map(|m| m.0));
-    finalize(&mut file, brand, &tracks, &patch, end_ok, &[], &[])?;
+    file.set_len(end_ok)?;
+    let (end, chapters) = append_extras(&mut file, &mut tracks, end_ok, timecode, chapters)?;
+    finalize(&mut file, brand, &tracks, &patch, end, &chapters, &[])?;
     Ok(Recovery::Recovered { seconds })
 }
 
@@ -1201,6 +1274,45 @@ pub(crate) mod tests {
         if let Some(out) = probe(&p) {
             assert!(out.contains("codec_name=h264"), "{out}");
         }
+    }
+
+    #[test]
+    fn a_rescued_file_keeps_its_timecode_and_gets_chapters() {
+        let p = tmp("crash-tc.mp4");
+        let mut w = Mp4Writer::create(&p, Brand::Mp4).unwrap();
+        let v = w.add_video(&fake_video_config(), 30);
+        w.set_timecode(30, 2_167_000);
+        for i in 0..120u32 {
+            let data = h264::to_avcc([&[0x65u8, 0x88, 0x84, i as u8][..]]);
+            w.write(v, i as i64 * 1_000_000_000 / 30, &data, i % 30 == 0).unwrap();
+        }
+        drop(w); // a crash
+        let chapters = vec![(1_000_000_000, "News".to_string())];
+        assert!(matches!(recover_with(&p, &chapters).unwrap(), Recovery::Recovered { .. }));
+        let bytes = std::fs::read(&p).unwrap();
+        let c = children(&bytes);
+        let m = c.iter().rev().find(|c| &c.0 == b"moov").unwrap();
+        let moov = &bytes[m.1..m.2];
+        let handlers: Vec<Vec<u8>> = children(moov).iter().filter(|c| &c.0 == b"trak").filter_map(|c| find(&moov[c.1..c.2], b"mdia").and_then(|m| find(m, b"hdlr")).map(|h| h[8..12].to_vec())).collect();
+        assert!(handlers.iter().any(|h| h == b"tmcd"), "the timecode track is back");
+        assert!(handlers.iter().any(|h| h == b"text"), "and the chapters");
+        assert!(bytes.windows(4).any(|w| w == 2_167_000u32.to_be_bytes()));
+        let d = duration_secs(&p).unwrap();
+        assert!(d > 2.9 && d < 4.1, "{d}");
+        if let Some(out) = probe(&p) {
+            assert!(out.contains("codec_name=h264"), "{out}");
+        }
+        // A finish cut short after its moov: complete, with the recording header put away.
+        let q = tmp("half-finished.mp4");
+        let w = write_sample_file(&q, 2, false).unwrap();
+        w.finish().unwrap();
+        let mut b = std::fs::read(&q).unwrap();
+        let first_free = children(&b).iter().find(|c| &c.0 == b"free").unwrap().1 - 4;
+        b[first_free..first_free + 4].copy_from_slice(b"moov");
+        std::fs::write(&q, &b).unwrap();
+        assert_eq!(recover(&q).unwrap(), Recovery::AlreadyComplete);
+        let b = std::fs::read(&q).unwrap();
+        assert_eq!(children(&b).iter().filter(|c| &c.0 == b"moov").count(), 1);
     }
 
     #[test]

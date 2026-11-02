@@ -128,6 +128,12 @@ local function file_name(path)
   return (tostring(path):match("[^/\\]+$")) or tostring(path)
 end
 
+-- Rescued after a crash (its Take.txt says so).
+local function rescued_take(dir)
+  local first = first_lines(dir .. sep .. "Take.txt")
+  return first ~= nil and first:find("(recovered)", 1, true) ~= nil
+end
+
 -- A take without Cutaway's take file: its videos, sound and .fcpxml.
 local function take_from_folder(folder)
   local t = { name = file_name(folder), folder = folder, cameras = {}, audio = {}, proxies = {}, markers = {} }
@@ -489,8 +495,10 @@ if not timeline then
       why = why .. "; you can try File > Import > Timeline with " .. file_name(take.timeline)
     end
     why = why .. "."
+  elseif rescued_take(folder) then
+    why = "this take was rescued after Cutaway stopped while recording, and its switches weren't saved (it was recorded with an older Cutaway), so there's no live edit to build. The cameras, program and sound are all in the project's bins."
   else
-    why = "there's no live edit for this take (Cutaway saves it when Record > Recording > Editing > Editor timelines is on, and a take rescued after a crash has none)."
+    why = "there's no live edit for this take (Cutaway saves it when Record > Recording > Editing > Editor timelines is on). The cameras, program and sound are all in the project's bins."
   end
   say(why)
   done = done .. "\n\n" .. why:sub(1, 1):upper() .. why:sub(2)
