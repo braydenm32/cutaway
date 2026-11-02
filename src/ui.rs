@@ -4397,10 +4397,14 @@ impl App {
             }
             return;
         }
+        if let Some(e) = &stream.error {
+            ui.add(egui::Label::new(RichText::new(e).size(TEXT_BODY).color(ERROR)).wrap());
+        }
         if let Some(kbps) = stream.lowered_kbps {
             ui.label(RichText::new(format!("⚠ bitrate lowered to {:.1} Mbps while the connection catches up", kbps as f64 / 1000.0)).size(TEXT_BODY).color(AMBER))
                 .on_hover_text(format!("Set: {:.1} Mbps. It comes back by itself once every destination keeps up.", self.cfg.streaming.video_bitrate_kbps as f64 / 1000.0));
         }
+        let mut open_settings = false;
         for d in &stream.destinations {
             if d.state == DestState::Off {
                 continue;
@@ -4429,13 +4433,21 @@ impl App {
                 ui.label(RichText::new("   ⚠ connection too slow — dropping frames").size(TEXT_BODY).color(AMBER));
             }
             if let Some(m) = &d.message {
-                if d.state != DestState::Live {
-                    ui.label(RichText::new(format!("   {m}")).size(TEXT_SMALL).color(TEXT_DIM));
+                // The encoder's own failure is already said once above.
+                if d.state != DestState::Live && stream.error.as_deref() != Some(m.as_str()) {
+                    let tone = if d.state == DestState::Failed { ERROR } else { TEXT_DIM };
+                    ui.add(egui::Label::new(RichText::new(m).size(TEXT_BODY).color(tone)).wrap());
+                }
+                if d.state == DestState::Failed && m.contains("Record › Streaming") && ui.small_button("Open streaming settings").clicked() {
+                    open_settings = true;
                 }
                 resp.on_hover_text(format!("{} — {m}", d.service.label()));
             } else {
                 resp.on_hover_text(d.service.label());
             }
+        }
+        if open_settings {
+            self.open_page(Section::Streaming, None);
         }
     }
 
@@ -5091,11 +5103,17 @@ impl App {
             self.toast("The engine isn't running".into(), true);
             return;
         };
-        let items = e.local_checks();
+        let mut items = e.local_checks();
         let dests: Vec<_> = self.cfg.streaming.destinations.iter().filter(|d| d.enabled).cloned().collect();
         let check_streams = then != Some(Then::Record) && !dests.is_empty() && !e.is_streaming();
-        let waiting = if check_streams { dests.len() } else { 0 };
-        let rx = check_streams.then(|| precheck::check_destinations(dests));
+        let dests = if check_streams { dests } else { Vec::new() };
+        // Opening every encoder at once takes a moment: off the UI thread.
+        let plan = e.encoder_plan();
+        if plan.is_none() {
+            items.push(CheckItem { level: Level::Ok, what: "Encoders".into(), detail: format!("{} · in use now", e.encoder_description()) });
+        }
+        let waiting = dests.len() + plan.is_some() as usize;
+        let rx = (waiting > 0).then(|| precheck::check_in_background(plan, dests));
         self.precheck = Some(Precheck { items, rx, waiting, then, started: Instant::now() });
     }
 
@@ -5118,7 +5136,7 @@ impl App {
             }
             if pc.waiting > 0 && pc.started.elapsed() > Duration::from_secs(20) {
                 // Don't wait for ever on a server that never answers.
-                pc.items.push(CheckItem { level: Level::Warn, what: "Streaming".into(), detail: format!("{} destination(s) didn't answer in time", pc.waiting) });
+                pc.items.push(CheckItem { level: Level::Warn, what: "Pre-show check".into(), detail: format!("{} check(s) didn't answer in time", pc.waiting) });
                 pc.waiting = 0;
             }
             if pc.waiting == 0 {

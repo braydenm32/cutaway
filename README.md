@@ -572,8 +572,12 @@ Takes start with the **Take name** from Record › Recording. Leave it as
   replacing one asks first. Takes are named after the show you're on (unless
   you've given them a Take name of your own).
 - **Pre-show check:** one button checks every source for a picture, every
-  input for sound, the disk, the encoder, and that every stream server
-  answers. It can run automatically before recording or going live.
+  input for sound, the disk, and that every stream server answers. It also
+  starts every encoder the show needs at the same time (program, each
+  recorded source, the stream), so a graphics card that runs out of encoders
+  shows up here, not as an empty file after the show. It warns when only the
+  software encoder is there for more than one 1080p file. It can run
+  automatically before recording or going live.
 
 ![Pre-show check](docs/precheck.png)
 
@@ -934,7 +938,16 @@ TALK, Undo, the graphics) always show the key as it's set now.
      orange if any destination isn't live.
    - The **Stream** panel shows each destination's state and bitrate, and why
      a destination is reconnecting ("Retrying in 4 s (try 2)", counted up so
-     it never says 0 s). Before a scheduled stream, it shows when that is.
+     it never says 0 s), in plain words ("Can't reach YouTube. Check the
+     internet connection."). Before a scheduled stream, it shows when that is.
+   - If a service refuses the stream key, retrying won't help, so Cutaway
+     stops after three tries and says so in red ("YouTube didn't accept the
+     stream key. Copy a fresh key from YouTube Studio…"), with a button to the
+     streaming settings.
+   - If the stream's video encoder stops, every destination it feeds turns
+     red with the reason, instead of sitting on "Connecting…" or "Live" with
+     no picture. A destination that connects but gets no picture for 20
+     seconds says so too.
 4. **End the stream:** press the button again. By default it asks first.
 
 ![Streaming settings](docs/settings-streaming.png)
@@ -1574,6 +1587,9 @@ Cutaway only sees the Drive files it made.
   - For lots of 4K, use H.265 or ProRes and moderate bitrates.
   - If an encoder can't keep up, the status light (Now and the Log) says so, and
     frames are repeated in that file rather than anything stalling.
+  - With the encoder on **Automatic**, a file or stream whose encoder won't
+    start (on Windows a graphics card can run out of encoder sessions) moves
+    to the next encoder on the list instead of failing, and the Log says so.
 - **Compositor:** runs on the GPU (Metal). A 4K program is fine.
 - **USB bandwidth:** several 4K USB capture devices on one bus can run out of
   bandwidth. Spread them across ports, or pick an MJPEG mode in the source's
