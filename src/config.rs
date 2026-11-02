@@ -1385,6 +1385,15 @@ impl StreamDestination {
             if !(server.starts_with("rtmp://") || server.starts_with("rtmps://")) || server.ends_with("://") {
                 return Some("the server must start with rtmp:// or rtmps://".into());
             }
+            // A pasted address or a stray space breaks the address without
+            // looking wrong in the hidden key box (review G12).
+            let key = self.key.trim();
+            if key.contains("://") || key.to_lowercase().starts_with("rtmp") {
+                return Some("the stream key looks like a whole address: paste only the key (the last part, after the last /)".into());
+            }
+            if key.chars().any(char::is_whitespace) {
+                return Some("the stream key has a space or line break in it: paste it again".into());
+            }
             if self.key.trim().is_empty() {
                 // Custom servers may take the stream name in the URL itself
                 // (rtmp://host/app/name); the big services always need a key.
@@ -2883,6 +2892,10 @@ mod tests {
         let inline = StreamDestination { service: Service::CustomRtmp, server: "rtmp://host/live/show".into(), ..Default::default() };
         assert!(inline.problem().is_none());
         assert_eq!(inline.url(), "rtmp://host/live/show");
+        let pasted = StreamDestination { key: "rtmp://a.rtmp.youtube.com/live2/abcd-1234".into(), ..Default::default() };
+        assert!(pasted.problem().unwrap().contains("whole address"));
+        let spaced = StreamDestination { key: "abcd 1234".into(), ..Default::default() };
+        assert!(spaced.problem().unwrap().contains("space"));
     }
 
     #[test]

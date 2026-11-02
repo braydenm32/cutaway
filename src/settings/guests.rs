@@ -105,7 +105,7 @@ impl SettingsUi {
                 }
             };
             match g.access {
-                GuestAccess::Tunnel => hint(ui, "The address is new each time Cutaway starts: send links on the day. For links that stay the same, use Tailscale Funnel."),
+                GuestAccess::Tunnel => hint(ui, "The address is new each time Cutaway starts, or its connection restarts (Cutaway says so): send links on the day. For links that stay the same, use Tailscale Funnel."),
                 GuestAccess::Tailscale => hint(ui, "The address stays the same, so you can send links days ahead. It's named after this computer: rename it in Tailscale's admin console to change it (old links stop working)."),
                 GuestAccess::Custom => {}
             }
