@@ -6417,7 +6417,7 @@ fn precheck_verdict(items: &[CheckItem], done: bool) -> (String, Color32) {
 
 #[cfg(test)]
 mod desk_tests {
-    use super::clock_text;
+    use super::{clock_text, edit_turns_preview_on};
     use chrono::NaiveTime;
 
     #[test]
