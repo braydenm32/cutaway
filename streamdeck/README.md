@@ -18,13 +18,15 @@ dials and the Stream Deck app's virtual decks).
 
 | Action | Key | Notes |
 |---|---|---|
-| Scene | take, preview or cut to a scene | live picture of the scene, red border on air, green in preview |
+| Scene | like the desk's scene button (the default: into preview when Preview is on, otherwise taken), or always take, always preview, or cut | live picture of the scene, red border on air, green in preview |
 | Source | a source full screen | live picture and tally |
 | Take / Cut | preview to program | lit while something is in preview |
+| Preview | Preview mode on/off, as the desk's Preview button | green while on, with the scene in preview |
+| Back | back to the last scene (the one on air before this) | |
 | Transition | cut, mix, wipe, push, dip, stinger | lit when it's the current one |
-| Record | start; hold a second to stop | red with the running time |
-| Go Live | hold to go live, hold to end | GOING LIVE… (amber) while it connects, then red with the running time; "LIVE 1 of 2" with an amber edge while a destination isn't live, as on the phone; holds can be turned off |
-| Marker | drop a marker (optional label) | |
+| Record | start; hold a second to stop | dark with a pulsing red dot and the running time, as the desk's REC; an amber edge when something needs a look (drive nearly full, a source lost, a recording problem); SAVING 40% while the last take is finished |
+| Go Live | hold to go live, hold to end | GOING LIVE… while it connects, then pink with the running time; "LIVE 1 of 2" with an amber edge while a destination isn't live, as on the phone; holds can be turned off |
+| Marker | drop a marker, plain or named (one of your quick marker names or your own) | shows its name |
 | Graphic | show/hide a logo, title or lower third | lit while on |
 | Audio Input | on/off, with a level meter | on a Stream Deck+ dial: turn for level, press or tap for on/off |
 | Auto Switching | follow who's talking on/off | |
@@ -36,17 +38,22 @@ dials and the Stream Deck app's virtual decks).
 | Clip | save the last few seconds as a clip | while recording; the length is Cutaway's setting or the key's own |
 | Timer | start/pause, reset, start, pause or stop a countdown or stopwatch | shows its time |
 | Guest | a remote guest spot: show them full screen or in preview | green with their name when they're on; the border shows the tally |
-| Fade to Black | fade the program (picture and sound) to black, and back | red "BLACK" while it's black |
+| Fade to Black | fade the program (picture and sound) to black, and back | "BLACK" with an amber edge while it's black |
 | Instant Replay | play the last few seconds again (slow motion if set) while recording | red while it plays; press again to stop |
 | Macro | run one of Cutaway's macros | the macro's colour and name |
 | PTZ Camera | go to a preset, home, or pan/tilt/zoom while held (real or virtual PTZ) | the preset's name; the border shows the camera's tally |
 | Teleprompter | roll/pause, faster, slower, back, forward, top | green while rolling, with the speed |
 | Viewer Comment | show the next chat comment, or hide it | amber while one's on screen, with how many are waiting |
-| Rundown | next segment, previous, or stop | the next key shows this segment's time left (red when over) and what's next |
+| Rundown | next segment, previous, or stop | the next key shows this segment's time left (an amber edge when over) and what's next |
 | Command | any Cutaway command | e.g. `preview:2`, `graphic:Logo:on`, `gain:Mic:-6` |
 
 Live pictures refresh once a second by default (choose Smooth, Slow or Off
 in any key's settings).
+
+Colours mean what they mean on the desk: red is on air (and nothing else),
+green is preview, pink is a live stream, amber means "have a look". Keys
+send numbers as places (`scene:#2`), so a scene named "2" can't be mistaken
+for the second one.
 
 ## How it works
 
@@ -60,7 +67,7 @@ pictures) with a small built-in WebSocket client.
 ```sh
 python3 make_icons.py                       # redraw the icons (the plugin icon is Cutaway's logo, from ../assets/logo)
 npx @elgato/cli validate app.cutaway.streamdeck.sdPlugin
-npx @elgato/cli pack app.cutaway.streamdeck.sdPlugin   # → .streamDeckPlugin
+./pack.sh   # → Cutaway.streamDeckPlugin (a test checks it matches the folder)
 node test/mock-streamdeck.js 127.0.0.1:8790 1234       # end-to-end test against a running Cutaway
 ```
 

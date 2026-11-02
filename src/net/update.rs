@@ -133,7 +133,9 @@ pub fn check(current: &str) -> Result<Option<Release>> {
         .map_err(|e| anyhow!("couldn't reach GitHub ({e})"))?;
     match resp.status().as_u16() {
         200 => {}
-        404 => return Ok(None), // no releases yet
+        // The releases page isn't there (the repository moved or went
+        // private): not the same as "up to date".
+        404 => return Err(anyhow!("can't check for updates: GitHub has no releases page for Cutaway at the moment (it answered 404)")),
         c => return Err(anyhow!("GitHub answered with error {c}")),
     }
     let text = resp.body_mut().read_to_string().map_err(|e| anyhow!("GitHub's answer was cut off ({e})"))?;

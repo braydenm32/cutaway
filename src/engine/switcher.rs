@@ -8,7 +8,7 @@ use crate::scene::{compose, PadState, Scene};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SwitchEvent {
     /// Host time of the switch.
     pub at: Ns,
@@ -87,6 +87,8 @@ pub struct Switcher {
     /// Each source's identity, by number (for the switch log's angles).
     uids: Mutex<Vec<u64>>,
     events: Mutex<Vec<SwitchEvent>>,
+    /// The take's journal while recording: each switch goes there too.
+    journal: Mutex<Option<std::sync::Arc<super::journal::Journal>>>,
     black: Mutex<Fade>,
 }
 
@@ -102,8 +104,21 @@ impl Switcher {
             state: Mutex::new(State { current: initial, active: None, preview: None, previous: None, aspects, direction: Direction::Right, dip: [0.0; 3] }),
             uids: Mutex::new(Vec::new()),
             events: Mutex::new(Vec::new()),
+            journal: Mutex::new(None),
             black: Mutex::new(Fade { from: 0.0, to: 0.0, start: Instant::now(), dur: Duration::ZERO }),
         }
+    }
+
+    /// Log switches to this take journal too (None: the take ended).
+    pub fn set_journal(&self, j: Option<std::sync::Arc<super::journal::Journal>>) {
+        *self.journal.lock_ok() = j;
+    }
+
+    fn log(&self, e: SwitchEvent) {
+        if let Some(j) = self.journal.lock_ok().as_ref() {
+            j.add(&super::journal::Entry::Switch(e.clone()));
+        }
+        self.events.lock_ok().push(e);
     }
 
     /// Fade the program to black (or back up) over `ms`.
@@ -186,7 +201,7 @@ impl Switcher {
         }
         st.remember(&scene);
         let angle = self.angle_of(&scene);
-        self.events.lock_ok().push(SwitchEvent { at: clock::now(), scene: scene.name.clone(), mode, duration_ms, angle });
+        self.log(SwitchEvent { at: clock::now(), scene: scene.name.clone(), mode, duration_ms, angle });
         if mode == TransitionMode::Cut || duration_ms == 0 || scene == st.current {
             st.current = scene;
         } else {
@@ -205,7 +220,7 @@ impl Switcher {
         st.remember(&scene);
         let duration_ms = (duration / 1_000_000).max(1) as u32;
         let angle = self.angle_of(&scene);
-        self.events.lock_ok().push(SwitchEvent { at: clock::now() + delay + cut, scene: scene.name.clone(), mode: TransitionMode::Stinger, duration_ms, angle });
+        self.log(SwitchEvent { at: clock::now() + delay + cut, scene: scene.name.clone(), mode: TransitionMode::Stinger, duration_ms, angle });
         let from = st.current.clone();
         let ns = |n: Ns| Duration::from_nanos(n.max(0) as u64);
         st.active = Some(Active { from, to: scene, mode: TransitionMode::Stinger, start: Instant::now() + ns(delay), dur: ns(duration.max(1)), cut: ns(cut) });

@@ -200,8 +200,8 @@ pub struct SyrinButton {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Container {
-    /// MP4, written crash-safe: a power cut or crash loses at most the last
-    /// second, and the file is repaired on the next start.
+    /// MP4, written crash-safe: a crash loses at most the last second (a
+    /// power cut the last few), and the file is repaired on the next start.
     #[serde(alias = "mkv")]
     Mp4,
     /// Same, QuickTime flavoured (Final Cut Pro, Premiere, Resolve).
@@ -802,6 +802,25 @@ impl SourceConfig {
     pub fn cut_from(&self) -> Option<&str> {
         self.framed_from().or_else(|| self.virtual_ptz_of())
     }
+
+    /// A close-up (virtual PTZ camera) set far bigger than the picture it
+    /// really holds: its size and about how much detail it has (its widest
+    /// preset's share of the camera it's cut from). Such a file is big for
+    /// nothing. None when it's about right, or not a close-up.
+    pub fn oversized(&self, sources: &[SourceConfig]) -> Option<((u32, u32), (u32, u32))> {
+        let from = self.virtual_ptz_of()?;
+        let wide = sources.iter().find(|s| s.name.trim().eq_ignore_ascii_case(from))?;
+        let zoom = self.ptz.presets.iter().map(|p| p.zoom).fold(f32::INFINITY, f32::min);
+        let zoom = if zoom.is_finite() { zoom.max(1.0) } else { 1.0 };
+        let detail = ((wide.width as f32 / zoom).round() as u32, (wide.height as f32 / zoom).round() as u32);
+        // Over twice the pixels (about 1.4 times each way) it really has.
+        ((self.width as u64 * self.height as u64) > 2 * detail.0 as u64 * detail.1 as u64).then_some(((self.width, self.height), detail))
+    }
+}
+
+/// What to say about a close-up recorded far bigger than its real detail.
+pub fn oversized_note(name: &str, size: (u32, u32), detail: (u32, u32)) -> String {
+    format!("{name} is recorded at {}×{} but holds only about {}×{} of real picture, so its file is far bigger than it needs to be. Set its size to {}×{} in Sources", size.0, size.1, detail.0, detail.1, detail.0 & !1, detail.1 & !1)
 }
 
 /// Who an auto-framed source follows.
@@ -1303,7 +1322,8 @@ impl Service {
     /// Server to fill in when the service is picked.
     pub fn default_server(self) -> &'static str {
         match self {
-            Service::Youtube => "rtmp://a.rtmp.youtube.com/live2",
+            // RTMPS: the stream key travels encrypted.
+            Service::Youtube => "rtmps://a.rtmps.youtube.com:443/live2",
             Service::Twitch => "rtmp://live.twitch.tv/app",
             Service::Facebook => "rtmps://live-api-s.facebook.com:443/rtmp",
             Service::Kick => "",
@@ -1314,12 +1334,23 @@ impl Service {
 
     pub fn help(self) -> &'static str {
         match self {
-            Service::Youtube => "Stream key from YouTube Studio → Go live → Stream. For RTMPS use rtmps://a.rtmps.youtube.com:443/live2",
+            Service::Youtube => "Stream key from YouTube Studio → Go live → Stream. The server is YouTube's secure (RTMPS) one; rtmp://a.rtmp.youtube.com/live2 works too.",
             Service::Twitch => "Stream key from Creator Dashboard → Settings → Stream. Most channels should stay at or below 6000 kbps.",
             Service::Facebook => "Stream key from Live Producer → Streaming software. Facebook requires RTMPS.",
             Service::Kick => "Copy both the Stream URL and Stream key from your Kick creator dashboard.",
             Service::CustomRtmp => "Server URL and stream key from your platform or media server.",
             Service::Srt => "srt://host:port of the receiver. The key (optional) is sent as the SRT stream ID.",
+        }
+    }
+
+    /// Where to copy a fresh stream key, for "didn't accept the key".
+    pub fn key_where(self) -> &'static str {
+        match self {
+            Service::Youtube => "YouTube Studio → Go live → Stream",
+            Service::Twitch => "the Twitch Creator Dashboard → Settings → Stream",
+            Service::Facebook => "Facebook Live Producer → Streaming software",
+            Service::Kick => "your Kick creator dashboard",
+            Service::CustomRtmp | Service::Srt => "your streaming service",
         }
     }
 
@@ -1488,6 +1519,18 @@ pub struct UiConfig {
     /// setting for the top bar, clock graphics, the second screen and
     /// scheduled times (numbers audit #8; `Config::sync_clock_format`).
     pub clock_12h: bool,
+}
+
+impl UiConfig {
+    /// Settings about this computer rather than the show: interface size
+    /// and updates. Switching shows, importing settings or starting over
+    /// keeps this computer's, so they never change behind your back.
+    pub fn keep_this_computers(&mut self, now: &UiConfig) {
+        self.scale = now.scale;
+        self.check_updates = now.check_updates;
+        self.auto_update = now.auto_update;
+        self.skip_version = now.skip_version.clone();
+    }
 }
 
 fn is_zero_f32(v: &f32) -> bool {
@@ -2127,9 +2170,23 @@ pub struct RemoteConfig {
     /// Asked for once by each phone/tablet. Always set while the remote is
     /// on (one is made if it's empty).
     pub pin: String,
+    /// Quick names for markers, set once and picked from the phone's
+    /// ◆ ▾ and a Stream Deck Marker key (comma-separated).
+    pub marker_labels: String,
 }
 
 impl RemoteConfig {
+    /// The quick marker names, in order, without blanks or repeats.
+    pub fn marker_labels(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for l in self.marker_labels.split(',').map(str::trim).filter(|l| !l.is_empty()) {
+            if !out.iter().any(|o| o.eq_ignore_ascii_case(l)) {
+                out.push(l.to_string());
+            }
+        }
+        out
+    }
+
     /// Make a PIN if the remote is on without one. True if it made one.
     pub fn ensure_pin(&mut self) -> bool {
         if !self.enabled || !self.pin.trim().is_empty() {
@@ -2152,7 +2209,7 @@ pub fn new_pin() -> String {
 
 impl Default for RemoteConfig {
     fn default() -> Self {
-        RemoteConfig { enabled: false, port: 8790, pin: String::new() }
+        RemoteConfig { enabled: false, port: 8790, pin: String::new(), marker_labels: "Good, Retake, Cut here".into() }
     }
 }
 
@@ -2637,6 +2694,17 @@ fn merge_lists(b: &[serde_json::Value], e: &[serde_json::Value], l: &[serde_json
 mod tests {
     use super::*;
 
+    /// Interface size and update choices belong to the computer, not the
+    /// show (review D10).
+    #[test]
+    fn this_computers_settings_stay() {
+        let now = UiConfig { scale: 1.25, check_updates: false, auto_update: false, skip_version: "0.9.9".into(), profile: "A".into(), ..Default::default() };
+        let mut show = UiConfig { scale: 1.0, check_updates: true, auto_update: true, skip_version: String::new(), profile: "B".into(), clock_12h: true, ..Default::default() };
+        show.keep_this_computers(&now);
+        assert_eq!((show.scale, show.check_updates, show.auto_update, show.skip_version.as_str()), (1.25, false, false, "0.9.9"));
+        assert_eq!((show.profile.as_str(), show.clock_12h), ("B", true), "the show's own settings come with it");
+    }
+
     /// One 12/24-hour setting (numbers audit #8): an old show keeps what
     /// its clock graphics showed on air, then every clock follows the show.
     #[test]
@@ -2881,7 +2949,7 @@ mod tests {
     #[test]
     fn stream_urls() {
         let yt = StreamDestination { key: "abcd-1234".into(), ..Default::default() };
-        assert_eq!(yt.url(), "rtmp://a.rtmp.youtube.com/live2/abcd-1234");
+        assert_eq!(yt.url(), "rtmps://a.rtmps.youtube.com:443/live2/abcd-1234");
         assert!(yt.problem().is_none());
         let srt = StreamDestination { service: Service::Srt, server: "srt://10.0.0.5:9000".into(), key: "show".into(), ..Default::default() };
         assert_eq!(srt.url(), "srt://10.0.0.5:9000?streamid=show");
@@ -3407,5 +3475,29 @@ impl DriveFiles {
             DriveFiles::ProgramAndMix => "the program, the vertical version and the mix",
             DriveFiles::Everything => "the whole take (every file)",
         }
+    }
+}
+
+#[cfg(test)]
+mod closeup_size_tests {
+    use super::*;
+
+    /// A close-up set far bigger than the part of the camera it shows is
+    /// noticed (a 4K file of a third of a 1080p camera); one sized to it isn't.
+    #[test]
+    fn notices_an_oversized_close_up() {
+        let wide = SourceConfig { name: "Cam left".into(), width: 1920, height: 1080, ..Default::default() };
+        let preset = |zoom| PtzConfig { presets: vec![PtzPreset { name: "left".into(), x: 0.25, y: 0.5, zoom }], ..Default::default() };
+        let close = |w, h, zoom| SourceConfig { name: "Cam left 3".into(), device: "vptz:Cam left".into(), width: w, height: h, ptz: preset(zoom), ..Default::default() };
+        let all = |c: &SourceConfig| vec![wide.clone(), c.clone()];
+        let big = close(3840, 2160, 2.0);
+        assert_eq!(big.oversized(&all(&big)), Some(((3840, 2160), (960, 540))));
+        assert!(oversized_note("Cam left 3", (3840, 2160), (960, 540)).contains("3840×2160 but holds only about 960×540"));
+        let right = close(960, 540, 2.0);
+        assert_eq!(right.oversized(&all(&right)), None);
+        // A little over (rounding, a 16:9 box) is fine.
+        let near = close(1280, 720, 2.0);
+        assert_eq!(near.oversized(&all(&near)), None);
+        assert_eq!(wide.oversized(&[wide.clone()]), None, "not a close-up");
     }
 }

@@ -202,7 +202,17 @@ pub fn prepare(release: &Release, me: &Install, cancel: &AtomicBool, progress: &
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).with_context(|| format!("couldn't make {}", dir.display()))?;
     let sums_file = super::fetch::fetch(&sums.url, &dir.join(SUMS), b"", "GitHub", "the release's fingerprints", cancel, &mut |_, _| {})?;
-    let want = expected_sum(&std::fs::read_to_string(&sums_file).unwrap_or_default(), &name).ok_or_else(|| anyhow!("the release's fingerprints don't list {name}"))?;
+    // Signed by Cutaway's maker (once updates are signed): see signing.rs.
+    let sums_bytes = std::fs::read(&sums_file).unwrap_or_default();
+    let sig = match release.assets.iter().find(|a| a.name == super::signing::SIG) {
+        Some(a) if super::signing::required() => {
+            let f = super::fetch::fetch(&a.url, &dir.join(super::signing::SIG), b"", "GitHub", "the update's signature", cancel, &mut |_, _| {})?;
+            Some(std::fs::read_to_string(&f).unwrap_or_default())
+        }
+        _ => None,
+    };
+    super::signing::verify(&sums_bytes, sig.as_deref())?;
+    let want = expected_sum(&String::from_utf8_lossy(&sums_bytes), &name).ok_or_else(|| anyhow!("the release's fingerprints don't list {name}"))?;
     let file = super::fetch::fetch(&zip.url, &dir.join(&name), ZIP_MAGIC, "GitHub", "the update", cancel, progress)?;
     downloaded();
     if sha256(&file)? != want {

@@ -50,7 +50,9 @@ impl App {
                 let r = r.on_disabled_hover_text("Stop recording and streaming to rename a camera: a new name restarts it for a moment");
                 let r = if busy { r } else { r.on_hover_text("The source's name, in scenes and the multiview. A new name restarts the camera for a moment") };
                 // Saved once the box is left (also by going elsewhere mid-word).
-                if !r.has_focus() && name.trim() != s.name.trim() {
+                // Never while recording or live (it would restart the
+                // camera mid-take): what was typed waits until it's over.
+                if !busy && !r.has_focus() && name.trim() != s.name.trim() {
                     edit = Some(RowEdit::Rename(i, name.trim().to_string()));
                     name = s.name.clone();
                 }
@@ -98,6 +100,10 @@ impl App {
     /// taken from it follow), as one Undo step.
     fn rename_camera(&mut self, i: usize, new: &str, ctx: &egui::Context) {
         let Some((uid, old)) = self.cfg.sources.get(i).map(|s| (s.uid, s.name.clone())) else { return };
+        if self.engine.as_ref().is_some_and(|e| e.is_recording() || e.is_streaming()) {
+            self.toast("Stop recording and streaming to rename a camera: a new name restarts it for a moment".into(), true);
+            return;
+        }
         let mut cfg = self.live_settings();
         if let Err(e) = cfg.rename_source(i, new) {
             self.toast(e, true);

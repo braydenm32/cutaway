@@ -67,5 +67,14 @@ jobs:
           else
             notes=(--generate-notes)
             if [ -f "docs/releases/$TAG.md" ]; then notes=(--notes-file "docs/releases/$TAG.md"); fi
-            gh release create "$TAG" dist/* --title "Cutaway $version" --target "$GITHUB_SHA" --latest "${notes[@]}"
+            # Once the app checks update signatures (a public key in
+            # src/net/signing.rs), the release waits as a draft: the
+            # fingerprints are signed off line (cutaway --sign-update) and
+            # SHA256SUMS.txt.sig added before it's published.
+            draft=()
+            if grep -Eq 'PUBLIC_KEY: &str = "[0-9a-f]{64}"' src/net/signing.rs; then
+              draft=(--draft)
+              echo "::notice::Draft release: sign SHA256SUMS.txt (cutaway --sign-update SHA256SUMS.txt --key <file>), add SHA256SUMS.txt.sig, then publish."
+            fi
+            gh release create "$TAG" dist/* --title "Cutaway $version" --target "$GITHUB_SHA" --latest "${draft[@]}" "${notes[@]}"
           fi

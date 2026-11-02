@@ -32,44 +32,61 @@ fn color_of(s: &str, fallback: u32) -> Color32 {
 }
 
 impl App {
-    /// A panel's heading in the column on the right: click it to fold the
-    /// panel away (or open it again), drag it by its ⠿ dots onto another
-    /// heading to move it there. It lights up under the pointer, and shows
-    /// a quiet "Set up ›" link then (the column's ⋯ has them all, too).
-    /// False while the panel is folded.
+    /// A panel's heading in the column on the right: click its ▾ or its
+    /// name to fold the panel away (or open it again), drag it by its ⠿
+    /// dots onto another heading to move it there (not while recording or
+    /// live, so a slip can't rearrange the column mid-show). It lights up
+    /// under the pointer, and shows a quiet "Set up ›" link then (the
+    /// column's ⋯ has them all, too). False while the panel is folded.
     pub(super) fn section_heading(&mut self, ui: &mut egui::Ui, panel: &'static str, text: &str, section: Section) -> bool {
         let folded = self.cfg.ui.is_folded(panel);
-        let (rect, r) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click_and_drag());
-        let lit = ui.rect_contains_pointer(rect) || r.dragged();
+        let busy = self.engine.as_ref().is_some_and(|e| e.is_recording() || e.is_streaming());
+        let (rect, r) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());
+        // The grip: the only place a drag starts.
+        let grip = Rect::from_min_size(rect.min, vec2(16.0, rect.height()));
+        let g = ui.interact(grip, r.id.with("grip"), if busy { Sense::hover() } else { Sense::drag() });
+        let dragging = g.dragged();
+        let lit = ui.rect_contains_pointer(rect) || dragging;
         let p = ui.painter();
         if lit {
             p.rect_filled(rect, 4.0, RAISED);
         }
-        // The grip: two rows of three dots, the usual "drag me" sign.
-        let grip = Rect::from_min_size(rect.min, vec2(16.0, rect.height()));
+        // Two rows of three dots, the usual "drag me" sign (faint mid-show,
+        // when they don't move anything).
+        let dot = if busy { LINE } else if lit { TEXT_DIM } else { LINE };
         for row in -1..=1 {
             for col in 0..2 {
-                p.circle_filled(pos2(grip.left() + 6.0 + col as f32 * 4.0, grip.center().y + row as f32 * 4.0), 1.2, if lit { TEXT_DIM } else { LINE });
+                p.circle_filled(pos2(grip.left() + 6.0 + col as f32 * 4.0, grip.center().y + row as f32 * 4.0), 1.2, dot);
             }
         }
         let cy = rect.center().y;
         p.text(pos2(rect.left() + 20.0, cy), Align2::LEFT_CENTER, if folded { "▸" } else { "▾" }, FontId::proportional(TEXT_SMALL), TEXT_DIM);
-        p.text(pos2(rect.left() + 32.0, cy), Align2::LEFT_CENTER, text, FontId::proportional(TEXT_SMALL), if lit { Color32::WHITE } else { TEXT_DIM });
+        let name = p.text(pos2(rect.left() + 32.0, cy), Align2::LEFT_CENTER, text, FontId::proportional(TEXT_SMALL), if lit { Color32::WHITE } else { TEXT_DIM });
+        // Folding: the arrow and the name only (not the whole row).
+        let fold_zone = Rect::from_min_max(pos2(rect.left() + 16.0, rect.top()), pos2(name.right() + 6.0, rect.bottom()));
+        let on_fold = |q: egui::Pos2| fold_zone.contains(q);
         let mut set_up = false;
-        if lit && !r.dragged() {
+        if lit && !dragging {
             let link = Rect::from_min_max(pos2(rect.right() - 64.0, rect.top()), rect.right_bottom());
             let l = ui.put(link, egui::Button::new(RichText::new("Set up ›").size(TEXT_SMALL).color(ACCENT)).frame(false));
             set_up = l.on_hover_text(format!("Open {text} in its page")).clicked();
         }
-        if r.dragged() {
+        let hover = ui.ctx().pointer_hover_pos();
+        if dragging {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-        } else if r.hovered() {
-            let on_grip = ui.ctx().pointer_hover_pos().is_some_and(|q| grip.contains(q));
-            ui.ctx().set_cursor_icon(if on_grip { egui::CursorIcon::Grab } else { egui::CursorIcon::PointingHand });
+        } else if g.hovered() && !busy {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+        } else if r.hovered() && hover.is_some_and(on_fold) {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
-        r.dnd_set_drag_payload(PanelDrag(panel));
-        let r = r.on_hover_text(if folded { "Click to open. Drag the ⠿ dots to move it (or ⋯ › Arrange panels)." } else { "Click to fold away. Drag the ⠿ dots to move it (or ⋯ › Arrange panels)." });
-        if r.clicked() {
+        if !busy {
+            g.dnd_set_drag_payload(PanelDrag(panel));
+        }
+        let fold_tip = if folded { "Click ▸ or the name to open it" } else { "Click ▾ or the name to fold it away" };
+        let move_tip = if busy { "Panels stay put while you're recording or live" } else { "Drag the ⠿ dots to move it (or ⋯ › Arrange panels)" };
+        g.on_hover_text(move_tip);
+        let r = r.on_hover_text(format!("{fold_tip}. {move_tip}."));
+        if r.clicked() && r.interact_pointer_pos().is_some_and(on_fold) {
             self.cfg.ui.set_folded(panel, !folded);
             self.cfg_dirty = true;
         }
@@ -83,7 +100,7 @@ impl App {
             }
         }
         if let Some(d) = r.dnd_release_payload::<PanelDrag>() {
-            if d.0 != panel {
+            if d.0 != panel && !busy {
                 self.cfg.ui.move_panel(d.0, Some(panel));
                 self.cfg_dirty = true;
             }
@@ -217,6 +234,7 @@ impl App {
             }
         }
         let mut kick = None;
+        let mut kick_hint = None;
         let mut copied = None;
         let mut qr = None;
         for g in &guests {
@@ -259,8 +277,17 @@ impl App {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if g.connected || g.connecting {
                         let tip = if g.screen { "Stop their screen share" } else if g.camera { "Disconnect the phone" } else { "Disconnect them" };
-                        if ui.small_button("✕").on_hover_text(tip).clicked() {
-                            kick = Some(g.id.clone());
+                        // A one-second hold: a slip beside Copy link mustn't
+                        // drop a guest's call mid-show (they'd have to rejoin).
+                        let (r, step) = super::hold::hold_button(ui, egui::Button::new("✕").small(), super::REC_HOLD_SECS, HOLD_FILL);
+                        r.on_hover_text(format!("{tip}: hold for a second"));
+                        match step {
+                            super::hold::HoldStep::Done => kick = Some(g.id.clone()),
+                            super::hold::HoldStep::LetGo => {
+                                let who = if g.guest_name.is_empty() { g.source.clone() } else { g.guest_name.clone() };
+                                kick_hint = Some(if g.screen { format!("Hold ✕ for a second to stop {who}'s screen share") } else { format!("Hold ✕ for a second to disconnect {who}") });
+                            }
+                            _ => {}
                         }
                     }
                     // (A screen is shared from the guest's own link.)
@@ -302,6 +329,9 @@ impl App {
         }
         if let Some(id) = kick {
             hub.kick(&id);
+        }
+        if let Some(h) = kick_hint {
+            self.toast(h, false);
         }
         if let Some(name) = copied {
             self.toast(format!("Copied {name}'s link: send it to them"), false);

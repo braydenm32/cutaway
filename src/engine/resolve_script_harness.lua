@@ -2,7 +2,7 @@
 -- the "Build project from a take" script against it and prints every call
 -- that shapes the project, one per line.
 --
---   luajit resolve_script_harness.lua <script> <config dir> <picker folder or -> <inclusive|exclusive|broken>
+--   luajit resolve_script_harness.lua <script> <config dir> <picker folder or -> <inclusive|exclusive|broken> [<open project or -> <answer>]
 --
 -- <config dir> is where Cutaway's notes are (resolve-build.txt,
 -- last-take.txt). The folder picker answers <picker folder> ("-": cancel).
@@ -10,6 +10,8 @@
 -- AppendToTimeline fails ("broken": the script falls back to the .fcpxml).
 
 local script, config_dir, picker, mode = arg[1], arg[2], arg[3], arg[4] or "inclusive"
+-- The project open in Resolve ("-": none) and what to answer when asked.
+local open_project, answer = arg[5] or "-", arg[6] or "New project"
 local real_print = print
 local function out(...)
   local parts = {}
@@ -162,7 +164,17 @@ function project:SetCurrentTimeline(tl)
   return true
 end
 
+function project:GetName()
+  return open_project
+end
+
 local pm = {}
+function pm:GetCurrentProject()
+  if open_project == "-" then
+    return nil
+  end
+  return project
+end
 function pm:CreateProject(n)
   out("PROJECT", n)
   return project
@@ -186,6 +198,10 @@ fu = {
   end,
 }
 cutaway_test_dirs = { config_dir }
+cutaway_test_choose = function(text, first, second)
+  out("ASK", text, first, second)
+  return answer
+end
 
 print = function(s)
   real_print("SAY\t" .. tostring(s))

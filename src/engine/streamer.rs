@@ -150,6 +150,10 @@ struct DestShared {
     /// packets because the connection is slow).
     need_key: AtomicBool,
     congested: AtomicBool,
+    /// Set when this destination's video encoder has stopped: nothing more
+    /// will come, so the destination says so and stops instead of sitting
+    /// on "Connecting…" or "Live" with no picture.
+    video_failed: Mutex<Option<String>>,
 }
 
 /// Hands encoded packets to every connected destination.
@@ -158,6 +162,13 @@ struct Fanout {
 }
 
 impl Fanout {
+    /// The video encoder for these destinations has stopped.
+    fn video_failed(&self, why: &str) {
+        for (_, d) in &self.dests {
+            *d.video_failed.lock_ok() = Some(why.to_string());
+        }
+    }
+
     /// How full the fullest connected destination's queue is (0..1).
     fn backlog(&self) -> f32 {
         self.dests
@@ -360,7 +371,8 @@ impl StreamSession {
                 fps,
                 bitrate_kbps: cfg.video_bitrate_kbps,
                 purpose: Purpose::Stream,
-                backend: backend.to_string(),
+                // "auto" may hand over to the next encoder if this one won't start.
+                backend: if encode::is_auto(&cfg.encoder) { "auto".into() } else { backend.to_string() },
             };
             let adaptive = cfg.adaptive_bitrate;
             let job = std::thread::Builder::new().name(name.into()).spawn(move || {
@@ -375,7 +387,11 @@ impl StreamSession {
                                 settings.width = f.width;
                                 settings.height = f.height;
                                 let fan = fan.clone();
-                                enc = Some(encode::create_video(&settings, Arc::new(move |p| fan.video(&p)))?);
+                                let (e, note) = encode::create_video_noting(&settings, Arc::new(move |p| fan.video(&p)))?;
+                                if let Some(note) = note {
+                                    status.lock_ok().push(LogLevel::Warning, format!("Stream: {note}"));
+                                }
+                                enc = Some(e);
                             }
                             enc.as_mut().unwrap().encode(&f, pts, force_key.swap(false, Ordering::Relaxed))?;
                         }
@@ -408,9 +424,11 @@ impl StreamSession {
                     Ok(())
                 })();
                 if let Err(e) = result {
+                    let why = format!("The stream's video encoder stopped ({e:#}). Stop the stream and go live again, or pick another encoder in Record › Streaming.");
+                    fan.video_failed(&why);
                     let mut st = status.lock_ok();
                     st.push(LogLevel::Error, format!("Stream encoder: {e:#}"));
-                    st.stream.error = Some(format!("the stream encoder stopped: {e:#}"));
+                    st.stream.error = Some(why);
                     drop(st);
                     waker();
                     for _ in vrx.iter() {} // keep draining until the tap goes away
@@ -660,6 +678,52 @@ struct Destination {
     audio_kbps: u32,
 }
 
+/// Tries before giving up when retrying can't help (a refused key).
+const HOPELESS_TRIES: u32 = 3;
+/// How long a connected destination may wait for its first picture before
+/// it says so.
+const NO_PICTURE_AFTER: Duration = Duration::from_secs(20);
+
+/// A connection failure in plain words, and whether trying again can't
+/// help (the service refused the key, or the address is wrong). The raw
+/// reason still goes in the status log.
+pub fn explain_failure(raw: &str, service: Service) -> (String, bool) {
+    let name = service.label();
+    let lower = raw.to_lowercase();
+    let has = |words: &[&str]| words.iter().any(|w| lower.contains(&w.to_lowercase()));
+    if has(&["rejected the stream", "badname", "rejected", "unauthorized", "authentication", "forbidden"]) {
+        let text = if service.is_srt() {
+            "The receiver refused the stream. Check the stream ID (key) in Record › Streaming.".to_string()
+        } else {
+            format!("{name} didn't accept the stream key. Copy a fresh key from {} and paste it in Record › Streaming.", service.key_where())
+        };
+        return (text, true);
+    }
+    if has(&["the address must", "the address has", "the address needs", "incomplete rtmp address", "bad port"]) {
+        return (format!("The server address isn't right ({raw}). Fix it in Record › Streaming."), true);
+    }
+    if has(&["can't find"]) {
+        return ("Can't find the server. Check the internet connection and the server address.".into(), false);
+    }
+    if has(&["secure connection failed"]) {
+        return (format!("The secure connection to {name} failed. Check the internet connection and the computer's date and time."), false);
+    }
+    if has(&["can't connect", "refused", "no srt listener", "timed out"]) {
+        return (format!("Can't reach {name}. Check the internet connection."), false);
+    }
+    if has(&["ended the stream"]) {
+        return (format!("{name} ended the stream. If you ended it there, start a new broadcast first."), false);
+    }
+    if has(&["connection lost", "closed the connection", "too slow", "stalled"]) {
+        return ("The connection dropped. Check the internet connection.".into(), false);
+    }
+    let mut text = raw.to_string();
+    if let Some(c) = text.get(..1) {
+        text.replace_range(..1, &c.to_uppercase());
+    }
+    (text, false)
+}
+
 /// How a connection ended.
 enum Ended {
     /// The stream is over.
@@ -684,9 +748,27 @@ impl Destination {
         self.status.lock_ok().push(level, text);
     }
 
+    /// Why this destination's video stopped coming, if it has.
+    fn video_gone(&self) -> Option<String> {
+        self.shared.video_failed.lock_ok().clone()
+    }
+
+    /// The video encoder stopped: say so in red, not "Connecting…".
+    fn fail_no_video(&self, why: String) {
+        self.update(|d| {
+            d.state = DestState::Failed;
+            d.message = Some(why);
+            d.kbps = 0.0;
+        });
+    }
+
     fn run(self) {
         let mut attempts = 0u32;
         loop {
+            if let Some(why) = self.video_gone() {
+                self.fail_no_video(why);
+                break;
+            }
             if self.stop.load(Ordering::Relaxed) {
                 break;
             }
@@ -704,7 +786,12 @@ impl Destination {
                 Err(e) => Ended::Failed(e),
             };
             match ended {
-                Ended::Done => break,
+                Ended::Done => {
+                    if let Some(why) = self.video_gone() {
+                        self.fail_no_video(why);
+                    }
+                    break;
+                }
                 Ended::Failed(e) => {
                     if !self.retry(e, &mut attempts) {
                         break;
@@ -720,9 +807,13 @@ impl Destination {
             return false;
         }
         *attempts += 1;
-        let msg = format!("{e:#}");
+        let raw = format!("{e:#}");
+        let (msg, hopeless) = explain_failure(&raw, self.cfg.service);
         let n = *attempts;
-        if self.auto_reconnect && (self.max_retries == 0 || n <= self.max_retries) {
+        // Retrying can't fix a refused key or a bad address: a couple more
+        // tries (in case the service was only slow to get ready), then stop.
+        let tries_left = if hopeless { n < HOPELESS_TRIES } else { self.max_retries == 0 || n <= self.max_retries };
+        if self.auto_reconnect && tries_left {
             let wait = (2u64 << n.min(4)).min(30);
             let at = Instant::now() + Duration::from_secs(wait);
             self.update(|d| {
@@ -731,9 +822,13 @@ impl Destination {
                 d.attempts = n;
                 d.kbps = 0.0;
             });
-            self.log(LogLevel::Warning, format!("Stream to {}: {msg}. Reconnecting in {wait} s.", self.cfg.name));
+            self.log(LogLevel::Warning, format!("Stream to {}: {msg} ({raw}). Reconnecting in {wait} s.", self.cfg.name));
             while Instant::now() < at {
                 if self.stop.load(Ordering::Relaxed) {
+                    return false;
+                }
+                if let Some(why) = self.video_gone() {
+                    self.fail_no_video(why);
                     return false;
                 }
                 std::thread::sleep(Duration::from_millis(100));
@@ -747,7 +842,7 @@ impl Destination {
                 d.attempts = n;
                 d.kbps = 0.0;
             });
-            self.log(LogLevel::Error, format!("Stream to {} stopped: {msg}", self.cfg.name));
+            self.log(LogLevel::Error, format!("Stream to {} stopped: {msg} ({raw})", self.cfg.name));
             false
         }
     }
@@ -761,6 +856,7 @@ impl Destination {
         let mut last_bytes = 0u64;
         let mut kbps = 0.0f64;
         let mut live = false;
+        let mut slow_noted = false;
         let send = |out: &mut Output, p: Pkt, base: &mut Option<Ns>, config: &mut Option<Arc<VideoConfig>>| -> Result<()> {
             match p {
                 Pkt::Video(v) => {
@@ -807,9 +903,16 @@ impl Destination {
             if let Err(e) = r {
                 return Ended::Failed(e);
             }
-            if closed || (self.stop.load(Ordering::Relaxed) && self.rx.is_empty()) {
+            if closed || (self.stop.load(Ordering::Relaxed) && self.rx.is_empty()) || self.shared.video_failed.lock_ok().is_some() {
                 out.close();
                 return Ended::Done;
+            }
+            // Connected, but no picture after a while: say so instead of an
+            // endless "Connecting…".
+            if !live && !slow_noted && connected_at.elapsed() > NO_PICTURE_AFTER {
+                slow_noted = true;
+                self.update(|d| d.message = Some("Connected, but no picture has reached it yet. If this doesn't change, stop the stream and go live again.".into()));
+                self.log(LogLevel::Warning, format!("Stream to {}: connected for {} s with no video yet", self.cfg.name, NO_PICTURE_AFTER.as_secs()));
             }
             if last_sample.elapsed() >= Duration::from_secs(1) {
                 let bytes = out.bytes_sent();
@@ -848,6 +951,25 @@ impl Destination {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A refused key says "check your key" and stops retrying; a network
+    /// problem keeps trying (review G5).
+    #[test]
+    fn failures_in_plain_words() {
+        let (text, hopeless) = explain_failure("the server rejected the stream (NetStream.Publish.BadName: bad key)", Service::Youtube);
+        assert!(hopeless);
+        assert!(text.contains("YouTube didn't accept the stream key") && text.contains("YouTube Studio"), "{text}");
+        let (text, hopeless) = explain_failure("the server rejected the stream key", Service::Twitch);
+        assert!(hopeless && text.contains("Twitch"));
+        let (text, hopeless) = explain_failure("can't connect to live.twitch.tv:4040: refused", Service::Twitch);
+        assert!(!hopeless && text.starts_with("Can't reach Twitch"), "{text}");
+        let (text, hopeless) = explain_failure("can't find a.rtmp.youtube.com: lookup failed", Service::Youtube);
+        assert!(!hopeless && text.starts_with("Can't find the server"));
+        let (_, hopeless) = explain_failure("the address must start with rtmp:// or rtmps://", Service::CustomRtmp);
+        assert!(hopeless);
+        let (text, hopeless) = explain_failure("something odd", Service::CustomRtmp);
+        assert_eq!((text.as_str(), hopeless), ("Something odd", false));
+    }
 
     /// The LIVE clock starts when a destination is really on air, not
     /// when Go Live was pressed (numbers audit #5).

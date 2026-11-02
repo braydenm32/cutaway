@@ -19,6 +19,8 @@
   /* A tap always lands on the button itself, never on a label inside it. */
   button * { pointer-events:none; }
   button:active { transform:scale(.98); }
+  /* No double-tap zoom on a quick second tap. */
+  button { touch-action:manipulation; }
   button.dim { opacity:.45; }
   a { color:var(--accent); }
   .pad-x { padding-left:max(12px,env(safe-area-inset-left)); padding-right:max(12px,env(safe-area-inset-right)); }
@@ -48,11 +50,18 @@
   .dests span::before { content:'●'; margin-right:5px; }
   .dests .d-live::before { color:var(--green); } .dests .d-connecting::before, .dests .d-retrying::before { color:var(--amber); } .dests .d-failed::before { color:var(--red); }
   .sheet { margin-top:8px; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:10px 12px; font-size:14px; }
+  /* A long list never pushes the scenes off the screen: it scrolls. */
+  #top .sheet { max-height:35vh; overflow:auto; }
   .sheet.warn { border-color:#5a4520; }
   .sheet .title { font-weight:650; }
   .sheet ul { margin:6px 0 0; padding-left:18px; }
   .sheet li { margin:2px 0; }
   .muted { color:var(--dim); font-size:13px; }
+  /* Nothing heard from Cutaway for a few seconds: say so, and dim what may be out of date. */
+  #conn { display:none; margin:0 0 6px; padding:6px 10px; border-radius:10px; background:#5a4520; color:#fff; font-size:14px; font-weight:650; text-align:center; }
+  body.stale #conn { display:block; }
+  body.stale main button, body.stale .pills button, body.stale .actions button { opacity:.45; }
+  .sheet .row { margin-top:8px; }
   .warntext { color:var(--amber); }
   .failtext { color:var(--red); }
 
@@ -80,6 +89,13 @@
 
   .switchrow { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-top:10px; }
   .switchrow button { font-weight:650; }
+  .takerow { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px; }
+  .takerow button { font-weight:750; letter-spacing:.5px; min-height:52px; }
+  .chip { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #transitions { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+  .heading { display:flex; align-items:baseline; justify-content:space-between; gap:8px; }
+  .heading h2 { margin-bottom:8px; }
+  .heading .muted { white-space:nowrap; }
   .toggle.on { background:var(--green); color:#000; border-color:var(--green); font-weight:600; }
   .take { background:var(--take); border-color:var(--take); font-weight:700; }
   .scene { min-height:68px; text-align:left; display:flex; flex-direction:column; justify-content:space-between; gap:4px; min-width:0; }
@@ -101,6 +117,11 @@
   .actions { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; padding-top:8px; }
   .actions.two { grid-template-columns:repeat(2,1fr); }
   .actions button { min-height:50px; font-weight:650; }
+  .mk { display:flex; gap:4px; min-width:0; }
+  .mk #marker { flex:1 1 auto; min-width:0; white-space:nowrap; padding-left:6px; padding-right:6px; }
+  .mk #markmore { flex:0 0 34px; padding:10px 0; }
+  #marks { display:flex; flex-wrap:wrap; gap:8px; padding-top:8px; }
+  #marks button { flex:1 1 30%; min-height:44px; }
   .tabs { display:grid; grid-template-columns:repeat(4,1fr); }
   .tabs button { background:none; border:0; border-radius:0; min-height:54px; color:var(--dim); font-size:13px; font-weight:600; position:relative; }
   .tabs button.sel { color:var(--text); }
@@ -149,10 +170,27 @@
   #pin { position:fixed; inset:0; background:var(--bg); display:none; align-items:center; justify-content:center; flex-direction:column; gap:12px; padding:24px; text-align:center; z-index:10; }
   #pin input { font-size:28px; text-align:center; width:180px; padding:10px; border-radius:12px; border:1px solid var(--line); background:var(--raised); color:var(--text); letter-spacing:8px; }
   .tally { position:fixed; inset:0; display:none; align-items:center; justify-content:center; flex-direction:column; font-size:9vw; font-weight:800; z-index:20; }
+
+  /* A short screen (a phone on its side, a small phone): smaller bars and
+     picture, so the scenes still fit. Everything stays on screen. */
+  @media (max-height:520px) {
+    button { min-height:42px; padding:8px 10px; }
+    .pills { margin-top:4px; }
+    .statusline { min-height:28px; }
+    /* The top scrolls away with the page rather than staying over it. */
+    #top { position:static; }
+    .monitor { max-height:34vh; width:auto; margin:0 auto; }
+    .scene { min-height:52px; }
+    .actions { padding-top:4px; }
+    .actions button { min-height:40px; }
+    .tabs button { min-height:42px; }
+    .takerow button { min-height:44px; }
+  }
 </style>
 </head>
 <body>
 <header id="top" class="pad-x">
+  <div id="conn" role="status">Reconnecting to Cutaway…</div>
   <div class="statusline">
     <span class="show" id="showname">Cutaway</span>
     <button class="light" id="light"><i></i><span id="lighttext">All good</span></button>
@@ -171,14 +209,19 @@
 <section id="tab-scenes">
   <div class="monitor"><img id="program" alt=""><div class="tags"><span class="tag">ON AIR</span><span class="name" id="pname"></span></div><div class="cc" id="cc"></div></div>
   <button class="segline" id="segline" hidden></button>
-  <div class="switchrow">
-    <button id="sw1">Mix</button><button id="sw2">Cut</button><button id="swback">⟲ Back</button>
+  <!-- As on the desk: TAKE and CUT always mean the same (the scene in
+       preview to air), the transition is picked from its chip. -->
+  <div class="takerow">
+    <button class="take" id="take">TAKE</button><button id="cut">CUT</button>
   </div>
-  <h2 id="sceneshead">Scenes</h2>
+  <div class="switchrow">
+    <button class="toggle" id="pvmode">Preview</button><button class="chip" id="trchip">Mix ▾</button><button id="swback">⟲ Back</button>
+  </div>
+  <div id="transitions" style="margin-top:8px" hidden></div>
+  <div class="heading"><h2 id="sceneshead">Scenes</h2><span class="muted" id="scenehint"></span></div>
   <div class="grid" id="scenes"></div>
-  <details class="more" id="moresw"><summary id="moreswsum">More transitions, Auto, fade to black ▾</summary>
-    <div class="row" id="transitions"></div>
-    <div class="row" style="margin-top:8px">
+  <details class="more" id="moresw"><summary id="moreswsum">Auto, captions, fade to black ▾</summary>
+    <div class="row">
       <button class="toggle" id="auto">Auto switching</button>
       <button class="toggle" id="cc_btn">CC</button>
       <button class="ftb" id="ftb">Fade to black</button>
@@ -211,13 +254,16 @@
     <div class="row" style="margin-top:4px"><button id="cnext">Show next</button><button class="toggle on" id="chide">Hide</button></div></div>
   <div id="replaywrap"><h2>Replay</h2><div class="row"><button class="replay" id="replay">⟲ Replay</button></div></div>
   <div id="rundownwrap"><h2>Rundown</h2><div class="segment" id="segment"><div class="big"></div><div></div><small class="muted"></small></div>
-    <div class="row" style="margin-top:8px"><button id="rdback">◀ Back</button><button class="take" id="nextseg">Next ▶</button><button id="rdstop">■ Stop</button></div></div>
+    <div class="row" style="margin-top:8px"><button id="rdback">◀ Previous</button><button class="take" id="nextseg">Next ▶</button><button id="rdstop">■ Stop</button></div></div>
   <div id="macrowrap"><h2>Macros</h2><div class="grid" id="macros"></div></div>
   <div id="mediawrap"><h2>Media</h2><div id="media"></div></div>
   <div id="ptzwrap"><h2>PTZ</h2><div id="ptz"></div></div>
   <div id="prompterwrap"><h2>Teleprompter</h2>
     <div class="row" id="prompter"><button id="pr_top">⏮</button><button id="pr_back">◀</button><button class="toggle" id="pr_play">▶ Roll</button><button id="pr_fwd">▶▶</button><button id="pr_slow">−</button><span class="muted" id="pr_wpm" style="align-self:center"></span><button id="pr_fast">＋</button></div>
     <a id="prompterlink" style="display:inline-block;padding:12px 0">Open the prompter on this device</a></div>
+  <h2>This phone</h2>
+  <div class="row"><button class="toggle" id="awake">Keep screen on</button></div>
+  <p class="muted">Keeps this phone's screen from going dark while the remote is open (uses more battery).</p>
   <h2>Tally lights</h2>
   <div class="row" id="tallies"></div>
   <p class="muted">Open a tally link on a phone mounted on each camera. Stream Deck and Companion: use <code>/api/action?do=scene:1</code> (see the README).</p>
@@ -228,15 +274,16 @@
 <footer id="bottom">
   <div class="actions pad-x" id="actions">
     <button class="toggle" id="names">Names</button>
-    <button id="marker">◆ Marker</button>
+    <div class="mk"><button id="marker">◆ Marker</button><button id="markmore" aria-label="Name the marker">▾</button></div>
     <button id="clip">✂ Clip</button>
   </div>
+  <div class="pad-x" id="marks" hidden></div>
   <nav class="tabs">
     <button data-tab="scenes">Scenes</button><button data-tab="sound">Sound</button><button data-tab="titles">Titles</button><button data-tab="more">More<span class="badge" id="morebadge" hidden></span></button>
   </nav>
 </footer>
 
-<div id="pin"><div style="font-size:20px">Enter the remote PIN</div><div class="muted">It's shown in Cutaway under More › Control.</div>
+<div id="pin"><div style="font-size:20px">Enter the remote PIN</div><div class="muted" id="pinwhy">It's shown in Cutaway under More › Control.</div>
   <input id="pinbox" inputmode="numeric" autocomplete="off" maxlength="12"><button onclick="savePin()">Connect</button></div>
 <div class="tally" id="tally"><div id="tname"></div><div id="tstate" style="font-size:4vw;opacity:.85"></div></div>
 
@@ -255,10 +302,20 @@ const $ = id => document.getElementById(id);
 window.cutawayBuilt = { scenes: 0, graphics: 0, pads: 0, inputs: 0, other: 0 };
 
 function api(path) { return path + (path.includes('?') ? '&' : '?') + 'pin=' + encodeURIComponent(pin); }
-function savePin() { pin = $('pinbox').value.trim(); store('cutaway_pin', pin); $('pin').style.display = 'none'; poll(); connectWs(); }
+// While the PIN box is up nothing else asks Cutaway: asking again and
+// again with an old PIN is what used to lock the phone out.
+let needPin = false;
+function askPin(why) {
+  needPin = true;
+  $('pinwhy').textContent = why;
+  $('pin').style.display = 'flex';
+  if (ws) { try { ws.onclose = null; ws.close(); } catch (e) {} ws = null; wsLive = false; }
+}
+function savePin() { pin = $('pinbox').value.trim(); store('cutaway_pin', pin); needPin = false; typed = true; $('pin').style.display = 'none'; poll(); connectWs(); }
 async function act(cmd) {
   try {
-    const r = await fetch(api('/api/action?do=' + encodeURIComponent(cmd)), { method: 'POST' });
+    // (keepalive: a "let go" sent as the page goes away still arrives.)
+    const r = await fetch(api('/api/action?do=' + encodeURIComponent(cmd)), { method: 'POST', keepalive: true });
     const t = await r.text();
     if (!r.ok) flash(t, true);
     else if (/pre-show check/i.test(t)) flash(t + '…');
@@ -332,6 +389,22 @@ function holdable(b, opts) {
 }
 function hint(b) { b._hint = true; clearTimeout(b._hintTimer); b._hintTimer = setTimeout(() => { b._hint = false; refresh(); }, 1500); refresh(); }
 function refresh() { if (state) render(); }
+// A long press (half a second, a finger kept still): `f` runs and the
+// click that follows is ignored (b._long). Scrolling cancels it.
+function longPress(b, f) {
+  let timer = null, at = null;
+  const stop = () => { clearTimeout(timer); timer = null; setFill(b, 0); };
+  b.addEventListener('pointerdown', e => {
+    b._long = false; at = [e.clientX, e.clientY];
+    const start = performance.now();
+    timer = setTimeout(() => { timer = null; setFill(b, 0); b._long = true; if (navigator.vibrate) navigator.vibrate(30); f(); }, 500);
+    const grow = () => { if (!timer) return; setFill(b, Math.min(1, (performance.now() - start) / 500)); requestAnimationFrame(grow); };
+    requestAnimationFrame(grow);
+  });
+  b.addEventListener('pointermove', e => { if (timer && at && Math.hypot(e.clientX - at[0], e.clientY - at[1]) > 10) stop(); });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => b.addEventListener(ev, stop));
+  b.addEventListener('contextmenu', e => e.preventDefault());
+}
 
 // ---- messages: they stay up long enough to read ----
 let toastTimer = null;
@@ -340,15 +413,20 @@ function flash(text, bad) {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.style.display = 'none'; }, bad ? 4000 : 2500);
 }
 
-// Keep the screen on (tally phones sit on a camera for hours).
+// Keep the screen on: tally phones sit on a camera for hours, and the
+// remote stays awake while it's open and showing (its "Keep screen on"
+// switch, on unless turned off on this phone).
 let lock = null;
+function wantAwake() { return tallySource !== null || stored('cutaway_awake') !== '0'; }
 async function keepAwake() {
-  try { if ('wakeLock' in navigator && !lock && document.visibilityState === 'visible') { lock = await navigator.wakeLock.request('screen'); lock.addEventListener('release', () => { lock = null; }); } } catch (e) {}
+  try {
+    if (!wantAwake()) { if (lock) { const l = lock; lock = null; await l.release(); } return; }
+    if ('wakeLock' in navigator && !lock && document.visibilityState === 'visible') { lock = await navigator.wakeLock.request('screen'); lock.addEventListener('release', () => { lock = null; }); }
+  } catch (e) {}
 }
-if (tallySource !== null) {
-  keepAwake();
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') keepAwake(); });
-}
+keepAwake();
+// (Some phones only allow it after a tap.)
+document.addEventListener('pointerup', () => { if (!lock) keepAwake(); });
 function clock(s) { s = Math.floor(s); return [s / 3600, s / 60 % 60, s % 60].map(v => String(Math.floor(v)).padStart(2, '0')).join(':'); }
 function db(v) { v = Math.round(v * 2) / 2; return (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toFixed(1) + ' dB'; }
 
@@ -369,21 +447,37 @@ function measure() { document.documentElement.style.setProperty('--bottom', $('b
 window.addEventListener('resize', measure);
 
 // ---- fixed controls (made once, updated in place) ----
-holdable($('rec'), { needs: () => !!state && state.recording, cmd: () => 'record' });
-holdable($('live'), { needs: () => true, cmd: () => 'live' });
-holdable($('ftb'), { needs: () => !!state && !state.black, cmd: () => 'ftb' });
+// Each sends what it means (start, stop), never "toggle": a screen a
+// moment out of date can't stop a take with a tap.
+holdable($('rec'), { needs: () => !!state && state.recording, cmd: () => 'record:off', tap: () => act('record:on') });
+holdable($('live'), { needs: () => true, cmd: () => state && state.live ? 'live:off' : 'live:on' });
+holdable($('ftb'), { needs: () => !!state && !state.black, cmd: () => 'ftb:on', tap: () => act('ftb:off') });
 let detailsOpen = false;
 onTap($('light'), () => { detailsOpen = !detailsOpen; refresh(); });
 onTap($('segline'), () => selectTab('more'));
-onTap($('sw1'), () => act(state && state.preview_mode ? 'cut' : 'transition:mix'));
-onTap($('sw2'), () => act(state && state.preview_mode ? 'take' : 'transition:cut'));
+// TAKE and CUT: the scene in preview to air, with the transition or straight.
+function takeOrCut(cmd) {
+  if (state && state.preview) return act(cmd);
+  flash(state && state.preview_mode ? 'Nothing in preview: tap a scene first' : 'Turn on Preview, then tap a scene to put it in preview');
+}
+onTap($('take'), () => takeOrCut('take'));
+onTap($('cut'), () => takeOrCut('cut'));
+onTap($('pvmode'), () => act(state && state.preview_mode ? 'preview:off' : 'preview:on'));
 onTap($('swback'), () => act('back'));
-['wipe', 'push', 'dip', 'stinger'].forEach(t => $('transitions').append(onTap(el('button', 'toggle', t[0].toUpperCase() + t.slice(1)), () => act('transition:' + t))));
+// The transition chip opens the choice; picking one closes it.
+const TRANSITIONS = ['cut', 'mix', 'wipe', 'push', 'dip', 'stinger'];
+function cap(t) { return t[0].toUpperCase() + t.slice(1); }
+let trOpen = false;
+onTap($('trchip'), () => { trOpen = !trOpen; refresh(); });
+TRANSITIONS.forEach(t => $('transitions').append(onTap(el('button', 'toggle', cap(t)), () => { trOpen = false; act('transition:' + t); refresh(); })));
 onTap($('auto'), () => act('auto'));
 onTap($('cc_btn'), () => act('captions'));
 function namesIndex() { return state ? state.graphics.findIndex(g => g.names) : -1; }
-onTap($('names'), () => { const i = namesIndex(); if (i >= 0) act('graphic:' + (i + 1)); });
+onTap($('names'), () => { const i = namesIndex(); if (i >= 0) act('graphic:#' + (i + 1)); });
 onTap($('marker'), () => state && state.recording ? act('marker') : flash('Markers go in a recording: start one first'));
+// ◆ ▾: the quick names set once on the desk (More › Control › Phone remote).
+let marksOpen = false;
+onTap($('markmore'), () => { marksOpen = !marksOpen; refresh(); measure(); });
 onTap($('clip'), () => state && state.recording ? act('clip') : flash('Clips come from a recording: start one first'));
 onTap($('cnext'), () => act('comment:next'));
 onTap($('chide'), () => act('comment:hide'));
@@ -391,6 +485,7 @@ onTap($('replay'), () => act(state && state.replaying ? 'replay:stop' : 'replay'
 onTap($('rdback'), () => act('rundown:previous'));
 onTap($('nextseg'), () => act('rundown:next'));
 onTap($('rdstop'), () => act('rundown:stop'));
+onTap($('awake'), () => { store('cutaway_awake', wantAwake() ? '0' : '1'); keepAwake(); refresh(); });
 [['pr_top', 'top'], ['pr_back', 'back'], ['pr_play', 'toggle'], ['pr_fwd', 'forward'], ['pr_slow', 'slower'], ['pr_fast', 'faster']].forEach(([id, c]) => onTap($(id), () => act('prompter:' + c)));
 
 function render() {
@@ -456,13 +551,20 @@ function renderTop(s) {
     const lines = pc.items.map(i => (i.level === 'fail' ? '✖ ' : '⚠ ') + i.what + ': ' + i.detail);
     const done = pc.waiting === 0;
     const next = !done ? 'Checking' + (pc.waiting ? ' (contacting ' + pc.waiting + ' stream server' + (pc.waiting > 1 ? 's' : '') + ')' : '') + '…'
-      : pc.then ? 'Waiting for someone at the desk to press Start or Cancel.' : 'Open on the desk.';
+      : pc.then ? 'Start or cancel here, or on the desk.' : 'Open on the desk.';
     const key = [what, pc.verdict, next, pc.level].concat(lines).join('\n');
     if (box._key !== key) {
       box._key = key; box.innerHTML = '';
       box.append(el('div', 'title', what + ' · ' + (done ? pc.verdict : 'checking on the desk')));
       if (lines.length) { const ul = el('ul'); lines.forEach(l => ul.append(el('li', l.startsWith('✖') ? 'failtext' : 'warntext', l))); box.append(ul); }
       box.append(el('div', 'muted', next));
+      // Answer it from here: the desk's Start (anyway) and Cancel.
+      if (pc.then) {
+        const row = el('div', 'row');
+        if (done) row.append(onTap(el('button', pc.level === 'fail' ? '' : 'take', pc.level === 'fail' ? 'Start anyway' : 'Start'), () => act('precheck:start')));
+        row.append(onTap(el('button', '', 'Cancel'), () => act('precheck:cancel')));
+        box.append(row);
+      }
     }
     setClass(box, 'sheet' + (pc.level !== 'ok' ? ' warn' : ''));
     showIf(box, true);
@@ -470,7 +572,7 @@ function renderTop(s) {
     if (lastCheck && lastCheck.then) {
       // It closed: say what happened.
       const started = lastCheck.then === 'record' ? s.recording : s.live;
-      flash(started ? 'Pre-show check done: ' + (lastCheck.then === 'record' ? 'recording' : 'going live') : 'The pre-show check was closed on the desk', !started);
+      flash(started ? 'Pre-show check done: ' + (lastCheck.then === 'record' ? 'recording' : 'going live') : 'The pre-show check was closed', !started);
     }
     lastCheck = null;
     showIf(box, false);
@@ -490,21 +592,23 @@ function renderScenes(s) {
     setText(seg.children[1], rd.number + '/' + rd.count + '  ' + rd.name);
     setText(seg.children[2], rd.drift_text || '');
   }
-  // Mix / Cut / Back; with Preview on, Cut / Take / Back.
-  const sw1 = $('sw1'), sw2 = $('sw2');
-  if (s.preview_mode) {
-    setText(sw1, 'Cut'); setClass(sw1, '');
-    setText(sw2, 'Take'); setClass(sw2, 'take');
-  } else {
-    setText(sw1, 'Mix'); setClass(sw1, 'toggle' + (s.transition === 'mix' ? ' on' : ''));
-    setText(sw2, 'Cut'); setClass(sw2, 'toggle' + (s.transition === 'cut' ? ' on' : ''));
-  }
-  setText($('sceneshead'), s.preview_mode ? 'Scenes · tap to preview' : 'Scenes · tap to take');
+  // TAKE / CUT: lit while something is in preview.
+  const ready = !!s.preview;
+  setClass($('take'), ready ? 'take' : 'take dim');
+  setClass($('cut'), ready ? '' : 'dim');
+  setClass($('pvmode'), 'toggle' + (s.preview_mode ? ' on' : ''));
+  setText($('trchip'), (TRANSITIONS.includes(s.transition) ? cap(s.transition) : 'Transition') + (trOpen ? ' ▴' : ' ▾'));
+  showIf($('transitions'), trOpen);
+  [...$('transitions').children].forEach((b, i) => setClass(b, 'toggle' + (s.transition === TRANSITIONS[i] ? ' on' : '')));
+  setText($('sceneshead'), 'Scenes');
+  setText($('scenehint'), s.preview_mode ? 'tap: preview · hold: cut to air' : 'tap: take · hold: cut');
   list($('scenes'), s.scenes, (sc, i) => i + ':' + sc.name, () => {
     const b = el('button', 'scene');
     const top = el('span', 'top'); top.append(el('span', 'key'), el('span', 'nm'));
     b.append(top, el('span', 'state'));
-    onTap(b, () => act((state.preview_mode ? 'preview:' : 'scene:') + (b._i + 1)));
+    // A tap does what the desk's scene button does; a hold cuts straight to air.
+    longPress(b, () => act('cut:#' + (b._i + 1)));
+    onTap(b, () => { if (b._long) { b._long = false; return; } act('press:#' + (b._i + 1)); });
     return b;
   }, (b, sc, i) => {
     b._i = i;
@@ -513,12 +617,9 @@ function renderScenes(s) {
     setText(b.firstChild.lastChild, sc.name);
     setText(b.lastChild, sc.program ? 'ON AIR' : sc.preview ? 'NEXT' : '');
   }, 'scenes');
-  // More transitions, Auto, CC and fade to black.
-  const other = ['wipe', 'push', 'dip', 'stinger'];
-  const special = other.includes(s.transition);
-  setText($('moreswsum'), (special ? 'Transition: ' + s.transition[0].toUpperCase() + s.transition.slice(1) + '. ' : '') + (s.black ? 'Faded to black. ' : '') + 'More transitions, Auto, fade to black ▾');
-  if ((special || s.black) && !$('moresw')._opened) { $('moresw').open = true; $('moresw')._opened = true; }
-  [...$('transitions').children].forEach((b, i) => setClass(b, 'toggle' + (s.transition === other[i] ? ' on' : '')));
+  // Auto, CC and fade to black.
+  setText($('moreswsum'), (s.black ? 'Faded to black. ' : '') + 'Auto, captions, fade to black ▾');
+  if (s.black && !$('moresw')._opened) { $('moresw').open = true; $('moresw')._opened = true; }
   setClass($('auto'), 'toggle' + (s.auto ? ' on' : ''));
   showIf($('cc_btn'), !!s.captions_available); setClass($('cc_btn'), 'toggle' + (s.captions ? ' on' : ''));
   const fb = $('ftb');
@@ -533,6 +634,22 @@ function renderActions(s) {
   if ($('actions').className !== cls) { $('actions').className = cls; measure(); }
   if (ni >= 0) setClass($('names'), 'toggle' + (s.graphics[ni].on ? ' on' : ''));
   setClass($('marker'), s.recording ? '' : 'dim');
+  // Quick marker names, while ◆ ▾ is open.
+  const labels = s.marker_labels || [];
+  showIf($('markmore'), labels.length > 0);
+  setClass($('markmore'), s.recording ? '' : 'dim');
+  if (!labels.length) marksOpen = false;
+  const marks = $('marks');
+  if (marks.hidden === marksOpen) { showIf(marks, marksOpen); measure(); }
+  list(marks, marksOpen ? labels.concat([null]) : [], l => l === null ? '\u0000close' : 'm:' + l, l => {
+    const b = el('button', l === null ? '' : 'toggle');
+    onTap(b, () => {
+      marksOpen = false; refresh(); measure();
+      if (b._label === null) return;
+      if (state && state.recording) act('marker:' + b._label); else flash('Markers go in a recording: start one first');
+    });
+    return b;
+  }, (b, l) => { b._label = l; setText(b, l === null ? 'Close' : '◆ ' + l); });
   setClass($('clip'), s.recording ? '' : 'dim');
   setText($('clip'), '✂ Clip ' + (s.clip_seconds || 30) + 's');
 }
@@ -542,6 +659,10 @@ let held = null;
 function hold(down, up) { if (held) act(held); held = up; act(down); }
 function letGo() { if (held) { const up = held; held = null; act(up); } }
 ['pointerup', 'pointercancel'].forEach(ev => document.addEventListener(ev, letGo));
+// The phone locking, another app or the page closing mid-hold lets go too,
+// so talkback or a camera move never stays on.
+['blur', 'pagehide'].forEach(ev => window.addEventListener(ev, letGo));
+document.addEventListener('visibilitychange', () => { if (document.hidden) letGo(); });
 $('talk').onpointerdown = e => { e.preventDefault(); hold('talkback:on', 'talkback:off'); };
 
 // Faders: at most ~8 changes a second while dragging, and the last one always.
@@ -549,7 +670,7 @@ const gainSent = {};
 function sendGain(i, v, now) {
   const g = gainSent[i] || (gainSent[i] = { at: 0, timer: null });
   clearTimeout(g.timer);
-  const go = () => { g.at = Date.now(); act('gain:' + (i + 1) + ':' + v); };
+  const go = () => { g.at = Date.now(); act('gain:#' + (i + 1) + ':' + v); };
   if (now || Date.now() - g.at > 120) go(); else g.timer = setTimeout(go, 120);
 }
 
@@ -559,7 +680,7 @@ function renderSound(s) {
   list($('pads'), pads, (p, i) => i + ':' + p.name, () => {
     const b = el('button', 'padbtn');
     b.append(el('i'), el('span'), el('small'));
-    b.onpointerdown = e => { e.preventDefault(); hold('pad:' + (b._i + 1) + ':press', 'pad:' + (b._i + 1) + ':release'); };
+    b.onpointerdown = e => { e.preventDefault(); hold('pad:#' + (b._i + 1) + ':press', 'pad:#' + (b._i + 1) + ':release'); };
     return b;
   }, (b, p, i) => {
     b._i = i;
@@ -569,7 +690,7 @@ function renderSound(s) {
     setText(b.children[1], p.name);
     setText(b.children[2], p.playing ? Math.ceil(p.remaining) + ' s' : 'pad ' + (i + 1));
   }, 'pads');
-  list($('syrin'), syr, (x, i) => i + ':' + x.name, () => { const b = el('button'); onTap(b, () => act('syrinscape:' + (b._i + 1))); return b; },
+  list($('syrin'), syr, (x, i) => i + ':' + x.name, () => { const b = el('button'); onTap(b, () => act('syrinscape:#' + (b._i + 1))); return b; },
     (b, x, i) => { b._i = i; setClass(b, 'syrin' + (x.playing ? ' on' : '')); setText(b, x.name); });
   const talk = $('talk');
   showIf(talk, !!s.talkback_available);
@@ -582,7 +703,7 @@ function renderSound(s) {
     const head = el('div', 'head'), onoff = el('button', 'onoff');
     head.append(el('span', 'nm'), onoff);
     // Turning a mic on is one tap; turning it off is a hold.
-    holdable(onoff, { needs: () => !!(state && state.inputs[c._i] && state.inputs[c._i].on), cmd: () => 'audio:' + (c._i + 1) + ':off', tap: () => act('audio:' + (c._i + 1) + ':on') });
+    holdable(onoff, { needs: () => !!(state && state.inputs[c._i] && state.inputs[c._i].on), cmd: () => 'audio:#' + (c._i + 1) + ':off', tap: () => act('audio:#' + (c._i + 1) + ':on') });
     const m = el('div', 'meter'); m.append(el('i'));
     const f = el('div', 'fader'), inp = el('input'), lab = el('span', 'db');
     inp.type = 'range'; inp.min = -60; inp.max = 12; inp.step = 0.5;
@@ -615,8 +736,8 @@ function renderSound(s) {
 }
 
 function renderTitles(s) {
-  const items = s.graphics.map((g, i) => ({ k: 'g' + i + ':' + g.name, name: g.name, on: g.on, cmd: 'graphic:' + (i + 1) }))
-    .concat((s.rotations || []).map((r, i) => ({ k: 'r' + i + ':' + r.name, name: '⟳ ' + r.name, on: r.running, cmd: 'rotation:' + (i + 1) })));
+  const items = s.graphics.map((g, i) => ({ k: 'g' + i + ':' + g.name, name: g.name, on: g.on, cmd: 'graphic:#' + (i + 1) }))
+    .concat((s.rotations || []).map((r, i) => ({ k: 'r' + i + ':' + r.name, name: '⟳ ' + r.name, on: r.running, cmd: 'rotation:#' + (i + 1) })));
   showIf($('gfxwrap'), items.length > 0);
   list($('graphics'), items, x => x.k, () => { const b = el('button', 'toggle'); onTap(b, () => act(b._cmd)); return b; },
     (b, x) => { b._cmd = x.cmd; setClass(b, 'toggle' + (x.on ? ' on' : '')); setText(b, x.name); }, 'graphics');
@@ -684,7 +805,7 @@ function renderMore(s) {
   // Macros.
   const mac = s.macros || [];
   showIf($('macrowrap'), mac.length > 0);
-  list($('macros'), mac, (m, i) => i + ':' + m.name, () => { const b = el('button', 'macro'); onTap(b, () => act('macro:' + (b._i + 1))); return b; },
+  list($('macros'), mac, (m, i) => i + ':' + m.name, () => { const b = el('button', 'macro'); onTap(b, () => act('macro:#' + (b._i + 1))); return b; },
     (b, m, i) => { b._i = i; setText(b, m.name); setStyle(b, 'borderLeftColor', m.color); });
   // Media players.
   showIf($('mediawrap'), s.players.length > 0);
@@ -704,13 +825,13 @@ function renderMore(s) {
   list($('ptz'), cams, c => c.source + ':' + c.name + ':' + c.presets.join('|'), c => {
     const r = el('div', 'row'); r.style.marginBottom = '8px';
     r.append(el('div', 'rowlabel', c.name));
-    c.presets.forEach((p, k) => r.append(onTap(el('button', '', p), () => act('ptz:' + c.source + ':preset:' + (k + 1)))));
-    r.append(onTap(el('button', '', '⌂ Home'), () => act('ptz:' + c.source + ':home')));
+    c.presets.forEach((p, k) => r.append(onTap(el('button', '', p), () => act('ptz:#' + c.source + ':preset:' + (k + 1)))));
+    r.append(onTap(el('button', '', '⌂ Home'), () => act('ptz:#' + c.source + ':home')));
     // The nudges on a row of their own: they move while held.
     const nudge = el('div', 'row'); nudge.style.flexBasis = '100%';
     [['◀', 'left'], ['▲', 'up'], ['▼', 'down'], ['▶', 'right'], ['＋', 'in'], ['－', 'out']].forEach(([label, dir]) => {
       const b = el('button', '', label); b.style.touchAction = 'none'; b.style.padding = '10px 4px';
-      b.onpointerdown = e => { e.preventDefault(); hold('ptz:' + c.source + ':' + dir + ':0.5', 'ptz:' + c.source + ':stop'); };
+      b.onpointerdown = e => { e.preventDefault(); hold('ptz:#' + c.source + ':' + dir + ':0.5', 'ptz:#' + c.source + ':stop'); };
       nudge.append(b);
     });
     r.append(nudge);
@@ -725,6 +846,8 @@ function renderMore(s) {
     const href = '/prompter' + (pin ? '?pin=' + encodeURIComponent(pin) : '');
     if ($('prompterlink').getAttribute('href') !== href) $('prompterlink').href = href;
   }
+  setClass($('awake'), 'toggle' + (wantAwake() ? ' on' : ''));
+  setText($('awake'), wantAwake() ? 'Keep screen on: on' : 'Keep screen on: off');
   // Tally lights.
   list($('tallies'), s.sources, (src, i) => i + ':' + src.name, (src, i) => {
     const a = el('a', '', src.name); a.href = '/?tally=' + (i + 1) + (pin ? '&pin=' + encodeURIComponent(pin) : ''); a.style.cssText = 'margin-right:14px;padding:10px 0;display:inline-block'; return a;
@@ -741,16 +864,25 @@ function renderTally() {
   $('tstate').textContent = src.tally === 'program' ? 'ON AIR' : src.tally === 'preview' ? 'PREVIEW' : '';
 }
 
+// Whether the PIN in use was just typed here (so a 401 means a typo).
+let typed = false;
 async function poll() {
+  if (needPin) return;
   try {
     const r = await fetch(api('/api/state'));
-    if (r.status === 401) { $('pin').style.display = 'flex'; return; }
+    if (r.status === 401) {
+      askPin(typed ? 'That PIN didn\'t work. The PIN is shown in Cutaway under More › Control.' : pin ? 'The PIN has changed. The new one is shown in Cutaway under More › Control.' : 'It\'s shown in Cutaway under More › Control.');
+      return;
+    }
+    if (r.status === 429) { askPin('Too many wrong PINs: wait a minute, then type the PIN shown in Cutaway under More › Control.'); return; }
+    typed = false;
     state = await r.json();
+    heard();
     render();
-  } catch (e) { flash('Cutaway isn\'t answering…', true); }
+  } catch (e) { if (!document.body.classList.contains('stale')) flash('Cutaway isn\'t answering…', true); }
 }
 function refreshImage() {
-  if (tallySource !== null || imgBusy || document.hidden || tab !== 'scenes') return;
+  if (needPin || tallySource !== null || imgBusy || document.hidden || tab !== 'scenes') return;
   imgBusy = true;
   const img = $('program');
   const next = new Image();
@@ -761,16 +893,42 @@ function refreshImage() {
 // Live updates over WebSocket; polling while it isn't connected.
 let wsLive = false, ws = null;
 function connectWs() {
-  if (ws && ws.readyState <= 1) return;
+  if (needPin || (ws && ws.readyState <= 1)) return;
   try { ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/ws?pin=' + encodeURIComponent(pin)); }
   catch (e) { return; }
   ws.onmessage = ev => {
+    heard();
     const m = JSON.parse(ev.data);
     if (m.type === 'state') { state = m.state; wsLive = true; render(); }
     else if (m.type === 'reply' && !m.ok) flash(m.message, true);
   };
-  ws.onclose = () => { wsLive = false; setTimeout(connectWs, 3000); };
+  ws.onclose = () => { wsLive = false; if (!needPin) { clearTimeout(wsTimer); wsTimer = setTimeout(connectWs, 3000); } };
 }
+let wsTimer = null;
+// Cutaway sends something at least every two seconds (a "tick" when the
+// show is quiet). Nothing for five: say so, dim what may be out of date,
+// and start a fresh connection (a phone that slept or changed Wi-Fi can
+// hold one that's quietly dead).
+let lastHeard = Date.now();
+function heard() { lastHeard = Date.now(); if (document.body.classList.contains('stale')) { document.body.classList.remove('stale'); measure(); } }
+function reconnectNow() {
+  if (needPin) return;
+  if (ws) { try { ws.onclose = null; ws.close(); } catch (e) {} ws = null; }
+  wsLive = false; clearTimeout(wsTimer);
+  poll(); connectWs();
+}
+setInterval(() => {
+  if (needPin || tallySource !== null || document.hidden) return;
+  const quiet = Date.now() - lastHeard;
+  if (quiet > 5000 && !document.body.classList.contains('stale')) { document.body.classList.add('stale'); measure(); }
+  if (quiet > 5000 && wsLive) reconnectNow();
+}, 1000);
+// Back on screen (unlocked, switched back to): fresh state and connection now.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  keepAwake();
+  if (Date.now() - lastHeard > 2500 || !wsLive) reconnectNow(); else poll();
+});
 if (tallySource === null) { selectTab(tab); measure(); }
 poll(); connectWs();
 setInterval(() => { if (!wsLive) poll(); }, 500);
