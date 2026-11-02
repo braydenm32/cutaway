@@ -286,6 +286,57 @@ pub struct Health {
     pub audio: Vec<AudioHealth>,
     /// Program frames the compositor had to skip (overload).
     pub compositor_skips: u64,
+    /// While recording (with something to hear): how long the recording
+    /// mix has been silent, in seconds (0 while there's sound).
+    pub silent_secs: Option<f64>,
+}
+
+/// Quieter than this (peak, dBFS) counts as no sound at all: well under
+/// any room or mic noise, so it means muted, unplugged or the wrong input.
+pub const SILENT_DB: f32 = -60.0;
+/// Silent this long while recording: a problem, and an alert (once).
+pub const SILENT_ALERT_SECS: f64 = 45.0;
+/// Silent this long: the small "no sound" badge beside REC (a pause
+/// between words doesn't light it).
+pub const SILENT_BADGE_SECS: f64 = 5.0;
+
+/// "45 s", "2 min".
+pub fn silent_text(secs: f64) -> String {
+    if secs < 120.0 {
+        format!("{:.0} s", secs.floor())
+    } else {
+        format!("{:.0} min", (secs / 60.0).floor())
+    }
+}
+
+/// Raises "no sound" once when the recording has been silent for
+/// SILENT_ALERT_SECS, and again only after the sound came back and then
+/// went again (or in a new take).
+#[derive(Clone, Debug, Default)]
+pub struct SilenceWatch {
+    warned: bool,
+}
+
+impl SilenceWatch {
+    /// One tick, with `Health::silent_secs`. True when it's time to alert.
+    pub fn step(&mut self, silent_secs: Option<f64>) -> bool {
+        match silent_secs {
+            Some(s) if s >= SILENT_ALERT_SECS => !std::mem::replace(&mut self.warned, true),
+            _ => {
+                self.warned = false;
+                false
+            }
+        }
+    }
+}
+
+/// How long the recording mix has been silent: from the later of the
+/// take's start and the last sound. None when not recording, or when
+/// there's nothing in the mix to hear.
+pub fn silent_for(recording_since: Option<Instant>, heard: Option<Instant>, has_inputs: bool, now: Instant) -> Option<f64> {
+    let since = recording_since.filter(|_| has_inputs)?;
+    let from = heard.map_or(since, |h| h.max(since));
+    Some(now.saturating_duration_since(from).as_secs_f64())
 }
 
 /// How far back "recent" frame trouble counts.
@@ -354,6 +405,9 @@ impl Health {
                 out.push(format!("{}: no signal", a.name));
             }
         }
+        if let Some(s) = self.silent_secs.filter(|s| *s >= SILENT_ALERT_SECS) {
+            out.push(format!("Recording: no sound for {}", silent_text(s)));
+        }
         out
     }
 }
@@ -420,6 +474,7 @@ pub struct HealthMonitor {
     pub compositor_skips: Arc<AtomicU64>,
     pub last_frames: Vec<(Instant, u64)>,
     pub seen: u64,
+    pub silence: SilenceWatch,
 }
 
 impl HealthMonitor {
@@ -510,6 +565,20 @@ impl HealthMonitor {
         }
         drop(take);
         let mut st = self.status.lock_ok();
+        // No sound in the recording (muted, unplugged, the wrong input).
+        let since = match &st.rec {
+            super::RecState::Recording { since, .. } => Some(*since),
+            _ => None,
+        };
+        health.silent_secs = silent_for(since, st.mix_heard, !audio.is_empty(), Instant::now());
+        if self.silence.step(health.silent_secs) {
+            let w = format!(
+                "No sound in the recording for {}: check the mics are on, turned up and plugged in, and the right inputs are picked (Sound › Inputs)",
+                silent_text(health.silent_secs.unwrap_or(SILENT_ALERT_SECS))
+            );
+            st.push(LogLevel::Warning, w.clone());
+            st.alerts.push(w);
+        }
         st.health = health;
         st.disk = disk;
         st.backup_disk = backup;
@@ -529,6 +598,39 @@ impl HealthMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// No sound: counted from the take's start or the last sound, alerted
+    /// once, and again only after the sound came back and went again.
+    #[test]
+    fn no_sound_alerts_once_and_rearms() {
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + std::time::Duration::from_secs(s);
+        assert_eq!(silent_for(None, None, true, at(100)), None);
+        assert_eq!(silent_for(Some(t0), None, false, at(100)), None, "nothing to hear");
+        assert_eq!(silent_for(Some(t0), None, true, at(50)), Some(50.0));
+        // Sound before the take started doesn't count.
+        assert_eq!(silent_for(Some(at(10)), Some(t0), true, at(20)), Some(10.0));
+        assert_eq!(silent_for(Some(t0), Some(at(30)), true, at(40)), Some(10.0));
+
+        let mut w = SilenceWatch::default();
+        assert!(!w.step(Some(10.0)));
+        assert!(w.step(Some(45.0)));
+        assert!(!w.step(Some(46.0)));
+        assert!(!w.step(Some(600.0)));
+        // Sound comes back, then goes again.
+        assert!(!w.step(Some(0.0)));
+        assert!(!w.step(Some(30.0)));
+        assert!(w.step(Some(45.5)));
+        // A new take.
+        assert!(!w.step(None));
+        assert!(w.step(Some(50.0)));
+
+        let h = Health { silent_secs: Some(44.0), ..Default::default() };
+        assert!(h.problems().is_empty());
+        let h = Health { silent_secs: Some(130.0), ..Default::default() };
+        assert_eq!(h.problems(), vec!["Recording: no sound for 2 min".to_string()]);
+        assert_eq!(silent_text(45.9), "45 s");
+    }
 
     /// Health: no false "0 fps" before there's anything to measure, and
     /// frame trouble counts from the last minute only (numbers audit #3, #17).
