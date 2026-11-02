@@ -1303,7 +1303,8 @@ impl Service {
     /// Server to fill in when the service is picked.
     pub fn default_server(self) -> &'static str {
         match self {
-            Service::Youtube => "rtmp://a.rtmp.youtube.com/live2",
+            // RTMPS: the stream key travels encrypted.
+            Service::Youtube => "rtmps://a.rtmps.youtube.com:443/live2",
             Service::Twitch => "rtmp://live.twitch.tv/app",
             Service::Facebook => "rtmps://live-api-s.facebook.com:443/rtmp",
             Service::Kick => "",
@@ -1314,7 +1315,7 @@ impl Service {
 
     pub fn help(self) -> &'static str {
         match self {
-            Service::Youtube => "Stream key from YouTube Studio → Go live → Stream. For RTMPS use rtmps://a.rtmps.youtube.com:443/live2",
+            Service::Youtube => "Stream key from YouTube Studio → Go live → Stream. The server is YouTube's secure (RTMPS) one; rtmp://a.rtmp.youtube.com/live2 works too.",
             Service::Twitch => "Stream key from Creator Dashboard → Settings → Stream. Most channels should stay at or below 6000 kbps.",
             Service::Facebook => "Stream key from Live Producer → Streaming software. Facebook requires RTMPS.",
             Service::Kick => "Copy both the Stream URL and Stream key from your Kick creator dashboard.",
@@ -2883,7 +2884,7 @@ mod tests {
     #[test]
     fn stream_urls() {
         let yt = StreamDestination { key: "abcd-1234".into(), ..Default::default() };
-        assert_eq!(yt.url(), "rtmp://a.rtmp.youtube.com/live2/abcd-1234");
+        assert_eq!(yt.url(), "rtmps://a.rtmps.youtube.com:443/live2/abcd-1234");
         assert!(yt.problem().is_none());
         let srt = StreamDestination { service: Service::Srt, server: "srt://10.0.0.5:9000".into(), key: "show".into(), ..Default::default() };
         assert_eq!(srt.url(), "srt://10.0.0.5:9000?streamid=show");

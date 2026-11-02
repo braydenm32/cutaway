@@ -2067,7 +2067,11 @@ impl CompositorLoop {
                         stream_grid = Some((from, grid_index(t - from + 1, sfps)));
                     }
                 }
-                None => stream_grid = None,
+                None => {
+                    stream_grid = None;
+                    // The next stream warns again if it can't keep up.
+                    warned_stream = false;
+                }
             }
             let canvas = self.comp.canvas_size();
             // (Not when there's something only the stream shows, like
@@ -2173,7 +2177,7 @@ impl CompositorLoop {
                         if let (Some(f), Some((tx, _))) = (stream_frame, stream_now) {
                             if tx.try_send(f).is_err() && !warned_stream {
                                 warned_stream = true;
-                                self.status.lock_ok().push(LogLevel::Warning, "Stream: the encoder can't keep up, frames are being dropped.");
+                                self.status.lock_ok().push(LogLevel::Warning, "Stream: the encoder can't keep up, frames are being dropped. Lower the stream's size, frame rate or bitrate in Record › Streaming.");
                             }
                         }
                         let fresh = r.preview.is_some() || !r.thumbs.is_empty();

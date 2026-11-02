@@ -42,6 +42,32 @@ The apps aren't signed yet, so the first launch takes one extra step:
 - **Windows:** unzip anywhere and run **Cutaway.exe**. When Windows says it
   "protected your PC", choose **More info → Run anyway**.
 
+> **Windows won't open it?**
+> - **No "Run anyway" button:** Smart App Control may be on. Open **Windows
+>   Security → App & browser control → Smart App Control**. While it's **On**,
+>   Windows blocks apps that aren't signed, and Cutaway isn't yet. Turning it
+>   off lets Cutaway run, but Windows can't turn it back on without a reset,
+>   so decide whether that's right for this PC.
+> - **Cutaway.exe vanished or "contains a virus":** Microsoft Defender
+>   sometimes flags new, unsigned apps. Open **Windows Security → Virus &
+>   threat protection → Protection history**, check it's Cutaway, and choose
+>   **Allow on device**. Then unzip again.
+> - **Nothing happens at all:** make sure you unzipped the whole folder first
+>   (running it from inside the zip doesn't work).
+
+### What it needs
+
+| | Smallest | Comfortable (several cameras, 4K) |
+|---|---|---|
+| Mac | Apple Silicon (M1), 8 GB memory, macOS 13 | M1 Pro/Max or newer, 16 GB |
+| Windows | Windows 11 64-bit, a graphics card with a video encoder (NVIDIA GTX 1050 or newer, AMD RX 5000 or newer, Intel 7th-generation graphics or newer), 8 GB memory | NVIDIA RTX, recent AMD or Intel Arc, 16 GB |
+| Drive | An SSD with room for the show: about 6 GB an hour for each 1080p file | A fast external SSD for 4K and many files |
+| Network (streaming) | Upload speed about 1.5 times the stream's bitrate | |
+
+These are a guide, not a promise: the work depends on how many files you
+record and their size. The pre-show check adds them up and says when a show
+may be too much for the computer.
+
 When a newer version comes out, Cutaway shows a blue dot on **More** in the
 rail and says so in **More › App › Updates & about** (it asks GitHub once
 when it starts; turn that off in More › App › General).
@@ -891,6 +917,9 @@ TALK, Undo, the graphics) always show the key as it's set now.
      a destination is reconnecting ("Retrying in 4 s (try 2)", counted up so
      it never says 0 s), in plain words ("Can't reach YouTube. Check the
      internet connection."). Before a scheduled stream, it shows when that is.
+   - Adding your first destination also ticks **When going live: also start
+     recording** (Record › Streaming), so a stream that drops still leaves a
+     full copy here. Untick it if you'd rather not.
    - If a service refuses the stream key, retrying won't help, so Cutaway
      stops after three tries and says so in red ("YouTube didn't accept the
      stream key. Copy a fresh key from YouTube Studio…"), with a button to the
@@ -905,7 +934,7 @@ TALK, Undo, the graphics) always show the key as it's set now.
 
 | Service | Server |
 |---|---|
-| YouTube | `rtmp://a.rtmp.youtube.com/live2`, or `rtmps://a.rtmps.youtube.com:443/live2` |
+| YouTube | `rtmps://a.rtmps.youtube.com:443/live2` (secure; new YouTube destinations use it), or `rtmp://a.rtmp.youtube.com/live2` |
 | Twitch | `rtmp://live.twitch.tv/app` |
 | Facebook | `rtmps://live-api-s.facebook.com:443/rtmp` (RTMPS only) |
 | Kick | copy the Stream URL from your Kick dashboard |

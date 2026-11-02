@@ -476,7 +476,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Streaming, "Encoder") => "What encodes the stream: always H.264, which every service accepts. The hardware encoder leaves the processor free.",
         (Streaming, "If a connection drops") => "Reconnects a destination by itself if its connection drops. A destination that fails never affects the others, the program or your recordings. If the service refuses the stream key, retrying can't help, so it stops after three tries and asks you to paste a fresh key.",
         (Streaming, "Give up after") => "How many reconnection attempts before giving up on a destination (0: keep trying). A refused stream key always stops after three tries.",
-        (Streaming, "When going live") => "Starts recording too whenever you go live.",
+        (Streaming, "When going live") => "Starts recording too whenever you go live, so a stream that drops still leaves a full copy here. It's ticked when you add your first destination; untick it if you don't want that.",
         (Streaming, "Slow connection") => "Lowers the video bitrate while the connection can't keep up, and brings it back after (adaptive bitrate): fewer freezes for viewers.",
 
         // ---- Vertical version
