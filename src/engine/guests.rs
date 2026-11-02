@@ -1766,7 +1766,7 @@ mod tests {
     #[test]
     fn a_guest_joins_with_picture_and_sound() {
         let _turn = turn();
-        let port = 18_791;
+        let port = crate::util::free_tcp_port();
         let id = "e2etestguest";
         // The guest spot, as the engine would start it.
         let slot = SourceSlot::new(0, 0, 0);
@@ -1809,7 +1809,7 @@ mod tests {
     #[test]
     fn a_phone_camera_sends_pictures() {
         let _turn = turn();
-        let port = 18_792;
+        let port = crate::util::free_tcp_port();
         let id = "e2etestphone";
         let slot = SourceSlot::new(0, 0, 0);
         let src = SourceConfig { name: "Phone E2E".into(), device: format!("phone:{id}"), width: 320, height: 180, fps: 30, network_latency_ms: 100, ..Default::default() };
@@ -1840,7 +1840,7 @@ mod tests {
     #[test]
     fn a_guest_shares_their_screen() {
         let _turn = turn();
-        let port = 18_793;
+        let port = crate::util::free_tcp_port();
         let id = "e2etestscreen";
         let (cam_slot, screen_slot) = (SourceSlot::new(0, 0, 0), SourceSlot::new(0, 0, 0));
         let cam = SourceConfig { name: "Guest E2E".into(), device: format!("guest:{id}"), width: 320, height: 180, fps: 30, network_latency_ms: 100, ..Default::default() };
@@ -1924,7 +1924,7 @@ mod tests {
     #[test]
     fn guest_backups_land_in_the_take() {
         let _turn = turn();
-        let port = 18_793;
+        let port = crate::util::free_tcp_port();
         let id = "backuptester";
         let dir = std::env::temp_dir().join(format!("cutaway-backup-{}", std::process::id()));
         let take = dir.join("Take 1");
