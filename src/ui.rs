@@ -4568,7 +4568,7 @@ impl App {
         let mut done = false;
         let mut apply = false;
         let anchor = self.rec_rect.map(|r| r.right_bottom() + vec2(6.0, 8.0)).unwrap_or_else(|| ctx.content_rect().right_top() + vec2(-400.0, 60.0));
-        let shown = egui::Area::new(egui::Id::new("marker_name")).order(egui::Order::Foreground).fixed_pos(anchor).show(ctx, |ui| {
+        let shown = egui::Area::new(egui::Id::unique("marker_name")).order(egui::Order::Foreground).fixed_pos(anchor).show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.set_width(300.0);
                 ui.label(RichText::new(format!("Name {own} ({})", fmt_clock(Duration::from_nanos(at.max(0) as u64)))).strong());
