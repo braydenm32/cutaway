@@ -1459,7 +1459,7 @@ impl SettingsUi {
                 if measured.is_some() { "measured on this take" } else { "estimated" },
                 free.map(|f| format!(" — the drive has room for about {}", crate::engine::health::fmt_left(f as f64 / rate.max(1.0)))).unwrap_or_default()
             ));
-            hint(ui, "Takes are written so that after a crash or a power cut they keep everything up to the last second; Cutaway mends them next time it opens.");
+            hint(ui, "Takes are written so that if Cutaway closes mid-take they keep everything up to about the last second, and after a power cut all but the last few seconds; Cutaway mends them next time it opens.");
             if let Some(b) = cfg.output.backup_folder.as_ref() {
                 if b == &cfg.output.folder {
                     ui.label(RichText::new("⚠ The backup folder is the recording folder; pick a folder on another drive.").color(AMBER));

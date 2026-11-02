@@ -427,7 +427,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Comments, "Hide after") => "Hides the comment by itself after this long (0: it stays until you hide it).",
 
         // ---- Recording
-        (Recording, "Save takes in") => "The folder where each take gets a folder of its own. Use a fast drive with plenty of room.",
+        (Recording, "Save takes in") => "The folder where each take gets a folder of its own. Use a fast drive with plenty of room. Every file is put on the disk every few seconds as it records, so even a power cut loses only the last few seconds.",
         (Recording, "Take name") => "The start of each take's folder name; the date and time follow. Leave it as \"Take\" (or empty) and, with a show chosen, takes are named after the show instead (e.g. My_Show_2026-10-16_19-30-02); the Resolve project gets the same name.",
         (Recording, "File format") => "MP4 opens everywhere; MOV suits Final Cut Pro. ProRes always records as MOV.",
         (Recording, "Codec") => "H.264 plays anywhere; H.265 makes smaller files (good for 4K); ProRes (on a Mac) is the easiest to edit, but the files are very large.",

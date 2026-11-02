@@ -200,8 +200,8 @@ pub struct SyrinButton {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Container {
-    /// MP4, written crash-safe: a power cut or crash loses at most the last
-    /// second, and the file is repaired on the next start.
+    /// MP4, written crash-safe: a crash loses at most the last second (a
+    /// power cut the last few), and the file is repaired on the next start.
     #[serde(alias = "mkv")]
     Mp4,
     /// Same, QuickTime flavoured (Final Cut Pro, Premiere, Resolve).

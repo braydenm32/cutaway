@@ -122,7 +122,7 @@ pub fn spawn_mp4(
     label: String,
     opts: FileOpts,
     clips: Option<Arc<super::clips::ClipBuffer>>,
-) -> JoinHandle<Result<(PathBuf, u64)>> {
+) -> JoinHandle<Result<Written>> {
     std::thread::Builder::new()
         .name(format!("write {label}"))
         .spawn(move || {
@@ -214,10 +214,19 @@ pub fn spawn_mp4(
                 }
             }
             if let Some(e) = failed {
-                if let Some((w, ..)) = writer {
-                    let _ = w.finish();
+                let Some((w, ..)) = writer else { return Err(e) };
+                // Close the file properly if the drive lets us; else mend it
+                // the way the rescue would, so it isn't left half-written.
+                let backup = opts.backup_for(&path);
+                let finished = w.finish().is_ok() || mend(&path);
+                if let Some(b) = backup.filter(|b| b.exists()) {
+                    mend(&b);
                 }
-                return Err(e);
+                if !finished {
+                    return Err(anyhow!("{label}: {e:#}. The file couldn't be repaired, so it may not open in every editor"));
+                }
+                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                return Ok(Written { path, size, problem: Some(format!("{label}: {e:#}. The file was repaired and plays up to there")) });
             }
             match writer {
                 Some((mut w, _, a)) => {
@@ -236,12 +245,35 @@ pub fn spawn_mp4(
                     let chapters = opts.markers.lock_ok().iter().filter(|m| !m.clip).map(|m| (m.at, m.name.clone())).collect();
                     w.set_chapters(chapters);
                     report_backup(&mut w);
-                    Ok((path, w.finish()?))
+                    match w.finish() {
+                        Ok(size) => Ok(Written { path, size, problem: None }),
+                        // The very end failed (the disk filled?): mend it.
+                        Err(e) if mend(&path) => {
+                            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                            Ok(Written { path, size, problem: Some(format!("{label}: couldn't finish the file ({e:#}); it was repaired instead")) })
+                        }
+                        Err(e) => Err(anyhow!("{label}: couldn't finish the file ({e:#}), and it couldn't be repaired, so it may not open in every editor")),
+                    }
                 }
                 None => Err(anyhow!("{label}: no video arrived, so no file was written")),
             }
         })
         .expect("thread")
+}
+
+/// A video file once its writer is done: where, how big, and what went
+/// wrong on the way (it still plays).
+#[derive(Debug)]
+pub struct Written {
+    pub path: PathBuf,
+    pub size: u64,
+    pub problem: Option<String>,
+}
+
+/// Turns a file left in its "while recording" form into an ordinary one
+/// (as the rescue does). True when it now plays.
+fn mend(path: &std::path::Path) -> bool {
+    matches!(crate::media::mp4::recover(path), Ok(crate::media::mp4::Recovery::Recovered { .. } | crate::media::mp4::Recovery::AlreadyComplete))
 }
 
 /// Puts a source's frames onto a constant frame rate starting at T0:
@@ -769,7 +801,7 @@ pub struct Take {
     pub audio_job: Option<JoinHandle<Result<()>>>,
     /// One encoder per input track.
     pub track_jobs: Vec<(String, JoinHandle<Result<()>>)>,
-    pub writers: Vec<(String, JoinHandle<Result<(PathBuf, u64)>>)>,
+    pub writers: Vec<(String, JoinHandle<Result<Written>>)>,
     pub wavs: Vec<(String, JoinHandle<Result<Vec<(PathBuf, u64)>>>)>,
     pub mix_tap_ids: Vec<u64>,
     pub markers: Markers,
@@ -825,7 +857,10 @@ impl Take {
         for (label, h) in self.writers {
             next(format!("Saving {label}"));
             match h.join() {
-                Ok(Ok(f)) => report.files.push(f),
+                Ok(Ok(f)) => {
+                    report.files.push((f.path, f.size));
+                    report.problems.extend(f.problem);
+                }
                 Ok(Err(e)) => report.problems.push(format!("{e:#}")),
                 Err(_) => report.problems.push(format!("{label}: writer crashed")),
             }
@@ -862,6 +897,24 @@ mod tests {
 
     fn frame(pts: Ns) -> VideoFrame {
         VideoFrame::new_nv12(2, 2, pts, vec![0; 4], vec![0; 2], 0)
+    }
+
+    /// A file left in its "while recording" form (the writer failed) is
+    /// mended so it plays.
+    #[test]
+    fn a_half_written_file_is_mended() {
+        use crate::media::mp4::{tests::fake_video_config, Brand, Mp4Writer};
+        let p = std::env::temp_dir().join(format!("cutaway-mend-{}.mp4", std::process::id()));
+        let mut w = Mp4Writer::create(&p, Brand::Mp4).unwrap();
+        let v = w.add_video(&fake_video_config(), 30);
+        for i in 0..90i64 {
+            w.write(v, i * NS_PER_SEC / 30, &[0, 0, 0, 1, 0x65], i % 30 == 0).unwrap();
+        }
+        drop(w);
+        assert!(mend(&p));
+        assert!(crate::media::mp4::duration_secs(&p).is_some_and(|d| d > 1.9));
+        assert!(mend(&p), "mending a mended file is harmless");
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]
