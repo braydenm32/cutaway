@@ -144,8 +144,28 @@ pub mod vcam {
     use anyhow::Result;
     use crossbeam_channel::Receiver;
 
+    /// Whether this copy can offer the virtual camera at all. On a Mac it
+    /// needs the camera extension, which only a copy signed with an Apple
+    /// Developer account can carry: the Mac download leaves it out, so
+    /// there's no Webcam button there.
     pub fn available() -> bool {
-        cfg!(any(target_os = "macos", windows))
+        #[cfg(target_os = "macos")]
+        {
+            super::macos::vcam::included() || super::macos::vcam::installed()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            cfg!(windows)
+        }
+    }
+
+    /// Why there's no virtual camera, in a line, when there isn't one.
+    pub fn missing_note() -> &'static str {
+        if cfg!(target_os = "macos") {
+            "The virtual camera (Cutaway as a webcam in Zoom, Teams or Meet) isn't in the Mac download yet. It's coming in a later version. It works on Windows 11 now."
+        } else {
+            "The virtual camera needs macOS or Windows 11."
+        }
     }
 
     pub fn installed() -> bool {

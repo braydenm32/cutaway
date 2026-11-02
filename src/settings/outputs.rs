@@ -91,8 +91,8 @@ impl SettingsUi {
         });
 
         if !crate::platform::vcam::available() {
-            part(ui, "vcam", "Virtual camera", "needs macOS or Windows 11", false, |ui| {
-                hint(ui, "The virtual camera needs macOS or Windows 11.");
+            part(ui, "vcam", "Virtual camera", if cfg!(target_os = "macos") { "coming later on Mac" } else { "needs macOS or Windows 11" }, false, |ui| {
+                hint(ui, crate::platform::vcam::missing_note());
             });
             return;
         }
@@ -146,11 +146,11 @@ impl SettingsUi {
                 ui.checkbox(&mut self.draft.display.virtual_camera, "turn it on when Cutaway starts");
                 ui.end_row();
             });
-            hint(ui, "It shows the program (1920×1080, 30 fps); pick your interface or a loopback device as the call's microphone.");
+            hint(ui, "It shows the program (1920×1080, 30 fps). In the call app, pick your audio interface (or a virtual audio device such as BlackHole) as the microphone.");
             if cfg!(windows) {
                 hint(ui, "Installing asks for administrator rights once (it goes in Program Files, where Windows' camera service can use it).");
             } else {
-                hint(ui, "macOS only runs camera extensions from apps signed with an Apple Developer account. If Install says the camera isn't included, see \"Virtual camera\" in the README for the one-time signing step.");
+                hint(ui, "macOS asks you to approve the camera once: in System Settings, Privacy & Security (macOS 13 and 14) or General › Login Items & Extensions (macOS 15 and later).");
             }
         });
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));

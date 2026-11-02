@@ -479,9 +479,9 @@ Takes start with the **Take name** from Record › Recording. Leave it as
 - **Live captions:** speech recognised on the Mac (nothing leaves it),
   shown on the stream (and optionally burned into the recording), from the
   mix or any one input.
-- **Virtual webcam:** the program as a "Cutaway" camera in Zoom, Teams, Meet,
-  FaceTime and others (macOS 13+; needs a one-time signing step, see
-  [Virtual camera](#virtual-camera)).
+- **Virtual webcam:** the program as a "Cutaway" camera in Zoom, Teams, Meet
+  and others. On Windows 11 now; on the Mac it's coming in a later version
+  (it isn't in the Mac download yet, see [Virtual camera](#virtual-camera)).
 
 ### Control
 
@@ -577,9 +577,14 @@ cargo run --release
 
 ### Virtual camera
 
+On Windows 11, see the Windows install steps: **Record › Screens & webcam ›
+Install…** asks for administrator rights once.
+
+On a Mac, the virtual camera isn't in the download yet, so there's no
+**Webcam** button and Record › Screens & webcam says it's coming later.
 macOS only runs camera extensions from apps signed with a paid Apple
-Developer account, so the virtual camera needs a one-time signing step. Skip
-this if you don't need it; everything else works without it.
+Developer account, which the download isn't yet. If you build Cutaway
+yourself and have such an account, this is the one-time signing step:
 
 1. In your [Apple Developer account](https://developer.apple.com/account),
    create an App ID `app.cutaway.Cutaway` with the **System Extension**
@@ -667,7 +672,7 @@ Settings are in `%APPDATA%\Cutaway\config.toml`, recordings go to
 | Audio | CoreAudio | Windows audio (WASAPI) and **ASIO** (interfaces show as "ASIO: …", every channel) |
 | Live captions | Apple's speech recognition | **Whisper**, on the PC: the speech model downloads once from Graphics › More ▾ › Captions (57 MB Fast, 181 MB Accurate) |
 | Auto-framing, background removal | Apple's Vision | Open models (YuNet, PP-HumanSeg) on the graphics card through ONNX Runtime and DirectML |
-| Virtual webcam | Camera extension (one-time signing step) | Windows 11's virtual camera: **Record › Screens & webcam › Install…** asks for administrator rights once |
+| Virtual webcam | Not in the Mac download yet (coming later; a self-signed build can have it) | Windows 11's virtual camera: **Record › Screens & webcam › Install…** asks for administrator rights once |
 | Log | `~/Library/Logs/Cutaway` | `%LOCALAPPDATA%\Cutaway\Logs` |
 
 Everything else (switching, graphics, the mixer, recording formats,
@@ -848,7 +853,7 @@ Video Extensions** on some PCs.
 | Fold or move a panel on the right | Click its heading (▾) to fold it down to one line, again to open it. Drag a heading by its ⠿ dots onto another panel's heading to move it above that one, or use **⋯ › Arrange panels…** at the top of the column (↑ ↓, Open, and **Reset order, folds and width**). Hovering a heading shows **Set up ›** for that panel; ⋯ lists them all. When panels go on below what fits, a line at the bottom says which (click it to scroll). Each show remembers its own |
 | Widen the column on the right | Drag its left edge (the three dots), up to about 60% of the window. Each show remembers its width |
 | Second screen | **Second screen** under the status light (set it up in Record › More ▾ › Screens & webcam, which also has Full screen and Close buttons). On that window: double-click or `F` for full screen, Esc to leave full screen, Esc again (or ✕, or Cmd/Ctrl+W) to close |
-| Webcam (virtual camera) | **Webcam** under the status light |
+| Webcam (virtual camera) | **Webcam** under the status light (Windows 11; not in the Mac download yet) |
 | Switch show | The show's name at the top of the rail, under the logo |
 | Time left on the drive | Top right, beside the clock: **2 h 40 min left**, with **412 GB free** under it (hover for the drive and whether the time is from this take's real write rate or estimated). It turns amber under 30 minutes, the same limit as the status light and the pre-show check |
 | Time of day | The clock at the top right. Click it to switch between 24-hour and 12-hour time, or choose in **More › App › General**, **Graphics › Clocks & timers** or under the status light; each show remembers which, and clock graphics, the second screen and scheduled times follow it |
