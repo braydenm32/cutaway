@@ -297,9 +297,11 @@ impl App {
         let mut cfg = self.cfg.clone();
         cfg.scenes = self.scenes.clone();
         cfg.graphics.push(Graphic::names(&name));
-        self.remember(super::undo::Kind::Settings, "Make a name title");
+        // One Undo step, kept only if it worked (review D11).
+        let before = self.snapshot(super::undo::Kind::Settings, "Make a name title".to_string());
         match self.apply_settings(cfg, ctx) {
             Ok(()) => {
+                self.history.record(before);
                 let named = self.cfg.sources.iter().filter(|s| !s.person.trim().is_empty()).count();
                 self.toast(
                     if named == 0 {
