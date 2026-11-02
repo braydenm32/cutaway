@@ -148,7 +148,11 @@ impl SettingsUi {
                     if ui.button("Rescan devices").clicked() {
                         self.video = devices::list(Kind::Video);
                     }
-                    hint(ui, &format!("{} camera(s) / capture card(s) found", self.video.len()));
+                    hint(ui, &match self.video.len() {
+                        0 => "No cameras or capture cards found on this computer".to_string(),
+                        1 => "1 camera or capture card found on this computer".to_string(),
+                        n => format!("{n} cameras or capture cards found on this computer"),
+                    });
                 });
             }
             SourcesView::CloseUps => self.closeup_guide(ui),
@@ -450,9 +454,9 @@ impl SettingsUi {
                 SourceKind::Test => {
                     label(ui, "Pattern");
                     let current = src.device.strip_prefix("test:").unwrap_or("smpte").to_string();
-                    egui::ComboBox::from_id_salt("pattern").selected_text(&current).show_ui(ui, |ui| {
+                    egui::ComboBox::from_id_salt("pattern").selected_text(crate::media::testsrc::pattern_label(&current)).show_ui(ui, |ui| {
                         for p in TEST_PATTERN_NAMES {
-                            if ui.selectable_label(current == *p, *p).clicked() {
+                            if ui.selectable_label(current == *p, crate::media::testsrc::pattern_label(p)).clicked() {
                                 src.device = format!("test:{p}");
                             }
                         }

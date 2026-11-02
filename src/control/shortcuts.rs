@@ -116,7 +116,7 @@ impl KeyCombo {
     /// Keys taken by the numbered shortcuts (scenes, graphics, pads), which
     /// stay where they are.
     pub fn is_numbered(&self) -> bool {
-        let digit = DIGITS.contains(&self.key);
+        let digit = DIGITS.contains(&self.key) || self.key == TENTH;
         let f = PAD_KEYS.contains(&self.key);
         (digit && !self.command && (!self.shift || !self.alt)) || (f && !self.command && !self.alt && !self.shift)
     }
@@ -133,6 +133,18 @@ fn capitalized(s: &str) -> String {
 }
 
 pub const DIGITS: [Key; 9] = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Num9];
+/// 0: the tenth scene (and Alt+0 the tenth graphic), after 1–9.
+pub const TENTH: Key = Key::Num0;
+
+/// The number key for the i-th scene or graphic (from 0): 1–9, then 0.
+pub fn number_key(i: usize) -> Option<Key> {
+    DIGITS.get(i).copied().or((i == 9).then_some(TENTH))
+}
+
+/// The same as people write it: "1"…"9", "0".
+pub fn number_label(i: usize) -> Option<String> {
+    number_key(i).map(|k| KeyCombo::plain(k).label())
+}
 pub const PAD_KEYS: [Key; 12] = [Key::F1, Key::F2, Key::F3, Key::F4, Key::F5, Key::F6, Key::F7, Key::F8, Key::F9, Key::F10, Key::F11, Key::F12];
 
 /// The shortcuts Cutaway comes with.
@@ -275,6 +287,9 @@ pub struct Keymap {
     pub keys: Vec<(KeyCombo, Binding)>,
     /// Keys given two jobs, and other mistakes, in plain words.
     pub problems: Vec<String>,
+    /// Built-in shortcuts whose key one of yours has taken, with that key:
+    /// they don't work there any more.
+    pub taken: Vec<(Builtin, KeyCombo)>,
 }
 
 /// The keys a built-in shortcut is on now: as set, or its defaults.
@@ -346,8 +361,10 @@ impl Keymap {
                 }
             }
             for combo in builtin_keys(cfg, b) {
-                // (A built-in on a key you've taken just steps aside.)
+                // (A built-in on a key you've taken steps aside; the
+                // Shortcuts page says so on its row.)
                 if map.keys.iter().any(|(c, bind)| *c == combo && matches!(bind, Binding::Command(_))) {
+                    map.taken.push((b, combo));
                     continue;
                 }
                 add(&mut map, combo, Binding::Builtin(b), b.describe().to_lowercase());
@@ -383,11 +400,13 @@ pub fn cheat_sheet(cfg: &crate::config::Config) -> String {
     let (alt, shift) = if cfg!(target_os = "macos") { ("⌥", "⇧") } else { ("Alt+", "Shift+") };
     let mut rows: Vec<(String, String)> = Vec::new();
     let scenes = cfg.effective_scenes();
-    for (i, s) in scenes.iter().take(9).enumerate() {
-        rows.push(((i + 1).to_string(), format!("Take {} ({shift}{} cuts straight to it)", s.name, i + 1)));
+    // 1–9, then 0 for the tenth.
+    let digit = |i: usize| ((i + 1) % 10).to_string();
+    for (i, s) in scenes.iter().take(10).enumerate() {
+        rows.push((digit(i), format!("Take {} ({shift}{} cuts straight to it)", s.name, digit(i))));
     }
-    for (i, g) in cfg.graphics.iter().take(9).enumerate() {
-        rows.push((format!("{alt}{}", i + 1), format!("Show / hide {}", g.name)));
+    for (i, g) in cfg.graphics.iter().take(10).enumerate() {
+        rows.push((format!("{alt}{}", digit(i)), format!("Show / hide {}", g.name)));
     }
     for (i, p) in cfg.pads.iter().take(12).enumerate() {
         rows.push((format!("F{}", i + 1), format!("Sound pad: {}", p.name)));
@@ -401,6 +420,7 @@ pub fn cheat_sheet(cfg: &crate::config::Config) -> String {
     }
     let body: String = rows.iter().map(|(k, w)| format!("<tr><td><kbd>{}</kbd></td><td>{}</td></tr>\n", esc(k), esc(w))).collect();
     let show = if cfg.ui.profile.is_empty() { String::new() } else { format!(" · {}", esc(&cfg.ui.profile)) };
+    let fn_note = if cfg!(target_os = "macos") { format!(" {}", esc(MAC_FN_KEYS)) } else { String::new() };
     format!(
         "<!doctype html><html><head><meta charset=\"utf-8\"><title>Cutaway shortcuts</title><style>\
          body{{font:14px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:32px;color:#111}}\
@@ -408,9 +428,20 @@ pub fn cheat_sheet(cfg: &crate::config::Config) -> String {
          table{{border-collapse:collapse;width:100%;columns:2}} td{{padding:5px 10px;border-bottom:1px solid #ddd;vertical-align:top}}\
          td:first-child{{white-space:nowrap;width:1%}} kbd{{font:600 13px ui-monospace,Menlo,Consolas,monospace;background:#f2f2f2;border:1px solid #ccc;border-radius:4px;padding:1px 6px}}\
          @media print{{body{{margin:12mm}}}}</style></head><body>\
-         <h1>Cutaway shortcuts{show}</h1><p>Going live has no key unless you give it one, so a stray key can't start or end a broadcast.</p>\
+         <h1>Cutaway shortcuts{show}</h1><p>Going live has no key unless you give it one, so a stray key can't start or end a broadcast.{fn_note}</p>\
          <table>{body}</table><script>window.print&&setTimeout(()=>window.print(),300)</script></body></html>"
     )
+}
+
+/// On a Mac laptop F1–F12 change brightness, volume and so on unless Fn is
+/// held: said wherever the sound pad keys are listed.
+pub const MAC_FN_KEYS: &str = "On a MacBook, hold Fn with F1–F12 for the sound pads, or turn on \"Use F1, F2, etc. keys as standard function keys\" in System Settings › Keyboard (Keyboard Shortcuts › Function Keys).";
+
+/// Capturing a key on a Mac with Control held: Control isn't a shortcut
+/// modifier there (⌘ is), so the key would be saved without it and fire
+/// on its own. Some(why) to refuse it.
+pub fn capture_problem(m: Modifiers) -> Option<&'static str> {
+    (cfg!(target_os = "macos") && m.ctrl && !m.command).then_some("Control isn't used for shortcuts on a Mac: use ⌘, ⇧ or ⌥ with the key instead.")
 }
 
 /// A command in words, from the same list Settings offers.
@@ -495,6 +526,26 @@ mod tests {
         assert!(map.problems.iter().any(|p| p.contains("both")));
         assert!(map.problems.iter().any(|p| p.contains("numbered")));
         assert!(map.problems.iter().any(|p| p.contains("explode")));
+        // The built-in on T is listed as taken by yours.
+        assert_eq!(map.taken, vec![(Builtin::Transition, KeyCombo::plain(Key::T))]);
+    }
+
+    #[test]
+    fn zero_is_the_tenth() {
+        assert!(KeyCombo::plain(Key::Num0).is_numbered());
+        assert!(KeyCombo::parse("Shift+0").unwrap().is_numbered());
+        assert!(!KeyCombo::parse("Cmd+0").unwrap().is_numbered());
+        let mut cfg = crate::config::Config::default();
+        cfg.scenes = (1..=10).map(|i| crate::scene::Scene { name: format!("S{i}"), ..Default::default() }).collect();
+        let html = cheat_sheet(&cfg);
+        assert!(html.contains("<kbd>0</kbd></td><td>Take S10"), "{html}");
+    }
+
+    #[test]
+    fn control_isnt_captured_on_a_mac() {
+        let ctrl = Modifiers { ctrl: true, ..Default::default() };
+        assert_eq!(capture_problem(ctrl).is_some(), cfg!(target_os = "macos"));
+        assert!(capture_problem(Modifiers::COMMAND).is_none());
     }
 
     #[test]
