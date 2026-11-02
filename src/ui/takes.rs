@@ -15,6 +15,9 @@ use std::path::{Path, PathBuf};
 pub struct Takes {
     /// The take the card is about (None: no card).
     card: Option<PathBuf>,
+    /// When the card's 20 seconds started (it came up, or the pointer last
+    /// left it).
+    card_since: Option<Instant>,
     /// The last take seen, so the card shows once for each.
     seen: Option<PathBuf>,
     /// What Open in Resolve did for a take (shown on its card and its row).
@@ -455,6 +458,7 @@ impl App {
             if self.takes.seen.as_ref() != Some(&r.folder) {
                 self.takes.seen = Some(r.folder.clone());
                 self.takes.card = Some(r.folder.clone());
+                self.takes.card_since = Some(Instant::now());
                 self.takes.resolve_note = None;
                 // Record › Takes reads the folder again, so it's there first.
                 self.look_for_takes_again();
@@ -480,7 +484,7 @@ impl App {
         let mut action = None;
         let mut close = false;
         let mut to_takes = false;
-        egui::Area::new(egui::Id::unique("take_card")).order(egui::Order::Foreground).fixed_pos(anchor.left_bottom() + vec2(0.0, 8.0)).show(ctx, |ui| {
+        let shown = egui::Area::new(egui::Id::unique("take_card")).order(egui::Order::Foreground).fixed_pos(anchor.left_bottom() + vec2(0.0, 8.0)).show(ctx, |ui| {
             egui::Frame::new()
                 .fill(RAISED)
                 .stroke(Stroke::new(1.0, LINE))
@@ -550,6 +554,19 @@ impl App {
                     });
                 });
         });
+        // A take with nothing wrong: the card goes by itself after a while
+        // (it's still first in Record › Takes), so it doesn't sit over the
+        // panels between takes. One with a ⚠ stays until ✕.
+        let now = Instant::now();
+        if shown.response.contains_pointer() {
+            self.takes.card_since = Some(now);
+        }
+        let since = *self.takes.card_since.get_or_insert(now);
+        if card_goes_by_itself(!problems.is_empty(), r.podcast_pending, now.duration_since(since)) {
+            close = true;
+        } else if problems.is_empty() {
+            ctx.request_repaint_after(Duration::from_millis(500));
+        }
         if close {
             self.takes.card = None;
         }
@@ -562,9 +579,27 @@ impl App {
     }
 }
 
+/// How long the "Take saved" card stays when the take has no problems.
+pub(super) const CARD_SECONDS: u64 = 20;
+
+/// Whether the card hides itself now: only a take with no problems (and
+/// not still making its podcast copy), after CARD_SECONDS.
+fn card_goes_by_itself(problems: bool, podcast_pending: bool, shown_for: Duration) -> bool {
+    !problems && !podcast_pending && shown_for >= Duration::from_secs(CARD_SECONDS)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn take_card_goes_only_when_all_is_well() {
+        let s = |n| Duration::from_secs(n);
+        assert!(!card_goes_by_itself(false, false, s(19)));
+        assert!(card_goes_by_itself(false, false, s(20)));
+        assert!(!card_goes_by_itself(true, false, s(600)), "a take with a problem keeps its card");
+        assert!(!card_goes_by_itself(false, true, s(60)), "still making the podcast copy");
+    }
 
     #[test]
     fn take_lengths() {

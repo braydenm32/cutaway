@@ -492,6 +492,9 @@ pub struct App {
     /// A marker being named (Shift+M): its time (which identifies it), its
     /// own name until then, and what's typed.
     marker_name: Option<(crate::media::Ns, String, String)>,
+    /// Where REC was last drawn (the named-marker box goes under ◆ Marker,
+    /// beside it).
+    rec_rect: Option<Rect>,
     /// Edit layout was open last frame (to see it open).
     edit_seen: bool,
     /// A marker's name being changed in the list under ◆ Marker ▾.
@@ -659,6 +662,7 @@ impl App {
             precheck: None,
             title_edit: None,
             marker_name: None,
+            rec_rect: None,
             edit_seen: false,
             marker_edit: None,
             self_test: None,
@@ -4782,32 +4786,45 @@ impl App {
     }
 
     /// Shift+M: the marker's already in, at the moment the key was pressed;
-    /// this names it. Cancel keeps the name it has ("Marker 3").
+    /// this names it, in a small box under ◆ Marker (like the ▾ list, not a
+    /// dialog: scenes, tiles and TAKE still work while it's open). Enter
+    /// names it; Esc keeps the name it has ("Marker 3"); a click elsewhere
+    /// keeps what's typed (or "Marker 3" if nothing is).
     fn marker_name_dialog(&mut self, ctx: &egui::Context) {
         let Some((at, own, mut text)) = self.marker_name.clone() else { return };
         let mut done = false;
         let mut apply = false;
-        let r = egui::Modal::new(egui::Id::unique("marker_name")).show(ctx, |ui| {
-            ui.set_width(360.0);
-            ui.heading("Name this marker");
-            ui.label(RichText::new(format!("{own} at {}: the time was kept when you pressed the key.", fmt_clock(Duration::from_nanos(at.max(0) as u64)))).color(TEXT_DIM));
-            ui.add_space(4.0);
-            let field = ui.add(egui::TextEdit::singleline(&mut text).hint_text(own.as_str()).desired_width(340.0));
-            if ui.memory(|m| m.focused().is_none()) {
-                field.request_focus();
-            }
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                let enter = ui.input(|i| i.key_pressed(Key::Enter));
-                if ui.add(egui::Button::new(RichText::new("OK").color(Color32::WHITE)).fill(ACCENT)).clicked() || enter {
-                    apply = true;
-                    done = true;
-                }
-                if ui.button("Cancel").on_hover_text(format!("Keep it as \"{own}\"")).clicked() {
-                    done = true;
-                }
+        let anchor = self.rec_rect.map(|r| r.right_bottom() + vec2(6.0, 8.0)).unwrap_or_else(|| ctx.content_rect().right_top() + vec2(-400.0, 60.0));
+        let shown = egui::Area::new(egui::Id::unique("marker_name")).order(egui::Order::Foreground).fixed_pos(anchor).show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.set_width(300.0);
+                ui.label(RichText::new(format!("Name {own} ({})", fmt_clock(Duration::from_nanos(at.max(0) as u64)))).strong());
+                ui.horizontal(|ui| {
+                    let field = ui.add(egui::TextEdit::singleline(&mut text).hint_text(own.as_str()).desired_width(220.0));
+                    if ui.memory(|m| m.focused().is_none()) {
+                        field.request_focus();
+                    }
+                    let enter = ui.input(|i| i.key_pressed(Key::Enter));
+                    if ui.add(egui::Button::new(RichText::new("OK").color(Color32::WHITE)).fill(ACCENT)).clicked() || enter {
+                        apply = true;
+                        done = true;
+                    }
+                });
+                ui.label(RichText::new("The time was kept when you pressed the key. Enter names it; Esc keeps it as it is.").size(TEXT_SMALL).color(TEXT_DIM));
             });
         });
+        let (esc, clicked_away) = ctx.input(|i| {
+            let away = i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !shown.response.rect.contains(p));
+            (i.key_pressed(Key::Escape), away)
+        });
+        if esc {
+            done = true;
+            apply = false;
+        } else if clicked_away {
+            // (The click still does what it was for: a scene, a tile, TAKE.)
+            done = true;
+            apply = true;
+        }
         if apply && !text.trim().is_empty() {
             if let Some(e) = &self.engine {
                 match e.rename_marker(at, &text) {
@@ -4816,7 +4833,7 @@ impl App {
                 }
             }
         }
-        self.marker_name = if done || r.should_close() { None } else { Some((at, own, text)) };
+        self.marker_name = if done { None } else { Some((at, own, text)) };
     }
 
     /// The list under ◆ Marker ▾: this take's markers, to rename or take out
