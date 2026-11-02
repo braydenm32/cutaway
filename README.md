@@ -1037,10 +1037,20 @@ rundown's **◀ Previous** (on the More tab) goes to the previous segment;
 **⟲ Back** is always the last scene.
 When the pre-show check is turned on (More › App › General → **Pre-show
 check**), starting from the phone, the Stream Deck, MIDI or OSC runs the check
-on the desk first, the same as the Record button; the phone shows that it's
-waiting on the desk, what the check found, and whether it started.
+on the desk first, the same as the Record button; the phone shows what the
+check found, with **Start** (or **Start anyway**) and **Cancel** buttons so
+you can answer it from across the room (or answer it on the desk), and
+whether it started.
 
 The remote keeps updating while the Cutaway window is minimised or hidden.
+It keeps the phone's screen on while it's open and showing; turn that off on
+the More tab (**Keep screen on**) to save battery. If nothing has come from
+Cutaway for five seconds (the phone left the Wi-Fi, the laptop went to
+sleep), a **Reconnecting to Cutaway…** strip shows at the top and the
+buttons dim, so a frozen screen never looks live; Cutaway sends a small sign
+of life every two seconds, so a quiet show isn't mistaken for a lost one.
+Coming back to the page (unlocking the phone, switching back to the browser)
+fetches the show and reconnects straight away.
 
 <img src="docs/remote.png" alt="The phone remote" width="300">
 
@@ -1061,7 +1071,8 @@ The remote keeps updating while the Cutaway window is minimised or hidden.
   `/api/key/scene/<n>.png` and `/api/key/source/<n>.png` (key pictures with
   tally, `?size=144`).
 - **WebSocket:** `ws://<address>:8790/api/ws?pin=<PIN>` pushes the state
-  (`{"type":"state","state":{…}}`) whenever it changes, and takes commands
+  (`{"type":"state","state":{…}}`) whenever it changes (and `{"type":"tick"}`
+  after two quiet seconds, so a client can tell it's still connected), and takes commands
   as text (`scene:2`) or JSON (`{"do":"scene:2","id":7}`, answered with
   `{"type":"reply","id":7,"ok":true,…}`).
 
@@ -1137,6 +1148,7 @@ destinations aren't live, `ending` or `off`), with `/stream/live` as "1 of 2".
 | `ptz:Cam 2:preset:1`, `ptz:2:home`, `ptz:2:left:0.5`, `ptz:2:in`, `ptz:2:stop`, `ptz:2:store:3` | PTZ cameras: presets, home, moves (`left`, `right`, `up`, `down`, `in`, `out`, with a speed) until `stop` |
 | `prompter`, `prompter:faster`, `prompter:slower`, `prompter:back`, `prompter:forward`, `prompter:top` | The teleprompter |
 | `comment:next`, `comment:hide`, `comment`, `comment:<n>` | Viewer comments on screen (`<n>` is a comment's number from `/api/state`) |
+| `precheck:start`, `precheck:cancel` | Answer the pre-show check open on the desk: start (anyway) or cancel |
 
 A number picks by position, unless something is named that number (a scene
 called "2"). `#` in front always means the position: `scene:#2` is the

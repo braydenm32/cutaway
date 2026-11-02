@@ -36,6 +36,7 @@
 //! macro:Intro  macro:2       run a macro          wait:1.5   (in macros and cues)
 //! prompter:play / pause / toggle / faster / slower / top / back / forward
 //! comment:next  comment:hide  comment:toggle        viewer comments on screen
+//! precheck:start  precheck:cancel   answer the pre-show check open on the desk
 //! ```
 
 pub mod keys;
@@ -254,6 +255,9 @@ pub enum Action {
     Wait(f32),
     Prompter(PrompterCmd),
     Comment(CommentCmd),
+    /// Answer the pre-show check open on the desk: true starts (anyway),
+    /// false cancels.
+    Precheck(bool),
 }
 
 /// A fader position (0..1) as a level: 0 is silence (-60 dB), 0.79 is
@@ -474,6 +478,11 @@ impl Action {
                     Err(_) => return Err(format!("unknown comment command \"{other}\" (next, hide, toggle or a comment's number)")),
                 },
             }),
+            "precheck" | "check" => match rest.unwrap_or("").trim().to_lowercase().as_str() {
+                "start" | "go" | "ok" | "yes" => Action::Precheck(true),
+                "cancel" | "close" | "no" | "stop" => Action::Precheck(false),
+                other => return Err(format!("unknown pre-show check command \"{other}\" (start or cancel)")),
+            },
             other => return Err(format!("unknown command \"{other}\"")),
         })
     }
@@ -573,6 +582,8 @@ impl Action {
                 CommentCmd::Toggle => "Comment on/off".into(),
                 CommentCmd::Show(id) => format!("Show comment {id}"),
             },
+            Action::Precheck(true) => "Pre-show check: start".into(),
+            Action::Precheck(false) => "Pre-show check: cancel".into(),
         }
     }
 }
@@ -942,6 +953,9 @@ mod tests {
         assert_eq!(Action::parse("comment:next"), Ok(Action::Comment(CommentCmd::Next)));
         assert_eq!(Action::parse("comment:12"), Ok(Action::Comment(CommentCmd::Show(12))));
         assert!(Action::parse("comment:bogus").is_err());
+        assert_eq!(Action::parse("precheck:start"), Ok(Action::Precheck(true)));
+        assert_eq!(Action::parse("precheck:Cancel"), Ok(Action::Precheck(false)));
+        assert!(Action::parse("precheck").is_err());
         assert_eq!(Action::parse("ptz:Cam 2:preset:Wide").unwrap().describe(), "Cam 2: go to preset Wide");
         assert!(Action::parse("explode").is_err());
         assert_eq!(fader_db(0.0), -60.0);
