@@ -1512,6 +1512,18 @@ pub struct UiConfig {
     pub clock_12h: bool,
 }
 
+impl UiConfig {
+    /// Settings about this computer rather than the show: interface size
+    /// and updates. Switching shows, importing settings or starting over
+    /// keeps this computer's, so they never change behind your back.
+    pub fn keep_this_computers(&mut self, now: &UiConfig) {
+        self.scale = now.scale;
+        self.check_updates = now.check_updates;
+        self.auto_update = now.auto_update;
+        self.skip_version = now.skip_version.clone();
+    }
+}
+
 fn is_zero_f32(v: &f32) -> bool {
     *v == 0.0
 }
@@ -2672,6 +2684,17 @@ fn merge_lists(b: &[serde_json::Value], e: &[serde_json::Value], l: &[serde_json
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Interface size and update choices belong to the computer, not the
+    /// show (review D10).
+    #[test]
+    fn this_computers_settings_stay() {
+        let now = UiConfig { scale: 1.25, check_updates: false, auto_update: false, skip_version: "0.9.9".into(), profile: "A".into(), ..Default::default() };
+        let mut show = UiConfig { scale: 1.0, check_updates: true, auto_update: true, skip_version: String::new(), profile: "B".into(), clock_12h: true, ..Default::default() };
+        show.keep_this_computers(&now);
+        assert_eq!((show.scale, show.check_updates, show.auto_update, show.skip_version.as_str()), (1.25, false, false, "0.9.9"));
+        assert_eq!((show.profile.as_str(), show.clock_12h), ("B", true), "the show's own settings come with it");
+    }
 
     /// One 12/24-hour setting (numbers audit #8): an old show keeps what
     /// its clock graphics showed on air, then every clock follows the show.

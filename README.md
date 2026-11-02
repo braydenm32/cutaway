@@ -99,8 +99,9 @@ and [Install on Windows](#install-on-windows).
 - **Any source, many at once.** Webcams, USB/Thunderbolt capture cards and
   cameras over HDMI capture (if QuickTime Player can see it, Cutaway can), the
   screen, or test patterns. There is no fixed limit; 4K sources are supported.
-- **Screen capture: a screen, a window or an app.** Pick it like sharing your
-  screen in a video call: your displays drawn as they're arranged, or cards
+- **Screen capture: a screen, a window or an app.** In **Sources › Cameras**,
+  **＋ Add → Screen, window or app**, then pick it like sharing your screen
+  in a video call: your displays drawn as they're arranged, or cards
   with a picture of each open window and app. A window keeps its shape (black
   around it), is found again by its title after a restart, and comes back by
   itself if it's closed and reopened. (An app on Windows is its biggest
@@ -189,7 +190,9 @@ and [Install on Windows](#install-on-windows).
 - **Lists work the same everywhere:** video sources, audio inputs, graphics,
   stream destinations, rundown segments and macros all have the same buttons
   under the list: **＋ Add**, **Duplicate**, **Remove**, **↑** and **↓**
-  (then any of their own, like **Split…**).
+  (then any of their own, like **Split…**). In Sources › Cameras, **＋ Add**
+  is a small menu: **Camera or capture card** (the next one not in use yet),
+  **Screen, window or app**, **Test picture** or **Media player**.
 - **See it as you change it:** in **Sources** each source shows its picture
   above its settings (the multiview's own, so nothing is opened twice). Crop,
   mirror and colour show as you change them; a source you've only just added,
@@ -600,7 +603,9 @@ Takes start with the **Take name** from Record › Recording. Leave it as
   the setup you're on isn't a show yet, switching saves it as "My setup"
   first, so nothing is lost. Rename a show in place, and deleting or
   replacing one asks first. Takes are named after the show you're on (unless
-  you've given them a Take name of your own).
+  you've given them a Take name of your own). The interface size and the
+  update choices belong to this computer, not the show: switching shows,
+  importing settings or starting over leaves them as they are.
 - **Pre-show check:** one button checks every source for a picture, every
   input for sound, the disk, and that every stream server answers. It also
   starts every encoder the show needs at the same time (program, each
@@ -780,7 +785,12 @@ Video Extensions** on some PCs.
   role are saved as you type, and a camera's new name when you press Enter or
   click elsewhere (it restarts that camera for a moment, so it waits while
   you're recording or live). The step also offers **＋ Make a name title** and
-  **Close-ups…** (a close-up of each person from one camera). Your scenes turns on **Edit layout**, and Editing
+  **Close-ups…** (a close-up of each person from one camera). The cameras
+  step also says how to add your screen (**＋ Add → Screen, window or app**).
+  **Record a test** has a button that starts recording; once a take is
+  saved, the step says where to find it (the Take saved card, or Record ›
+  Takes) with a **Takes…** button. On a Mac the guide says up front that macOS
+  will ask about the camera and microphone (choose Allow). Your scenes turns on **Edit layout**, and Editing
   afterwards opens **Record › Recording › Editing**, where the DaVinci Resolve,
   Premiere Pro and Final Cut projects are switched on. A step's button folds
   the guide down to a small **Guide 3 of 7** button on the left, just above
