@@ -172,7 +172,7 @@ impl Engine {
             if acfg.is_some() {
                 audio_outs.push(mtx.clone());
             }
-            let proxy = proxy_backend.map(|backend| {
+            let proxy = proxy_backend.map(|_| {
                 let plabel = format!("{label} proxy");
                 let (ptx, prx) = unbounded();
                 writers.push((plabel.clone(), recorder::spawn_mp4(folder.join("Proxies").join(&file), brand, fps, acfg.clone(), tracks.clone(), prx, self.status.clone(), plabel, opts.clone(), None)));
@@ -184,14 +184,14 @@ impl Engine {
                 let pw = size.0 / factor;
                 // Never more than the full-size file (ProRes rates are far higher anyway).
                 let prate = encode::auto_bitrate_kbps(crate::media::VideoCodec::H264, pw, size.1 / factor, fps).clamp(1_500, 6_000).min(rate.max(300));
-                recorder::ProxyJob { settings: recorder::video_settings(crate::media::VideoCodec::H264, fps, prate, backend), factor, mux: ptx }
+                recorder::ProxyJob { settings: recorder::video_settings(crate::media::VideoCodec::H264, fps, prate, "auto"), factor, mux: ptx }
             });
             let (vtx, vrx) = bounded(queue);
             let st = Arc::new(VideoStats::default());
             stats.push((label.clone(), st.clone()));
             video_jobs.push((
                 label.clone(),
-                recorder::spawn_video(label, vrx, recorder::video_settings(codec, fps, rate, backend), retimer, t0, t1.clone(), mtx, self.status.clone(), st, proxy),
+                recorder::spawn_video(label, vrx, recorder::video_settings(codec, fps, rate, if encode::is_auto(&out.encoder) { "auto" } else { backend }), retimer, t0, t1.clone(), mtx, self.status.clone(), st, proxy),
             ));
             (path, vtx, muxes)
         };

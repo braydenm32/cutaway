@@ -1323,6 +1323,17 @@ impl Service {
         }
     }
 
+    /// Where to copy a fresh stream key, for "didn't accept the key".
+    pub fn key_where(self) -> &'static str {
+        match self {
+            Service::Youtube => "YouTube Studio → Go live → Stream",
+            Service::Twitch => "the Twitch Creator Dashboard → Settings → Stream",
+            Service::Facebook => "Facebook Live Producer → Streaming software",
+            Service::Kick => "your Kick creator dashboard",
+            Service::CustomRtmp | Service::Srt => "your streaming service",
+        }
+    }
+
     pub fn is_srt(self) -> bool {
         self == Service::Srt
     }

@@ -354,9 +354,13 @@ pub fn spawn_video(
                     settings.width = f.width;
                     settings.height = f.height;
                     let m = mux.clone();
-                    *enc = Some(encode::create_video(&settings, Arc::new(move |p| {
+                    let (e, note) = encode::create_video_noting(&settings, Arc::new(move |p| {
                         let _ = m.send(MuxMsg::Video(p));
-                    }))?);
+                    }))?;
+                    if let Some(note) = note {
+                        status.lock_ok().push(LogLevel::Warning, format!("{label}: {note}"));
+                    }
+                    *enc = Some(e);
                 }
                 // A device that came back in a different mode: keep the file
                 // going with the last good picture rather than failing it.
@@ -387,9 +391,9 @@ pub fn spawn_video(
                             p.settings.width = small.width;
                             p.settings.height = small.height;
                             let m = p.mux.clone();
-                            proxy_enc = Some(encode::create_video(&p.settings, Arc::new(move |pk| {
+                            proxy_enc = Some(encode::create_video_noting(&p.settings, Arc::new(move |pk| {
                                 let _ = m.send(MuxMsg::Video(pk));
-                            }))?);
+                            }))?.0);
                         }
                         proxy_enc.as_mut().unwrap().encode(&small, pts, false)
                     })();

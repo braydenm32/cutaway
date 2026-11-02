@@ -625,6 +625,12 @@ impl App {
             let live = stream.destinations.iter().filter(|d| d.state == DestState::Live).count();
             let total = stream.destinations.iter().filter(|d| d.state != DestState::Off).count();
             let connecting: Vec<&str> = stream.destinations.iter().filter(|d| matches!(d.state, DestState::Connecting | DestState::Retrying { .. })).map(|d| d.name.as_str()).collect();
+            if let Some(e) = &stream.error {
+                return Some((e.clone(), ERROR));
+            }
+            if live == 0 && connecting.is_empty() && total > 0 {
+                return Some(("The stream isn't reaching anyone — see the Stream panel".into(), ERROR));
+            }
             if live == 0 && !connecting.is_empty() {
                 return Some((format!("Connecting to {}", connecting.join(", ")), LIVE_SOFT));
             }

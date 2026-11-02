@@ -199,7 +199,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         // ---- General & shows
         (General, "Interface size") => "Makes everything in Cutaway's window bigger or smaller: text, buttons and monitors. Handy on a big screen across the room, or a small laptop. It changes when you let go of the slider.",
         (General, "Ask before") => "Asks you to confirm before the stream ends, so a stray click or key can't end the show. A recording is always protected: hold the REC pill (top right; it says hold to stop under its time) for a second to stop it, and its key (Cmd/Ctrl+R) asks first. On the phone remote and the Stream Deck, stopping or ending takes a one-second hold (on the phone, so do going live, fade to black and turning a mic off).",
-        (General, "Pre-show check") => "Before you record or go live, Cutaway checks that every source has a picture, the inputs have sound, the disk has room and the stream servers answer. Anything wrong is listed, and you can still go ahead. Starting from the phone remote, the Stream Deck, MIDI or OSC runs it too; the phone shows that it's waiting on the desk and what the check found. Run it by hand from the status light (top right) or Record › Recording › Before you start.",
+        (General, "Pre-show check") => "Before you record or go live, Cutaway checks that every source has a picture, the inputs have sound, the disk has room, every encoder the show needs starts at the same time, and the stream servers answer. Anything wrong is listed, and you can still go ahead. Starting from the phone remote, the Stream Deck, MIDI or OSC runs it too; the phone shows that it's waiting on the desk and what the check found. Run it by hand from the status light (top right) or Record › Recording › Before you start.",
         (General, "Updates") => "When Cutaway starts, it asks GitHub whether there's a newer release and tells you if there is, with a blue dot on More in the rail (nothing about you or your show is sent); Update now in More › App › Updates & about downloads and puts it in. With the second box ticked, Cutaway downloads it by itself and puts it in the next time you close Cutaway, keeping your settings and shows.",
 
         // ---- Video sources
@@ -431,7 +431,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Recording, "Take name") => "The start of each take's folder name; the date and time follow. Leave it as \"Take\" (or empty) and, with a show chosen, takes are named after the show instead (e.g. My_Show_2026-10-16_19-30-02); the Resolve project gets the same name.",
         (Recording, "File format") => "MP4 opens everywhere; MOV suits Final Cut Pro. ProRes always records as MOV.",
         (Recording, "Codec") => "H.264 plays anywhere; H.265 makes smaller files (good for 4K); ProRes (on a Mac) is the easiest to edit, but the files are very large.",
-        (Recording, "Encoder") => "What encodes the video: the computer's built-in hardware encoder when there is one (fast, and leaves the processor free), or software.",
+        (Recording, "Encoder") => "What encodes the video: the computer's built-in hardware encoder when there is one (fast, and leaves the processor free), or software. On Automatic, a file whose encoder won't start moves to the next one on the list, and the Log says so. The pre-show check starts them all at once to be sure.",
         (Recording, "Source file bitrate") => "The quality of each source's own file. Automatic sets it from each source's size and frame rate; higher is better and bigger.",
         (Recording, "Program bitrate") => "The quality of the program file. Automatic sets it from the program's size and frame rate.",
         (Recording, "Audio in video files") => "The quality of the sound inside the video files (AAC). 192–256 kbps is plenty.",
@@ -474,8 +474,8 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Streaming, "Video bitrate") => "The stream's picture quality, and the upload it needs for each destination. Keep the total under about 70% of your measured upload speed.",
         (Streaming, "Audio bitrate") => "The stream's sound quality. 160 kbps is plenty for most shows.",
         (Streaming, "Encoder") => "What encodes the stream: always H.264, which every service accepts. The hardware encoder leaves the processor free.",
-        (Streaming, "If a connection drops") => "Reconnects a destination by itself if its connection drops. A destination that fails never affects the others, the program or your recordings.",
-        (Streaming, "Give up after") => "How many reconnection attempts before giving up on a destination (0: keep trying).",
+        (Streaming, "If a connection drops") => "Reconnects a destination by itself if its connection drops. A destination that fails never affects the others, the program or your recordings. If the service refuses the stream key, retrying can't help, so it stops after three tries and asks you to paste a fresh key.",
+        (Streaming, "Give up after") => "How many reconnection attempts before giving up on a destination (0: keep trying). A refused stream key always stops after three tries.",
         (Streaming, "When going live") => "Starts recording too whenever you go live.",
         (Streaming, "Slow connection") => "Lowers the video bitrate while the connection can't keep up, and brings it back after (adaptive bitrate): fewer freezes for viewers.",
 
