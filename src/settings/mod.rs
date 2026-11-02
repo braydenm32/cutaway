@@ -1860,6 +1860,11 @@ impl SettingsUi {
     /// A new destination of this service, picked.
     fn add_destination(&mut self, s: Service) {
         let names = self.draft.streaming.destinations.iter().map(|d| d.name.clone()).collect();
+        // The first one also turns on recording when you go live (it can
+        // be unticked), so a stream that drops still leaves a copy here.
+        if self.draft.streaming.destinations.is_empty() {
+            self.draft.streaming.record_when_live = true;
+        }
         let base = match s {
             Service::CustomRtmp => "Custom",
             other => other.label(),

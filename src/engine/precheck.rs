@@ -99,7 +99,15 @@ impl Engine {
                 (true, None) => out.push(item(Level::Ok, "Backup drive", "writable")),
             }
         }
-        // The encoders are tried in the background (see `encoder_plan`).
+        // The encoders are tried in the background (see `encoder_plan`);
+        // how much they'll have to do is worked out here.
+        if let Some(plan) = self.encoder_plan() {
+            let o = &cfg.output;
+            let hardware = encode::resolve_backend(o.codec.video_codec(), &o.encoder).is_ok_and(encode::is_hardware);
+            if let Some(text) = size_verdict(&plan.jobs, o.proxies, hardware) {
+                out.push(item(Level::Warn, "Show size", text));
+            }
+        }
         if let Some(f) = &self.status.lock_ok().fatal {
             out.push(item(Level::Fail, "Compositor", f.clone()));
         }
@@ -164,6 +172,41 @@ impl Engine {
         }
         Some(EncoderPlan { jobs, description: self.encoder_description() })
     }
+}
+
+/// A 1080p30 file's pixels a second: the unit "this show is N times that"
+/// counts in.
+const HD30: f64 = 1920.0 * 1080.0 * 30.0;
+/// How many 1080p30 files' worth a graphics-card encoder is trusted with
+/// before the check says it may be too much (a guess on the cautious side:
+/// four 4K30 files, or sixteen 1080p30 ones).
+const HARDWARE_LIMIT: f64 = 16.0;
+
+/// A line when the show may be too much for this computer: every file
+/// (and proxy) it records and the stream, in 1080p30 files' worth.
+/// (The software encoder has its own warning in the encoder check.)
+fn size_verdict(jobs: &[(String, encode::VideoSettings)], proxies: bool, hardware: bool) -> Option<String> {
+    if !hardware {
+        return None;
+    }
+    let px = |s: &encode::VideoSettings| s.width as f64 * s.height as f64 * s.fps.max(1) as f64;
+    let files = jobs.iter().filter(|(l, _)| l != "Stream").count();
+    let mut load: f64 = jobs.iter().map(|(_, s)| px(s)).sum::<f64>() / HD30;
+    if proxies {
+        // Each file's proxy, at about a quarter of its pixels.
+        load += jobs.iter().filter(|(l, _)| l != "Stream").map(|(_, s)| px(s) / 4.0).sum::<f64>() / HD30;
+    }
+    if load <= HARDWARE_LIMIT {
+        return None;
+    }
+    let big = jobs.iter().filter(|(l, s)| l != "Stream" && s.width as u64 * s.height as u64 > 2560 * 1440).count();
+    let at_4k = if big > 0 { format!(" ({big} of them 4K)") } else { String::new() };
+    Some(format!(
+        "This show records {files} files{at_4k}{}, about {:.0} times the work of one 1080p file. That may be too much for this computer: if the test recording repeats frames, record fewer sources (untick Record on some), use 1080p sources{}.",
+        if jobs.iter().any(|(l, _)| l == "Stream") { " and streams" } else { "" },
+        load,
+        if proxies { ", or turn off proxy files" } else { "" }
+    ))
 }
 
 /// Open every encoder in the plan at the same time and say whether they
@@ -278,6 +321,19 @@ mod tests {
 
     /// One encoder failing among several is a red line naming the files;
     /// the software encoder on a busy show is amber (review G3, G10).
+    /// A big show gets a "may be too much" line; a usual one doesn't
+    /// (review G9).
+    #[test]
+    fn show_size_line() {
+        let file = |w: u32, h: u32| encode::VideoSettings { codec: crate::media::VideoCodec::H264, width: w, height: h, fps: 30, bitrate_kbps: 0, purpose: encode::Purpose::Record, backend: "auto".into() };
+        let usual: Vec<_> = (0..5).map(|i| (format!("ISO {i}"), file(1920, 1080))).collect();
+        assert_eq!(size_verdict(&usual, true, true), None);
+        let heavy: Vec<_> = (0..5).map(|i| (format!("ISO {i}"), file(3840, 2160))).collect();
+        let text = size_verdict(&heavy, false, true).unwrap();
+        assert!(text.contains("5 files (5 of them 4K)") && text.contains("20 times"), "{text}");
+        assert_eq!(size_verdict(&heavy, false, false), None, "the software encoder has its own warning");
+    }
+
     #[test]
     fn encoder_verdicts() {
         assert_eq!(verdict(4, &[], &[], false, true, "H.264"), None);
