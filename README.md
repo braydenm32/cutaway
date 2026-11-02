@@ -188,14 +188,19 @@ and [Install on Windows](#install-on-windows).
   screens stay awake, even when you only switch from a Stream Deck or the
   phone remote and nobody touches the laptop.
 - **Crash rescue:** the video files are written so that if Cutaway closes
-  or the computer stops mid-take, what was recorded is still there; next
+  mid-take everything up to about the last second is still there, and
+  every file is put on the disk every few seconds as it records, so a power
+  cut loses only the last few seconds; next
   time Cutaway opens it repairs the take (the proxies too, and the files
   keep their timecode). Cutaway also keeps a small note in the take folder
   as you record (`.take-journal.jsonl`, hidden): the switches, the markers
   and the files. So a rescued take gets back what a normal Stop saves: the
   switch log, the editor timelines with your live edit, the Resolve take
   file, the markers and the chapters. Its Take.txt says it was rescued,
-  with its date and length. After a normal Stop the note is removed.
+  with its date and length. After a normal Stop the note is removed. A
+  file that hit a problem while recording (a drive hiccup, the disk
+  filling at the very end) is repaired when the take stops, so it still
+  plays; the take card says which file and why.
 - **FAT32 drives:** starting a take on a drive formatted as FAT32 (common on
   older USB sticks and SD cards) warns straight away: no file there can be
   bigger than 4 GB, so a long take would stop. Use exFAT, APFS or NTFS.

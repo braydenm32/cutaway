@@ -1024,7 +1024,6 @@ pub fn duration_secs(path: &Path) -> Option<f64> {
 }
 
 /// Turn a fragmented MP4 left behind by a crash into a regular one.
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn recover(path: &Path) -> Result<Recovery> {
     recover_with(path, &[])
 }
