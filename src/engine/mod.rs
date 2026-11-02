@@ -593,7 +593,14 @@ impl Engine {
             match opened {
                 Err(e) => {
                     let mut st = status.lock_ok();
-                    st.push(LogLevel::Error, format!("{}: {e:#}. It will connect automatically when available.", sc.name));
+                    // (Screen Recording not allowed won't fix itself: no
+                    // "connects when available" after "restart".)
+                    let msg = format!("{e:#}");
+                    if msg.contains(crate::platform::capture::SCREEN_NOT_ALLOWED) {
+                        st.push(LogLevel::Error, format!("{}: {msg}.", sc.name));
+                    } else {
+                        st.push(LogLevel::Error, format!("{}: {msg}. It will connect automatically when available.", sc.name));
+                    }
                     st.offline.insert(sc.name.clone());
                 }
                 Ok(_) => {

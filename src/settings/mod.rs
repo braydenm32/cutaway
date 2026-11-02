@@ -2169,8 +2169,8 @@ pub(super) fn short_audio_device(device: &str) -> String {
 
 pub(super) fn short_device(device: &str) -> String {
     match device {
-        "test" => "Test pattern".into(),
-        d if d.starts_with("test:") => format!("Test pattern ({})", &d[5..]),
+        "test" => "Test picture".into(),
+        d if d.starts_with("test:") => format!("Test picture ({})", crate::media::testsrc::pattern_label(&d[5..]).to_lowercase()),
         d if crate::platform::capture::is_screen(d) => crate::platform::capture::ScreenTarget::parse(d).map(|t| t.describe()).unwrap_or_default(),
         "default" => "System default".into(),
         "media" => "Media player".into(),
@@ -2325,7 +2325,7 @@ pub(super) fn video_device_combo(ui: &mut egui::Ui, value: &mut String, devices:
         ui.separator();
         ui.selectable_value(value, "screen".to_string(), "Screen capture");
         for p in TEST_PATTERN_NAMES {
-            ui.selectable_value(value, format!("test:{p}"), format!("Test pattern: {p}"));
+            ui.selectable_value(value, format!("test:{p}"), format!("Test picture: {}", crate::media::testsrc::pattern_label(p).to_lowercase()));
         }
     });
 }

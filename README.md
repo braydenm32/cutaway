@@ -184,6 +184,9 @@ and [Install on Windows](#install-on-windows).
 - **Every input on its own track:** optionally, the Program file carries
   each audio input as its own (disabled) track after the mix, so an editor
   can re-balance the show without the WAVs.
+- **No sleeping mid-show:** while recording or live, the computer and its
+  screens stay awake, even when you only switch from a Stream Deck or the
+  phone remote and nobody touches the laptop.
 - **No accidental quits:** closing the window (or Cmd+Q, Alt+F4) while
   recording or live, or while a take is still saving, the podcast copy is
   being made or an upload is running, asks first. Quitting anyway finishes
@@ -314,7 +317,9 @@ Takes start with the **Take name** from Record › Recording. Leave it as
   **Fixed title** is for typed text). It names whoever fills the program, changing at each
   cut, and can come on by itself for a few seconds when someone new is on
   air (not again for the same person for 10 minutes, or as you set). Its
-  button keeps it on for as long as you like. For two people on one camera,
+  button keeps it on for as long as you like, and says whose name it shows:
+  amber while it's on screen, an amber edge while it's switched on but
+  nobody with a name is on air. For two people on one camera,
   make a close-up of each (an auto-framed close-up following the person on
   the left or right, or a virtual PTZ) and name each close-up.
 - **Graphics taking turns:** a group of graphics (sponsors, your social
@@ -652,6 +657,12 @@ right) are the places to start.
    PC": choose **More info → Run anyway** (once). If cameras or microphones
    don't show, turn on **Windows Settings → Privacy & security → Camera** (and
    **Microphone**) → **Let desktop apps access…**.
+5. **Firewall:** the first time you turn on the phone remote, a network
+   source, the stream server or guests, Windows Defender Firewall asks
+   whether Cutaway may accept connections. Tick **Private networks** and
+   choose **Allow access**. If you pressed Cancel, the phone can't connect:
+   go to **Windows Security → Firewall & network protection → Allow an app
+   through firewall**, find Cutaway and tick **Private**.
 
 Settings are in `%APPDATA%\Cutaway\config.toml`, recordings go to
 `Videos\Cutaway`.
@@ -778,8 +789,9 @@ Video Extensions** on some PCs.
   everything at a glance, **Log** is everything Cutaway has noted this session
   (**Warnings only**, and **Copy** to paste it into a message), and **Run
   pre-show check** runs the check.
-- **Messages:** an error stays at the bottom of the window until you click
-  it, and several stack up rather than replacing each other. Disk-space and
+- **Messages:** an error stays at the bottom of the window for 30 seconds
+  (or until you click it), and several stack up rather than replacing each
+  other; the status light and the Log keep it after that. Disk-space and
   backup-drive warnings show there too, and every error also goes in the Log.
   If a scene key does nothing, check the top bar: **⌨ Typing** means a box has
   the keyboard (Esc).
@@ -825,7 +837,7 @@ Video Extensions** on some PCs.
 | Automatic switching | **AUTO** or `A`. Until it has rules (Scenes › More ▾ › Auto-switching) AUTO is greyed, and a click says so with a **Set up rules ›** link |
 | Captions on screen | **CC** or `C` |
 | Who an auto-framed source follows | **⋯** on its tile (or right-click it): follow and shot size |
-| Marker | `M`, or **◆ Marker** beside REC while recording (just **◆ 3** in a narrow window) |
+| Marker | `M`, or **◆ Marker** beside REC while recording (greyed out between takes, so REC never moves) |
 | Named marker | `Shift+M` while recording, or **▾ › Named marker…** beside ◆: the marker goes in at that moment and a box asks for its name (typing doesn't move it; Cancel keeps "Marker 3") |
 | This take's markers | **▾** beside **◆ Marker**: each marker's time, name and the scene on air. Change a name there, or ✕ to take one out, until the take stops (clips show with ✂ and stay as they are) |
 | Save a clip | `K`, or **✂ Clip** beside REC while recording (the last 30 seconds, or as set); the status light's panel has **✂ Clip the last 10 / 30 / 60 s** |
@@ -970,7 +982,9 @@ raise it for Wi-Fi or the internet.
 
 Turn on **More › Control › Phone remote › Remote control**. Open the address it
 shows (e.g. `http://192.168.1.20:8790`) on a phone or tablet on the same
-network and type the PIN. The remote always has one (Cutaway makes a
+network and type the PIN (on Windows, allow Cutaway through the firewall
+when asked: see [Install on Windows](#install-on-windows), step 5). The
+remote always has one (Cutaway makes a
 four-digit PIN if you don't set your own), and a device that guesses five
 different wrong PINs in a row waits a minute before it can try again (a
 phone or Stream Deck still using an old PIN after you change it just asks
@@ -1660,7 +1674,7 @@ and a software GPU:
 - **Whisper captions:** the streaming logic (partial and settled words,
   timing, long speech) with a stand-in recogniser, and whisper.cpp itself
   loading and running a model.
-- **Unit tests:** `cargo test` (200 tests, plus Windows-only ones that run there), including the compositor's
+- **Unit tests:** `cargo test` (about 380 tests, plus Windows-only ones that run there), including the compositor's
   styling, keying, person masks, transitions and graphics, the voice
   processing, loudness, limiters and leveller, automatic switching,
   auto-framing, captions, lip sync, the podcast, OSC, the WebSocket, the
@@ -1673,7 +1687,10 @@ hasn't run there. The GitHub workflow runs the tests and a test recording on
 Windows; the Media Foundation tests there also measure Windows' AAC encoder
 delay.
 
-**Not yet run on a Mac:** the parts that only exist on macOS compile
+**On a real Mac:** Cutaway is used for real shows on an Apple Silicon Mac
+(cameras, recording, switching), and NDI has been tested there and works.
+
+**Not yet run on a Mac:** the other parts that only exist on macOS compile
 against the macOS frameworks for Apple Silicon but haven't been run on real
 hardware yet. Expect a little tuning on first contact; the status light
 (Now and the Log) is the place to start:
@@ -1682,11 +1699,10 @@ hardware yet. Expect a little tuning on first contact; the status light
   player).
 - Headphone output.
 - MIDI.
-- NDI (needs the NDI runtime).
 - The virtual camera (needs the signing step).
 - Live captions (the Speech framework) and auto-framing and background
   removal (the Vision framework).
 - The Stream Deck plugin in the real Stream Deck app.
-- NDI output and PTZ control on a real network.
+- PTZ control on a real network.
 - Phone cameras from a real iPhone or Android phone, and uploads to the real
   YouTube and Google Drive.
