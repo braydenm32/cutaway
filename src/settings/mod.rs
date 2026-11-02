@@ -1855,10 +1855,16 @@ impl SettingsUi {
                     hint(ui, &format!("typical for this size: {lo}–{hi} kbps"));
                 });
                 ui.end_row();
+                // A service's own advice beats the size's typical range (review G11).
+                if s.video_bitrate_kbps > TWITCH_KBPS && s.destinations.iter().any(|d| d.enabled && d.service == crate::config::Service::Twitch) {
+                    ui.label("");
+                    ui.label(RichText::new(format!("⚠ Twitch advises {TWITCH_KBPS} kbps or less for most channels; above that, some viewers may buffer.")).color(AMBER).size(TEXT_BODY));
+                    ui.end_row();
+                }
                 label(ui, "Audio bitrate");
                 egui::ComboBox::from_id_salt("stream_abr").selected_text(format!("AAC {} kbps", s.audio_bitrate_kbps)).show_ui(ui, |ui| {
                     for r in [96, 128, 160, 192, 256, 320] {
-                        ui.selectable_value(&mut s.audio_bitrate_kbps, r, format!("AAC {r} kbps"));
+                        ui.selectable_value(&mut s.audio_bitrate_kbps, r, aac_label(r));
                     }
                 });
                 ui.end_row();
@@ -2568,6 +2574,19 @@ fn list_names(names: &[String]) -> String {
 }
 
 /// Rough, commonly published ranges for live streaming bitrates.
+/// Twitch's advice for most channels (its own help pages).
+const TWITCH_KBPS: u32 = 6000;
+
+/// An AAC bitrate in the list: Windows' encoder tops out at 192 kbps, so
+/// higher ones say what's really sent there.
+fn aac_label(kbps: u32) -> String {
+    if cfg!(windows) && kbps > 192 {
+        format!("AAC {kbps} kbps (sent as 192 on Windows)")
+    } else {
+        format!("AAC {kbps} kbps")
+    }
+}
+
 pub(super) fn recommended_kbps(w: u32, h: u32, fps: u32) -> (u32, u32) {
     let pixels = w.max(h) as u64 * w.min(h) as u64;
     let high = fps > 30;

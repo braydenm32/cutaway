@@ -81,7 +81,10 @@ has run for a few seconds, and comes back by itself if the new one doesn't
 start. Tick **download it by itself, and put it in when I quit** (More › App ›
 General › Updates) to have every update arrive that way. If Cutaway
 can't change its own folder (an account without administrator rights on a
-Mac, say), the notice takes you to the download page instead. On Windows, an
+Mac, say), the notice takes you to the download page instead; on Windows,
+moving the Cutaway folder somewhere of your own (Documents, the Desktop) lets
+it update itself again. If an update can't go in (another program such as
+OBS or Zoom is holding Cutaway's webcam, say), Cutaway says what to do. On Windows, an
 update that changes the virtual camera asks you to reinstall it (Record ›
 Screens & webcam), which needs administrator rights once.
 Your settings, shows and recordings stay as they are when you update.

@@ -530,6 +530,9 @@ pub struct App {
     rescue: Option<waiting::Rescue>,
     /// Scripted actions for automated screenshots (hidden --ui-test flag).
     self_test: Option<(Instant, u8)>,
+    /// The guest link as last seen, to say when it changes or fails
+    /// (review G14): when it was checked, the address, failure told.
+    guest_link: (Option<Instant>, Option<String>, bool),
 }
 
 impl App {
@@ -659,6 +662,7 @@ impl App {
             edit_seen: false,
             marker_edit: None,
             self_test: None,
+            guest_link: (None, None, false),
         };
         app.vcam_wanted = app.cfg.display.virtual_camera;
         app.start_engine();
@@ -692,10 +696,13 @@ impl App {
                     app.cfg_dirty = true;
                 }
                 Some(Outcome::NotInstalled { to, why }) => {
-                    app.toast(format!("{to} wasn't put in: {why}"), true);
+                    app.toast(format!("{to} wasn't put in: {}", crate::net::self_update::plain_reason(&why)), true);
                 }
                 None => {}
             }
+        }
+        if let Some((to, why)) = crate::net::self_update::missed_at_exit() {
+            app.toast(format!("{to} wasn't put in when Cutaway closed: {why}. More › App › Updates & about can try again"), true);
         }
         // For scripted screenshots: a pretend newer version, its window open.
         if let Ok(v) = std::env::var("CUTAWAY_UI_TEST_UPDATE") {
@@ -4397,6 +4404,31 @@ impl App {
     /// Delete a scene (Edit layout's Delete, once confirmed), as one Undo
     /// step. With Preview on the first scene goes in preview to edit next;
     /// with it off, the first scene is taken if this one was on air.
+    /// A quick tunnel that restarts (after a Wi-Fi blip or sleep) gets a new
+    /// address, so links already sent stop working: say so, and say when it
+    /// gives up. Checked once a second.
+    fn watch_guest_link(&mut self) {
+        use crate::net::tunnel::TunnelState;
+        if !self.cfg.guests.enabled || self.guest_link.0.is_some_and(|t| t.elapsed() < Duration::from_secs(1)) {
+            return;
+        }
+        self.guest_link.0 = Some(Instant::now());
+        match crate::engine::guests::hub().reach() {
+            TunnelState::Up(a) => {
+                if self.guest_link.1.as_ref().is_some_and(|old| *old != a) {
+                    self.toast("The guest link changed (the connection restarted): copy the new one from Sources › Guests and send it again".into(), true);
+                }
+                self.guest_link.1 = Some(a);
+                self.guest_link.2 = false;
+            }
+            TunnelState::Failed(why) if !self.guest_link.2 => {
+                self.guest_link.2 = true;
+                self.toast(format!("Guests can't reach Cutaway: {why}. See Sources › Guests"), true);
+            }
+            _ => {}
+        }
+    }
+
     /// After scenes were deleted elsewhere (`before`: the names then): the
     /// one in preview moves on to the first scene, and with Preview off the
     /// one on air is replaced by the first scene, instead of staying on air
@@ -6187,6 +6219,11 @@ impl eframe::App for App {
         // No sleeping (computer or screens) while recording or live.
         crate::platform::awake::keep_awake(self.engine.as_ref().is_some_and(|e| e.is_recording() || e.is_streaming()));
         self.fit_first_window(&ctx);
+        self.watch_guest_link();
+        if crate::secrets::take_write_failure() {
+            let place = if cfg!(windows) { "Credential Manager" } else { "Keychain" };
+            self.toast(format!("Cutaway couldn't use the {place}, so your stream keys and passwords are saved in the settings file on this computer. Allow Cutaway to use the {place} to keep them there instead."), true);
+        }
         self.tick_starting(&ctx);
         self.autosave();
         // Controllers' commands, the engine's status and the published state
