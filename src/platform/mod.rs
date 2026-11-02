@@ -3,6 +3,7 @@
 use crate::media::{AudioBlock, VideoFrame};
 use std::sync::Arc;
 
+pub mod awake;
 pub mod capture;
 pub mod displays;
 #[cfg(target_os = "macos")]

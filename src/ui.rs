@@ -1020,8 +1020,8 @@ impl App {
     }
 
     fn toast(&mut self, text: String, error: bool) {
-        // One passing message at a time; errors pile up until they're read.
-        self.toasts.retain(|t| t.error || t.until.is_none());
+        // One passing message at a time; errors pile up (for a while).
+        self.toasts.retain(|t| t.error);
         self.toasts.retain(|t| t.text != text);
         if error {
             // Errors go in the log too, to look back at (and for problem reports).
@@ -1037,7 +1037,10 @@ impl App {
                 }
             }
         }
-        let until = (!error).then(|| Instant::now() + Duration::from_secs(6));
+        // Errors stay longer, then go too, so they never sit over the
+        // pictures for the rest of the show (they're in the Log, and the
+        // status light keeps them).
+        let until = Some(Instant::now() + Duration::from_secs(if error { 30 } else { 6 }));
         self.toasts.push(Toast { text, until, error });
     }
 
@@ -1143,17 +1146,20 @@ impl App {
     fn restore(&mut self, s: &undo::Snapshot, ctx: &egui::Context) -> Result<(), String> {
         match s.kind {
             undo::Kind::Settings if s.settings_differ(&self.cfg) => {
+                // Only what that step changed: faders, mic ON/OFF, the
+                // transition and the like moved on the desk since stay put.
+                let target = s.settings_onto(&self.live_settings());
                 // While recording or live, the same care as Settings and the
                 // show list: no sources taken out or restarted, no other show.
                 if self.engine.as_ref().is_some_and(|e| e.is_recording() || e.is_streaming()) {
-                    if s.cfg.ui.profile != self.cfg.ui.profile {
+                    if target.ui.profile != self.cfg.ui.profile {
                         return Err("stop recording and streaming before switching shows".into());
                     }
-                    if s.cfg.lineup_changed(&self.cfg) {
+                    if target.lineup_changed(&self.cfg) {
                         return Err("it changes the sources or inputs: stop recording and streaming first, then Undo again".into());
                     }
                 }
-                self.apply_settings_as(s.cfg.clone(), ctx, true)?;
+                self.apply_settings_as(target, ctx, true)?;
                 let now = self.live_settings();
                 if let Some(win) = self.settings.as_mut() {
                     win.restored(&now);
@@ -2150,6 +2156,10 @@ impl App {
             // On an area page: Show › Edit layout (it was switched on out of sight).
             Builtin::Edit if !self.on_show() => self.go("show/edit/canvas"),
             Builtin::Edit => self.edit_mode = !self.edit_mode,
+            // (A key pressed between takes is a hint, not an error.)
+            Builtin::Marker | Builtin::NamedMarker if !self.engine.as_ref().is_some_and(|e| e.is_recording()) => {
+                self.toast("Markers work while recording: start recording first".into(), false);
+            }
             Builtin::Marker => match self.add_marker(None) {
                 Ok(n) => self.toast(format!("{n} added"), false),
                 Err(err) => self.toast(err, true),
@@ -4413,9 +4423,34 @@ impl App {
                     None => name.clone(),
                 };
                 let over = clock.as_ref().is_some_and(|c| c.1);
-                let text = RichText::new(shown).strong().size(TEXT_BODY).color(if *on { Color32::BLACK } else if over { ERROR } else { Color32::WHITE });
-                let b = egui::Button::new(text).fill(if *on { AMBER } else { RAISED }).min_size(vec2(64.0, 28.0));
+                // A title that follows whoever is on air: amber only while
+                // it's really on screen, an amber edge while it's switched on
+                // but waiting for a named person, and whose name it shows.
+                let follow = self.engine.as_ref().and_then(|e| e.graphics.follow_state(i));
+                let (lit, armed, shown) = match &follow {
+                    Some((visible, wanted, who)) => (*visible, *wanted && !*visible, match who {
+                        Some(w) => format!("{name}: {w}"),
+                        None => shown,
+                    }),
+                    None => (*on, false, shown),
+                };
+                let text = RichText::new(shown).strong().size(TEXT_BODY).color(if lit { Color32::BLACK } else if over { ERROR } else { Color32::WHITE });
+                let mut b = egui::Button::new(text).fill(if lit { AMBER } else { RAISED }).min_size(vec2(64.0, 28.0));
+                if armed {
+                    b = b.stroke(egui::Stroke::new(1.5, AMBER));
+                }
                 let mut r = ui.add(b);
+                if let Some((visible, wanted, who)) = &follow {
+                    let state = match (visible, wanted, who) {
+                        (true, _, Some(w)) => format!("On screen now: {w}."),
+                        (true, _, None) => "On screen now.".to_string(),
+                        (false, true, Some(_)) => "Switched on: coming on now.".to_string(),
+                        (false, true, None) => "Switched on: it comes on when someone with a name is on air (Sources › People & names).".to_string(),
+                        (false, false, Some(w)) => format!("Off. Click to show {w}'s name."),
+                        (false, false, None) => "Off. Nobody with a name is on air right now.".to_string(),
+                    };
+                    r = r.on_hover_text(state);
+                }
                 let is_timer = self.cfg.graphics.get(i).is_some_and(|g| g.kind == crate::config::GraphicKind::Clock && g.clock.is_timer());
                 let shown = on_air.iter().find(|o| o.name == *name).zip(since).map(|(o, (_, when))| {
                     let n = o.showings.len();
@@ -5295,6 +5330,20 @@ impl App {
             // Screenshots: beside the main window rather than under it.
             builder = builder.with_position([1500.0, 60.0]);
         }
+        // The pictures are normally brought in by Show's monitors and
+        // multiview; on any other area the output would freeze, so bring them
+        // in here too (a second call in the same frame costs nothing).
+        {
+            let engine = self.engine.as_ref().unwrap();
+            let program_slot = engine.program_preview.clone();
+            let preview_slot = engine.preview_bus.clone();
+            let sources: Vec<Arc<FrameSlot>> = if multiview { engine.sources.iter().map(|s| s.preview.clone()).collect() } else { Vec::new() };
+            self.texture(ctx, "program", &program_slot);
+            self.texture(ctx, "previewbus", &preview_slot);
+            for (i, slot) in sources.iter().enumerate() {
+                self.texture(ctx, &format!("src{i}"), slot);
+            }
+        }
         let program = self.textures.get("program").map(|t| t.1.id());
         let preview = self.textures.get("previewbus").map(|t| t.1.id());
         let engine = self.engine.as_ref().unwrap();
@@ -5615,7 +5664,9 @@ impl App {
                 self.quiet_save = true;
                 let result = self.apply_settings(merged, ctx);
                 self.quiet_save = false;
-                if result.is_ok() && before.settings_differ(&self.cfg) {
+                // (Scenes renamed, moved, added or deleted on Scenes › Scenes
+                // are a step too.)
+                if result.is_ok() && (before.settings_differ(&self.cfg) || before.scenes != self.scenes) {
                     self.history.record(before);
                 }
                 let now = self.live_settings();
@@ -5943,6 +5994,10 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.confirm = Some(Confirm::Quit);
         }
+        // The latest settings step's result, for an Undo of only that step.
+        self.history.settle(&self.cfg);
+        // No sleeping (computer or screens) while recording or live.
+        crate::platform::awake::keep_awake(self.engine.as_ref().is_some_and(|e| e.is_recording() || e.is_streaming()));
         self.fit_first_window(&ctx);
         self.tick_starting(&ctx);
         self.autosave();

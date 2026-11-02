@@ -665,27 +665,32 @@ impl App {
         // ---- LIVE (once there's somewhere to stream to)
         self.live_pill(ui, &stream, streaming, roomy);
 
-        // ---- ✂ and ◆ while recording, then REC
+        // ---- ✂ and ◆ (always there, so REC never moves when a take
+        // starts or stops; they only work while recording), then REC
         let mut marker_clicked = false;
         let mut clip_clicked = false;
         let mut named = false;
-        if matches!(rec, RecState::Recording { .. }) {
-            let clip = if roomy { "✂ Clip" } else { "✂" };
+        let recording = matches!(rec, RecState::Recording { .. });
+        ui.scope(|ui| {
+            if !recording {
+                ui.disable();
+            }
+            let idle = "Works while recording";
             if ui
-                .add(egui::Button::new(clip).min_size(vec2(0.0, 30.0)))
+                .add(egui::Button::new("✂ Clip").min_size(vec2(0.0, 30.0)))
                 .on_hover_text(format!("Save the last {} seconds as a clip in the take's Clips folder{}", self.cfg.output.clip_seconds, self.key_hint(Builtin::Clip)))
+                .on_disabled_hover_text(format!("{idle}: saves the last {} seconds as a clip", self.cfg.output.clip_seconds))
                 .clicked()
             {
                 clip_clicked = true;
             }
             let gap = ui.spacing().item_spacing.x;
             ui.spacing_mut().item_spacing.x = 2.0;
-            let list = ui.add(egui::Button::new("▾").min_size(vec2(22.0, 30.0))).on_hover_text("This take's markers: name one, rename or take them out");
+            let list = ui.add(egui::Button::new("▾").min_size(vec2(22.0, 30.0))).on_hover_text("This take's markers: name one, rename or take them out").on_disabled_hover_text(format!("{idle}: this take's markers"));
             let mtext = match (roomy, markers) {
-                (true, 0) => "◆ Marker".to_string(),
+                (_, 0) => "◆ Marker".to_string(),
                 (true, n) => format!("◆ Marker ({n})"),
-                (false, 0) => "◆".to_string(),
-                (false, n) => format!("◆ {n}"),
+                (false, n) => format!("◆ Marker {n}"),
             };
             let named_key = self.key_label_or(Builtin::NamedMarker, "");
             if ui
@@ -695,6 +700,7 @@ impl App {
                     self.key_hint(Builtin::Marker),
                     if named_key.is_empty() { " ▾ adds one and asks for its name".to_string() } else { format!(" {named_key} (or ▾) adds one and asks for its name") }
                 ))
+                .on_disabled_hover_text(format!("{idle}: marks the moment as a chapter and a timeline marker"))
                 .clicked()
             {
                 marker_clicked = true;
@@ -711,7 +717,7 @@ impl App {
                 ui.separator();
                 self.marker_list(ui, &take_markers);
             });
-        }
+        });
         let rec_rect = self.rec_pill(ui, &rec, roomy);
         if self.on_show() {
             if let Some((_, last)) = &card {

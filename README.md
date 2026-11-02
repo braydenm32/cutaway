@@ -184,6 +184,9 @@ and [Install on Windows](#install-on-windows).
 - **Every input on its own track:** optionally, the Program file carries
   each audio input as its own (disabled) track after the mix, so an editor
   can re-balance the show without the WAVs.
+- **No sleeping mid-show:** while recording or live, the computer and its
+  screens stay awake, even when you only switch from a Stream Deck or the
+  phone remote and nobody touches the laptop.
 - **No accidental quits:** closing the window (or Cmd+Q, Alt+F4) while
   recording or live, or while a take is still saving, the podcast copy is
   being made or an upload is running, asks first. Quitting anyway finishes
@@ -314,7 +317,9 @@ Takes start with the **Take name** from Record › Recording. Leave it as
   **Fixed title** is for typed text). It names whoever fills the program, changing at each
   cut, and can come on by itself for a few seconds when someone new is on
   air (not again for the same person for 10 minutes, or as you set). Its
-  button keeps it on for as long as you like. For two people on one camera,
+  button keeps it on for as long as you like, and says whose name it shows:
+  amber while it's on screen, an amber edge while it's switched on but
+  nobody with a name is on air. For two people on one camera,
   make a close-up of each (an auto-framed close-up following the person on
   the left or right, or a virtual PTZ) and name each close-up.
 - **Graphics taking turns:** a group of graphics (sponsors, your social
@@ -778,8 +783,9 @@ Video Extensions** on some PCs.
   everything at a glance, **Log** is everything Cutaway has noted this session
   (**Warnings only**, and **Copy** to paste it into a message), and **Run
   pre-show check** runs the check.
-- **Messages:** an error stays at the bottom of the window until you click
-  it, and several stack up rather than replacing each other. Disk-space and
+- **Messages:** an error stays at the bottom of the window for 30 seconds
+  (or until you click it), and several stack up rather than replacing each
+  other; the status light and the Log keep it after that. Disk-space and
   backup-drive warnings show there too, and every error also goes in the Log.
   If a scene key does nothing, check the top bar: **⌨ Typing** means a box has
   the keyboard (Esc).
@@ -825,7 +831,7 @@ Video Extensions** on some PCs.
 | Automatic switching | **AUTO** or `A`. Until it has rules (Scenes › More ▾ › Auto-switching) AUTO is greyed, and a click says so with a **Set up rules ›** link |
 | Captions on screen | **CC** or `C` |
 | Who an auto-framed source follows | **⋯** on its tile (or right-click it): follow and shot size |
-| Marker | `M`, or **◆ Marker** beside REC while recording (just **◆ 3** in a narrow window) |
+| Marker | `M`, or **◆ Marker** beside REC while recording (greyed out between takes, so REC never moves) |
 | Named marker | `Shift+M` while recording, or **▾ › Named marker…** beside ◆: the marker goes in at that moment and a box asks for its name (typing doesn't move it; Cancel keeps "Marker 3") |
 | This take's markers | **▾** beside **◆ Marker**: each marker's time, name and the scene on air. Change a name there, or ✕ to take one out, until the take stops (clips show with ✂ and stay as they are) |
 | Save a clip | `K`, or **✂ Clip** beside REC while recording (the last 30 seconds, or as set); the status light's panel has **✂ Clip the last 10 / 30 / 60 s** |
