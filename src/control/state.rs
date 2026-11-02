@@ -71,6 +71,8 @@ pub struct ShowState {
     pub saving: Option<SavingState>,
     /// The pre-show check, while it's open on the desk (null otherwise).
     pub precheck: Option<PrecheckState>,
+    /// Quick names for markers (More › Control › Phone remote).
+    pub marker_labels: Vec<String>,
 }
 
 #[derive(Serialize, Clone, Debug, Default, PartialEq)]

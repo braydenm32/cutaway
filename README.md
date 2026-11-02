@@ -982,10 +982,17 @@ connection drops or the phone locks.
 The remote has four tabs at the bottom, and it remembers the last one you
 used on that phone:
 
-- **Scenes:** the program picture, **Mix / Cut / ⟲ Back** (with Preview on:
-  **Cut / Take / ⟲ Back**), the scenes in two columns with their key number
-  and an **ON AIR** or **NEXT** tag, and, folded below them, the other
-  transitions, Auto switching, captions and **Fade to black**.
+- **Scenes:** the program picture, then the same switching buttons as the
+  desk. **TAKE** and **CUT** always mean the same thing: the scene in
+  preview goes on air, with the transition or straight away (they're dimmed
+  while nothing is in preview). Under them, **Preview** turns Preview mode on
+  and off, the transition chip (**Mix ▾**) opens the choice of transitions
+  (Cut, Mix, Wipe, Push, Dip, Stinger), and **⟲ Back** goes back to the last
+  scene. Then the scenes in two columns with their key number and an
+  **ON AIR** or **NEXT** tag. Tapping a scene does what the desk's scene
+  button does (with Preview on it goes in preview, otherwise it's taken with
+  the transition); **holding** one for half a second cuts it straight to
+  air. Folded below: Auto switching, captions and **Fade to black**.
 - **Sound:** sound pads, Syrinscape, talkback, and each mic or input with ON /
   OFF, its level and a fader (−60 to +12 dB, the same range as `gain`
   commands and MIDI faders).
@@ -999,12 +1006,21 @@ are down and a recording that failed), the recording time left on the drive,
 and the **REC** and **LIVE** buttons. LIVE says how it really is: **GOING
 LIVE…** while it connects, **LIVE 1 of 2** with each destination's state when
 one isn't up. Along the bottom, above the tabs: **Names**, **◆ Marker** and
-**✂ Clip**.
+**✂ Clip**. **◆ ▾** beside the marker lists your quick marker names (set them
+once in More › Control › Phone remote → **Quick marker names**; Good, Retake
+and Cut here to start with): one tap adds a marker with that name, so you
+don't type mid-show. On a short screen (a phone on its side) the bars and
+the picture get smaller, and the top scrolls away with the page; a long
+status list or pre-show check scrolls inside its box.
 
 Taps you can't take back need a one-second hold (a fill grows across the
 button, and letting go sooner only says **Hold to…**): stopping the recording,
 going live and ending the stream, fade to black, and turning a mic off.
 Starting a recording, turning a mic on and coming back from black are one tap.
+Each button sends what it means (start or stop, never "switch over"), so a
+screen that's a moment out of date can't stop a take with a tap. The
+rundown's **◀ Previous** (on the More tab) goes to the previous segment;
+**⟲ Back** is always the last scene.
 When the pre-show check is turned on (More › App › General → **Pre-show
 check**), starting from the phone, the Stream Deck, MIDI or OSC runs the check
 on the desk first, the same as the Record button; the phone shows that it's
@@ -1077,6 +1093,8 @@ destinations aren't live, `ending` or `off`), with `/stream/live` as "1 of 2".
 | `scene:2` or `scene:Host` | Take a scene (by number or name) with the current transition |
 | `cut:2` | Cut straight to a scene |
 | `preview:2` | Put a scene in preview |
+| `press:2` | As the desk's scene button: into preview with Preview on, otherwise taken with the transition |
+| `preview:on`, `preview:off`, `preview:toggle` | Preview mode on or off |
 | `take` / `cut` | Take / cut the preview to program |
 | `back` | Back to the last scene: the one on air before this one, with the current transition (again goes forward) |
 | `transition:mix` | Choose `cut`, `mix`, `wipe`, `push` or `dip` |
@@ -1088,7 +1106,7 @@ destinations aren't live, `ending` or `off`), with `/stream/live` as "1 of 2".
 | `mute:Mic`, `unmute:Mic`, `audio:Mic` | An input on / off / toggle |
 | `gain:Mic:-6` | Set an input's level in dB |
 | `media:Clips:play` | Media player: `play`, `pause`, `toggle`, `restart`, `next`, `previous` |
-| `source:2` | A source full screen (like clicking it in the multiview) |
+| `source:2` | A source full screen, straight on air (to preview with Preview on), like Shift+clicking its tile |
 | `captions`, `captions:on`, `captions:off` | Captions on screen |
 | `transition:stinger` | Use the stinger (set in Scenes › More ▾ › Stinger & fade to black) |
 | `pad:1`, `pad:Applause`, `pad:1:stop`, `pads:stop` | Sound pads (press: play, or stop if playing; `play`, `stop`, `release`) |
@@ -1107,7 +1125,10 @@ destinations aren't live, `ending` or `off`), with `/stream/live` as "1 of 2".
 | `comment:next`, `comment:hide`, `comment`, `comment:<n>` | Viewer comments on screen (`<n>` is a comment's number from `/api/state`) |
 
 A number picks by position, unless something is named that number (a scene
-called "2"). A macro that runs itself is stopped there, with a message.
+called "2"). `#` in front always means the position: `scene:#2` is the
+second scene button even if another scene is called "2". The phone remote
+and the Stream Deck send these, so a scene named with a number can't be
+mistaken for a place. A macro that runs itself is stopped there, with a message.
 
 **When scenes move.** `scene:3` means the third scene button, wherever it
 came from: that's what the number keys, Stream Deck scene keys (their

@@ -1742,7 +1742,7 @@ impl Engine {
                 let names: Vec<String> = angles.iter().map(|a| a.0.clone()).collect();
                 // (By number: the source's place in the show, not among those recorded.)
                 let i = match t {
-                    crate::control::Target::Index(i) => self.sources.get(*i).and_then(|s| names.iter().position(|n| *n == s.name)),
+                    crate::control::Target::Index(i) | crate::control::Target::Place(i) => self.sources.get(*i).and_then(|s| names.iter().position(|n| *n == s.name)),
                     t => t.find(&names),
                 };
                 let Some(i) = i else {
