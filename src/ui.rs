@@ -67,6 +67,9 @@ pub mod theme {
     pub const REC_EDGE: Color32 = Color32::from_rgb(120, 44, 50);
     /// Pressed-and-held across the REC pill (to stop): a see-through red.
     pub const REC_HOLD: Color32 = Color32::from_rgba_premultiplied(110, 26, 30, 110);
+    /// Pressed-and-held across the other hold buttons (Fade to black, a mic
+    /// OFF, disconnecting a guest): see-through white, not red.
+    pub const HOLD_FILL: Color32 = Color32::from_rgba_premultiplied(70, 70, 70, 70);
     /// TAKE: the main switching action (CUT is a plain button).
     pub const TAKE: Color32 = Color32::from_rgb(52, 112, 204);
     pub const TAKE_HOVER: Color32 = Color32::from_rgb(76, 136, 228);
@@ -4018,8 +4021,22 @@ impl App {
             .fill(if lit { AMBER } else if black { AMBER_DIM } else { RAISED })
             .stroke(Stroke::new(1.0, if black { AMBER } else { LINE }))
             .min_size(vec2(104.0, 26.0));
-        if ui.add(ftb).on_hover_text(if black { "The program is black: click to fade back up" } else { "Fade the program, graphics and sound to black; click again to come back (the fade's length is in Scenes › More › Stinger & fade to black)" }).clicked() {
-            self.act(Action::Ftb(Toggle::Toggle));
+        if black {
+            // Coming back is a click.
+            if ui.add(ftb).on_hover_text("The program is black: click to fade back up").clicked() {
+                self.act(Action::Ftb(Toggle::Toggle));
+            }
+        } else {
+            // Going to black takes a one-second hold, as on the phone and
+            // the Stream Deck: a slip off the transitions beside it can't
+            // black out the show.
+            let (r, step) = hold::hold_button(ui, ftb, REC_HOLD_SECS, HOLD_FILL);
+            r.on_hover_text("Hold for a second to fade the program, graphics and sound to black; click again to come back (the fade's length is in Scenes › More › Stinger & fade to black)");
+            match step {
+                hold::HoldStep::Done => self.act(Action::Ftb(Toggle::On)),
+                hold::HoldStep::LetGo => self.toast("Hold Fade to black for a second to fade (a click alone does nothing)".into(), false),
+                _ => {}
+            }
         }
         if black {
             ui.ctx().request_repaint_after(Duration::from_millis(250));
@@ -4796,6 +4813,7 @@ impl App {
         }
         let mut gain_changes = Vec::new();
         let mut on_changes = Vec::new();
+        let mut hint: Option<String> = None;
         let mut solo: Option<String> = None;
         ui.add_space(2.0);
         // The meters (and the faders beside them) take the height the column
@@ -4839,7 +4857,18 @@ impl App {
                             let btn = egui::Button::new(RichText::new(if *on { "ON" } else { "OFF" }).strong().size(TEXT_BODY).color(if *on { Color32::BLACK } else { Color32::WHITE }))
                                 .fill(if *on { GREEN } else { OFF })
                                 .min_size(vec2(56.0, 24.0));
-                            if ui.add(btn).on_hover_text(if *on { "Heard in the mixes: click to turn it off" } else { "Off: not heard in the mixes. Click to turn it on" }).clicked() {
+                            if *on && (recording || live) {
+                                // While recording or live, turning a mic off takes a
+                                // one-second hold (as on the phone and the Stream
+                                // Deck); turning one on stays a click.
+                                let (r, step) = hold::hold_button(ui, btn, REC_HOLD_SECS, HOLD_FILL);
+                                r.on_hover_text("Heard in the mixes: hold for a second to turn it off");
+                                match step {
+                                    hold::HoldStep::Done => on_changes.push((i, false)),
+                                    hold::HoldStep::LetGo => hint = Some(format!("Hold {name}'s ON for a second to turn it off while you're recording or live")),
+                                    _ => {}
+                                }
+                            } else if ui.add(btn).on_hover_text(if *on { "Heard in the mixes: click to turn it off" } else { "Off: not heard in the mixes. Click to turn it on" }).clicked() {
                                 on_changes.push((i, !*on));
                             }
                             ui.horizontal(|ui| {
@@ -4949,6 +4978,9 @@ impl App {
         }
         for (i, on) in on_changes {
             self.set_input_on(i, on);
+        }
+        if let Some(h) = hint {
+            self.toast(h, false);
         }
         if let Some(name) = solo {
             let src = &mut self.cfg.mix.monitor_source;
