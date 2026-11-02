@@ -29,7 +29,14 @@ pub use audio_in::{list_audio_devices, open_audio_input};
 pub use audio_out::{list_output_devices, open_audio_output};
 
 #[cfg(target_os = "macos")]
-pub use macos::{capture_targets, list_video_devices, open_camera, open_screen, permissions_changed, request_permissions};
+pub use macos::{capture_targets, list_video_devices, open_camera, open_screen, permissions_changed, request_permissions, still_asking};
+
+/// Whether the system is still waiting for an answer about the camera and
+/// the microphone (only macOS asks this way): (camera, microphone).
+#[cfg(not(target_os = "macos"))]
+pub fn still_asking() -> (bool, bool) {
+    (false, false)
+}
 #[cfg(windows)]
 pub use win::{capture_targets, list_video_devices, open_camera, open_screen, permissions_changed, request_permissions};
 

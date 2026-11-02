@@ -187,6 +187,9 @@ pub struct Status {
     pub last_take: Option<recorder::TakeReport>,
     /// Names of sources/inputs that aren't delivering.
     pub offline: HashSet<String>,
+    /// Why a source couldn't open, when it's something to do (the camera
+    /// isn't allowed), for its tile: by name (review B3).
+    pub why_offline: HashMap<String, String>,
     /// Set when writing a file fails (e.g. disk full); the take should be stopped.
     pub rec_failed: Option<String>,
     /// Unrecoverable engine error.
@@ -603,6 +606,9 @@ impl Engine {
                         st.push(LogLevel::Error, format!("{}: {msg}. It will connect automatically when available.", sc.name));
                     }
                     st.offline.insert(sc.name.clone());
+                    if let Some(why) = tile_reason(&format!("{e:#}")) {
+                        st.why_offline.insert(sc.name.clone(), why);
+                    }
                 }
                 Ok(_) => {
                     if let Some(p) = input.framing().and_then(|f| f.problem.lock_ok().clone()) {
@@ -1552,6 +1558,9 @@ impl Engine {
                         let mut st = status.lock_ok();
                         st.push(LogLevel::Error, format!("{}: {e:#}. It will connect automatically when available.", input.cfg.name));
                         st.offline.insert(input.cfg.name.clone());
+                        if let Some(why) = tile_reason(&format!("{e:#}")) {
+                            st.why_offline.insert(input.cfg.name.clone(), why);
+                        }
                     }
                 }
                 waker();
@@ -1941,6 +1950,20 @@ fn apply_scene_audio(inputs: &[(String, Arc<InputShared>)], scene: &crate::scene
                 }
             }
         }
+    }
+}
+
+/// A source's open error as a line for its tile, when it's something the
+/// person can fix (the camera isn't allowed); None for the rest, which
+/// stay in the status light and the Log.
+pub fn tile_reason(err: &str) -> Option<String> {
+    let l = err.to_lowercase();
+    if l.contains("isn't allowed to use cameras") {
+        Some("Cutaway may not use cameras: System Settings › Privacy & Security › Camera".into())
+    } else if l.contains("windows blocked access") {
+        Some("Windows blocked the camera: Windows Settings › Privacy & security › Camera".into())
+    } else {
+        None
     }
 }
 
