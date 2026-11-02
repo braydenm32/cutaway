@@ -778,6 +778,13 @@ Video Extensions** on some PCs.
   everything at a glance, **Log** is everything Cutaway has noted this session
   (**Warnings only**, and **Copy** to paste it into a message), and **Run
   pre-show check** runs the check.
+- **No sound in the recording:** while you record, Cutaway listens to the
+  recording mix. If it stays silent (below about −60 dB, quieter than any
+  room) for 45 seconds, because a mic is off, muted, unplugged or the wrong
+  input is picked, it says so in a message, on the status light and on the
+  phone remote. It says it once, and again if the sound comes back and then
+  goes again. A small amber **no sound** beside REC shows whenever the
+  recording has been silent for a few seconds.
 - **Messages:** an error stays at the bottom of the window until you click
   it, and several stack up rather than replacing each other. Disk-space and
   backup-drive warnings show there too, and every error also goes in the Log.

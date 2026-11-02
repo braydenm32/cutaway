@@ -198,6 +198,9 @@ pub struct Status {
     pub backup_disk: Option<health::DiskStatus>,
     /// Markers in the take being recorded.
     pub markers: usize,
+    /// When the recording mix was last above `health::SILENT_DB` (set by
+    /// the mixer; the health monitor turns it into "no sound").
+    pub mix_heard: Option<Instant>,
     pub loudness: audio::MixLoudness,
     pub auto_switch: autoswitch::AutoStatus,
     /// Work after a take (making the podcast copy): what, and how far (0..1).
@@ -741,6 +744,7 @@ impl Engine {
                 compositor_skips: compositor_skips.clone(),
                 last_frames: Vec::new(),
                 seen: 0,
+                silence: Default::default(),
             };
             let w = watchdog::Watchdog {
                 lineup: lineup.clone(),

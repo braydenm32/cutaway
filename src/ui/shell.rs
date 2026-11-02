@@ -655,9 +655,9 @@ impl App {
             self.status_light(ui);
             return;
         };
-        let (rec, stream, markers, disk, backup) = {
+        let (rec, stream, markers, disk, backup, silent) = {
             let st = engine.status.lock_ok();
-            (st.rec.clone(), st.stream.clone(), st.markers, st.disk.clone(), st.backup_disk.clone())
+            (st.rec.clone(), st.stream.clone(), st.markers, st.disk.clone(), st.backup_disk.clone(), st.health.silent_secs)
         };
         let streaming = engine.is_streaming();
         let take_markers = engine.take_markers();
@@ -717,6 +717,21 @@ impl App {
             if let Some((_, last)) = &card {
                 self.take_card(ui.ctx(), rec_rect, last.as_ref());
             }
+        }
+        // A small "no sound" beside REC while the recording mix is silent
+        // (after a while it's a problem and an alert too: see health.rs).
+        if let Some(s) = silent.filter(|s| *s >= crate::engine::health::SILENT_BADGE_SECS) {
+            let r = egui::Frame::new()
+                .fill(AMBER_DIM)
+                .stroke(Stroke::new(1.0, AMBER))
+                .corner_radius(10.0)
+                .inner_margin(egui::Margin::symmetric(8, 2))
+                .show(ui, |ui| ui.label(RichText::new("no sound").strong().size(TEXT_BODY).color(Color32::WHITE)))
+                .response;
+            r.on_hover_text(format!(
+                "The recording has had no sound for {}. Check the mics are on (ON in the audio column), turned up and plugged in",
+                crate::engine::health::silent_text(s)
+            ));
         }
 
         // ---- the clock
