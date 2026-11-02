@@ -268,7 +268,7 @@ Takes start with the **Take name** from Record › Recording. Leave it as
   save them. Start a new scene blank or from one of those layouts
   (**＋ New scene** in Show › Edit layout or Scenes › Scenes), and put the
   scene buttons in the order you want (drag them in Edit layout, or ↑ ↓ in
-  Scenes › Scenes): keys 1–9 take the first nine. The Scenes pages save as
+  Scenes › Scenes): keys 1–9 take the first nine, and 0 the tenth. The Scenes pages save as
   you go, with Undo.
 - **Fill, crop and zoom per scene.** Each frame in a scene can show the whole
   picture (fit) or fill the frame, cropped to its shape, so a camera in a tall
@@ -494,7 +494,10 @@ Takes start with the **Take name** from Record › Recording. Leave it as
   them to another key or turn one off, and add your own keys for any
   command (a scene, a graphic, a pad, a macro, a camera move) in
   **More › Control › Shortcuts**. A key you pick wins over a built-in
-  one, mistakes like a key given two jobs are flagged as you go, and
+  one (the built-in's row then shows its key struck through, "taken by your
+  own shortcut"), mistakes like a key given two jobs are flagged on the row
+  they belong to as you go, Control isn't taken as a shortcut key on a Mac
+  (⌘ is), and
   **Print a cheat sheet** opens a page of every key to keep by the keyboard.
 - **Undo and redo** (Cmd/Ctrl+Z, Cmd/Ctrl+Shift+Z, or the buttons in Edit
   layout) for what you build: moving, resizing, filling and zooming frames,
@@ -827,9 +830,9 @@ Video Extensions** on some PCs.
 
 | Action | How |
 |---|---|
-| Take scene 1–9 | Number keys, or click the scene button |
+| Take scene 1–10 | Number keys 1–9, and 0 for the tenth, or click the scene button (with Preview on, the keys put it in preview) |
 | Scene buttons | Along the bottom, every one in view. Each shows its key number (large), its name, **ON AIR** or **NEXT** (in preview), ♪ when it changes the sound and ⚠ when a source in it has no signal; a long name ends in "…" and shows in full when you hover. With room, each has a live picture of its scene (its sources where its frames are); in a narrower window (a 13" laptop) they become two rows of smaller buttons without pictures, so up to 12 scenes always fit. A bank longer than that scrolls sideways, and the edge says how many more (**+3 ›**: click it). In a window at least 1000 pixels tall they keep their pictures in two rows |
-| Cut straight to a scene | Shift + number, or Shift + click |
+| Cut straight to a scene | Shift + number (Shift+0 for the tenth), or Shift + click |
 | Back to the last scene | **⟲ Back** under the transitions, `Backspace` or the `back` command: the scene on air before this one goes back on air with the current transition and its cues (in Preview mode too, without passing through preview). Press it again to go back the other way |
 | Put a source full screen | With Preview off, click its tile in the multiview to pick it (a blue edge), then **Put on air** on the tile: so clicking a tile to look closer never switches the show. Shift+click a tile cuts to it at once. With Preview on, a click puts it in preview. Each tile shows the source's name and who's in it |
 | Preview, then take | Turn on **Preview**; scene keys then load the preview. Space = Take (with the transition), Enter = Cut |
@@ -845,11 +848,11 @@ Video Extensions** on some PCs.
 | Fade to black | **Fade to black**, at the end of the transitions; it flashes while the program is black, and reads **Fade up**: click it again to come back |
 | Macros, PTZ, teleprompter, comments | Their panels on the right, the Stream Deck, the remote, MIDI or OSC. Set them up in **More › Show tools** |
 | Teleprompter page keys | On the prompter page on a computer: Space rolls or pauses, ← → jump a paragraph, ↑ ↓ change the speed, Home goes to the top (the bar under the script says so) |
-| Sound pads 1–12 | F1–F12, or the pad buttons in the sound panel (hold for "while held" pads) |
+| Sound pads 1–12 | F1–F12, or the pad buttons in the sound panel (hold for "while held" pads). On a MacBook the F-keys change brightness and volume unless you hold **Fn** with them, or turn on "Use F1, F2, etc. keys as standard function keys" in System Settings › Keyboard › Keyboard Shortcuts › Function Keys; the Shortcuts page and the cheat sheet say so on a Mac |
 | Talkback | Hold `B`, or hold **TALK** in the sound panel |
 | Next rundown segment | `N` (Shift+N goes back), or **Next ▶** in the rundown panel |
 | Timers | **▶ / ⏸** and **⟲** beside a countdown or stopwatch's graphic button: start, pause, back to the start (right-click it for Stop and reset too) |
-| Graphics 1–9 | Alt/Option + number, or the graphic buttons; ✎ edits a title's text live |
+| Graphics 1–10 | Alt/Option + number (0 for the tenth), or the graphic buttons; ✎ edits a title's text live |
 | Media player | ⟲ ⏯ ⏭ on its tile; **⋯** (or right-click) for the playlist |
 | Record / stop | ⌘R, or **● Record** at the top right. While recording, the **REC** pill (dark, with a pulsing red dot) shows the time with **hold to stop** under it: hold it for a second to stop (a red fill grows across it; a quick click does nothing but light up the hint). ⌘R asks "Stop recording?" first, so a stray click or key can't split the take |
 | Go live / end stream | **◉ Go live** at the top right, once there's somewhere to stream to (set that up in **Record › Streaming**). It says **Going live…** until a destination is really on air, and the **LIVE** time counts from then, the same on the desk, the phone and OSC. It has no key unless you give it one in More › Control › Shortcuts, so a stray key can't start or end a broadcast (a key gets the same checks and "are you sure?" as the button) |
