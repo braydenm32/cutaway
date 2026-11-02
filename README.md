@@ -657,6 +657,12 @@ right) are the places to start.
    PC": choose **More info → Run anyway** (once). If cameras or microphones
    don't show, turn on **Windows Settings → Privacy & security → Camera** (and
    **Microphone**) → **Let desktop apps access…**.
+5. **Firewall:** the first time you turn on the phone remote, a network
+   source, the stream server or guests, Windows Defender Firewall asks
+   whether Cutaway may accept connections. Tick **Private networks** and
+   choose **Allow access**. If you pressed Cancel, the phone can't connect:
+   go to **Windows Security → Firewall & network protection → Allow an app
+   through firewall**, find Cutaway and tick **Private**.
 
 Settings are in `%APPDATA%\Cutaway\config.toml`, recordings go to
 `Videos\Cutaway`.
@@ -976,7 +982,9 @@ raise it for Wi-Fi or the internet.
 
 Turn on **More › Control › Phone remote › Remote control**. Open the address it
 shows (e.g. `http://192.168.1.20:8790`) on a phone or tablet on the same
-network and type the PIN. The remote always has one (Cutaway makes a
+network and type the PIN (on Windows, allow Cutaway through the firewall
+when asked: see [Install on Windows](#install-on-windows), step 5). The
+remote always has one (Cutaway makes a
 four-digit PIN if you don't set your own), and a device that gets it wrong
 five times in a row waits a minute before it can try again.
 
@@ -1661,7 +1669,7 @@ and a software GPU:
 - **Whisper captions:** the streaming logic (partial and settled words,
   timing, long speech) with a stand-in recogniser, and whisper.cpp itself
   loading and running a model.
-- **Unit tests:** `cargo test` (200 tests, plus Windows-only ones that run there), including the compositor's
+- **Unit tests:** `cargo test` (about 380 tests, plus Windows-only ones that run there), including the compositor's
   styling, keying, person masks, transitions and graphics, the voice
   processing, loudness, limiters and leveller, automatic switching,
   auto-framing, captions, lip sync, the podcast, OSC, the WebSocket, the
@@ -1674,7 +1682,10 @@ hasn't run there. The GitHub workflow runs the tests and a test recording on
 Windows; the Media Foundation tests there also measure Windows' AAC encoder
 delay.
 
-**Not yet run on a Mac:** the parts that only exist on macOS compile
+**On a real Mac:** Cutaway is used for real shows on an Apple Silicon Mac
+(cameras, recording, switching), and NDI has been tested there and works.
+
+**Not yet run on a Mac:** the other parts that only exist on macOS compile
 against the macOS frameworks for Apple Silicon but haven't been run on real
 hardware yet. Expect a little tuning on first contact; the status light
 (Now and the Log) is the place to start:
@@ -1683,11 +1694,10 @@ hardware yet. Expect a little tuning on first contact; the status light
   player).
 - Headphone output.
 - MIDI.
-- NDI (needs the NDI runtime).
 - The virtual camera (needs the signing step).
 - Live captions (the Speech framework) and auto-framing and background
   removal (the Vision framework).
 - The Stream Deck plugin in the real Stream Deck app.
-- NDI output and PTZ control on a real network.
+- PTZ control on a real network.
 - Phone cameras from a real iPhone or Android phone, and uploads to the real
   YouTube and Google Drive.

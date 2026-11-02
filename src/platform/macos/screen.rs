@@ -146,7 +146,11 @@ pub(super) fn shareable_content() -> Result<Retained<SCShareableContent>> {
     Ok(rx
         .recv_timeout(Duration::from_secs(15))
         .map_err(|_| anyhow!("screen capture didn't answer"))?
-        .map_err(|e| anyhow!("screen capture isn't allowed ({e}). Turn on Cutaway in System Settings → Privacy & Security → Screen Recording, then restart it."))?
+        .map_err(|e| {
+            // (Apple's own words go in the log; on screen, what to do.)
+            crate::logging::note(&format!("screen capture refused: {e}"));
+            anyhow!("{}", crate::platform::capture::SCREEN_NOT_ALLOWED)
+        })?
         .0)
 }
 
