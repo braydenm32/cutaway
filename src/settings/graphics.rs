@@ -431,7 +431,7 @@ impl SettingsUi {
                             label(ui, "Format");
                             ui.horizontal(|ui| {
                                 ui.checkbox(&mut g.show_seconds, "seconds");
-                                hint(ui, if twelve { "12-hour, as the show's clock (Graphics › Clocks & timers, or click the clock in the top bar)" } else { "24-hour, as the show's clock (Graphics › Clocks & timers, or click the clock in the top bar)" });
+                                hint(ui, if twelve { "12-hour, as the show's clock (Graphics › Clocks & timers, or under the status light)" } else { "24-hour, as the show's clock (Graphics › Clocks & timers, or under the status light)" });
                             });
                             ui.end_row();
                         }
