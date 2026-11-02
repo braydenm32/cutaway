@@ -354,7 +354,7 @@ function connect() {
   ws.on("error", (e) => {
     if (cutaway.ws !== ws) return;
     cutaway.problem =
-      e.status === 401 ? "wrong or missing PIN" : e.code === "ECONNREFUSED" ? `nothing at ${host}:${port} (is remote control on in Cutaway?)` : e.status ? `${host}:${port} isn't Cutaway (${e.message})` : e.message;
+      e.status === 401 ? "wrong PIN: type the one in Cutaway's More › Control into this key's settings" : e.status === 429 ? "too many wrong PINs: wait a minute" : e.code === "ECONNREFUSED" ? `nothing at ${host}:${port} (is remote control on in Cutaway?)` : e.status ? `${host}:${port} isn't Cutaway (${e.message})` : e.message;
   });
   ws.on("close", () => {
     if (cutaway.ws !== ws) return;
@@ -363,7 +363,9 @@ function connect() {
     cutaway.state = null;
     if (!cutaway.problem) cutaway.problem = "disconnected";
     renderAll(true);
-    reconnectSoon(2000);
+    // A PIN problem won't fix itself in two seconds: try less often (a new
+    // PIN typed in the key's settings connects straight away).
+    reconnectSoon(/PIN/.test(cutaway.problem) ? 15000 : 2000);
   });
 }
 

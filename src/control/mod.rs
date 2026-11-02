@@ -764,6 +764,43 @@ pub fn suggestions(cfg: &Config) -> Vec<(String, String)> {
 
 #[cfg(test)]
 mod tests {
+    /// The packed plugin people install (and the release carries) is the
+    /// plugin folder as it is now: change the folder, run streamdeck/pack.sh.
+    #[test]
+    fn streamdeck_plugin_is_packed_from_the_folder() {
+        use std::io::Read;
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("streamdeck");
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(root.join("Cutaway.streamDeckPlugin")).unwrap()).unwrap();
+        let mut packed = std::collections::BTreeMap::new();
+        for i in 0..zip.len() {
+            let mut f = zip.by_index(i).unwrap();
+            if f.is_dir() {
+                continue;
+            }
+            let mut bytes = Vec::new();
+            f.read_to_end(&mut bytes).unwrap();
+            packed.insert(f.name().map(|n| n.to_string()).unwrap_or_default(), bytes);
+        }
+        let mut on_disk = std::collections::BTreeMap::new();
+        let mut dirs = vec![root.join("app.cutaway.streamdeck.sdPlugin")];
+        while let Some(d) = dirs.pop() {
+            for e in std::fs::read_dir(&d).unwrap() {
+                let p = e.unwrap().path();
+                if p.is_dir() {
+                    dirs.push(p);
+                } else if p.file_name().is_some_and(|n| n != ".DS_Store") {
+                    let name = p.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
+                    on_disk.insert(name, std::fs::read(&p).unwrap());
+                }
+            }
+        }
+        let names = |m: &std::collections::BTreeMap<String, Vec<u8>>| m.keys().cloned().collect::<Vec<_>>();
+        assert_eq!(names(&packed), names(&on_disk), "streamdeck/Cutaway.streamDeckPlugin is out of date: run streamdeck/pack.sh");
+        for (name, bytes) in &on_disk {
+            assert!(packed[name] == *bytes, "{name} differs in streamdeck/Cutaway.streamDeckPlugin: run streamdeck/pack.sh");
+        }
+    }
+
     use super::*;
 
     #[test]
