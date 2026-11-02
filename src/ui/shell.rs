@@ -350,8 +350,10 @@ impl App {
         self.flush_live();
         if let Some(win) = self.settings.as_mut() {
             if !win.leave() {
-                // The question shows on the page with the changes.
-                let page = win.section();
+                // The question shows on the page with the changes (where its
+                // Apply is), not on whatever page is open now (review D5).
+                let here = win.section();
+                let page = if win.section_dirty(here) { here } else { crate::settings::Section::ALL.into_iter().find(|&s| win.section_dirty(s)).unwrap_or(here) };
                 if let Some((a, t, s)) = indexes(home_of(page)) {
                     if !matches!(target_at(self.shell.area, self.place().1, self.place().2), Some(Target::Page(p, _)) if p == page) {
                         self.set_place(a, t, s);

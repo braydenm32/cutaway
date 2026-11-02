@@ -145,7 +145,7 @@ impl SettingsUi {
                     egui::Frame::new().fill(Color32::from_rgb(52, 30, 34)).corner_radius(6).inner_margin(10).show(ui, |ui| {
                         ui.label(RichText::new(format!("Delete {}?", all[i])).strong().color(Color32::WHITE));
                         if !uses.is_empty() {
-                            hint(ui, &format!("Used by: {}. They won't find it any more.", uses.join(", ")));
+                            hint(ui, &format!("Used by: {}. Those that pick it by name won't find it any more; those that pick it by number get the scene that moves up into its place.", uses.join(", ")));
                         }
                         ui.horizontal(|ui| {
                             if ui.add(egui::Button::new(RichText::new("Delete").color(Color32::WHITE)).fill(ERROR)).clicked() {

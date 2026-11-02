@@ -4183,13 +4183,18 @@ impl App {
             }
             Confirm::Quit => {
                 let (rec, live) = self.engine.as_ref().map_or((false, false), |e| (e.is_recording(), e.is_streaming()));
-                quit_text(rec, live, self.busy())
+                let (title, mut body, button) = quit_text(rec, live, self.busy());
+                if let Some(w) = self.settings.as_ref().and_then(|w| w.waiting_for_apply()) {
+                    let line = format!("Some changes are still waiting for Apply ({w}): quitting leaves them out. Cancel, then press Apply on the bar at the bottom, to keep them.");
+                    body = if body.is_empty() { line } else { format!("{body} {line}") };
+                }
+                (if title == "Quit?" { "Quit without applying?".to_string() } else { title }, body, button)
             }
             Confirm::DeleteScene(n) => {
                 let names = self.scene_names();
                 let i = names.iter().position(|x| x == n).unwrap_or(usize::MAX);
                 let uses = control::scene_uses(&self.live_settings(), &names, i);
-                let used = if uses.is_empty() { String::new() } else { format!("Used by: {}. They won't find it any more. ", uses.join(", ")) };
+                let used = if uses.is_empty() { String::new() } else { format!("Used by: {}. Those that pick it by name won't find it any more; those that pick it by number get the scene that moves up into its place. ", uses.join(", ")) };
                 // With Preview off the scene being edited is on air: say what replaces it.
                 let on_air = !self.preview_mode() && self.engine.as_ref().is_some_and(|e| e.switcher.live().name == *n);
                 let next = names.iter().find(|x| *x != n).cloned().unwrap_or_default();
@@ -4259,6 +4264,26 @@ impl App {
     /// Delete a scene (Edit layout's Delete, once confirmed), as one Undo
     /// step. With Preview on the first scene goes in preview to edit next;
     /// with it off, the first scene is taken if this one was on air.
+    /// After scenes were deleted elsewhere (`before`: the names then): the
+    /// one in preview moves on to the first scene, and with Preview off the
+    /// one on air is replaced by the first scene, instead of staying on air
+    /// with no button.
+    fn follow_deleted_scenes(&mut self, before: &[String]) {
+        let now = self.scene_names();
+        let gone = |n: &str| before.iter().any(|b| b == n) && !now.iter().any(|x| x == n);
+        let Some(e) = &self.engine else { return };
+        let Some(first) = self.scenes.first().cloned() else { return };
+        if self.preview_mode() {
+            if e.switcher.preview().is_some_and(|p| gone(&p.name)) {
+                let mut s = first;
+                s.retain_sources(e.sources.len());
+                e.switcher.set_preview(Some(s));
+            }
+        } else if gone(&e.switcher.live().name) {
+            self.take_scene(&first, true);
+        }
+    }
+
     fn delete_scene(&mut self, name: &str) {
         if self.scenes.len() <= 1 || !self.scenes.iter().any(|s| s.name == name) {
             return;
@@ -5786,6 +5811,9 @@ impl App {
         if let (Some(e), false) = (&self.engine, renamed.is_empty()) {
             e.switcher.rename_scenes(&|n| renamed.iter().find(|(a, _)| a == n).map(|(_, b)| b.clone()));
         }
+        // A scene deleted in Scenes › Scenes that's in preview or on air
+        // goes the way Edit layout's Delete does it (review D9).
+        self.follow_deleted_scenes(&old_names);
         if sources_changed {
             self.reconcile_scenes();
             if let Some(e) = &self.engine {
@@ -5938,8 +5966,10 @@ impl eframe::App for App {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        // Closing the window (or Cmd+Q / Alt+F4) mid-show asks first.
-        if ctx.input(|i| i.viewport().close_requested()) && !self.quit_ok && (self.engine.as_ref().is_some_and(|e| e.is_recording() || e.is_streaming()) || self.busy().is_some()) {
+        // Closing the window (or Cmd+Q / Alt+F4) mid-show asks first, and
+        // so do changes still waiting for Apply (they'd be lost).
+        let waiting = self.settings.as_ref().and_then(|w| w.waiting_for_apply());
+        if ctx.input(|i| i.viewport().close_requested()) && !self.quit_ok && (self.engine.as_ref().is_some_and(|e| e.is_recording() || e.is_streaming()) || self.busy().is_some() || waiting.is_some()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.confirm = Some(Confirm::Quit);
         }
