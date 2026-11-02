@@ -236,7 +236,7 @@
   </nav>
 </footer>
 
-<div id="pin"><div style="font-size:20px">Enter the remote PIN</div><div class="muted">It's shown in Cutaway under More › Control.</div>
+<div id="pin"><div style="font-size:20px">Enter the remote PIN</div><div class="muted" id="pinwhy">It's shown in Cutaway under More › Control.</div>
   <input id="pinbox" inputmode="numeric" autocomplete="off" maxlength="12"><button onclick="savePin()">Connect</button></div>
 <div class="tally" id="tally"><div id="tname"></div><div id="tstate" style="font-size:4vw;opacity:.85"></div></div>
 
@@ -255,10 +255,20 @@ const $ = id => document.getElementById(id);
 window.cutawayBuilt = { scenes: 0, graphics: 0, pads: 0, inputs: 0, other: 0 };
 
 function api(path) { return path + (path.includes('?') ? '&' : '?') + 'pin=' + encodeURIComponent(pin); }
-function savePin() { pin = $('pinbox').value.trim(); store('cutaway_pin', pin); $('pin').style.display = 'none'; poll(); connectWs(); }
+// While the PIN box is up nothing else asks Cutaway: asking again and
+// again with an old PIN is what used to lock the phone out.
+let needPin = false;
+function askPin(why) {
+  needPin = true;
+  $('pinwhy').textContent = why;
+  $('pin').style.display = 'flex';
+  if (ws) { try { ws.onclose = null; ws.close(); } catch (e) {} ws = null; wsLive = false; }
+}
+function savePin() { pin = $('pinbox').value.trim(); store('cutaway_pin', pin); needPin = false; typed = true; $('pin').style.display = 'none'; poll(); connectWs(); }
 async function act(cmd) {
   try {
-    const r = await fetch(api('/api/action?do=' + encodeURIComponent(cmd)), { method: 'POST' });
+    // (keepalive: a "let go" sent as the page goes away still arrives.)
+    const r = await fetch(api('/api/action?do=' + encodeURIComponent(cmd)), { method: 'POST', keepalive: true });
     const t = await r.text();
     if (!r.ok) flash(t, true);
     else if (/pre-show check/i.test(t)) flash(t + '…');
@@ -542,6 +552,10 @@ let held = null;
 function hold(down, up) { if (held) act(held); held = up; act(down); }
 function letGo() { if (held) { const up = held; held = null; act(up); } }
 ['pointerup', 'pointercancel'].forEach(ev => document.addEventListener(ev, letGo));
+// The phone locking, another app or the page closing mid-hold lets go too,
+// so talkback or a camera move never stays on.
+['blur', 'pagehide'].forEach(ev => window.addEventListener(ev, letGo));
+document.addEventListener('visibilitychange', () => { if (document.hidden) letGo(); });
 $('talk').onpointerdown = e => { e.preventDefault(); hold('talkback:on', 'talkback:off'); };
 
 // Faders: at most ~8 changes a second while dragging, and the last one always.
@@ -741,16 +755,24 @@ function renderTally() {
   $('tstate').textContent = src.tally === 'program' ? 'ON AIR' : src.tally === 'preview' ? 'PREVIEW' : '';
 }
 
+// Whether the PIN in use was just typed here (so a 401 means a typo).
+let typed = false;
 async function poll() {
+  if (needPin) return;
   try {
     const r = await fetch(api('/api/state'));
-    if (r.status === 401) { $('pin').style.display = 'flex'; return; }
+    if (r.status === 401) {
+      askPin(typed ? 'That PIN didn\'t work. The PIN is shown in Cutaway under More › Control.' : pin ? 'The PIN has changed. The new one is shown in Cutaway under More › Control.' : 'It\'s shown in Cutaway under More › Control.');
+      return;
+    }
+    if (r.status === 429) { askPin('Too many wrong PINs: wait a minute, then type the PIN shown in Cutaway under More › Control.'); return; }
+    typed = false;
     state = await r.json();
     render();
   } catch (e) { flash('Cutaway isn\'t answering…', true); }
 }
 function refreshImage() {
-  if (tallySource !== null || imgBusy || document.hidden || tab !== 'scenes') return;
+  if (needPin || tallySource !== null || imgBusy || document.hidden || tab !== 'scenes') return;
   imgBusy = true;
   const img = $('program');
   const next = new Image();
@@ -761,7 +783,7 @@ function refreshImage() {
 // Live updates over WebSocket; polling while it isn't connected.
 let wsLive = false, ws = null;
 function connectWs() {
-  if (ws && ws.readyState <= 1) return;
+  if (needPin || (ws && ws.readyState <= 1)) return;
   try { ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/ws?pin=' + encodeURIComponent(pin)); }
   catch (e) { return; }
   ws.onmessage = ev => {
@@ -769,7 +791,7 @@ function connectWs() {
     if (m.type === 'state') { state = m.state; wsLive = true; render(); }
     else if (m.type === 'reply' && !m.ok) flash(m.message, true);
   };
-  ws.onclose = () => { wsLive = false; setTimeout(connectWs, 3000); };
+  ws.onclose = () => { wsLive = false; if (!needPin) setTimeout(connectWs, 3000); };
 }
 if (tallySource === null) { selectTab(tab); measure(); }
 poll(); connectWs();

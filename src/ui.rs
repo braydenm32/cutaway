@@ -1702,10 +1702,14 @@ impl App {
     fn handle_requests(&mut self) {
         while let Ok(r) = self.requests_rx.try_recv() {
             let result = self.run_action(r.action);
+            // What couldn't be done shows here too, whoever asked (the phone,
+            // a Stream Deck key, MIDI): the person at the laptop needs to
+            // know REC didn't start, not only the key that was pressed.
+            if let Err(e) = &result {
+                self.toast(format!("Couldn't do what a controller asked: {e}"), true);
+            }
             if let Some(reply) = r.reply {
                 let _ = reply.send(result);
-            } else if let Err(e) = result {
-                self.toast(e, true);
             }
         }
     }
@@ -2010,7 +2014,12 @@ impl App {
     fn handle_keys(&mut self, ctx: &egui::Context) {
         // Let go of held shortcuts (talkback, sound pads), even if a window
         // opened while the key was down.
-        let ups: Vec<Key> = ctx.input(|i| i.events.iter().filter_map(|e| if let egui::Event::Key { key, pressed: false, .. } = e { Some(*key) } else { None }).collect());
+        let mut ups: Vec<Key> = ctx.input(|i| i.events.iter().filter_map(|e| if let egui::Event::Key { key, pressed: false, .. } = e { Some(*key) } else { None }).collect());
+        // The window losing focus (another app, ⌘Tab) never sends the key's
+        // release: let go of everything held then.
+        if ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::WindowFocused(false)))) {
+            ups.extend(self.held_keys.iter().map(|(k, _)| *k));
+        }
         for k in ups {
             let (go, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut self.held_keys).into_iter().partition(|(h, _)| *h == k);
             self.held_keys = keep;
