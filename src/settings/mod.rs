@@ -1009,9 +1009,9 @@ impl SettingsUi {
                 ui.label(format!("{} {} for a moment as soon as you apply, to take the new settings.", list_names(&check.restarting), if one { "restarts" } else { "restart" }));
                 if check.recording {
                     ui.label(if one {
-                        "Its own recording ends there and starts again from the next take; the program keeps recording."
+                        "Its own file ends there and a new one starts straight away; the program keeps recording."
                     } else {
-                        "Their own recordings end there and start again from the next take; the program keeps recording."
+                        "Their own files end there and new ones start straight away; the program keeps recording."
                     });
                 }
             } else {
@@ -1459,7 +1459,7 @@ impl SettingsUi {
                 if measured.is_some() { "measured on this take" } else { "estimated" },
                 free.map(|f| format!(" — the drive has room for about {}", crate::engine::health::fmt_left(f as f64 / rate.max(1.0)))).unwrap_or_default()
             ));
-            hint(ui, "Takes are written so that after a crash or a power cut they keep everything up to the last second; Cutaway mends them next time it opens.");
+            hint(ui, "Takes are written so that if Cutaway closes mid-take they keep everything up to about the last second, and after a power cut all but the last few seconds; Cutaway mends them next time it opens.");
             if let Some(b) = cfg.output.backup_folder.as_ref() {
                 if b == &cfg.output.folder {
                     ui.label(RichText::new("⚠ The backup folder is the recording folder; pick a folder on another drive.").color(AMBER));
@@ -2169,8 +2169,8 @@ pub(super) fn short_audio_device(device: &str) -> String {
 
 pub(super) fn short_device(device: &str) -> String {
     match device {
-        "test" => "Test pattern".into(),
-        d if d.starts_with("test:") => format!("Test pattern ({})", &d[5..]),
+        "test" => "Test picture".into(),
+        d if d.starts_with("test:") => format!("Test picture ({})", crate::media::testsrc::pattern_label(&d[5..]).to_lowercase()),
         d if crate::platform::capture::is_screen(d) => crate::platform::capture::ScreenTarget::parse(d).map(|t| t.describe()).unwrap_or_default(),
         "default" => "System default".into(),
         "media" => "Media player".into(),
@@ -2325,7 +2325,7 @@ pub(super) fn video_device_combo(ui: &mut egui::Ui, value: &mut String, devices:
         ui.separator();
         ui.selectable_value(value, "screen".to_string(), "Screen capture");
         for p in TEST_PATTERN_NAMES {
-            ui.selectable_value(value, format!("test:{p}"), format!("Test pattern: {p}"));
+            ui.selectable_value(value, format!("test:{p}"), format!("Test picture: {}", crate::media::testsrc::pattern_label(p).to_lowercase()));
         }
     });
 }
@@ -2863,10 +2863,17 @@ mod tests {
         // Pixel for pixel: half a 4K picture is 1080p.
         assert_eq!((right.width, right.height), (1920, 1080));
         assert!(win.draft.validate().is_ok(), "{:?}", win.draft.validate());
-        // Again: three more, after the first two, with names of their own.
+        // Again, into three: they replace the two (the same names and
+        // identities where they fit), never "Wide left 2".
+        let (left, right) = (win.draft.sources[1].uid, win.draft.sources[2].uid);
         win.split_source(0, 3);
         let names: Vec<&str> = win.draft.sources.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names[3..6], ["Wide left 2", "Wide middle", "Wide right 2"]);
+        assert_eq!(names, ["Wide", "Wide left", "Wide middle", "Wide right", "Screen"]);
+        assert_eq!((win.draft.sources[1].uid, win.draft.sources[3].uid), (left, right));
+        assert_eq!(win.sel_source, 1);
+        win.split_source(0, 2);
+        let names: Vec<&str> = win.draft.sources.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["Wide", "Wide left", "Wide right", "Screen"]);
         // A close-up isn't split again.
         let before = win.draft.sources.len();
         win.split_source(1, 2);

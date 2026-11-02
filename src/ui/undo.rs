@@ -29,12 +29,26 @@ pub struct Snapshot {
     pub scenes: Vec<Scene>,
     /// The scene on air (by name) when it was taken.
     pub live: String,
+    /// The settings just after the change (filled in on the next frame), so
+    /// undoing it takes back only what it changed: faders, mic ON/OFF and
+    /// the like moved on the desk since stay as they are.
+    pub after: Option<Config>,
     at: Instant,
 }
 
 impl Snapshot {
     pub fn new(kind: Kind, label: impl Into<String>, cfg: &Config, scenes: &[Scene], live: &str) -> Self {
-        Snapshot { label: label.into(), kind, cfg: cfg.clone(), scenes: scenes.to_vec(), live: live.to_string(), at: Instant::now() }
+        Snapshot { label: label.into(), kind, cfg: cfg.clone(), scenes: scenes.to_vec(), live: live.to_string(), after: None, at: Instant::now() }
+    }
+
+    /// The settings to put back onto `now`: with `after` known, only what
+    /// this step changed (a three-way merge); otherwise the whole lot.
+    pub fn settings_onto(&self, now: &Config) -> Config {
+        let Some(after) = &self.after else { return self.cfg.clone() };
+        let same_scenes = |c: &Config| Config { scenes: now.scenes.clone(), ..c.clone() };
+        let mut out = now.with_edits(&same_scenes(after), &same_scenes(&self.cfg));
+        out.scenes = now.scenes.clone();
+        out
     }
 
     /// Whether putting this back changes the settings (not just scenes).
@@ -65,6 +79,7 @@ impl History {
                 // Same gesture going on: keep the state from its start, but
                 // count from now.
                 top.at = before.at;
+                top.after = None;
                 self.redo.clear();
                 return;
             }
@@ -76,17 +91,37 @@ impl History {
         self.redo.clear();
     }
 
+    /// Note the settings as they are now as the result of the latest step,
+    /// once (called every frame, so it lands just after the change).
+    pub fn settle(&mut self, cfg: &Config) {
+        if let Some(top) = self.undo.last_mut() {
+            if top.kind == Kind::Settings && top.after.is_none() {
+                top.after = Some(cfg.clone());
+            }
+        }
+    }
+
+    /// The opposite step: what was changed, the other way round.
+    fn reverse(of: &Snapshot, now: Snapshot) -> Snapshot {
+        match &of.after {
+            Some(after) => Snapshot { label: of.label.clone(), kind: of.kind, cfg: after.clone(), after: Some(of.cfg.clone()), ..now },
+            None => Snapshot { label: of.label.clone(), kind: of.kind, ..now },
+        }
+    }
+
     /// The state to go back to; `now` is kept to redo it.
     pub fn undo(&mut self, now: Snapshot) -> Option<Snapshot> {
         let back = self.undo.pop()?;
-        self.redo.push(Snapshot { label: back.label.clone(), kind: back.kind, ..now });
+        self.redo.push(Self::reverse(&back, now));
         Some(back)
     }
 
     /// The state to go forward to; `now` is kept to undo it again.
     pub fn redo(&mut self, now: Snapshot) -> Option<Snapshot> {
         let fwd = self.redo.pop()?;
-        self.undo.push(Snapshot { label: fwd.label.clone(), kind: fwd.kind, at: Instant::now() - COALESCE, ..now });
+        let mut back = Self::reverse(&fwd, now);
+        back.at = Instant::now() - COALESCE;
+        self.undo.push(back);
         Some(fwd)
     }
 
@@ -170,6 +205,31 @@ mod tests {
             n += 1;
         }
         assert_eq!(n, DEPTH);
+    }
+
+    #[test]
+    fn undo_takes_back_only_that_step() {
+        // A step changed the frame rate; then the desk turned Preview on.
+        let before = Config::default();
+        let mut after = before.clone();
+        after.program.fps = 50;
+        let mut h = History::default();
+        h.record(Snapshot::new(Kind::Settings, "Frame rate", &before, &[], ""));
+        h.settle(&after);
+        let mut now = after.clone();
+        now.transition.preview_mode = !before.transition.preview_mode;
+        let back = h.undo(Snapshot::new(Kind::Scenes, "", &now, &[], "")).unwrap();
+        let undone = back.settings_onto(&now);
+        assert_eq!(undone.program.fps, before.program.fps);
+        assert_eq!(undone.transition.preview_mode, now.transition.preview_mode, "the desk's change stays");
+        // Redo puts the frame rate back, still leaving the desk alone.
+        let fwd = h.redo(Snapshot::new(Kind::Scenes, "", &undone, &[], "")).unwrap();
+        let redone = fwd.settings_onto(&undone);
+        assert_eq!(redone.program.fps, 50);
+        assert_eq!(redone.transition.preview_mode, now.transition.preview_mode);
+        // And undo again.
+        let again = h.undo(Snapshot::new(Kind::Scenes, "", &redone, &[], "")).unwrap();
+        assert_eq!(again.settings_onto(&redone).program.fps, before.program.fps);
     }
 
     #[test]
