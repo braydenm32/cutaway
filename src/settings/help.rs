@@ -395,7 +395,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Rundown, "Scene") => "The scene to take when the segment starts, or stay on the one that's on.",
         (Rundown, "Cues") => "Commands run as the segment starts: show a title or clock, play a pad, start a Syrinscape mood or a countdown, mute a mic… The scene's own cues run too.",
         (Rundown, "Notes") => "Talking points, who's on, what to set up: shown with the rundown in the main window, and on the teleprompter when it follows the rundown.",
-        (Rundown, "Chapters") => "Adds a marker as each segment starts, so it becomes a chapter in the files and the podcast.",
+        (Rundown, "Chapters") => "Adds a marker as each segment starts, so it becomes a chapter in the files and the podcast. Add your own while recording with M or ◆ Marker; Shift+M adds one and opens a small box under ◆ Marker for its name, while the scene buttons keep working.",
 
         // ---- Scenes
         (Scenes, "Name") => "What the scene's button says. Renamed when you leave the box; what goes by its name (the rundown, \"if it drops, cut to\", automatic switching, scene:Name commands) follows the new name.",
@@ -427,7 +427,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Comments, "Hide after") => "Hides the comment by itself after this long (0: it stays until you hide it).",
 
         // ---- Recording
-        (Recording, "Save takes in") => "The folder where each take gets a folder of its own. Use a fast drive with plenty of room.",
+        (Recording, "Save takes in") => "The folder where each take gets a folder of its own. Use a fast drive with plenty of room. After each take a Take saved card shows under REC: when all went well it goes by itself after 20 seconds; one with a ⚠ stays until you close it. Every take stays in Record › Takes.",
         (Recording, "Take name") => "The start of each take's folder name; the date and time follow. Leave it as \"Take\" (or empty) and, with a show chosen, takes are named after the show instead (e.g. My_Show_2026-10-16_19-30-02); the Resolve project gets the same name.",
         (Recording, "File format") => "MP4 opens everywhere; MOV suits Final Cut Pro. ProRes always records as MOV.",
         (Recording, "Codec") => "H.264 plays anywhere; H.265 makes smaller files (good for 4K); ProRes (on a Mac) is the easiest to edit, but the files are very large.",

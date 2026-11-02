@@ -213,8 +213,11 @@ and [Install on Windows](#install-on-windows).
   saved or ⚠ what went wrong (dropped or repeated frames, a file that failed,
   a backup copy that didn't finish). Its buttons: **Open in Resolve** (see
   [Editing your takes](#editing-your-takes)), **Show in Finder** (Explorer on
-  Windows) and **Upload** (when uploads are set up). ✕ only hides the card
-  (the take stays first in Record › Takes); the next recording hides it too.
+  Windows) and **Upload** (when uploads are set up). When all went well the
+  card goes by itself after 20 seconds (hovering over it keeps it), so it
+  doesn't sit over the panels between takes; one with a ⚠ stays until you
+  close it. ✕ hides it any time (the take stays first in Record › Takes),
+  and the next recording hides it too.
   The time left on the drive stays in view at the top right.
 - **Record › Takes:** the last ten takes in the recording folder, newest
   first: date, length, size and file count (the same figures as the card),
@@ -826,7 +829,7 @@ Video Extensions** on some PCs.
 | Captions on screen | **CC** or `C` |
 | Who an auto-framed source follows | **⋯** on its tile (or right-click it): follow and shot size |
 | Marker | `M`, or **◆ Marker** beside REC while recording (just **◆ 3** in a narrow window) |
-| Named marker | `Shift+M` while recording, or **▾ › Named marker…** beside ◆: the marker goes in at that moment and a box asks for its name (typing doesn't move it; Cancel keeps "Marker 3") |
+| Named marker | `Shift+M` while recording, or **▾ › Named marker…** beside ◆: the marker goes in at that moment and a small box under **◆ Marker** asks for its name (typing doesn't move it). Enter names it; Esc keeps "Marker 3"; clicking elsewhere keeps what you typed. It isn't a dialog: scene buttons, tiles and TAKE still work with the mouse while it's open (keys type into the box) |
 | This take's markers | **▾** beside **◆ Marker**: each marker's time, name and the scene on air. Change a name there, or ✕ to take one out, until the take stops (clips show with ✂ and stay as they are) |
 | Save a clip | `K`, or **✂ Clip** beside REC while recording (the last 30 seconds, or as set); the status light's panel has **✂ Clip the last 10 / 30 / 60 s** |
 | Instant replay | **⋯** beside CUT / MIX › **⟲ Replay**, or under the status light, while recording: Slow, from the program, one camera or every angle, and the last 5 / 10 / 20 / 30 s |

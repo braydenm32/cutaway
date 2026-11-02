@@ -873,6 +873,8 @@ impl App {
                 }
             }
         }
+        // (The named-marker box opens under ◆ Marker, just right of here.)
+        self.rec_rect = Some(rect);
         rect
     }
 
