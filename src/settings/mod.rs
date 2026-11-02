@@ -343,6 +343,9 @@ struct RemoveCheck {
     on_air: Vec<String>,
     /// Sources that stay but restart (a changed device, size, delay…).
     restarting: Vec<String>,
+    /// Inputs that stay but reopen (a changed device, channels, delay…):
+    /// their sound drops out for a moment.
+    inputs: Vec<String>,
     recording: bool,
     streaming: bool,
 }
@@ -890,7 +893,15 @@ impl SettingsUi {
             let r = egui::Modal::new(egui::Id::unique("discard_settings")).show(ctx, |ui| {
                 ui.set_width(340.0);
                 ui.heading("Discard your changes?");
-                ui.label("Some changes here wait for Apply because they open, close or restart sources. Everything else is already saved.");
+                match self.live_problem() {
+                    Some(problem) => {
+                        ui.label(RichText::new(format!("⚠ {problem}")).color(AMBER));
+                        ui.label("Until that's fixed, changes made since then aren't saved either. Keep editing to fix it, or discard them.");
+                    }
+                    None => {
+                        ui.label("Some changes here wait for Apply because they open, close or restart sources. Everything else is already saved.");
+                    }
+                }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if ui.button("Discard").clicked() {
@@ -938,8 +949,9 @@ impl SettingsUi {
         if info.recording || info.streaming {
             let (names, on_air) = self.leaving(&info.on_air);
             let restarting = self.restarting();
-            if !names.is_empty() || !restarting.is_empty() {
-                self.confirm_remove = Some(RemoveCheck { names, on_air, restarting, recording: info.recording, streaming: info.streaming });
+            let inputs = self.reopening_inputs();
+            if !names.is_empty() || !restarting.is_empty() || !inputs.is_empty() {
+                self.confirm_remove = Some(RemoveCheck { names, on_air, restarting, inputs, recording: info.recording, streaming: info.streaming });
                 return SettingsAction::None;
             }
         }
@@ -973,6 +985,17 @@ impl SettingsUi {
         names
     }
 
+    /// The inputs that stay but reopen when applied (review D7).
+    fn reopening_inputs(&self) -> Vec<String> {
+        use crate::config::audio_key;
+        self.draft
+            .audio
+            .iter()
+            .filter(|a| a.uid != 0 && self.original.audio.iter().any(|o| o.uid == a.uid && audio_key(o) != audio_key(a)))
+            .map(|a| a.name.clone())
+            .collect()
+    }
+
     /// The sources and inputs applying would remove, and which of them are
     /// on the program now.
     fn leaving(&self, on_air: &[u64]) -> (Vec<String>, Vec<String>) {
@@ -1002,16 +1025,20 @@ impl SettingsUi {
         let r = egui::Modal::new(egui::Id::unique("confirm_remove_sources")).show(ctx, |ui| {
             ui.set_width(420.0);
             let one = check.names.len() == 1;
-            if check.names.is_empty() {
+            if check.names.is_empty() && check.restarting.is_empty() {
+                let one = check.inputs.len() == 1;
+                ui.heading(format!("Reopen {} while {what}?", if one { "this input" } else { "these inputs" }));
+                ui.add_space(4.0);
+            } else if check.names.is_empty() {
                 let one = check.restarting.len() == 1;
                 ui.heading(format!("Restart {} while {what}?", if one { "this source" } else { "these sources" }));
                 ui.add_space(4.0);
                 ui.label(format!("{} {} for a moment as soon as you apply, to take the new settings.", list_names(&check.restarting), if one { "restarts" } else { "restart" }));
                 if check.recording {
                     ui.label(if one {
-                        "Its own recording ends there and starts again from the next take; the program keeps recording."
+                        "Its own file ends there and a new one starts straight away; the program keeps recording."
                     } else {
-                        "Their own recordings end there and start again from the next take; the program keeps recording."
+                        "Their own files end there and new ones start straight away; the program keeps recording."
                     });
                 }
             } else {
@@ -1025,6 +1052,16 @@ impl SettingsUi {
                     ui.label(format!("{} also {} for a moment.", list_names(&check.restarting), if check.restarting.len() == 1 { "restarts" } else { "restart" }));
                 }
             }
+            if !check.inputs.is_empty() {
+                let one = check.inputs.len() == 1;
+                ui.label(format!(
+                    "{} {} for a moment as soon as you apply: {} sound drops out of the {} for about a second.",
+                    list_names(&check.inputs),
+                    if one { "reopens" } else { "reopen" },
+                    if one { "its" } else { "their" },
+                    if check.recording { "recording" } else { "stream" }
+                ));
+            }
             if !check.on_air.is_empty() {
                 ui.add_space(4.0);
                 let on = list_names(&check.on_air);
@@ -1033,7 +1070,13 @@ impl SettingsUi {
             }
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                let go = if check.names.is_empty() { "Restart and apply" } else { "Remove and apply" };
+                let go = if !check.names.is_empty() {
+                    "Remove and apply"
+                } else if check.restarting.is_empty() {
+                    "Reopen and apply"
+                } else {
+                    "Restart and apply"
+                };
                 if ui.button(RichText::new(go).color(ERROR)).clicked() {
                     action = Some(SettingsAction::Apply { cfg: self.draft.clone(), base: Box::new(self.original.clone()) });
                     done = true;
@@ -1459,7 +1502,7 @@ impl SettingsUi {
                 if measured.is_some() { "measured on this take" } else { "estimated" },
                 free.map(|f| format!(" — the drive has room for about {}", crate::engine::health::fmt_left(f as f64 / rate.max(1.0)))).unwrap_or_default()
             ));
-            hint(ui, "Takes are written so that after a crash or a power cut they keep everything up to the last second; Cutaway mends them next time it opens.");
+            hint(ui, "Takes are written so that if Cutaway closes mid-take they keep everything up to about the last second, and after a power cut all but the last few seconds; Cutaway mends them next time it opens.");
             if let Some(b) = cfg.output.backup_folder.as_ref() {
                 if b == &cfg.output.folder {
                     ui.label(RichText::new("⚠ The backup folder is the recording folder; pick a folder on another drive.").color(AMBER));
@@ -1812,10 +1855,16 @@ impl SettingsUi {
                     hint(ui, &format!("typical for this size: {lo}–{hi} kbps"));
                 });
                 ui.end_row();
+                // A service's own advice beats the size's typical range (review G11).
+                if s.video_bitrate_kbps > TWITCH_KBPS && s.destinations.iter().any(|d| d.enabled && d.service == crate::config::Service::Twitch) {
+                    ui.label("");
+                    ui.label(RichText::new(format!("⚠ Twitch advises {TWITCH_KBPS} kbps or less for most channels; above that, some viewers may buffer.")).color(AMBER).size(TEXT_BODY));
+                    ui.end_row();
+                }
                 label(ui, "Audio bitrate");
                 egui::ComboBox::from_id_salt("stream_abr").selected_text(format!("AAC {} kbps", s.audio_bitrate_kbps)).show_ui(ui, |ui| {
                     for r in [96, 128, 160, 192, 256, 320] {
-                        ui.selectable_value(&mut s.audio_bitrate_kbps, r, format!("AAC {r} kbps"));
+                        ui.selectable_value(&mut s.audio_bitrate_kbps, r, aac_label(r));
                     }
                 });
                 ui.end_row();
@@ -1860,6 +1909,11 @@ impl SettingsUi {
     /// A new destination of this service, picked.
     fn add_destination(&mut self, s: Service) {
         let names = self.draft.streaming.destinations.iter().map(|d| d.name.clone()).collect();
+        // The first one also turns on recording when you go live (it can
+        // be unticked), so a stream that drops still leaves a copy here.
+        if self.draft.streaming.destinations.is_empty() {
+            self.draft.streaming.record_when_live = true;
+        }
         let base = match s {
             Service::CustomRtmp => "Custom",
             other => other.label(),
@@ -2169,8 +2223,8 @@ pub(super) fn short_audio_device(device: &str) -> String {
 
 pub(super) fn short_device(device: &str) -> String {
     match device {
-        "test" => "Test pattern".into(),
-        d if d.starts_with("test:") => format!("Test pattern ({})", &d[5..]),
+        "test" => "Test picture".into(),
+        d if d.starts_with("test:") => format!("Test picture ({})", crate::media::testsrc::pattern_label(&d[5..]).to_lowercase()),
         d if crate::platform::capture::is_screen(d) => crate::platform::capture::ScreenTarget::parse(d).map(|t| t.describe()).unwrap_or_default(),
         "default" => "System default".into(),
         "media" => "Media player".into(),
@@ -2325,7 +2379,7 @@ pub(super) fn video_device_combo(ui: &mut egui::Ui, value: &mut String, devices:
         ui.separator();
         ui.selectable_value(value, "screen".to_string(), "Screen capture");
         for p in TEST_PATTERN_NAMES {
-            ui.selectable_value(value, format!("test:{p}"), format!("Test pattern: {p}"));
+            ui.selectable_value(value, format!("test:{p}"), format!("Test picture: {}", crate::media::testsrc::pattern_label(p).to_lowercase()));
         }
     });
 }
@@ -2520,6 +2574,19 @@ fn list_names(names: &[String]) -> String {
 }
 
 /// Rough, commonly published ranges for live streaming bitrates.
+/// Twitch's advice for most channels (its own help pages).
+const TWITCH_KBPS: u32 = 6000;
+
+/// An AAC bitrate in the list: Windows' encoder tops out at 192 kbps, so
+/// higher ones say what's really sent there.
+fn aac_label(kbps: u32) -> String {
+    if cfg!(windows) && kbps > 192 {
+        format!("AAC {kbps} kbps (sent as 192 on Windows)")
+    } else {
+        format!("AAC {kbps} kbps")
+    }
+}
+
 pub(super) fn recommended_kbps(w: u32, h: u32, fps: u32) -> (u32, u32) {
     let pixels = w.max(h) as u64 * w.min(h) as u64;
     let high = fps > 30;
@@ -2863,10 +2930,17 @@ mod tests {
         // Pixel for pixel: half a 4K picture is 1080p.
         assert_eq!((right.width, right.height), (1920, 1080));
         assert!(win.draft.validate().is_ok(), "{:?}", win.draft.validate());
-        // Again: three more, after the first two, with names of their own.
+        // Again, into three: they replace the two (the same names and
+        // identities where they fit), never "Wide left 2".
+        let (left, right) = (win.draft.sources[1].uid, win.draft.sources[2].uid);
         win.split_source(0, 3);
         let names: Vec<&str> = win.draft.sources.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names[3..6], ["Wide left 2", "Wide middle", "Wide right 2"]);
+        assert_eq!(names, ["Wide", "Wide left", "Wide middle", "Wide right", "Screen"]);
+        assert_eq!((win.draft.sources[1].uid, win.draft.sources[3].uid), (left, right));
+        assert_eq!(win.sel_source, 1);
+        win.split_source(0, 2);
+        let names: Vec<&str> = win.draft.sources.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["Wide", "Wide left", "Wide right", "Screen"]);
         // A close-up isn't split again.
         let before = win.draft.sources.len();
         win.split_source(1, 2);
@@ -2946,6 +3020,20 @@ mod tests {
         let check = win.confirm_remove.take().expect("asks");
         assert!(check.names.is_empty());
         assert_eq!(check.restarting, vec!["Wide".to_string(), "Alex".to_string()]);
+        assert!(matches!(win.apply(&ctx(false)), SettingsAction::Apply { .. }));
+    }
+
+    /// A mic that reopens mid-recording asks too, like a camera (review D7).
+    #[test]
+    fn asks_before_reopening_an_input_while_recording() {
+        let mut cfg = Config::default();
+        cfg.audio = vec![crate::config::AudioConfig { name: "Guest mic".into(), device: "Mic A".into(), ..Default::default() }];
+        cfg.assign_uids();
+        let mut win = SettingsUi::new(cfg.clone());
+        win.draft.audio[0].device = "Mic B".into();
+        assert!(matches!(win.apply(&ctx(true)), SettingsAction::None));
+        let check = win.confirm_remove.take().expect("asks");
+        assert_eq!(check.inputs, vec!["Guest mic".to_string()]);
         assert!(matches!(win.apply(&ctx(false)), SettingsAction::Apply { .. }));
     }
 

@@ -142,6 +142,7 @@ impl Watchdog {
                     if out.down {
                         let mut st = self.status.lock_ok();
                         st.offline.remove(&name);
+                        st.why_offline.remove(&name);
                         st.push(LogLevel::Info, format!("{name}: back"));
                         *out = Outage { ever_alive: true, ..Default::default() };
                         changed = true;

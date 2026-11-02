@@ -18,7 +18,7 @@
 //!   (`{"do":"scene:2","id":1}`, answered with `{"type":"reply","id":1,...}`).
 //!
 //! Everything but the pages needs the PIN (`?pin=`, an `X-Cutaway-Pin`
-//! header or the cookie the page sets). Five wrong PINs in a row from one
+//! header or the cookie the page sets). Five different wrong PINs in a row from one
 //! address make it wait a minute.
 
 use crate::util::LockExt;
@@ -59,30 +59,39 @@ pub struct RemoteShared {
     pub keys: Mutex<KeySources>,
     /// The teleprompter's script as JSON ({version, text, segments}).
     pub prompter: Mutex<String>,
-    /// Wrong PINs by address: how many in a row, and when the last was.
-    wrong: Mutex<HashMap<IpAddr, (u32, Instant)>>,
+    /// Wrong PINs by address: how many different ones in a row, when the
+    /// last was, and what it was.
+    wrong: Mutex<HashMap<IpAddr, (u32, Instant, String)>>,
 }
 
 /// Wrong PINs from one address before it has to wait.
 const TRIES: u32 = 5;
 /// How long it waits.
 const LOCKED_FOR: Duration = Duration::from_secs(60);
+/// A WebSocket that's had nothing for this long gets `{"type":"tick"}`.
+const TICK_EVERY: Duration = Duration::from_secs(2);
 
 impl RemoteShared {
     /// Whether `ip` is waiting after too many wrong PINs.
     fn locked_out(&self, ip: IpAddr) -> bool {
         let mut w = self.wrong.lock_ok();
-        w.retain(|_, (_, at)| at.elapsed() < LOCKED_FOR);
-        w.get(&ip).is_some_and(|(n, _)| *n >= TRIES)
+        w.retain(|_, (_, at, _)| at.elapsed() < LOCKED_FOR);
+        w.get(&ip).is_some_and(|(n, _, _)| *n >= TRIES)
     }
 
-    fn note_pin(&self, ip: IpAddr, right: bool) {
+    /// A PIN tried. The same wrong PIN again (a phone or Stream Deck still
+    /// using the old one after a change, asking every second) counts once:
+    /// only guessing different ones locks an address out.
+    fn note_pin(&self, ip: IpAddr, given: &str, right: bool) {
         let mut w = self.wrong.lock_ok();
         if right {
             w.remove(&ip);
         } else {
-            let e = w.entry(ip).or_insert((0, Instant::now()));
-            e.0 += 1;
+            let e = w.entry(ip).or_insert((0, Instant::now(), String::new()));
+            if e.0 == 0 || e.2 != given {
+                e.0 += 1;
+                e.2 = given.to_string();
+            }
             e.1 = Instant::now();
         }
     }
@@ -290,7 +299,7 @@ fn handle(mut conn: TcpStream, sh: &RemoteShared) -> std::io::Result<()> {
     let locked = sh.locked_out(ip);
     let authed = !locked && !pin.is_empty() && same(&given, &pin);
     if !locked && !given.is_empty() {
-        sh.note_pin(ip, authed);
+        sh.note_pin(ip, &given, authed);
     }
     if path == "/icon.png" || path == "/apple-touch-icon.png" {
         return respond(&mut conn, "200 OK", "image/png", ICON_PNG, "Cache-Control: max-age=86400\r\n");
@@ -379,6 +388,10 @@ fn websocket(conn: TcpStream, key: &str, sh: &RemoteShared) -> std::io::Result<(
         let (w2, c2) = (writer.clone(), closed.clone());
         let mut r = conn;
         scope.spawn(move || {
+            // What's held down from this controller (talkback, a pad, a PTZ
+            // move), as the commands that let go: run when the connection
+            // goes, so nothing stays stuck on.
+            let mut held: Vec<String> = Vec::new();
             loop {
                 match ws::read_message(&mut r) {
                     Ok(ws::Message::Text(t)) => {
@@ -393,6 +406,13 @@ fn websocket(conn: TcpStream, key: &str, sh: &RemoteShared) -> std::io::Result<(
                             _ => (t.trim().to_string(), None),
                         };
                         let result = sh.run(&cmd);
+                        if result.is_ok() {
+                            let c = cmd.trim().to_ascii_lowercase();
+                            held.retain(|h| *h != c);
+                            if let Some(up) = let_go_of(&c) {
+                                held.push(up);
+                            }
+                        }
                         let reply = serde_json::json!({
                             "type": "reply",
                             "id": id,
@@ -411,13 +431,19 @@ fn websocket(conn: TcpStream, key: &str, sh: &RemoteShared) -> std::io::Result<(
                     Ok(_) => {}
                 }
             }
+            for up in held {
+                let _ = sh.run(&up);
+            }
             c2.store(true, Ordering::Relaxed);
             let _ = ws::write_frame(&mut *w2.lock_ok(), 0x8, &[]);
             let _ = w2.lock_ok().shutdown(std::net::Shutdown::Both);
         });
-        // Writer: the state whenever it changes (at most 10 times a second).
+        // Writer: the state whenever it changes (at most 10 times a second),
+        // and a small tick when nothing has gone for two seconds, so a page
+        // can tell a quiet show from a lost connection.
         let mut seen = u64::MAX;
         let mut last_ping = Instant::now();
+        let mut last_sent = Instant::now();
         while !closed.load(Ordering::Relaxed) {
             let (generation, state) = sh.snapshot();
             if generation != seen {
@@ -425,7 +451,13 @@ fn websocket(conn: TcpStream, key: &str, sh: &RemoteShared) -> std::io::Result<(
                 if send_state(&writer, &state).is_err() {
                     break;
                 }
+                last_sent = Instant::now();
                 std::thread::sleep(Duration::from_millis(100));
+            } else if last_sent.elapsed() >= TICK_EVERY {
+                if ws::write_text(&mut *writer.lock_ok(), r#"{"type":"tick"}"#).is_err() {
+                    break;
+                }
+                last_sent = Instant::now();
             }
             if last_ping.elapsed() > Duration::from_secs(15) {
                 last_ping = Instant::now();
@@ -441,8 +473,30 @@ fn websocket(conn: TcpStream, key: &str, sh: &RemoteShared) -> std::io::Result<(
     Ok(())
 }
 
+/// For a command that starts something held down (talkback on, a pad
+/// pressed, a PTZ camera moving), the command that lets it go.
+fn let_go_of(cmd: &str) -> Option<String> {
+    let parts: Vec<&str> = cmd.split(':').collect();
+    match parts.as_slice() {
+        ["talkback", "on"] => Some("talkback:off".into()),
+        ["pad", which, "press"] => Some(format!("pad:{which}:release")),
+        ["ptz", cam, dir, speed] if speed.parse::<f32>().is_ok() && !matches!(*dir, "preset") => Some(format!("ptz:{cam}:stop")),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn held_commands_know_how_to_let_go() {
+        assert_eq!(let_go_of("talkback:on").as_deref(), Some("talkback:off"));
+        assert_eq!(let_go_of("pad:3:press").as_deref(), Some("pad:3:release"));
+        assert_eq!(let_go_of("ptz:2:left:0.5").as_deref(), Some("ptz:2:stop"));
+        assert_eq!(let_go_of("ptz:2:preset:1"), None);
+        assert_eq!(let_go_of("scene:2"), None);
+        assert_eq!(let_go_of("talkback"), None);
+    }
+
     use super::*;
 
     fn get(port: u16, path: &str) -> (String, String) {
@@ -462,7 +516,8 @@ mod tests {
         *sh.pin.lock_ok() = "4321".into();
         *sh.state.lock_ok() = r#"{"recording":false}"#.into();
         *sh.tally.lock_ok() = vec!["program".into(), "off".into()];
-        let server = RemoteServer::start(18791, sh.clone()).unwrap();
+        let port = crate::util::free_tcp_port();
+        let server = RemoteServer::start(port, sh.clone()).unwrap();
         // The app's side: answer requests.
         let worker = std::thread::spawn(move || {
             if let Ok(r) = rx.recv_timeout(Duration::from_secs(5)) {
@@ -470,23 +525,29 @@ mod tests {
                 r.reply.unwrap().send(Ok("Scene 2".into())).unwrap();
             }
         });
-        let (status, body) = get(18791, "/");
+        let (status, body) = get(port, "/");
         assert!(status.contains("200") && body.contains("Cutaway Remote"));
-        assert!(get(18791, "/api/state").0.contains("401"));
+        assert!(get(port, "/api/state").0.contains("401"));
         // The icon is public too, so a home-screen shortcut gets it.
-        assert!(get(18791, "/apple-touch-icon.png").0.contains("200"));
-        let (status, body) = get(18791, "/api/state?pin=4321");
+        assert!(get(port, "/apple-touch-icon.png").0.contains("200"));
+        let (status, body) = get(port, "/api/state?pin=4321");
         assert!(status.contains("200") && body.contains("recording"), "{status} {body}");
-        assert_eq!(get(18791, "/api/tally/1?pin=4321").1, "program");
-        let (status, body) = get(18791, "/api/action?do=scene%3A2&pin=4321");
+        assert_eq!(get(port, "/api/tally/1?pin=4321").1, "program");
+        let (status, body) = get(port, "/api/action?do=scene%3A2&pin=4321");
         assert!(status.contains("200") && body == "Scene 2", "{status} {body}");
-        assert!(get(18791, "/api/action?do=explode&pin=4321").0.contains("400"));
+        assert!(get(port, "/api/action?do=explode&pin=4321").0.contains("400"));
         worker.join().unwrap();
-        // Guessing: five wrong PINs and even the right one waits.
-        for _ in 0..5 {
-            assert!(get(18791, "/api/state?pin=0000").0.contains("401"));
+        // An old PIN asked again and again (a phone after the PIN changed)
+        // counts once, so the right one still gets in.
+        for _ in 0..10 {
+            assert!(get(port, "/api/state?pin=1111").0.contains("401"));
         }
-        assert!(get(18791, "/api/state?pin=4321").0.contains("429"));
+        assert!(get(port, "/api/state?pin=4321").0.contains("200"));
+        // Guessing: five different wrong PINs and even the right one waits.
+        for g in ["0000", "0001", "0002", "0003", "0004"] {
+            assert!(get(port, &format!("/api/state?pin={g}")).0.contains("401"));
+        }
+        assert!(get(port, "/api/state?pin=4321").0.contains("429"));
         drop(server);
     }
 
@@ -494,10 +555,11 @@ mod tests {
     fn no_pin_lets_nothing_in() {
         let (tx, _rx) = crossbeam_channel::unbounded::<Request>();
         let sh = RemoteShared::new(tx, Arc::new(|| {}));
-        let server = RemoteServer::start(18793, sh).unwrap();
-        assert!(get(18793, "/").0.contains("200"));
-        assert!(get(18793, "/api/state").0.contains("401"));
-        assert!(get(18793, "/api/state?pin=").0.contains("401"));
+        let port = crate::util::free_tcp_port();
+        let server = RemoteServer::start(port, sh).unwrap();
+        assert!(get(port, "/").0.contains("200"));
+        assert!(get(port, "/api/state").0.contains("401"));
+        assert!(get(port, "/api/state?pin=").0.contains("401"));
         drop(server);
     }
 
@@ -510,13 +572,14 @@ mod tests {
         s.scenes.push(SceneState { name: "Wide".into(), program: true, preview: false });
         sh.publish(&s);
         *sh.pin.lock_ok() = "2468".into();
-        let server = RemoteServer::start(18792, sh.clone()).unwrap();
+        let port = crate::util::free_tcp_port();
+        let server = RemoteServer::start(port, sh.clone()).unwrap();
         let worker = std::thread::spawn(move || {
             let r = rx.recv_timeout(Duration::from_secs(5)).unwrap();
             assert_eq!(r.action, Action::Take);
             r.reply.unwrap().send(Ok("Taken".into())).unwrap();
         });
-        let mut c = TcpStream::connect(("127.0.0.1", 18792)).unwrap();
+        let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
         c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         write!(c, "GET /api/ws?pin=2468 HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n").unwrap();
         let mut head = Vec::new();
@@ -550,10 +613,18 @@ mod tests {
                 }
             }
         }
+        // Nothing changes: a tick still comes, within a few seconds.
+        loop {
+            if let ws::Message::Text(t) = ws::read_message(&mut c).unwrap() {
+                if t.contains("\"tick\"") {
+                    break;
+                }
+            }
+        }
         // Key pictures.
-        let (status, _) = get(18792, "/api/key/scene/1.png?size=72&pin=2468");
+        let (status, _) = get(port, "/api/key/scene/1.png?size=72&pin=2468");
         assert!(status.contains("200"), "{status}");
-        assert!(get(18792, "/api/key/scene/9.png?pin=2468").0.contains("404"));
+        assert!(get(port, "/api/key/scene/9.png?pin=2468").0.contains("404"));
         c.write_all(&ws::client_frame(0x8, b"")).unwrap();
         worker.join().unwrap();
         drop(server);

@@ -1088,6 +1088,10 @@ pub fn run_mixer(mut inputs: Vec<MixInput>, mut names: Vec<String>, taps: MixTap
                 }
             }
             let (peak_db, rms_db) = rec.peaks.take();
+            // (Any block since the last look counts: the peaks are kept.)
+            if peak_db.iter().any(|d| *d > super::health::SILENT_DB) {
+                st.mix_heard = Some(std::time::Instant::now());
+            }
             st.meters.insert("mix".into(), Meter { peak_db, rms_db });
             let (peak_db, rms_db) = stream.peaks.take();
             st.meters.insert("stream".into(), Meter { peak_db, rms_db });

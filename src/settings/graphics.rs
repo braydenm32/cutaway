@@ -51,8 +51,8 @@ fn kind_name(g: &Graphic) -> &'static str {
 
 /// "Alt+1" (⌥1 on a Mac): the key that shows and hides the i-th graphic.
 fn graphic_key(i: usize) -> Option<String> {
-    use crate::control::shortcuts::{KeyCombo, DIGITS};
-    (i < 9).then(|| KeyCombo { alt: true, ..KeyCombo::plain(DIGITS[i]) }.label())
+    use crate::control::shortcuts::{number_key, KeyCombo};
+    number_key(i).map(|k| KeyCombo { alt: true, ..KeyCombo::plain(k) }.label())
 }
 
 impl SettingsUi {
@@ -431,7 +431,7 @@ impl SettingsUi {
                             label(ui, "Format");
                             ui.horizontal(|ui| {
                                 ui.checkbox(&mut g.show_seconds, "seconds");
-                                hint(ui, if twelve { "12-hour, as the show's clock (Graphics › Clocks & timers, or click the clock in the top bar)" } else { "24-hour, as the show's clock (Graphics › Clocks & timers, or click the clock in the top bar)" });
+                                hint(ui, if twelve { "12-hour, as the show's clock (Graphics › Clocks & timers, or under the status light)" } else { "24-hour, as the show's clock (Graphics › Clocks & timers, or under the status light)" });
                             });
                             ui.end_row();
                         }
