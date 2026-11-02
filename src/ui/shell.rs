@@ -625,6 +625,12 @@ impl App {
             let live = stream.destinations.iter().filter(|d| d.state == DestState::Live).count();
             let total = stream.destinations.iter().filter(|d| d.state != DestState::Off).count();
             let connecting: Vec<&str> = stream.destinations.iter().filter(|d| matches!(d.state, DestState::Connecting | DestState::Retrying { .. })).map(|d| d.name.as_str()).collect();
+            if let Some(e) = &stream.error {
+                return Some((e.clone(), ERROR));
+            }
+            if live == 0 && connecting.is_empty() && total > 0 {
+                return Some(("The stream isn't reaching anyone — see the Stream panel".into(), ERROR));
+            }
             if live == 0 && !connecting.is_empty() {
                 return Some((format!("Connecting to {}", connecting.join(", ")), LIVE_SOFT));
             }
@@ -655,9 +661,9 @@ impl App {
             self.status_light(ui);
             return;
         };
-        let (rec, stream, markers, disk, backup) = {
+        let (rec, stream, markers, disk, backup, silent) = {
             let st = engine.status.lock_ok();
-            (st.rec.clone(), st.stream.clone(), st.markers, st.disk.clone(), st.backup_disk.clone())
+            (st.rec.clone(), st.stream.clone(), st.markers, st.disk.clone(), st.backup_disk.clone(), st.health.silent_secs)
         };
         let streaming = engine.is_streaming();
         let take_markers = engine.take_markers();
@@ -665,27 +671,32 @@ impl App {
         // ---- LIVE (once there's somewhere to stream to)
         self.live_pill(ui, &stream, streaming, roomy);
 
-        // ---- ✂ and ◆ while recording, then REC
+        // ---- ✂ and ◆ (always there, so REC never moves when a take
+        // starts or stops; they only work while recording), then REC
         let mut marker_clicked = false;
         let mut clip_clicked = false;
         let mut named = false;
-        if matches!(rec, RecState::Recording { .. }) {
-            let clip = if roomy { "✂ Clip" } else { "✂" };
+        let recording = matches!(rec, RecState::Recording { .. });
+        ui.scope(|ui| {
+            if !recording {
+                ui.disable();
+            }
+            let idle = "Works while recording";
             if ui
-                .add(egui::Button::new(clip).min_size(vec2(0.0, 30.0)))
+                .add(egui::Button::new("✂ Clip").min_size(vec2(0.0, 30.0)))
                 .on_hover_text(format!("Save the last {} seconds as a clip in the take's Clips folder{}", self.cfg.output.clip_seconds, self.key_hint(Builtin::Clip)))
+                .on_disabled_hover_text(format!("{idle}: saves the last {} seconds as a clip", self.cfg.output.clip_seconds))
                 .clicked()
             {
                 clip_clicked = true;
             }
             let gap = ui.spacing().item_spacing.x;
             ui.spacing_mut().item_spacing.x = 2.0;
-            let list = ui.add(egui::Button::new("▾").min_size(vec2(22.0, 30.0))).on_hover_text("This take's markers: name one, rename or take them out");
+            let list = ui.add(egui::Button::new("▾").min_size(vec2(22.0, 30.0))).on_hover_text("This take's markers: name one, rename or take them out").on_disabled_hover_text(format!("{idle}: this take's markers"));
             let mtext = match (roomy, markers) {
-                (true, 0) => "◆ Marker".to_string(),
+                (_, 0) => "◆ Marker".to_string(),
                 (true, n) => format!("◆ Marker ({n})"),
-                (false, 0) => "◆".to_string(),
-                (false, n) => format!("◆ {n}"),
+                (false, n) => format!("◆ Marker {n}"),
             };
             let named_key = self.key_label_or(Builtin::NamedMarker, "");
             if ui
@@ -695,6 +706,7 @@ impl App {
                     self.key_hint(Builtin::Marker),
                     if named_key.is_empty() { " ▾ adds one and asks for its name".to_string() } else { format!(" {named_key} (or ▾) adds one and asks for its name") }
                 ))
+                .on_disabled_hover_text(format!("{idle}: marks the moment as a chapter and a timeline marker"))
                 .clicked()
             {
                 marker_clicked = true;
@@ -711,12 +723,27 @@ impl App {
                 ui.separator();
                 self.marker_list(ui, &take_markers);
             });
-        }
+        });
         let rec_rect = self.rec_pill(ui, &rec, roomy);
         if self.on_show() {
             if let Some((_, last)) = &card {
                 self.take_card(ui.ctx(), rec_rect, last.as_ref());
             }
+        }
+        // A small "no sound" beside REC while the recording mix is silent
+        // (after a while it's a problem and an alert too: see health.rs).
+        if let Some(s) = silent.filter(|s| *s >= crate::engine::health::SILENT_BADGE_SECS) {
+            let r = egui::Frame::new()
+                .fill(AMBER_DIM)
+                .stroke(Stroke::new(1.0, AMBER))
+                .corner_radius(10.0)
+                .inner_margin(egui::Margin::symmetric(8, 2))
+                .show(ui, |ui| ui.label(RichText::new("no sound").strong().size(TEXT_BODY).color(Color32::WHITE)))
+                .response;
+            r.on_hover_text(format!(
+                "The recording has had no sound for {}. Check the mics are on (ON in the audio column), turned up and plugged in",
+                crate::engine::health::silent_text(s)
+            ));
         }
 
         // ---- the clock
@@ -1464,10 +1491,14 @@ impl App {
                 }
                 let shift = |k| KeyCombo { shift: true, ..KeyCombo::plain(k) }.label();
                 let alt = |k| KeyCombo { alt: true, ..KeyCombo::plain(k) }.label();
-                row(ui, format!("{}–{}", KeyCombo::plain(DIGITS[0]).label(), KeyCombo::plain(DIGITS[8]).label()), "Take scene 1–9 (or source 1–9, as set in Scenes › Switching)");
-                row(ui, format!("{}–{}", shift(DIGITS[0]), shift(DIGITS[8])), "Cut straight to it, even with Preview on");
-                row(ui, format!("{}–{}", alt(DIGITS[0]), alt(DIGITS[8])), "Show or hide graphic 1–9");
+                let tenth = crate::control::shortcuts::TENTH;
+                row(ui, format!("{}–{}, {}", KeyCombo::plain(DIGITS[0]).label(), KeyCombo::plain(DIGITS[8]).label(), KeyCombo::plain(tenth).label()), "Take scene 1–9, and 0 for scene 10; with Preview on, into preview");
+                row(ui, format!("{}–{}, {}", shift(DIGITS[0]), shift(DIGITS[8]), shift(tenth)), "Cut straight to it, even with Preview on");
+                row(ui, format!("{}–{}, {}", alt(DIGITS[0]), alt(DIGITS[8]), alt(tenth)), "Show or hide graphic 1–10");
                 row(ui, "F1–F12".into(), "Play sound pad 1–12 (held pads play while the key is down)");
+                if cfg!(target_os = "macos") {
+                    row(ui, "Fn".into(), crate::control::shortcuts::MAC_FN_KEYS);
+                }
                 if let (Some(first), Some(last)) = (area_key(1), area_key(7)) {
                     row(ui, format!("{}–{}", first.label(), last.label()), "Show, Sources, Scenes, Sound, Graphics, Record, More");
                 }

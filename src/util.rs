@@ -182,6 +182,19 @@ pub fn guard<T>(what: &str, f: impl FnOnce() -> anyhow::Result<T>) -> anyhow::Re
     }
 }
 
+/// A free TCP port on this computer, for tests: fixed ports collide when
+/// tests run side by side.
+#[cfg(test)]
+pub fn free_tcp_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0").and_then(|l| l.local_addr()).map(|a| a.port()).expect("a free port")
+}
+
+/// A free UDP port on this computer, for tests.
+#[cfg(test)]
+pub fn free_udp_port() -> u16 {
+    std::net::UdpSocket::bind("127.0.0.1:0").and_then(|l| l.local_addr()).map(|a| a.port()).expect("a free port")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

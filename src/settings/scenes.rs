@@ -101,7 +101,7 @@ impl SettingsUi {
                 ui.set_width(250.0);
                 for i in 0..n {
                     let s = &self.draft.scenes[i];
-                    let key = if i < 9 { format!("{}", i + 1) } else { "  ".into() };
+                    let key = crate::control::shortcuts::number_label(i).unwrap_or_else(|| "  ".into());
                     let b = egui::Button::selectable(self.sel_scene == i, RichText::new(format!("{key}   {}", s.name)).size(TEXT_STATE)).min_size(vec2(250.0, 30.0));
                     let r = ui.add(b);
                     // The one on air: a red dot (red only means on air).
@@ -109,7 +109,7 @@ impl SettingsUi {
                     if on_air {
                         ui.painter().circle_filled(r.rect.right_center() - vec2(14.0, 0.0), 4.5, ON_AIR);
                     }
-                    let key = if i < 9 { format!("Key {}", i + 1) } else { "No number key (keys 1–9 take the first nine)".into() };
+                    let key = crate::control::shortcuts::number_label(i).map(|k| format!("Key {k}")).unwrap_or_else(|| "No number key (keys 1–9 and 0 take the first ten)".into());
                     if r.on_hover_text(if on_air { format!("{key} · on air now") } else { key }).clicked() {
                         self.commit_scene_rename();
                         self.sel_scene = i;
@@ -193,7 +193,7 @@ impl SettingsUi {
                     });
                     ui.end_row();
                     label(ui, "Number key");
-                    ui.label(if sel < 9 { format!("{}", sel + 1) } else { "None: only the first nine have one (move it up with ↑)".into() });
+                    ui.label(crate::control::shortcuts::number_label(sel).unwrap_or_else(|| "None: only the first ten have one (move it up with ↑)".into()));
                     ui.end_row();
                     label(ui, "Shows");
                     ui.vertical(|ui| {

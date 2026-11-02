@@ -31,7 +31,7 @@ pub(super) struct Queued {
 
 /// Commands that change the scene (not run as scene or rundown cues).
 fn takes_a_scene(a: &Action) -> bool {
-    matches!(a, Action::Scene(_) | Action::CutTo(_) | Action::Preview(_) | Action::Take | Action::Cut | Action::Back | Action::Source(_) | Action::Rundown(_))
+    matches!(a, Action::Scene(_) | Action::CutTo(_) | Action::Preview(_) | Action::Press(_) | Action::PreviewMode(_) | Action::Take | Action::Cut | Action::Back | Action::Source(_) | Action::Rundown(_))
 }
 
 impl App {
@@ -180,7 +180,7 @@ impl App {
                 // Real cameras: any memory number; virtual ones: saved presets.
                 let n = match (&t, t.find(&presets)) {
                     (_, Some(n)) => n,
-                    (Target::Index(n), None) if virt.is_none() => *n,
+                    (Target::Index(n) | Target::Place(n), None) if virt.is_none() => *n,
                     _ => return Err(format!("{name} has no preset {t}")),
                 };
                 p.send(Move::Recall(n));
@@ -190,7 +190,7 @@ impl App {
             PtzCmd::Store(t) => {
                 let n = match (&t, t.find(&presets)) {
                     (_, Some(n)) => n,
-                    (Target::Index(n), None) => *n,
+                    (Target::Index(n) | Target::Place(n), None) => *n,
                     (Target::Name(_), None) => presets.len(),
                 };
                 p.send(Move::Store(n));

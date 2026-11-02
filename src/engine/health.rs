@@ -129,6 +129,68 @@ pub fn disk_space(path: &Path) -> Option<(u64, u64)> {
     }
 }
 
+/// Whether the drive holding `path` is FAT (FAT32 and older), where no
+/// file can be bigger than 4 GB: one file reaching that stops the take.
+pub fn fat_drive(path: &Path) -> bool {
+    let mut p = path.to_path_buf();
+    while !p.exists() {
+        let Some(up) = p.parent() else { return false };
+        p = up.to_path_buf();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::ffi::{CStr, CString};
+        use std::os::unix::ffi::OsStrExt;
+        let Ok(c) = CString::new(p.as_os_str().as_bytes()) else { return false };
+        let mut st: libc::statfs = unsafe { std::mem::zeroed() };
+        if unsafe { libc::statfs(c.as_ptr(), &mut st) } != 0 {
+            return false;
+        }
+        // "msdos" is FAT12/16/32 ("exfat" has no 4 GB limit).
+        let kind = unsafe { CStr::from_ptr(st.f_fstypename.as_ptr()) };
+        kind.to_bytes() == b"msdos"
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        let Ok(c) = CString::new(p.as_os_str().as_bytes()) else { return false };
+        let mut st: libc::statfs = unsafe { std::mem::zeroed() };
+        if unsafe { libc::statfs(c.as_ptr(), &mut st) } != 0 {
+            return false;
+        }
+        st.f_type as i64 == 0x4d44 // MSDOS_SUPER_MAGIC
+    }
+    #[cfg(windows)]
+    {
+        use windows::core::HSTRING;
+        use windows::Win32::Storage::FileSystem::{GetVolumeInformationW, GetVolumePathNameW};
+        let mut root = [0u16; 261];
+        // SAFETY: plain calls with valid buffers.
+        if unsafe { GetVolumePathNameW(&HSTRING::from(p.as_os_str()), &mut root) }.is_err() {
+            return false;
+        }
+        let mut fs = [0u16; 32];
+        if unsafe { GetVolumeInformationW(windows::core::PCWSTR(root.as_ptr()), None, None, None, None, Some(&mut fs)) }.is_err() {
+            return false;
+        }
+        let name = String::from_utf16_lossy(&fs[..fs.iter().position(|&c| c == 0).unwrap_or(fs.len())]);
+        name.eq_ignore_ascii_case("FAT32") || name.eq_ignore_ascii_case("FAT")
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    {
+        false
+    }
+}
+
+/// What to tell someone recording to a FAT drive.
+pub fn fat_warning(path: &Path) -> String {
+    format!(
+        "The recording drive ({}) is formatted as FAT32, where no file can be bigger than 4 GB: a take stops when its first file gets there (often 20 to 40 minutes). Record to another drive, or reformat this one as exFAT (or APFS / NTFS)",
+        path.display()
+    )
+}
+
 /// Bytes per second a take writes with these settings (main drive).
 /// `estimate_rate` for a config's own audio inputs.
 pub fn estimate_for(cfg: &Config) -> f64 {
@@ -153,6 +215,15 @@ pub fn estimate_rate(cfg: &Config, wav_channels: &[(u32, bool)]) -> f64 {
         }
         if out.proxies {
             kbps += proxy_kbps;
+        }
+    }
+    // The program without graphics: a second program file, with the mix (and its proxy).
+    if out.clean_program {
+        kbps += encode::record_bitrate_kbps(codec, out.program_bitrate_kbps, p.width, p.height, p.fps) as f64;
+        files_with_audio += 1.0;
+        if out.proxies {
+            kbps += proxy_kbps;
+            files_with_audio += 1.0;
         }
     }
     if cfg.vertical.enabled && cfg.vertical.record {
@@ -215,6 +286,57 @@ pub struct Health {
     pub audio: Vec<AudioHealth>,
     /// Program frames the compositor had to skip (overload).
     pub compositor_skips: u64,
+    /// While recording (with something to hear): how long the recording
+    /// mix has been silent, in seconds (0 while there's sound).
+    pub silent_secs: Option<f64>,
+}
+
+/// Quieter than this (peak, dBFS) counts as no sound at all: well under
+/// any room or mic noise, so it means muted, unplugged or the wrong input.
+pub const SILENT_DB: f32 = -60.0;
+/// Silent this long while recording: a problem, and an alert (once).
+pub const SILENT_ALERT_SECS: f64 = 45.0;
+/// Silent this long: the small "no sound" badge beside REC (a pause
+/// between words doesn't light it).
+pub const SILENT_BADGE_SECS: f64 = 5.0;
+
+/// "45 s", "2 min".
+pub fn silent_text(secs: f64) -> String {
+    if secs < 120.0 {
+        format!("{:.0} s", secs.floor())
+    } else {
+        format!("{:.0} min", (secs / 60.0).floor())
+    }
+}
+
+/// Raises "no sound" once when the recording has been silent for
+/// SILENT_ALERT_SECS, and again only after the sound came back and then
+/// went again (or in a new take).
+#[derive(Clone, Debug, Default)]
+pub struct SilenceWatch {
+    warned: bool,
+}
+
+impl SilenceWatch {
+    /// One tick, with `Health::silent_secs`. True when it's time to alert.
+    pub fn step(&mut self, silent_secs: Option<f64>) -> bool {
+        match silent_secs {
+            Some(s) if s >= SILENT_ALERT_SECS => !std::mem::replace(&mut self.warned, true),
+            _ => {
+                self.warned = false;
+                false
+            }
+        }
+    }
+}
+
+/// How long the recording mix has been silent: from the later of the
+/// take's start and the last sound. None when not recording, or when
+/// there's nothing in the mix to hear.
+pub fn silent_for(recording_since: Option<Instant>, heard: Option<Instant>, has_inputs: bool, now: Instant) -> Option<f64> {
+    let since = recording_since.filter(|_| has_inputs)?;
+    let from = heard.map_or(since, |h| h.max(since));
+    Some(now.saturating_duration_since(from).as_secs_f64())
 }
 
 /// How far back "recent" frame trouble counts.
@@ -283,6 +405,9 @@ impl Health {
                 out.push(format!("{}: no signal", a.name));
             }
         }
+        if let Some(s) = self.silent_secs.filter(|s| *s >= SILENT_ALERT_SECS) {
+            out.push(format!("Recording: no sound for {}", silent_text(s)));
+        }
         out
     }
 }
@@ -301,6 +426,12 @@ pub struct TakeMonitor {
 }
 
 impl TakeMonitor {
+    /// A file started during the take.
+    pub fn add_file(&mut self, name: String, stats: Arc<VideoStats>) {
+        self.stats.push((name, stats));
+        self.recent.push(Default::default());
+    }
+
     pub fn new(folder: PathBuf, backup: Option<PathBuf>, stats: Vec<(String, Arc<VideoStats>)>) -> Self {
         let recent = vec![Default::default(); stats.len()];
         TakeMonitor { folder, backup, stats, sizes: VecDeque::new(), warned: 0, backup_warned: false, started: Instant::now(), recent }
@@ -343,6 +474,7 @@ pub struct HealthMonitor {
     pub compositor_skips: Arc<AtomicU64>,
     pub last_frames: Vec<(Instant, u64)>,
     pub seen: u64,
+    pub silence: SilenceWatch,
 }
 
 impl HealthMonitor {
@@ -433,6 +565,20 @@ impl HealthMonitor {
         }
         drop(take);
         let mut st = self.status.lock_ok();
+        // No sound in the recording (muted, unplugged, the wrong input).
+        let since = match &st.rec {
+            super::RecState::Recording { since, .. } => Some(*since),
+            _ => None,
+        };
+        health.silent_secs = silent_for(since, st.mix_heard, !audio.is_empty(), Instant::now());
+        if self.silence.step(health.silent_secs) {
+            let w = format!(
+                "No sound in the recording for {}: check the mics are on, turned up and plugged in, and the right inputs are picked (Sound › Inputs)",
+                silent_text(health.silent_secs.unwrap_or(SILENT_ALERT_SECS))
+            );
+            st.push(LogLevel::Warning, w.clone());
+            st.alerts.push(w);
+        }
         st.health = health;
         st.disk = disk;
         st.backup_disk = backup;
@@ -452,6 +598,39 @@ impl HealthMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// No sound: counted from the take's start or the last sound, alerted
+    /// once, and again only after the sound came back and went again.
+    #[test]
+    fn no_sound_alerts_once_and_rearms() {
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + std::time::Duration::from_secs(s);
+        assert_eq!(silent_for(None, None, true, at(100)), None);
+        assert_eq!(silent_for(Some(t0), None, false, at(100)), None, "nothing to hear");
+        assert_eq!(silent_for(Some(t0), None, true, at(50)), Some(50.0));
+        // Sound before the take started doesn't count.
+        assert_eq!(silent_for(Some(at(10)), Some(t0), true, at(20)), Some(10.0));
+        assert_eq!(silent_for(Some(t0), Some(at(30)), true, at(40)), Some(10.0));
+
+        let mut w = SilenceWatch::default();
+        assert!(!w.step(Some(10.0)));
+        assert!(w.step(Some(45.0)));
+        assert!(!w.step(Some(46.0)));
+        assert!(!w.step(Some(600.0)));
+        // Sound comes back, then goes again.
+        assert!(!w.step(Some(0.0)));
+        assert!(!w.step(Some(30.0)));
+        assert!(w.step(Some(45.5)));
+        // A new take.
+        assert!(!w.step(None));
+        assert!(w.step(Some(50.0)));
+
+        let h = Health { silent_secs: Some(44.0), ..Default::default() };
+        assert!(h.problems().is_empty());
+        let h = Health { silent_secs: Some(130.0), ..Default::default() };
+        assert_eq!(h.problems(), vec!["Recording: no sound for 2 min".to_string()]);
+        assert_eq!(silent_text(45.9), "45 s");
+    }
 
     /// Health: no false "0 fps" before there's anything to measure, and
     /// frame trouble counts from the last minute only (numbers audit #3, #17).
@@ -494,6 +673,11 @@ mod tests {
         let r = estimate_rate(&cfg, &[(2, true)]);
         // Program + one ISO at ~12 Mbps each, AAC, 24-bit stereo WAV: ~3.3 MB/s.
         assert!(r > 3.0e6 && r < 3.8e6, "{r}");
+        // The program without graphics is a second program file.
+        cfg.output.clean_program = true;
+        let program = encode::record_bitrate_kbps(cfg.output.codec.video_codec(), cfg.output.program_bitrate_kbps, cfg.program.width, cfg.program.height, cfg.program.fps) as f64;
+        let with_clean = estimate_rate(&cfg, &[(2, true)]);
+        assert_eq!(with_clean - r, (program + cfg.output.audio_bitrate_kbps as f64) * 1000.0 / 8.0);
         assert_eq!(fmt_left(45.0 * 60.0), "45 min");
         assert_eq!(fmt_left(125.0 * 60.0), "2 h 5 min");
         assert_eq!(fmt_left(40.0), "under 1 min");
