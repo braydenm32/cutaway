@@ -209,6 +209,11 @@ and [Install on Windows](#install-on-windows).
   edit on V1, every camera (and the program) full length on its own track
   above it, in sync, and the mix underneath. When it's done (or if Resolve
   couldn't do something) a small Cutaway box in Resolve says what happened.
+  Recorded the show in two takes (a break in the middle)? With the first
+  take's project still open in Resolve, the script asks **Add to this
+  project** or **New project**: adding puts the second take in a bin of its
+  own in the same project, with its own live-edit timeline. It asks only
+  when the open project is the same show on the same day.
 - **Saving files** after you stop shows what it's finishing (each video, the
   sound, the timeline) and how far along it is, on the Record button.
 - **Take saved:** once it's done, a card under the Record button says how
