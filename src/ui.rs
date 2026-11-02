@@ -492,6 +492,8 @@ pub struct App {
     /// A marker being named (Shift+M): its time (which identifies it), its
     /// own name until then, and what's typed.
     marker_name: Option<(crate::media::Ns, String, String)>,
+    /// Edit layout was open last frame (to see it open).
+    edit_seen: bool,
     /// A marker's name being changed in the list under ◆ Marker ▾.
     marker_edit: Option<(crate::media::Ns, String)>,
     display_fullscreen: bool,
@@ -654,6 +656,7 @@ impl App {
             precheck: None,
             title_edit: None,
             marker_name: None,
+            edit_seen: false,
             marker_edit: None,
             self_test: None,
         };
@@ -1237,6 +1240,19 @@ impl App {
 
     fn preview_mode(&self) -> bool {
         self.cfg.transition.preview_mode
+    }
+
+    /// Edit layout opened. While recording or live with Preview off, it
+    /// turns Preview on (as Edit in preview does), so you edit the next
+    /// shot: a stray E and a scroll can't change the picture on air.
+    fn edit_opened(&mut self) {
+        let busy = self.engine.as_ref().is_some_and(|e| e.is_recording() || e.is_streaming());
+        if edit_turns_preview_on(busy, self.preview_mode()) {
+            self.cfg.transition.preview_mode = true;
+            self.cfg_dirty = true;
+            self.mv_selected = None;
+            self.toast("Editing in preview, so the picture on air stays as it is: Take puts your changes on air".into(), false);
+        }
     }
 
     /// Preview on or off, from the bank's Preview button or a controller.
@@ -3339,9 +3355,9 @@ impl App {
         // The groups side by side as far as they fit (as measured last
         // time), the rest on the next row.
         let widths_id = egui::Id::unique("edit_group_widths");
-        let widths: [f32; 3] = ui.ctx().data(|d| d.get_temp(widths_id)).unwrap_or([f32::INFINITY; 3]);
+        let widths: [f32; 2] = ui.ctx().data(|d| d.get_temp(widths_id)).unwrap_or([f32::INFINITY; 2]);
         let (avail, gap) = (ui.available_width(), ui.spacing().item_spacing.x);
-        let mut new_row = [false; 3];
+        let mut new_row = [false; 2];
         let mut x = 0.0;
         for (i, w) in widths.iter().enumerate() {
             if x > 0.0 && x + gap + w > avail {
@@ -3351,46 +3367,14 @@ impl App {
                 x += if x > 0.0 { gap } else { 0.0 } + w;
             }
         }
-        let mut measured = [0.0; 3];
+        let mut measured = [0.0; 2];
+        // The selected frame (its own row, FRAME, shows only then: below).
+        let sel = self.selected_layer.filter(|&i| i < scene.layers.len());
         ui.horizontal_wrapped(|ui| {
-            // Frame: the selected frame.
-            let sel = self.selected_layer.filter(|&i| i < scene.layers.len());
-            measured[0] = tool_group(ui, "FRAME", |ui| {
-                egui::ComboBox::from_id_salt("add_layer").selected_text("Add source").show_ui(ui, |ui| {
-                    for (i, n) in names.iter().enumerate() {
-                        // A source shows once per scene (the program has one
-                        // picture of each).
-                        let there = scene.layers.iter().any(|l| l.source == i);
-                        if ui.add_enabled(!there, egui::Button::selectable(false, n)).on_disabled_hover_text("Already in this scene").clicked() {
-                            scene.layers.push(Layer::at(i, 0.3, 0.3, 0.4, 0.4));
-                            changed = true;
-                        }
-                    }
-                });
-                if ui.add_enabled(sel.is_some(), egui::Button::new("Remove")).on_disabled_hover_text("Click a frame first").clicked() {
-                    scene.layers.remove(sel.unwrap());
-                    self.selected_layer = None;
-                    changed = true;
-                }
-                if ui.add_enabled(sel.is_some(), egui::Button::new("To front")).on_disabled_hover_text("Click a frame first").clicked() {
-                    let l = scene.layers.remove(sel.unwrap());
-                    scene.layers.push(l);
-                    self.selected_layer = Some(scene.layers.len() - 1);
-                    changed = true;
-                }
-                if ui.add_enabled(sel.is_some(), egui::Button::new("Full frame")).on_disabled_hover_text("Click a frame first").clicked() {
-                    let l = &mut scene.layers[sel.unwrap()];
-                    (l.x, l.y, l.w, l.h) = (0.0, 0.0, 1.0, 1.0);
-                    changed = true;
-                }
-            });
-            if new_row[1] {
-                ui.end_row();
-            }
             // Picture: the picture in the selected frame, fitted or filling,
             // its zoom, and moving it (always there, so the bar doesn't
             // change size on a click).
-            measured[1] = tool_group(ui, "PICTURE", |ui| {
+            measured[0] = tool_group(ui, "PICTURE", |ui| {
                 ui.spacing_mut().slider_width = 90.0;
                 let on = sel.is_some();
                 let mut none = Layer::at(0, 0.0, 0.0, 1.0, 1.0);
@@ -3420,11 +3404,12 @@ impl App {
                     changed = true;
                 }
             });
-            if new_row[2] {
+            if new_row[1] {
                 ui.end_row();
             }
-            // Scene: its name, sound and cues, and the scene itself.
-            measured[2] = tool_group(ui, "SCENE", |ui| {
+            // Scene: its name, its sources, sound and what else it runs, and
+            // the scene itself.
+            measured[1] = tool_group(ui, "SCENE", |ui| {
                 let mut name = match &self.scene_name_edit {
                     Some((of, text)) if *of == old_name => text.clone(),
                     _ => scene.name.clone(),
@@ -3446,6 +3431,17 @@ impl App {
                         }
                     }
                 }
+                // A source's frame (each source once per scene: the program
+                // has one picture of each).
+                egui::ComboBox::from_id_salt("add_layer").selected_text("Add source").show_ui(ui, |ui| {
+                    for (i, n) in names.iter().enumerate() {
+                        let there = scene.layers.iter().any(|l| l.source == i);
+                        if ui.add_enabled(!there, egui::Button::selectable(false, n)).on_disabled_hover_text("Already in this scene").clicked() {
+                            scene.layers.push(Layer::at(i, 0.3, 0.3, 0.4, 0.4));
+                            changed = true;
+                        }
+                    }
+                });
                 // Scene audio: inputs this scene turns on or off.
                 let n_audio = scene.audio_on.len() + scene.audio_off.len();
                 ui.menu_button(if n_audio > 0 { format!("Audio ({n_audio})") } else { "Audio".into() }, |ui| {
@@ -3480,9 +3476,9 @@ impl App {
                 })
                 .response
                 .on_hover_text("Scene audio: inputs this scene turns on or off");
-                // Scene cues: commands run when the scene is taken.
+                // Also run: commands run when the scene is taken (its cues).
                 let n_cues = scene.cues.len();
-                ui.menu_button(if n_cues > 0 { format!("Cues ({n_cues})") } else { "Cues".into() }, |ui| {
+                ui.menu_button(if n_cues > 0 { format!("Also run ({n_cues})") } else { "Also run…".into() }, |ui| {
                     ui.set_min_width(300.0);
                     ui.label(RichText::new("When this scene is taken, also:").strong());
                     let label_of = |c: &str| cue_suggestions.iter().find(|(cmd, _)| cmd.eq_ignore_ascii_case(c)).map(|(_, l)| l.clone()).or_else(|| Action::parse(c).ok().map(|a| a.describe())).unwrap_or_else(|| c.to_string());
@@ -3514,7 +3510,7 @@ impl App {
                     ui.label(RichText::new("e.g. start a Syrinscape mood, play a pad, show a title. Pick from ＋ Add; ✕ takes one off. Several run in order.").size(TEXT_SMALL).color(TEXT_DIM));
                 })
                 .response
-                .on_hover_text("Scene cues: commands run when this scene is taken");
+                .on_hover_text("Also run when this scene is taken: show a title, play a pad, start a mood…");
                 if let Some(s) = crate::settings::new_scene_menu(ui, &names, &self.scenes) {
                     fresh = Some(s);
                 }
@@ -3537,7 +3533,34 @@ impl App {
         } else {
             format!("Drag a frame to move it · corner to resize (Shift keeps shape) · scroll to zoom · double-click to fit or fill · ✥ or {alt}-drag moves the picture · Esc when done")
         };
-        ui.add(egui::Label::new(RichText::new(hint.clone()).color(TEXT_DIM).size(TEXT_SMALL)).truncate()).on_hover_text(hint);
+        // One line, always as tall: FRAME and its buttons when a frame is
+        // selected, then what the mouse does. (Its height never changes, so
+        // the picture doesn't move under the mouse as you pick a frame.)
+        ui.horizontal(|ui| {
+            ui.set_min_height(26.0);
+            if let Some(i) = sel {
+                ui.label(RichText::new("FRAME").color(TEXT_DIM).size(TEXT_SMALL).strong());
+                if ui.button("Remove").on_hover_text("Take this frame out of the scene").clicked() {
+                    scene.layers.remove(i);
+                    self.selected_layer = None;
+                    changed = true;
+                } else {
+                    if ui.button("To front").on_hover_text("In front of the other frames").clicked() {
+                        let l = scene.layers.remove(i);
+                        scene.layers.push(l);
+                        self.selected_layer = Some(scene.layers.len() - 1);
+                        changed = true;
+                    }
+                    if ui.button("Full frame").on_hover_text("Fill the whole picture").clicked() {
+                        let l = &mut scene.layers[self.selected_layer.unwrap_or(i)];
+                        (l.x, l.y, l.w, l.h) = (0.0, 0.0, 1.0, 1.0);
+                        changed = true;
+                    }
+                }
+                ui.add_space(6.0);
+            }
+            ui.add(egui::Label::new(RichText::new(hint.clone()).color(TEXT_DIM).size(TEXT_SMALL)).truncate()).on_hover_text(hint);
+        });
         if let Some(n) = rename_clash {
             self.toast(format!("There's already a scene called {n}"), true);
         }
@@ -6174,6 +6197,12 @@ impl eframe::App for App {
         }
         self.tick_uploads();
         self.tick_ndi(&ctx);
+        // Edit layout just opened (E, the tab, a link): mid-show it edits
+        // in preview, never the scene on air.
+        if self.edit_mode && !self.edit_seen {
+            self.edit_opened();
+        }
+        self.edit_seen = self.edit_mode;
         if self.settle_at.is_some_and(|t| Instant::now() >= t) {
             self.settle_at = None;
             if let Ok(me) = crate::net::self_update::Install::here() {
@@ -6458,6 +6487,12 @@ fn cut_after_drop(dropped: &[String], sources: &[crate::config::SourceConfig], s
     (scene.name != live && !blind).then(|| scene.clone())
 }
 
+/// Whether opening Edit layout turns Preview on: only mid-show (recording
+/// or live) with Preview off, where it would otherwise edit the scene on air.
+fn edit_turns_preview_on(recording_or_live: bool, preview_on: bool) -> bool {
+    recording_or_live && !preview_on
+}
+
 /// The time of day for the header: "15:05", or "3:05 PM".
 fn clock_text(t: chrono::NaiveTime, twelve: bool) -> String {
     t.format(crate::engine::timers::time_format(twelve, false)).to_string()
@@ -6602,7 +6637,7 @@ fn precheck_verdict(items: &[CheckItem], done: bool) -> (String, Color32) {
 
 #[cfg(test)]
 mod desk_tests {
-    use super::clock_text;
+    use super::{clock_text, edit_turns_preview_on};
     use chrono::NaiveTime;
 
     #[test]
@@ -6643,6 +6678,13 @@ mod desk_tests {
         assert!((r.2 - 1080.0).abs() < 0.5 && (r.3 - 1080.0).abs() < 0.5);
         assert_eq!((uv.min.x, uv.max.x), (0.0, 0.5));
         assert!((uv.min.y - 1.0 / 18.0).abs() < 1e-4 && (uv.max.y - 17.0 / 18.0).abs() < 1e-4, "{uv:?}");
+    }
+
+    #[test]
+    fn edit_layout_mid_show_edits_in_preview() {
+        assert!(edit_turns_preview_on(true, false));
+        assert!(!edit_turns_preview_on(true, true));
+        assert!(!edit_turns_preview_on(false, false), "between shows it edits the scene on air, as before");
     }
 
     #[test]
