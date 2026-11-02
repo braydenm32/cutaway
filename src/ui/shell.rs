@@ -1463,10 +1463,14 @@ impl App {
                 }
                 let shift = |k| KeyCombo { shift: true, ..KeyCombo::plain(k) }.label();
                 let alt = |k| KeyCombo { alt: true, ..KeyCombo::plain(k) }.label();
-                row(ui, format!("{}–{}", KeyCombo::plain(DIGITS[0]).label(), KeyCombo::plain(DIGITS[8]).label()), "Take scene 1–9 (or source 1–9, as set in Scenes › Switching)");
-                row(ui, format!("{}–{}", shift(DIGITS[0]), shift(DIGITS[8])), "Cut straight to it, even with Preview on");
-                row(ui, format!("{}–{}", alt(DIGITS[0]), alt(DIGITS[8])), "Show or hide graphic 1–9");
+                let tenth = crate::control::shortcuts::TENTH;
+                row(ui, format!("{}–{}, {}", KeyCombo::plain(DIGITS[0]).label(), KeyCombo::plain(DIGITS[8]).label(), KeyCombo::plain(tenth).label()), "Take scene 1–9, and 0 for scene 10; with Preview on, into preview");
+                row(ui, format!("{}–{}, {}", shift(DIGITS[0]), shift(DIGITS[8]), shift(tenth)), "Cut straight to it, even with Preview on");
+                row(ui, format!("{}–{}, {}", alt(DIGITS[0]), alt(DIGITS[8]), alt(tenth)), "Show or hide graphic 1–10");
                 row(ui, "F1–F12".into(), "Play sound pad 1–12 (held pads play while the key is down)");
+                if cfg!(target_os = "macos") {
+                    row(ui, "Fn".into(), crate::control::shortcuts::MAC_FN_KEYS);
+                }
                 if let (Some(first), Some(last)) = (area_key(1), area_key(7)) {
                     row(ui, format!("{}–{}", first.label(), last.label()), "Show, Sources, Scenes, Sound, Graphics, Record, More");
                 }

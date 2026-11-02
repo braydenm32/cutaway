@@ -2121,13 +2121,15 @@ impl App {
         if label.is_empty() { label } else { format!(" ({label})") }
     }
 
-    /// 1–9 take a scene (Shift cuts straight to it), Alt/Option + 1–9 show a
-    /// graphic, F1–F12 play sound pads.
+    /// 1–9 and 0 (the tenth) take a scene (Shift cuts straight to it),
+    /// Alt/Option + 1–9 and 0 show a graphic, F1–F12 play sound pads.
     fn numbered_key(&mut self, combo: KeyCombo) {
         if combo.command {
             return;
         }
-        if let Some(i) = shortcuts::DIGITS.iter().position(|k| *k == combo.key) {
+        // 1–9, and 0 for the tenth.
+        let digit = shortcuts::DIGITS.iter().position(|k| *k == combo.key).or((combo.key == shortcuts::TENTH).then_some(9));
+        if let Some(i) = digit {
             match (combo.shift, combo.alt) {
                 (_, false) => self.press_scene(i, combo.shift),
                 (false, true) => self.toggle_graphic(i, None),
@@ -4029,7 +4031,7 @@ impl App {
     /// on big buttons also a live picture of the scene (its sources'
     /// multiview pictures where its frames are). Some((i, cut)) when pressed.
     fn scene_button(&mut self, ui: &mut egui::Ui, i: usize, s: &Scene, (is_live, is_preview): (bool, bool), missing: Option<&Vec<String>>, layout: BankLayout) -> Option<(usize, bool)> {
-        let key = if i < 9 { format!("{}", i + 1) } else { String::new() };
+        let key = shortcuts::number_label(i).unwrap_or_default();
         // In Edit layout the buttons can be dragged into another order (never
         // during the show otherwise, so a slip can't upset it).
         let (rect, resp) = ui.allocate_exact_size(layout.button, if self.edit_mode { Sense::click_and_drag() } else { Sense::click() });
@@ -4139,9 +4141,9 @@ impl App {
         let top = if name_y.is_nan() { rect.center().y - galley.size().y / 2.0 } else { name_y - galley.size().y };
         painter.galley(pos2(name_left, top), galley, Color32::WHITE);
         let press = resp.clicked().then(|| (i, ui.input(|inp| inp.modifiers.shift)));
-        let tip = match (i < 9, self.cfg.transition.preview_mode) {
-            (true, true) => format!("Press {} to preview (Shift+{} cuts to program)", i + 1, i + 1),
-            (true, false) => format!("Press {} (Shift+{} to cut)", i + 1, i + 1),
+        let tip = match (shortcuts::number_label(i), self.cfg.transition.preview_mode) {
+            (Some(k), true) => format!("Press {k} to preview (Shift+{k} cuts to program)"),
+            (Some(k), false) => format!("Press {k} (Shift+{k} to cut)"),
             _ => "Click to take".into(),
         };
         let tip = if elided { format!("{}\n{tip}", s.name) } else { tip };
@@ -4433,7 +4435,7 @@ impl App {
                 r = r.on_hover_text(match problem {
                     Some(p) => format!("⚠ {p}"),
                     None if is_timer => "Show / hide. ▶ starts it and ⟲ puts it back to the start (right-click for more).".into(),
-                    None if i < 9 => format!("Show / hide ({})", shortcuts::KeyCombo { alt: true, ..shortcuts::KeyCombo::plain(shortcuts::DIGITS[i]) }.label()),
+                    None if shortcuts::number_key(i).is_some() => format!("Show / hide ({})", shortcuts::KeyCombo { alt: true, ..shortcuts::KeyCombo::plain(shortcuts::number_key(i).unwrap_or(shortcuts::TENTH)) }.label()),
                     None => "Show / hide".into(),
                 } + &shown.unwrap_or_default());
                 if r.clicked() {
