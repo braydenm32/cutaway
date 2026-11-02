@@ -19,6 +19,8 @@
   /* A tap always lands on the button itself, never on a label inside it. */
   button * { pointer-events:none; }
   button:active { transform:scale(.98); }
+  /* No double-tap zoom on a quick second tap. */
+  button { touch-action:manipulation; }
   button.dim { opacity:.45; }
   a { color:var(--accent); }
   .pad-x { padding-left:max(12px,env(safe-area-inset-left)); padding-right:max(12px,env(safe-area-inset-right)); }
@@ -48,6 +50,8 @@
   .dests span::before { content:'●'; margin-right:5px; }
   .dests .d-live::before { color:var(--green); } .dests .d-connecting::before, .dests .d-retrying::before { color:var(--amber); } .dests .d-failed::before { color:var(--red); }
   .sheet { margin-top:8px; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:10px 12px; font-size:14px; }
+  /* A long list never pushes the scenes off the screen: it scrolls. */
+  #top .sheet { max-height:35vh; overflow:auto; }
   .sheet.warn { border-color:#5a4520; }
   .sheet .title { font-weight:650; }
   .sheet ul { margin:6px 0 0; padding-left:18px; }
@@ -80,6 +84,13 @@
 
   .switchrow { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-top:10px; }
   .switchrow button { font-weight:650; }
+  .takerow { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px; }
+  .takerow button { font-weight:750; letter-spacing:.5px; min-height:52px; }
+  .chip { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #transitions { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+  .heading { display:flex; align-items:baseline; justify-content:space-between; gap:8px; }
+  .heading h2 { margin-bottom:8px; }
+  .heading .muted { white-space:nowrap; }
   .toggle.on { background:var(--green); color:#000; border-color:var(--green); font-weight:600; }
   .take { background:var(--take); border-color:var(--take); font-weight:700; }
   .scene { min-height:68px; text-align:left; display:flex; flex-direction:column; justify-content:space-between; gap:4px; min-width:0; }
@@ -101,6 +112,11 @@
   .actions { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; padding-top:8px; }
   .actions.two { grid-template-columns:repeat(2,1fr); }
   .actions button { min-height:50px; font-weight:650; }
+  .mk { display:flex; gap:4px; min-width:0; }
+  .mk #marker { flex:1 1 auto; min-width:0; white-space:nowrap; padding-left:6px; padding-right:6px; }
+  .mk #markmore { flex:0 0 34px; padding:10px 0; }
+  #marks { display:flex; flex-wrap:wrap; gap:8px; padding-top:8px; }
+  #marks button { flex:1 1 30%; min-height:44px; }
   .tabs { display:grid; grid-template-columns:repeat(4,1fr); }
   .tabs button { background:none; border:0; border-radius:0; min-height:54px; color:var(--dim); font-size:13px; font-weight:600; position:relative; }
   .tabs button.sel { color:var(--text); }
@@ -149,6 +165,22 @@
   #pin { position:fixed; inset:0; background:var(--bg); display:none; align-items:center; justify-content:center; flex-direction:column; gap:12px; padding:24px; text-align:center; z-index:10; }
   #pin input { font-size:28px; text-align:center; width:180px; padding:10px; border-radius:12px; border:1px solid var(--line); background:var(--raised); color:var(--text); letter-spacing:8px; }
   .tally { position:fixed; inset:0; display:none; align-items:center; justify-content:center; flex-direction:column; font-size:9vw; font-weight:800; z-index:20; }
+
+  /* A short screen (a phone on its side, a small phone): smaller bars and
+     picture, so the scenes still fit. Everything stays on screen. */
+  @media (max-height:520px) {
+    button { min-height:42px; padding:8px 10px; }
+    .pills { margin-top:4px; }
+    .statusline { min-height:28px; }
+    /* The top scrolls away with the page rather than staying over it. */
+    #top { position:static; }
+    .monitor { max-height:34vh; width:auto; margin:0 auto; }
+    .scene { min-height:52px; }
+    .actions { padding-top:4px; }
+    .actions button { min-height:40px; }
+    .tabs button { min-height:42px; }
+    .takerow button { min-height:44px; }
+  }
 </style>
 </head>
 <body>
@@ -171,14 +203,19 @@
 <section id="tab-scenes">
   <div class="monitor"><img id="program" alt=""><div class="tags"><span class="tag">ON AIR</span><span class="name" id="pname"></span></div><div class="cc" id="cc"></div></div>
   <button class="segline" id="segline" hidden></button>
-  <div class="switchrow">
-    <button id="sw1">Mix</button><button id="sw2">Cut</button><button id="swback">⟲ Back</button>
+  <!-- As on the desk: TAKE and CUT always mean the same (the scene in
+       preview to air), the transition is picked from its chip. -->
+  <div class="takerow">
+    <button class="take" id="take">TAKE</button><button id="cut">CUT</button>
   </div>
-  <h2 id="sceneshead">Scenes</h2>
+  <div class="switchrow">
+    <button class="toggle" id="pvmode">Preview</button><button class="chip" id="trchip">Mix ▾</button><button id="swback">⟲ Back</button>
+  </div>
+  <div id="transitions" style="margin-top:8px" hidden></div>
+  <div class="heading"><h2 id="sceneshead">Scenes</h2><span class="muted" id="scenehint"></span></div>
   <div class="grid" id="scenes"></div>
-  <details class="more" id="moresw"><summary id="moreswsum">More transitions, Auto, fade to black ▾</summary>
-    <div class="row" id="transitions"></div>
-    <div class="row" style="margin-top:8px">
+  <details class="more" id="moresw"><summary id="moreswsum">Auto, captions, fade to black ▾</summary>
+    <div class="row">
       <button class="toggle" id="auto">Auto switching</button>
       <button class="toggle" id="cc_btn">CC</button>
       <button class="ftb" id="ftb">Fade to black</button>
@@ -211,7 +248,7 @@
     <div class="row" style="margin-top:4px"><button id="cnext">Show next</button><button class="toggle on" id="chide">Hide</button></div></div>
   <div id="replaywrap"><h2>Replay</h2><div class="row"><button class="replay" id="replay">⟲ Replay</button></div></div>
   <div id="rundownwrap"><h2>Rundown</h2><div class="segment" id="segment"><div class="big"></div><div></div><small class="muted"></small></div>
-    <div class="row" style="margin-top:8px"><button id="rdback">◀ Back</button><button class="take" id="nextseg">Next ▶</button><button id="rdstop">■ Stop</button></div></div>
+    <div class="row" style="margin-top:8px"><button id="rdback">◀ Previous</button><button class="take" id="nextseg">Next ▶</button><button id="rdstop">■ Stop</button></div></div>
   <div id="macrowrap"><h2>Macros</h2><div class="grid" id="macros"></div></div>
   <div id="mediawrap"><h2>Media</h2><div id="media"></div></div>
   <div id="ptzwrap"><h2>PTZ</h2><div id="ptz"></div></div>
@@ -228,9 +265,10 @@
 <footer id="bottom">
   <div class="actions pad-x" id="actions">
     <button class="toggle" id="names">Names</button>
-    <button id="marker">◆ Marker</button>
+    <div class="mk"><button id="marker">◆ Marker</button><button id="markmore" aria-label="Name the marker">▾</button></div>
     <button id="clip">✂ Clip</button>
   </div>
+  <div class="pad-x" id="marks" hidden></div>
   <nav class="tabs">
     <button data-tab="scenes">Scenes</button><button data-tab="sound">Sound</button><button data-tab="titles">Titles</button><button data-tab="more">More<span class="badge" id="morebadge" hidden></span></button>
   </nav>
@@ -342,6 +380,22 @@ function holdable(b, opts) {
 }
 function hint(b) { b._hint = true; clearTimeout(b._hintTimer); b._hintTimer = setTimeout(() => { b._hint = false; refresh(); }, 1500); refresh(); }
 function refresh() { if (state) render(); }
+// A long press (half a second, a finger kept still): `f` runs and the
+// click that follows is ignored (b._long). Scrolling cancels it.
+function longPress(b, f) {
+  let timer = null, at = null;
+  const stop = () => { clearTimeout(timer); timer = null; setFill(b, 0); };
+  b.addEventListener('pointerdown', e => {
+    b._long = false; at = [e.clientX, e.clientY];
+    const start = performance.now();
+    timer = setTimeout(() => { timer = null; setFill(b, 0); b._long = true; if (navigator.vibrate) navigator.vibrate(30); f(); }, 500);
+    const grow = () => { if (!timer) return; setFill(b, Math.min(1, (performance.now() - start) / 500)); requestAnimationFrame(grow); };
+    requestAnimationFrame(grow);
+  });
+  b.addEventListener('pointermove', e => { if (timer && at && Math.hypot(e.clientX - at[0], e.clientY - at[1]) > 10) stop(); });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => b.addEventListener(ev, stop));
+  b.addEventListener('contextmenu', e => e.preventDefault());
+}
 
 // ---- messages: they stay up long enough to read ----
 let toastTimer = null;
@@ -379,21 +433,37 @@ function measure() { document.documentElement.style.setProperty('--bottom', $('b
 window.addEventListener('resize', measure);
 
 // ---- fixed controls (made once, updated in place) ----
-holdable($('rec'), { needs: () => !!state && state.recording, cmd: () => 'record' });
-holdable($('live'), { needs: () => true, cmd: () => 'live' });
-holdable($('ftb'), { needs: () => !!state && !state.black, cmd: () => 'ftb' });
+// Each sends what it means (start, stop), never "toggle": a screen a
+// moment out of date can't stop a take with a tap.
+holdable($('rec'), { needs: () => !!state && state.recording, cmd: () => 'record:off', tap: () => act('record:on') });
+holdable($('live'), { needs: () => true, cmd: () => state && state.live ? 'live:off' : 'live:on' });
+holdable($('ftb'), { needs: () => !!state && !state.black, cmd: () => 'ftb:on', tap: () => act('ftb:off') });
 let detailsOpen = false;
 onTap($('light'), () => { detailsOpen = !detailsOpen; refresh(); });
 onTap($('segline'), () => selectTab('more'));
-onTap($('sw1'), () => act(state && state.preview_mode ? 'cut' : 'transition:mix'));
-onTap($('sw2'), () => act(state && state.preview_mode ? 'take' : 'transition:cut'));
+// TAKE and CUT: the scene in preview to air, with the transition or straight.
+function takeOrCut(cmd) {
+  if (state && state.preview) return act(cmd);
+  flash(state && state.preview_mode ? 'Nothing in preview: tap a scene first' : 'Turn on Preview, then tap a scene to put it in preview');
+}
+onTap($('take'), () => takeOrCut('take'));
+onTap($('cut'), () => takeOrCut('cut'));
+onTap($('pvmode'), () => act(state && state.preview_mode ? 'preview:off' : 'preview:on'));
 onTap($('swback'), () => act('back'));
-['wipe', 'push', 'dip', 'stinger'].forEach(t => $('transitions').append(onTap(el('button', 'toggle', t[0].toUpperCase() + t.slice(1)), () => act('transition:' + t))));
+// The transition chip opens the choice; picking one closes it.
+const TRANSITIONS = ['cut', 'mix', 'wipe', 'push', 'dip', 'stinger'];
+function cap(t) { return t[0].toUpperCase() + t.slice(1); }
+let trOpen = false;
+onTap($('trchip'), () => { trOpen = !trOpen; refresh(); });
+TRANSITIONS.forEach(t => $('transitions').append(onTap(el('button', 'toggle', cap(t)), () => { trOpen = false; act('transition:' + t); refresh(); })));
 onTap($('auto'), () => act('auto'));
 onTap($('cc_btn'), () => act('captions'));
 function namesIndex() { return state ? state.graphics.findIndex(g => g.names) : -1; }
-onTap($('names'), () => { const i = namesIndex(); if (i >= 0) act('graphic:' + (i + 1)); });
+onTap($('names'), () => { const i = namesIndex(); if (i >= 0) act('graphic:#' + (i + 1)); });
 onTap($('marker'), () => state && state.recording ? act('marker') : flash('Markers go in a recording: start one first'));
+// ◆ ▾: the quick names set once on the desk (More › Control › Phone remote).
+let marksOpen = false;
+onTap($('markmore'), () => { marksOpen = !marksOpen; refresh(); measure(); });
 onTap($('clip'), () => state && state.recording ? act('clip') : flash('Clips come from a recording: start one first'));
 onTap($('cnext'), () => act('comment:next'));
 onTap($('chide'), () => act('comment:hide'));
@@ -500,21 +570,23 @@ function renderScenes(s) {
     setText(seg.children[1], rd.number + '/' + rd.count + '  ' + rd.name);
     setText(seg.children[2], rd.drift_text || '');
   }
-  // Mix / Cut / Back; with Preview on, Cut / Take / Back.
-  const sw1 = $('sw1'), sw2 = $('sw2');
-  if (s.preview_mode) {
-    setText(sw1, 'Cut'); setClass(sw1, '');
-    setText(sw2, 'Take'); setClass(sw2, 'take');
-  } else {
-    setText(sw1, 'Mix'); setClass(sw1, 'toggle' + (s.transition === 'mix' ? ' on' : ''));
-    setText(sw2, 'Cut'); setClass(sw2, 'toggle' + (s.transition === 'cut' ? ' on' : ''));
-  }
-  setText($('sceneshead'), s.preview_mode ? 'Scenes · tap to preview' : 'Scenes · tap to take');
+  // TAKE / CUT: lit while something is in preview.
+  const ready = !!s.preview;
+  setClass($('take'), ready ? 'take' : 'take dim');
+  setClass($('cut'), ready ? '' : 'dim');
+  setClass($('pvmode'), 'toggle' + (s.preview_mode ? ' on' : ''));
+  setText($('trchip'), (TRANSITIONS.includes(s.transition) ? cap(s.transition) : 'Transition') + (trOpen ? ' ▴' : ' ▾'));
+  showIf($('transitions'), trOpen);
+  [...$('transitions').children].forEach((b, i) => setClass(b, 'toggle' + (s.transition === TRANSITIONS[i] ? ' on' : '')));
+  setText($('sceneshead'), 'Scenes');
+  setText($('scenehint'), s.preview_mode ? 'tap: preview · hold: cut to air' : 'tap: take · hold: cut');
   list($('scenes'), s.scenes, (sc, i) => i + ':' + sc.name, () => {
     const b = el('button', 'scene');
     const top = el('span', 'top'); top.append(el('span', 'key'), el('span', 'nm'));
     b.append(top, el('span', 'state'));
-    onTap(b, () => act((state.preview_mode ? 'preview:' : 'scene:') + (b._i + 1)));
+    // A tap does what the desk's scene button does; a hold cuts straight to air.
+    longPress(b, () => act('cut:#' + (b._i + 1)));
+    onTap(b, () => { if (b._long) { b._long = false; return; } act('press:#' + (b._i + 1)); });
     return b;
   }, (b, sc, i) => {
     b._i = i;
@@ -523,12 +595,9 @@ function renderScenes(s) {
     setText(b.firstChild.lastChild, sc.name);
     setText(b.lastChild, sc.program ? 'ON AIR' : sc.preview ? 'NEXT' : '');
   }, 'scenes');
-  // More transitions, Auto, CC and fade to black.
-  const other = ['wipe', 'push', 'dip', 'stinger'];
-  const special = other.includes(s.transition);
-  setText($('moreswsum'), (special ? 'Transition: ' + s.transition[0].toUpperCase() + s.transition.slice(1) + '. ' : '') + (s.black ? 'Faded to black. ' : '') + 'More transitions, Auto, fade to black ▾');
-  if ((special || s.black) && !$('moresw')._opened) { $('moresw').open = true; $('moresw')._opened = true; }
-  [...$('transitions').children].forEach((b, i) => setClass(b, 'toggle' + (s.transition === other[i] ? ' on' : '')));
+  // Auto, CC and fade to black.
+  setText($('moreswsum'), (s.black ? 'Faded to black. ' : '') + 'Auto, captions, fade to black ▾');
+  if (s.black && !$('moresw')._opened) { $('moresw').open = true; $('moresw')._opened = true; }
   setClass($('auto'), 'toggle' + (s.auto ? ' on' : ''));
   showIf($('cc_btn'), !!s.captions_available); setClass($('cc_btn'), 'toggle' + (s.captions ? ' on' : ''));
   const fb = $('ftb');
@@ -543,6 +612,22 @@ function renderActions(s) {
   if ($('actions').className !== cls) { $('actions').className = cls; measure(); }
   if (ni >= 0) setClass($('names'), 'toggle' + (s.graphics[ni].on ? ' on' : ''));
   setClass($('marker'), s.recording ? '' : 'dim');
+  // Quick marker names, while ◆ ▾ is open.
+  const labels = s.marker_labels || [];
+  showIf($('markmore'), labels.length > 0);
+  setClass($('markmore'), s.recording ? '' : 'dim');
+  if (!labels.length) marksOpen = false;
+  const marks = $('marks');
+  if (marks.hidden === marksOpen) { showIf(marks, marksOpen); measure(); }
+  list(marks, marksOpen ? labels.concat([null]) : [], l => l === null ? '\u0000close' : 'm:' + l, l => {
+    const b = el('button', l === null ? '' : 'toggle');
+    onTap(b, () => {
+      marksOpen = false; refresh(); measure();
+      if (b._label === null) return;
+      if (state && state.recording) act('marker:' + b._label); else flash('Markers go in a recording: start one first');
+    });
+    return b;
+  }, (b, l) => { b._label = l; setText(b, l === null ? 'Close' : '◆ ' + l); });
   setClass($('clip'), s.recording ? '' : 'dim');
   setText($('clip'), '✂ Clip ' + (s.clip_seconds || 30) + 's');
 }
@@ -563,7 +648,7 @@ const gainSent = {};
 function sendGain(i, v, now) {
   const g = gainSent[i] || (gainSent[i] = { at: 0, timer: null });
   clearTimeout(g.timer);
-  const go = () => { g.at = Date.now(); act('gain:' + (i + 1) + ':' + v); };
+  const go = () => { g.at = Date.now(); act('gain:#' + (i + 1) + ':' + v); };
   if (now || Date.now() - g.at > 120) go(); else g.timer = setTimeout(go, 120);
 }
 
@@ -573,7 +658,7 @@ function renderSound(s) {
   list($('pads'), pads, (p, i) => i + ':' + p.name, () => {
     const b = el('button', 'padbtn');
     b.append(el('i'), el('span'), el('small'));
-    b.onpointerdown = e => { e.preventDefault(); hold('pad:' + (b._i + 1) + ':press', 'pad:' + (b._i + 1) + ':release'); };
+    b.onpointerdown = e => { e.preventDefault(); hold('pad:#' + (b._i + 1) + ':press', 'pad:#' + (b._i + 1) + ':release'); };
     return b;
   }, (b, p, i) => {
     b._i = i;
@@ -583,7 +668,7 @@ function renderSound(s) {
     setText(b.children[1], p.name);
     setText(b.children[2], p.playing ? Math.ceil(p.remaining) + ' s' : 'pad ' + (i + 1));
   }, 'pads');
-  list($('syrin'), syr, (x, i) => i + ':' + x.name, () => { const b = el('button'); onTap(b, () => act('syrinscape:' + (b._i + 1))); return b; },
+  list($('syrin'), syr, (x, i) => i + ':' + x.name, () => { const b = el('button'); onTap(b, () => act('syrinscape:#' + (b._i + 1))); return b; },
     (b, x, i) => { b._i = i; setClass(b, 'syrin' + (x.playing ? ' on' : '')); setText(b, x.name); });
   const talk = $('talk');
   showIf(talk, !!s.talkback_available);
@@ -596,7 +681,7 @@ function renderSound(s) {
     const head = el('div', 'head'), onoff = el('button', 'onoff');
     head.append(el('span', 'nm'), onoff);
     // Turning a mic on is one tap; turning it off is a hold.
-    holdable(onoff, { needs: () => !!(state && state.inputs[c._i] && state.inputs[c._i].on), cmd: () => 'audio:' + (c._i + 1) + ':off', tap: () => act('audio:' + (c._i + 1) + ':on') });
+    holdable(onoff, { needs: () => !!(state && state.inputs[c._i] && state.inputs[c._i].on), cmd: () => 'audio:#' + (c._i + 1) + ':off', tap: () => act('audio:#' + (c._i + 1) + ':on') });
     const m = el('div', 'meter'); m.append(el('i'));
     const f = el('div', 'fader'), inp = el('input'), lab = el('span', 'db');
     inp.type = 'range'; inp.min = -60; inp.max = 12; inp.step = 0.5;
@@ -629,8 +714,8 @@ function renderSound(s) {
 }
 
 function renderTitles(s) {
-  const items = s.graphics.map((g, i) => ({ k: 'g' + i + ':' + g.name, name: g.name, on: g.on, cmd: 'graphic:' + (i + 1) }))
-    .concat((s.rotations || []).map((r, i) => ({ k: 'r' + i + ':' + r.name, name: '⟳ ' + r.name, on: r.running, cmd: 'rotation:' + (i + 1) })));
+  const items = s.graphics.map((g, i) => ({ k: 'g' + i + ':' + g.name, name: g.name, on: g.on, cmd: 'graphic:#' + (i + 1) }))
+    .concat((s.rotations || []).map((r, i) => ({ k: 'r' + i + ':' + r.name, name: '⟳ ' + r.name, on: r.running, cmd: 'rotation:#' + (i + 1) })));
   showIf($('gfxwrap'), items.length > 0);
   list($('graphics'), items, x => x.k, () => { const b = el('button', 'toggle'); onTap(b, () => act(b._cmd)); return b; },
     (b, x) => { b._cmd = x.cmd; setClass(b, 'toggle' + (x.on ? ' on' : '')); setText(b, x.name); }, 'graphics');
@@ -698,7 +783,7 @@ function renderMore(s) {
   // Macros.
   const mac = s.macros || [];
   showIf($('macrowrap'), mac.length > 0);
-  list($('macros'), mac, (m, i) => i + ':' + m.name, () => { const b = el('button', 'macro'); onTap(b, () => act('macro:' + (b._i + 1))); return b; },
+  list($('macros'), mac, (m, i) => i + ':' + m.name, () => { const b = el('button', 'macro'); onTap(b, () => act('macro:#' + (b._i + 1))); return b; },
     (b, m, i) => { b._i = i; setText(b, m.name); setStyle(b, 'borderLeftColor', m.color); });
   // Media players.
   showIf($('mediawrap'), s.players.length > 0);
@@ -718,13 +803,13 @@ function renderMore(s) {
   list($('ptz'), cams, c => c.source + ':' + c.name + ':' + c.presets.join('|'), c => {
     const r = el('div', 'row'); r.style.marginBottom = '8px';
     r.append(el('div', 'rowlabel', c.name));
-    c.presets.forEach((p, k) => r.append(onTap(el('button', '', p), () => act('ptz:' + c.source + ':preset:' + (k + 1)))));
-    r.append(onTap(el('button', '', '⌂ Home'), () => act('ptz:' + c.source + ':home')));
+    c.presets.forEach((p, k) => r.append(onTap(el('button', '', p), () => act('ptz:#' + c.source + ':preset:' + (k + 1)))));
+    r.append(onTap(el('button', '', '⌂ Home'), () => act('ptz:#' + c.source + ':home')));
     // The nudges on a row of their own: they move while held.
     const nudge = el('div', 'row'); nudge.style.flexBasis = '100%';
     [['◀', 'left'], ['▲', 'up'], ['▼', 'down'], ['▶', 'right'], ['＋', 'in'], ['－', 'out']].forEach(([label, dir]) => {
       const b = el('button', '', label); b.style.touchAction = 'none'; b.style.padding = '10px 4px';
-      b.onpointerdown = e => { e.preventDefault(); hold('ptz:' + c.source + ':' + dir + ':0.5', 'ptz:' + c.source + ':stop'); };
+      b.onpointerdown = e => { e.preventDefault(); hold('ptz:#' + c.source + ':' + dir + ':0.5', 'ptz:#' + c.source + ':stop'); };
       nudge.append(b);
     });
     r.append(nudge);

@@ -1228,6 +1228,22 @@ impl App {
         self.cfg.transition.preview_mode
     }
 
+    /// Preview on or off, from the bank's Preview button or a controller.
+    /// Turned off, nothing is left waiting in preview.
+    fn set_preview_mode(&mut self, on: bool) {
+        if self.cfg.transition.preview_mode == on {
+            return;
+        }
+        self.cfg.transition.preview_mode = on;
+        self.cfg_dirty = true;
+        if !on {
+            if let Some(e) = &self.engine {
+                e.switcher.set_preview(None);
+            }
+        }
+        self.mv_selected = None;
+    }
+
     /// A scene button or number key: to preview (in preview mode) or air.
     fn press_scene(&mut self, idx: usize, force_cut: bool) {
         let Some(scene) = self.scenes.get(idx).cloned() else { return };
@@ -1434,6 +1450,18 @@ impl App {
                     (self.waker)();
                 }
                 Ok(format!("{} in preview", s.name))
+            }
+            Action::Press(t) => {
+                let i = find_scene(&t)?;
+                let name = self.scenes[i].name.clone();
+                let to_preview = self.preview_mode();
+                self.press_scene(i, false);
+                Ok(if to_preview { format!("{name} in preview") } else { format!("Took {name}") })
+            }
+            Action::PreviewMode(t) => {
+                let on = toggle(&t, self.preview_mode());
+                self.set_preview_mode(on);
+                Ok(format!("Preview {}", if on { "on" } else { "off" }))
             }
             Action::Back => {
                 let name = self.back_to_last_scene()?;
@@ -1792,6 +1820,7 @@ impl App {
             program: live.name.clone(),
             preview: preview.as_ref().map(|p| p.name.clone()),
             preview_mode: self.cfg.transition.preview_mode,
+            marker_labels: self.cfg.remote.marker_labels(),
             transition: self.cfg.transition.mode.name().into(),
             auto: e.auto_switch_enabled(),
             captions: e.captions().is_some_and(|c| c.showing()),
@@ -1972,7 +2001,7 @@ impl App {
                 let Some(msg) = midi::Msg::parse(&map.message) else { continue };
                 let Ok(action) = Action::parse(&map.action) else { continue };
                 let value = match &action {
-                    Action::Scene(t) | Action::CutTo(t) | Action::Preview(t) => match t.find(&scene_names).map(|i| &state.scenes[i]) {
+                    Action::Scene(t) | Action::CutTo(t) | Action::Preview(t) | Action::Press(t) => match t.find(&scene_names).map(|i| &state.scenes[i]) {
                         Some(sc) if sc.program => 127,
                         Some(sc) if sc.preview => 32,
                         _ => 0,
@@ -1984,6 +2013,7 @@ impl App {
                     },
                     Action::Record(_) => lit(state.recording),
                     Action::Live(_) => lit(state.live),
+                    Action::PreviewMode(_) => lit(state.preview_mode),
                     Action::Auto(_) => lit(state.auto),
                     Action::Graphic(t, _) => lit(t.find(&gnames).is_some_and(|i| state.graphics[i].on)),
                     Action::Rotation(t, _) => {
@@ -3962,17 +3992,9 @@ impl App {
     /// Under the transitions: Preview, AUTO, CC and ⟲ Back. (Edit layout is
     /// Show's second tab, and E.)
     fn bank_toggles(&mut self, ui: &mut egui::Ui) {
-        let mut pv = self.cfg.transition.preview_mode;
+        let pv = self.cfg.transition.preview_mode;
         if ui.add(egui::Button::selectable(pv, "Preview")).on_hover_text(format!("Pick the next scene in preview, then Take{} or Cut{}", self.key_hint(Builtin::Take), self.key_hint(Builtin::CutPreview))).clicked() {
-            pv = !pv;
-            self.cfg.transition.preview_mode = pv;
-            self.cfg_dirty = true;
-            if !pv {
-                if let Some(e) = &self.engine {
-                    e.switcher.set_preview(None);
-                }
-            }
-            self.mv_selected = None;
+            self.set_preview_mode(!pv);
         }
         // AUTO: greyed until it has rules (forensics bank #5); a click then
         // says why and links to them. The A key still turns it on and off.
