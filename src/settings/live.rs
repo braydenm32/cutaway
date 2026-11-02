@@ -292,6 +292,16 @@ fn audio_keys(c: &Config) -> Vec<(u64, crate::config::AudioConfig)> {
 }
 
 impl SettingsUi {
+    /// What's waiting for Apply, in words ("restarts Couch, adds Sound
+    /// pads"), for the question quitting asks; None if nothing is.
+    pub fn waiting_for_apply(&self) -> Option<String> {
+        if !self.dirty() {
+            return None;
+        }
+        let (list, _) = held_list(&self.original, &self.draft);
+        Some(if list.is_empty() { "changes".to_string() } else { list.join(", ") })
+    }
+
     /// The settings in effect plus every change on a live page that can be
     /// applied without interrupting anything.
     pub(super) fn live_part(&self) -> Config {
@@ -310,7 +320,18 @@ impl SettingsUi {
     /// Changes not applied yet that the page doesn't save by itself: held
     /// back on a live page, or anything on an old one.
     pub(super) fn unapplied(&self) -> bool {
-        self.draft_compared() != self.live_part().with_framed_rates() || self.scene_rename_pending()
+        self.draft_compared() != self.live_part().with_framed_rates() || self.scene_rename_pending() || self.live_problem().is_some()
+    }
+
+    /// A change that saves as you go but can't be saved (a value that
+    /// isn't allowed): it holds back every later change too, so leaving
+    /// asks rather than dropping them without a word (review D6).
+    pub(super) fn live_problem(&self) -> Option<String> {
+        let lp = self.live_part();
+        if lp == self.original {
+            return None;
+        }
+        lp.check().err().map(|e| format!("{e:#}"))
     }
 
     /// Changes on a live page held back for "Apply (restarts cameras)".

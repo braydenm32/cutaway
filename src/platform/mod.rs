@@ -3,6 +3,7 @@
 use crate::media::{AudioBlock, VideoFrame};
 use std::sync::Arc;
 
+pub mod awake;
 pub mod capture;
 pub mod displays;
 #[cfg(target_os = "macos")]
@@ -28,7 +29,14 @@ pub use audio_in::{list_audio_devices, open_audio_input};
 pub use audio_out::{list_output_devices, open_audio_output};
 
 #[cfg(target_os = "macos")]
-pub use macos::{capture_targets, list_video_devices, open_camera, open_screen, permissions_changed, request_permissions};
+pub use macos::{capture_targets, list_video_devices, open_camera, open_screen, permissions_changed, request_permissions, still_asking};
+
+/// Whether the system is still waiting for an answer about the camera and
+/// the microphone (only macOS asks this way): (camera, microphone).
+#[cfg(not(target_os = "macos"))]
+pub fn still_asking() -> (bool, bool) {
+    (false, false)
+}
 #[cfg(windows)]
 pub use win::{capture_targets, list_video_devices, open_camera, open_screen, permissions_changed, request_permissions};
 
@@ -144,8 +152,28 @@ pub mod vcam {
     use anyhow::Result;
     use crossbeam_channel::Receiver;
 
+    /// Whether this copy can offer the virtual camera at all. On a Mac it
+    /// needs the camera extension, which only a copy signed with an Apple
+    /// Developer account can carry: the Mac download leaves it out, so
+    /// there's no Webcam button there.
     pub fn available() -> bool {
-        cfg!(any(target_os = "macos", windows))
+        #[cfg(target_os = "macos")]
+        {
+            super::macos::vcam::included() || super::macos::vcam::installed()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            cfg!(windows)
+        }
+    }
+
+    /// Why there's no virtual camera, in a line, when there isn't one.
+    pub fn missing_note() -> &'static str {
+        if cfg!(target_os = "macos") {
+            "The virtual camera (Cutaway as a webcam in Zoom, Teams or Meet) isn't in the Mac download yet. It's coming in a later version. It works on Windows 11 now."
+        } else {
+            "The virtual camera needs macOS or Windows 11."
+        }
     }
 
     pub fn installed() -> bool {

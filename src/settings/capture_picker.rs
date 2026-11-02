@@ -94,7 +94,17 @@ impl CapturePicker {
         let list = match &found {
             Some(Ok(l)) => l.clone(),
             Some(Err(e)) => {
-                ui.label(RichText::new(format!("⚠ {e}")).color(AMBER));
+                ui.label(RichText::new(format!("⚠ {e}.")).color(AMBER));
+                if e.contains(crate::platform::capture::SCREEN_NOT_ALLOWED) {
+                    ui.horizontal(|ui| {
+                        if ui.button("Open System Settings").on_hover_text("The Screen Recording page: turn on Cutaway there").clicked() {
+                            crate::platform::capture::open_screen_privacy();
+                        }
+                        if ui.button("Restart Cutaway").on_hover_text("Quits and opens Cutaway again: macOS only lets it record the screen after a restart").clicked() && crate::platform::capture::relaunch_soon() {
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                    });
+                }
                 Vec::new()
             }
             None => Vec::new(),

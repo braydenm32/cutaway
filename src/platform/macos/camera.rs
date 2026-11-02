@@ -54,6 +54,13 @@ pub fn permissions_changed() -> bool {
     PERMISSION_GRANTED.swap(false, Ordering::Relaxed)
 }
 
+/// macOS hasn't had an answer yet about the camera / the microphone (its
+/// question may be up now): (camera, microphone).
+pub fn still_asking() -> (bool, bool) {
+    let pending = |kind: Option<&'static AVMediaType>| kind.is_some_and(|k| unsafe { AVCaptureDevice::authorizationStatusForMediaType(k) } == AVAuthorizationStatus::NotDetermined);
+    (pending(unsafe { AVMediaTypeVideo }), pending(unsafe { AVMediaTypeAudio }))
+}
+
 fn denied(kind: Option<&'static AVMediaType>) -> bool {
     let Some(kind) = kind else { return false };
     let status = unsafe { AVCaptureDevice::authorizationStatusForMediaType(kind) };

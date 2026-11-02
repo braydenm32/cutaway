@@ -176,9 +176,9 @@ function check(ok, what) {
     key("keyUp", "k-rec", "record");
     await until("recording", async () => (await state()).recording);
     check(true, "record key starts recording");
-    await until("the record key to turn red", () => {
+    await until("the record key to show it's recording (dark, with a red dot)", () => {
       const m = last("setImage", "k-rec");
-      return m && decodeURIComponent(m.payload.image).includes("#e5303e") && decodeURIComponent(m.payload.image).includes("REC");
+      return m && decodeURIComponent(m.payload.image).includes("#281e22") && decodeURIComponent(m.payload.image).includes("REC");
     });
     check(true, "record key shows recording, with the time");
     key("keyDown", "k-rec", "record");
@@ -360,8 +360,10 @@ function check(ok, what) {
       appear("k-ptz", "ptz", { camera: "1", button: "preset", preset: "1" });
       appear("k-prompter", "prompter", { button: "toggle" });
       appear("k-comment", "comment", { button: "toggle" });
+      appear("k-preview", "preview", {});
+      appear("k-back", "back", {});
       await sleep(600);
-      for (const ctx of ["k-scene", "k-source", "k-take", "k-transition", "k-rec", "k-live", "k-marker", "k-graphic", "k-audio", "k-auto", "k-captions", "k-media", "k-command", "k-pad", "k-syrin", "k-talk", "k-clip", "k-timer", "k-rundown", "k-ftb", "k-replay", "k-macro", "k-ptz", "k-prompter", "k-comment"]) {
+      for (const ctx of ["k-scene", "k-source", "k-take", "k-transition", "k-rec", "k-live", "k-marker", "k-graphic", "k-audio", "k-auto", "k-captions", "k-media", "k-command", "k-pad", "k-syrin", "k-talk", "k-clip", "k-timer", "k-rundown", "k-ftb", "k-replay", "k-macro", "k-ptz", "k-prompter", "k-comment", "k-preview", "k-back"]) {
         const m = last("setImage", ctx);
         if (!m) continue;
         const [head, data] = m.payload.image.split(",");
@@ -376,9 +378,11 @@ function check(ok, what) {
 
     // A wrong PIN is reported.
     if (pin) {
+      // (Cleared first: with a wrong PIN the plugin waits 15 s before trying
+      // again, so the "not connected" pictures are drawn once, right away.)
+      received.length = 0;
       sd.send({ event: "didReceiveGlobalSettings", payload: { settings: { address, pin: "0000", thumbnails: "250" } } });
       await sleep(1500);
-      received.length = 0;
       sd.send({ event: "sendToPlugin", action: "app.cutaway.streamdeck.scene", context: "k-scene", payload: { kind: "lists" } });
       const l = await until("status", () => last("sendToPropertyInspector", "k-scene"));
       check(!l.payload.connected && /PIN/.test(l.payload.status), `wrong PIN: "${l.payload.status}"`);

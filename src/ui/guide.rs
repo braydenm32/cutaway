@@ -96,15 +96,27 @@ impl App {
             self.guide_heard = self.cfg.audio[i].uid;
         }
         let heard = mic_uid != 0 && self.guide_heard == mic_uid;
-        let recorded = self.engine.as_ref().is_some_and(|e| e.is_recording()) || self.guide_recorded;
+        let recording_now = self.engine.as_ref().is_some_and(|e| e.is_recording());
+        let recorded = recording_now || self.guide_recorded;
 
         // Who's on camera: as Sources › People & names lists them.
         let people: Vec<usize> = self.people_sources();
         let named = people.iter().filter(|&&i| !self.cfg.sources[i].person.trim().is_empty()).count();
         let name_title = self.has_name_title();
         let timelines = self.cfg.output.export_timelines;
-        let scenes_seen = self.guide_scenes || self.edit_mode;
-        self.guide_scenes = scenes_seen;
+        // Ticked once you've taken another scene or changed one, not for
+        // opening Edit layout (review B9).
+        if let Some(live) = self.engine.as_ref().map(|e| e.switcher.live().name.clone()) {
+            match &self.guide_first_scene {
+                None => self.guide_first_scene = Some(live),
+                Some(first) if *first != live => self.guide_scenes = true,
+                _ => {}
+            }
+        }
+        if self.edit_mode && self.scenes_dirty {
+            self.guide_scenes = true;
+        }
+        let scenes_seen = self.guide_scenes;
 
         // Each step's state, for the steps and the folded button's count.
         let cam_state = if cams > 0 && cams_alive == cams { Step::Done } else { Step::Todo };
@@ -152,6 +164,7 @@ impl App {
         let mut go_part: Option<(Section, &str)> = None;
         let mut go: Option<Section> = None;
         let mut check = false;
+        let mut record = false;
         let mut done = false;
         egui::Window::new("Your first show")
             .open(&mut open)
@@ -162,6 +175,10 @@ impl App {
             .default_pos(ctx.content_rect().center())
             .show(ctx, |ui| {
                 ui.label(format!("A few steps to a first recording and its edit ({done_n} of {counted} done). Each button opens the right page and folds this down to a Guide button on the left, above More, to come back to."));
+                if cfg!(target_os = "macos") && !recorded {
+                    ui.add_space(4.0);
+                    ui.add(egui::Label::new(RichText::new("macOS asks whether Cutaway may use the camera and the microphone (and later the screen, if you add it): choose Allow each time.").color(AMBER)).wrap());
+                }
                 ui.add_space(8.0);
                 egui::ScrollArea::vertical().max_height((ctx.content_rect().height() - 220.0).max(240.0)).auto_shrink([true, true]).show(ui, |ui| {
                 let mut n = 0;
@@ -190,11 +207,15 @@ impl App {
                     clicked
                 };
 
+                // macOS's own question is up (or was dismissed unanswered):
+                // waiting, not a fault (review B7).
+                let (asking_cam, asking_mic) = crate::platform::still_asking();
                 let cam_text = match (cams, cams_alive) {
+                    (c, 0) if c > 0 && asking_cam => "Waiting for you to allow the camera in macOS's question (choose Allow).".to_string(),
                     (0, _) if tests > 0 => format!("No camera found yet: test pictures stand in for now. Plug one in and add it here (a capture card, a USB camera or a phone). If it's plugged in, check that no other app is using it and that Cutaway may use the camera ({CAMERA_PRIVACY})."),
                     (0, _) => "No cameras yet. Plug one in, then add it here (a capture card, a USB camera or a phone).".to_string(),
-                    (1, 1) => "1 camera with a picture. Name it so scenes and titles make sense.".to_string(),
-                    (c, a) if a == c => format!("{c} cameras with a picture. Name them so scenes and titles make sense."),
+                    (1, 1) => "1 camera with a picture. Name it so scenes and titles make sense. Want your screen too? ＋ Add → Screen, window or app.".to_string(),
+                    (c, a) if a == c => format!("{c} cameras with a picture. Name them so scenes and titles make sense. Want your screen too? ＋ Add → Screen, window or app."),
                     (c, 0) => format!("{} Check the cable, that no other app is using {}, and that Cutaway may use the camera ({CAMERA_PRIVACY}).", if c == 1 { "The camera has no picture." } else { "None of the cameras has a picture." }, if c == 1 { "it" } else { "them" }),
                     (c, a) => format!("{a} of {c} cameras have a picture. Check the cable, or that no other app is using {}.", if c - a == 1 { "the one without" } else { "them" }),
                 };
@@ -226,7 +247,9 @@ impl App {
                     step(ui, people_state, "Name your people", people_text, None, Some(&mut rows));
                 }
 
-                let mic_text = if mics == 0 || mic.is_none() {
+                let mic_text = if asking_mic && !heard {
+                    "Waiting for you to allow the microphone in macOS's question (choose Allow).".to_string()
+                } else if mics == 0 || mic.is_none() {
                     "No microphone yet. Add one so the recording has sound.".to_string()
                 } else if heard {
                     format!("Listening to {mic_name}, and Cutaway can hear you. Say a few words and watch its meter at the bottom.")
@@ -239,7 +262,7 @@ impl App {
                     go = Some(Section::Audio);
                 }
 
-                let scenes_text = "A scene is a layout: which cameras show and where (one full screen, side by side, picture in picture). The buttons along the bottom take them. Show › Edit layout (or E) lets you drag the frames on the picture to change them.".to_string();
+                let scenes_text = "A scene is a layout: which cameras show and where (one full screen, side by side, picture in picture). The buttons along the bottom take them. Show › Edit layout (or E) lets you drag the frames on the picture to change them. Try taking scene 2 (the 2 key), then change one.".to_string();
                 if step(ui, scenes_state, "Your scenes", scenes_text, Some("Edit layout"), None) {
                     edit_layout = true;
                 }
@@ -273,14 +296,20 @@ impl App {
                     check = true;
                 }
 
-                step(
-                    ui,
-                    rec_state,
-                    "Record a test",
-                    format!("Press Record{}, talk for ten seconds while switching cameras, then hold REC to stop. Watch the take back from its folder before the real show.", record_key),
-                    None,
-                    None,
-                );
+                let (rec_text, rec_button) = if recording_now {
+                    ("Recording. Talk for ten seconds while switching cameras, then hold REC (top right) to stop.".to_string(), None)
+                } else if recorded {
+                    ("Recorded. Find it on the Take saved card, or in Record › Takes, and watch it back before the real show.".to_string(), Some("Takes…"))
+                } else {
+                    (format!("Press Record a test (or Record{record_key}), talk for ten seconds while switching cameras, then hold REC to stop."), Some("Record a test"))
+                };
+                if step(ui, rec_state, "Record a test", rec_text, rec_button, None) {
+                    if recorded {
+                        go_place = Some("record/takes/takes");
+                    } else {
+                        record = true;
+                    }
+                }
 
                 let edit_text = if timelines {
                     "On: every take also saves a project for DaVinci Resolve, Premiere Pro and Final Cut, with each camera on its own track, your live cuts as the first edit, and your markers."
@@ -314,14 +343,16 @@ impl App {
         }
         if edit_layout {
             self.edit_mode = true;
-            self.guide_scenes = true;
         }
         if check {
             self.guide_checked = true;
             self.start_precheck(None);
         }
+        if record {
+            self.toggle_record();
+        }
         // Gone to a page: out of its way, a click from coming back.
-        if go.is_some() || go_place.is_some() || go_part.is_some() || edit_layout || check {
+        if go.is_some() || go_place.is_some() || go_part.is_some() || edit_layout || check || record {
             self.guide_folded = true;
         }
         if done || !open {
