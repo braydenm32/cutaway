@@ -371,7 +371,8 @@ local function build_live_edit()
   pcall(function()
     tl:SetTrackName("video", 1, "Live edit")
   end)
-  -- Every angle, full length, from the start: in parallel, in sync.
+  -- Every angle, full length, from where it starts (the start, unless its
+  -- camera joined during the take): in parallel, in sync.
   for k, a in ipairs(take.angles or {}) do
     local item = item_for(a.file)
     if item and a.frames and a.frames > 0 then
@@ -382,7 +383,7 @@ local function build_live_edit()
         end
       end
       if (tl:GetTrackCount("video") or 0) >= track then
-        local placed = place(item, 0, a.frames, 0, track, 1)
+        local placed = place(item, 0, a.frames, a.at or 0, track, 1)
         if placed then
           pcall(function()
             tl:SetTrackName("video", track, a.name)
