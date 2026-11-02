@@ -43,7 +43,7 @@ pub struct TakeReport {
 }
 
 /// A marker dropped during a take (time from the start of the files).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Marker {
     pub at: Ns,
     pub name: String,
@@ -782,6 +782,8 @@ pub struct Take {
     /// started (they may be removed from the show before it ends).
     pub iso_slots: Vec<(String, Arc<super::sources::SourceSlot>)>,
     pub raw_inputs: Vec<Arc<super::audio::InputShared>>,
+    /// The take's journal (for a rescue after a crash), if it could be written.
+    pub journal: Option<Arc<super::journal::Journal>>,
 }
 
 impl Take {

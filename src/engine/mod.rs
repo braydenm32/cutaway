@@ -38,6 +38,7 @@ pub mod graphics;
 pub mod guests;
 pub mod health;
 pub mod inputs;
+pub mod journal;
 pub mod lipsync;
 pub mod ndi;
 pub mod netsrc;
@@ -1393,6 +1394,9 @@ impl Engine {
                     let length = clock::now() - take.t0;
                     for f in take.export_files.iter_mut().filter(|f| f.source == Some(h.uid as usize)) {
                         f.length = Some(length);
+                    }
+                    if let Some(j) = &take.journal {
+                        j.add(&journal::Entry::Ends { source: h.uid as usize, length });
                     }
                 }
             }

@@ -31,6 +31,17 @@ pub struct Unfinished {
     pub files: Vec<PathBuf>,
 }
 
+/// A take's media files: its own folder and its Proxies folder.
+fn media_in(dir: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for d in [dir.to_path_buf(), dir.join("Proxies")] {
+        let Ok(rd) = fs::read_dir(&d) else { continue };
+        files.extend(rd.flatten().map(|f| f.path()).filter(|p| p.is_file() && is_media(p, &["mp4", "mov", "wav"]) && !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'))));
+    }
+    files.sort();
+    files
+}
+
 /// Takes in `output` that need repairing (just a look at the folders: quick).
 pub fn find_unfinished(output: &Path) -> Vec<Unfinished> {
     let Ok(entries) = fs::read_dir(output) else { return Vec::new() };
@@ -40,14 +51,12 @@ pub fn find_unfinished(output: &Path) -> Vec<Unfinished> {
         if !dir.is_dir() || dir.join("Take.txt").exists() {
             continue;
         }
-        let Ok(files) = fs::read_dir(&dir) else { continue };
-        let mut files: Vec<PathBuf> = files.flatten().map(|f| f.path()).filter(|p| is_media(p, &["mp4", "mov", "wav"])).collect();
+        let files = media_in(&dir);
         let ours = files.iter().any(|p| {
             let name = p.file_name().unwrap_or_default().to_string_lossy();
             name.starts_with("Program.") || name.starts_with("ISO_") || name.starts_with("Audio_")
-        });
-        if ours {
-            files.sort();
+        }) || dir.join(crate::engine::journal::FILE).exists();
+        if ours && !files.is_empty() {
             takes.push(Unfinished { dir, files });
         }
     }
@@ -55,34 +64,93 @@ pub fn find_unfinished(output: &Path) -> Vec<Unfinished> {
     takes
 }
 
+/// "Show_2026-11-01_20-04-12" (or "…_2") → when it was recorded.
+fn stamp_of(name: &str) -> Option<chrono::NaiveDateTime> {
+    let parts: Vec<&str> = name.split('_').collect();
+    (0..parts.len().saturating_sub(1)).rev().find_map(|i| chrono::NaiveDateTime::parse_from_str(&format!("{} {}", parts[i], parts[i + 1]), "%Y-%m-%d %H-%M-%S").ok())
+}
+
 /// Repairs one take's files, calling `on_file` with each file's index and
 /// name before it's worked on, and marks the take finished (Take.txt).
+/// With its journal, the take gets back its side files too (switch log,
+/// timelines, Resolve take file, chapters, markers).
 pub fn repair(take: &Unfinished, mut on_file: impl FnMut(usize, &str)) -> bool {
+    let journal = crate::engine::journal::read(&take.dir);
+    // Chapters in the files, as Stop puts them there.
+    let chapters: Vec<(i64, String)> = journal.as_ref().map(|j| j.markers.iter().filter(|m| !m.clip).map(|m| (m.at, m.name.clone())).collect()).unwrap_or_default();
     let mut lines = Vec::new();
+    // The files that play, their sizes, and how long each is.
+    let mut good: Vec<(PathBuf, u64)> = Vec::new();
+    let mut seconds: Vec<(PathBuf, f64)> = Vec::new();
     for (i, p) in take.files.iter().enumerate() {
-        let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let name = p.strip_prefix(&take.dir).unwrap_or(p).to_string_lossy().to_string();
         on_file(i, &name);
         // A damaged file mustn't stop the rest (or the rescue screen).
-        if is_media(p, &["mp4", "mov"]) {
-            match crate::util::guard("repairing a recording", || mp4::recover(p)) {
-                Ok(mp4::Recovery::Recovered { seconds }) => lines.push(format!("  {name}: recovered {seconds:.1} s")),
-                Ok(mp4::Recovery::AlreadyComplete) => lines.push(format!("  {name}: complete")),
-                Ok(mp4::Recovery::NotRecoverable) => lines.push(format!("  {name}: nothing could be recovered")),
-                Err(e) => lines.push(format!("  {name}: couldn't repair ({e:#})")),
+        let length = if is_media(p, &["mp4", "mov"]) {
+            match crate::util::guard("repairing a recording", || mp4::recover_with(p, &chapters)) {
+                Ok(mp4::Recovery::Recovered { seconds }) => {
+                    lines.push(format!("  {name}: recovered {seconds:.1} s"));
+                    Some(seconds)
+                }
+                Ok(mp4::Recovery::AlreadyComplete) => {
+                    lines.push(format!("  {name}: complete"));
+                    mp4::duration_secs(p)
+                }
+                Ok(mp4::Recovery::NotRecoverable) => {
+                    lines.push(format!("  {name}: nothing could be recovered"));
+                    None
+                }
+                Err(e) => {
+                    lines.push(format!("  {name}: couldn't repair ({e:#})"));
+                    None
+                }
             }
         } else {
-            match crate::util::guard("repairing a recording", || wav::repair(p)) {
-                Ok(true) => lines.push(format!("  {name}: header repaired")),
-                Ok(false) => lines.push(format!("  {name}: complete")),
-                Err(e) => lines.push(format!("  {name}: couldn't repair ({e:#})")),
-            }
+            let ok = match crate::util::guard("repairing a recording", || wav::repair(p)) {
+                Ok(true) => {
+                    lines.push(format!("  {name}: header repaired"));
+                    true
+                }
+                Ok(false) => {
+                    lines.push(format!("  {name}: complete"));
+                    true
+                }
+                Err(e) => {
+                    lines.push(format!("  {name}: couldn't repair ({e:#})"));
+                    false
+                }
+            };
+            ok.then(|| wav::WavReader::open(p).ok().map(|r| r.frames as f64 / r.rate.max(1) as f64)).flatten()
+        };
+        if let Some(secs) = length {
+            good.push((p.clone(), fs::metadata(p).map(|m| m.len()).unwrap_or(0)));
+            seconds.push((p.clone(), secs));
         }
     }
-    let note = format!(
-        "Cutaway take (recovered)\n\nThis take wasn't stopped normally (crash, power loss or force quit).\n\
-         Files play up to about the last second that was written.\n\nFiles:\n{}\n",
-        lines.join("\n")
-    );
+    // The take's length: the program's, else the longest file's.
+    let is_program = |p: &Path| p.parent() == Some(take.dir.as_path()) && p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("Program."));
+    let secs = seconds.iter().find(|(p, _)| is_program(p)).map(|s| s.1).unwrap_or_else(|| seconds.iter().map(|s| s.1).fold(0.0, f64::max));
+    let length = std::time::Duration::from_secs_f64(secs.max(0.0));
+    if let Some(j) = &journal {
+        crate::engine::take::rebuild_from_journal(&take.dir, j, good, length, lines);
+        let _ = fs::remove_file(take.dir.join(crate::engine::journal::FILE));
+        return take.dir.join("Take.txt").exists();
+    }
+    // No journal (a take from an older Cutaway): what the files say.
+    let name = take.dir.file_name().unwrap_or_default().to_string_lossy().to_string();
+    let mut note = String::from("Cutaway take (recovered)\n");
+    if let Some(at) = stamp_of(&name) {
+        note += &format!("Recorded: {}\n", at.format("%Y-%m-%d %H:%M"));
+    }
+    note += &format!("Length: {}\n", crate::engine::fmt_duration(length));
+    note += "\nThis take wasn't stopped normally (crash, power loss or force quit).\n\
+             Files play up to about the last second that was written. Its switches and markers weren't saved,\n\
+             so it has no timelines or chapters.\n\nFiles:\n";
+    for (p, size) in &good {
+        let rel = p.strip_prefix(&take.dir).unwrap_or(p).to_string_lossy().to_string();
+        note += &format!("  {rel}  ({})\n", crate::util::human_size(*size));
+    }
+    note += &format!("\nRepair:\n{}\n", lines.join("\n"));
     fs::write(take.dir.join("Take.txt"), note).is_ok()
 }
 
@@ -184,7 +252,8 @@ mod tests {
         // A WAV whose writer never finished.
         let wav_path = take.join("Audio_01_DAW.wav");
         let mut w = WavWriter::create(&wav_path, SampleFormat::from_bits(24), 2, 48000).unwrap();
-        w.write(&vec![0.25f32; 9600]).unwrap();
+        // Over a second, so some of it reached the disk.
+        w.write(&vec![0.25f32; 2 * 48_000 * 2 + 9600]).unwrap();
         std::mem::forget(w); // simulate a crash: no finish()
         // Something that isn't ours is left alone.
         fs::create_dir_all(root.join("Other")).unwrap();
@@ -192,7 +261,13 @@ mod tests {
         assert_eq!(done, vec![take.clone()]);
         let note = fs::read_to_string(take.join("Take.txt")).unwrap();
         assert!(note.contains("Audio_01_DAW.wav"), "{note}");
+        // When and how long, for Record › Takes and uploads.
+        assert!(note.contains("Recorded: 2026-01-01 00:00\nLength: 00:00:0"), "{note}");
+        assert!(note.contains("  Audio_01_DAW.wav  ("), "listed with its size: {note}");
         assert!(recover_unfinished(&root).is_empty(), "second pass leaves finished takes alone");
+        assert_eq!(stamp_of("Show_2026-11-01_20-04-12_2").map(|t| t.to_string()), Some("2026-11-01 20:04:12".into()));
+        assert_eq!(stamp_of("My_Show_2026-11-01_20-04-12").map(|t| t.to_string()), Some("2026-11-01 20:04:12".into()));
+        assert!(stamp_of("Other").is_none());
         fs::remove_dir_all(&root).unwrap();
     }
 

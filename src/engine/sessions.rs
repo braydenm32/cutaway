@@ -792,6 +792,16 @@ mod tests {
         let all = run_script(&config, "-", "inclusive").unwrap().join("\n");
         assert!(all.contains("PICKER") && all.contains("no folder chosen"), "{all}");
         assert!(!build_note_file(&config).exists());
+
+        // No live edit at all: a take rescued from an older Cutaway says so.
+        std::fs::write(folder.join(format!("{} (Resolve).lua", s.name)), s.resolve_lua(&folder, &videos, None, (1920, 1080), &ResolveEdit::default())).unwrap();
+        write_build_note(&config, &folder).unwrap();
+        let all = run_script(&config, "-", "inclusive").unwrap().join("\n");
+        assert!(all.contains("Editor timelines is on") && !all.contains("rescued"), "{all}");
+        std::fs::write(folder.join("Take.txt"), "Cutaway take (recovered)\n").unwrap();
+        write_build_note(&config, &folder).unwrap();
+        let all = run_script(&config, "-", "inclusive").unwrap().join("\n");
+        assert!(all.contains("rescued after Cutaway stopped while recording") && !all.contains("Editor timelines"), "{all}");
         let _ = std::fs::remove_dir_all(folder.parent().unwrap());
     }
 

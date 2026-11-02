@@ -295,6 +295,26 @@ impl Engine {
         }
 
         let live = self.switcher.live();
+        // The journal: what the side files need, kept as the take goes, for
+        // a rescue after a crash.
+        let journal = {
+            let start = super::journal::Start {
+                take: name.clone(),
+                t0,
+                fps,
+                canvas: self.info.canvas,
+                wall: wall.to_rfc3339(),
+                tc_seconds: tc_secs,
+                first_scene: live.name.clone(),
+                first_angle: self.switcher.angle_now(),
+                files: export_files.iter().map(journal_file).collect(),
+                setup: self.describe_setup(),
+                output: out.clone(),
+            };
+            let dirs: Vec<&std::path::Path> = std::iter::once(folder.as_path()).chain(backup_folder.as_deref()).collect();
+            super::journal::Journal::create(&dirs, start).map(Arc::new)
+        };
+        self.switcher.set_journal(journal.clone());
         let take = recorder::Take {
             folder: folder.clone(),
             t0,
@@ -318,6 +338,7 @@ impl Engine {
             tc_seconds: tc_secs,
             iso_slots,
             raw_inputs,
+            journal,
         };
         *self.take_monitor.lock_ok() = Some(TakeMonitor::new(folder.clone(), backup_folder.clone(), stats));
         {
@@ -360,20 +381,23 @@ impl Engine {
         if name.is_empty() {
             bail!("a marker needs a name");
         }
-        self.edit_markers(|m| rename_marker_in(m, at, name))
+        self.edit_markers(|m| rename_marker_in(m, at, name), super::journal::Entry::Rename { at, name: name.to_string() })
     }
 
     /// Take the marker at `at` out of the take being recorded.
     pub fn delete_marker(&self, at: Ns) -> Result<()> {
-        self.edit_markers(|m| remove_marker_in(m, at))
+        self.edit_markers(|m| remove_marker_in(m, at), super::journal::Entry::Delete { at })
     }
 
-    fn edit_markers(&self, f: impl FnOnce(&mut Vec<Marker>) -> bool) -> Result<()> {
+    fn edit_markers(&self, f: impl FnOnce(&mut Vec<Marker>) -> bool, logged: super::journal::Entry) -> Result<()> {
         let guard = self.take.lock_ok();
         let Some(take) = guard.as_ref() else { bail!("the take has stopped, so its markers are saved") };
         let mut markers = take.markers.lock_ok();
         if !f(&mut markers) {
             bail!("that marker isn't in this take any more");
+        }
+        if let Some(j) = &take.journal {
+            j.add(&logged);
         }
         let count = markers.len();
         drop(markers);
@@ -393,6 +417,9 @@ impl Engine {
         let marker = Marker { at, name: name.clone(), scene: self.switcher.live().name, clip };
         markers.push(marker.clone());
         markers.sort_by_key(|m| m.at);
+        if let Some(j) = &take.journal {
+            j.add(&super::journal::Entry::Marker(marker.clone()));
+        }
         let count = markers.len();
         drop(markers);
         drop(guard);
@@ -435,6 +462,7 @@ impl Engine {
         // can't start in between and lose its program to this one's ending.)
         let mut guard = self.take.lock_ok();
         let Some(take) = guard.take() else { return };
+        self.switcher.set_journal(None);
         let folder = take.folder.clone();
         self.status.lock_ok().rec = RecState::Finalizing { folder: folder.clone(), step: "Catching the last frames".into(), done: 0.0 };
         drop(guard);
@@ -492,7 +520,10 @@ impl Engine {
                 export_files: take.export_files.clone(),
                 tc_seconds: take.tc_seconds,
                 on_air: graphics.on_air(take.t0, t1),
+                rescued: None,
+                note_latest: true,
             };
+            let journal = take.journal.clone();
             // What the window shows while it saves.
             let saving = |what: String, done: f32| {
                 if let RecState::Finalizing { step, done: d, .. } = &mut status.lock_ok().rec {
@@ -519,6 +550,10 @@ impl Engine {
             saving("Writing the timeline and notes".into(), 0.95);
             let (written, backup_problem) = side.write(&cfg, &report, &summary, &events, t0, t1, wall, fps, (cw, ch), stream_since, cues.as_deref());
             report.problems.extend(backup_problem);
+            // Saved: the journal kept for a rescue isn't needed.
+            if let Some(j) = journal {
+                j.remove();
+            }
             let mut st = status.lock_ok();
             let total: u64 = report.files.iter().map(|f| f.1).sum();
             st.push(
@@ -615,6 +650,10 @@ struct SideFiles {
     tc_seconds: f64,
     /// Graphics on screen during the take (the sponsor report).
     on_air: Vec<super::graphics::OnAir>,
+    /// Rescued after a crash: what the repair did to each file.
+    rescued: Option<Vec<String>>,
+    /// Note this as the latest take (for the Resolve script).
+    note_latest: bool,
 }
 
 impl SideFiles {
@@ -697,7 +736,7 @@ impl SideFiles {
                 live_edit = Some(te);
             }
         }
-        files.push(("Take.txt".into(), take_info(setup, report, &self.markers, self.tc_seconds, recorded, cfg, !timelines.is_empty(), chapters.is_some())));
+        files.push(("Take.txt".into(), take_info(setup, report, &self.markers, self.tc_seconds, recorded, cfg, !timelines.is_empty(), chapters.is_some(), self.rescued.as_deref())));
 
         // Projects for audio software and Resolve.
         let session = if cfg.output.daw_sessions || cfg.output.resolve_project {
@@ -746,7 +785,7 @@ impl SideFiles {
             }
         }
         // The Resolve script starts at the latest take.
-        if let Some(dir) = crate::config::default_config_path().parent() {
+        if let Some(dir) = crate::config::default_config_path().parent().filter(|_| self.note_latest) {
             let _ = std::fs::write(super::sessions::last_take_file(dir), self.folder.to_string_lossy().as_bytes());
         }
         // The backup copy is only complete once every file arrived there.
@@ -769,6 +808,51 @@ impl SideFiles {
         }
         (extra, backup_problem)
     }
+}
+
+/// A file as the journal keeps it: by its name in the take folder (the
+/// take may be rescued from its backup copy, or after it's moved).
+pub(crate) fn journal_file(f: &ExportFile) -> ExportFile {
+    let mut f = f.clone();
+    if let Some(n) = f.path.file_name() {
+        f.path = PathBuf::from(n);
+    }
+    f
+}
+
+/// A rescued take's side files from its journal: the same Switches.csv,
+/// timelines, Resolve take file, chapters and markers a normal Stop
+/// writes, as far as the files go. `files` are the media files that were
+/// repaired (and their sizes), `length` how long the take is now,
+/// `repair` what was done to each file. Returns what was written.
+pub(crate) fn rebuild_from_journal(dir: &std::path::Path, r: &super::journal::Replay, files: Vec<(PathBuf, u64)>, length: Duration, repair: Vec<String>) -> Vec<String> {
+    let s = &r.start;
+    let mut cfg = crate::config::Config::default();
+    cfg.output = s.output.clone();
+    // Made after Stop, so not for a rescued take.
+    cfg.podcast.enabled = false;
+    cfg.captions.transcript = false;
+    let fps = s.fps.max(1);
+    let t0 = s.t0;
+    let t1 = t0 + length.as_nanos().min(i64::MAX as u128) as Ns;
+    let wall = chrono::DateTime::parse_from_rfc3339(&s.wall).map(|w| w.with_timezone(&chrono::Local)).unwrap_or_else(|_| chrono::Local::now());
+    let export_files = r.files.iter().map(|f| ExportFile { path: dir.join(&f.path), ..f.clone() }).collect();
+    let report = recorder::TakeReport { folder: dir.to_path_buf(), files, duration: length, recorded_at: Some(wall), ..Default::default() };
+    // The same switches Stop takes (those showing in the program by the end).
+    let events: Vec<switcher::SwitchEvent> = r.events.iter().filter(|e| e.at >= t0 + VIDEO_LATENCY && e.at <= t1 + VIDEO_LATENCY).cloned().collect();
+    let side = SideFiles {
+        folder: dir.to_path_buf(),
+        backup: None,
+        first_scene: s.first_scene.clone(),
+        first_angle: s.first_angle,
+        markers: r.markers.clone(),
+        export_files,
+        tc_seconds: s.tc_seconds,
+        on_air: Vec::new(),
+        rescued: Some(repair),
+        note_latest: false,
+    };
+    side.write(&cfg, &report, &s.setup, &events, t0, t1, wall, fps, s.canvas, None, None).0
 }
 
 pub(crate) fn timecode(ns: u64, fps: u32) -> String {
@@ -817,9 +901,16 @@ fn instant_at(t: Ns) -> Instant {
     }
 }
 
-fn take_info(setup: &str, report: &recorder::TakeReport, markers: &[Marker], tc_seconds: f64, recorded: chrono::DateTime<chrono::Local>, cfg: &crate::config::Config, timelines: bool, chapters: bool) -> String {
+#[allow(clippy::too_many_arguments)]
+fn take_info(setup: &str, report: &recorder::TakeReport, markers: &[Marker], tc_seconds: f64, recorded: chrono::DateTime<chrono::Local>, cfg: &crate::config::Config, timelines: bool, chapters: bool, rescued: Option<&[String]>) -> String {
     let timecode_on = cfg.output.timecode;
-    let mut s = format!("Cutaway take\nRecorded: {}\nLength: {}\n", recorded.format("%Y-%m-%d %H:%M"), fmt_duration(report.duration));
+    let head = if rescued.is_some() { "Cutaway take (recovered)" } else { "Cutaway take" };
+    let mut s = format!("{head}\nRecorded: {}\nLength: {}\n", recorded.format("%Y-%m-%d %H:%M"), fmt_duration(report.duration));
+    if rescued.is_some() {
+        s += "\nThis take wasn't stopped normally (Cutaway closed, or the computer stopped, while recording).\n\
+              Its files were repaired and play up to about the last second that was written. The switches\n\
+              and markers were saved as the take went, so its timelines, chapters and markers are here too.\n";
+    }
     if timecode_on {
         let t = tc_seconds as u64;
         s += &format!("Timecode at start: {:02}:{:02}:{:02} (time of day)\n", t / 3600, (t / 60) % 60, t % 60);
@@ -851,6 +942,12 @@ fn take_info(setup: &str, report: &recorder::TakeReport, markers: &[Marker], tc_
         s += "\nMarkers:\n";
         for m in markers {
             s += &format!("  {}  {}  (on air: {})\n", fmt_duration(Duration::from_nanos(m.at as u64)), m.name, m.scene);
+        }
+    }
+    if let Some(lines) = rescued.filter(|l| !l.is_empty()) {
+        s += "\nRepair:\n";
+        for l in lines {
+            s += &format!("{l}\n");
         }
     }
     if !report.problems.is_empty() {
@@ -904,9 +1001,92 @@ mod tests {
         let report = recorder::TakeReport { duration: Duration::from_secs(1800), ..Default::default() };
         let cfg = crate::config::Config::default();
         let clip = Marker { at: 0, name: "Clip 1".into(), scene: "Wide".into(), clip: true };
-        let s = take_info("", &report, &[clip], 0.0, at, &cfg, false, false);
+        let s = take_info("", &report, &[clip], 0.0, at, &cfg, false, false, None);
         assert!(s.contains("Recorded: 2026-10-20 23:50"), "{s}");
         assert!(!s.contains("Chapters.txt") && s.contains("Clip 1"), "the clip is listed, but there are no chapters");
+    }
+
+    /// A take rescued from its journal gets the same side files a normal
+    /// Stop writes: switch log, chapters, markers, timelines, Resolve file.
+    #[test]
+    fn a_journal_rebuilds_what_stop_writes() {
+        use super::super::journal::{self, Entry, Journal};
+        let root = std::env::temp_dir().join(format!("cutaway-journal-take-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let name = "Show_2026-11-01_20-04-12";
+        let (a, b) = (root.join("stopped").join(name), root.join("rescued").join(name));
+        let mut cfg = crate::config::Config::default();
+        cfg.output.export_timelines = true;
+        cfg.output.resolve_project = true;
+        cfg.output.timecode = true;
+        cfg.podcast.enabled = false;
+        let t0: Ns = 1_000 * NS_PER_SEC;
+        let length = Duration::from_secs(120);
+        let t1 = t0 + 120 * NS_PER_SEC;
+        let wall = chrono::DateTime::parse_from_rfc3339("2026-11-01T20:04:12+01:00").unwrap().with_timezone(&chrono::Local);
+        let file = |dir: &std::path::Path, f: &str, source| ExportFile { path: dir.join(f), name: f.trim_end_matches(".mp4").into(), width: 1920, height: 1080, fps: 30, has_audio: true, source, tc_frame: Some(72_252 * 30), length: None, clean: false };
+        let files_of = |dir: &std::path::Path| vec![file(dir, "Program.mp4", None), file(dir, "ISO_01_Wide.mp4", Some(7)), file(dir, "ISO_02_Host.mp4", Some(9))];
+        let sw = |s: i64, scene: &str, angle| switcher::SwitchEvent { at: t0 + VIDEO_LATENCY + s * NS_PER_SEC, scene: scene.into(), mode: TransitionMode::Cut, duration_ms: 0, angle };
+        let events = vec![sw(20, "Host", Some(9)), sw(45, "Both", None), sw(80, "Wide", Some(7))];
+        let mk = |s: i64, n: &str| Marker { at: s * NS_PER_SEC, name: n.into(), scene: "Wide".into(), clip: false };
+        let markers = vec![mk(0, "Welcome"), mk(30, "News"), mk(70, "Guest")];
+        let mut cut = files_of(&a);
+        cut[2].length = Some(100 * NS_PER_SEC); // Host left the show
+        for d in [&a, &b] {
+            std::fs::create_dir_all(d).unwrap();
+            for f in files_of(d) {
+                std::fs::write(&f.path, b"x").unwrap();
+            }
+        }
+        let report_of = |dir: &std::path::Path| recorder::TakeReport { folder: dir.to_path_buf(), files: files_of(dir).iter().map(|f| (f.path.clone(), 1)).collect(), duration: length, recorded_at: Some(wall), ..Default::default() };
+        // A normal Stop.
+        let side = SideFiles { folder: a.clone(), backup: None, first_scene: "Wide".into(), first_angle: Some(7), markers: markers.clone(), export_files: cut, tc_seconds: 72_252.0, on_air: Vec::new(), rescued: None, note_latest: false };
+        side.write(&cfg, &report_of(&a), "Setup", &events, t0, t1, wall, 30, (1920, 1080), None, None);
+        // The same take, from its journal (markers renamed and taken out on the way).
+        let start = journal::Start {
+            take: name.into(),
+            t0,
+            fps: 30,
+            canvas: (1920, 1080),
+            wall: wall.to_rfc3339(),
+            tc_seconds: 72_252.0,
+            first_scene: "Wide".into(),
+            first_angle: Some(7),
+            files: files_of(&b).iter().map(journal_file).collect(),
+            setup: "Setup".into(),
+            output: cfg.output.clone(),
+        };
+        let j = Journal::create(&[b.as_path()], start).unwrap();
+        j.add(&Entry::Marker(mk(0, "Welcome")));
+        j.add(&Entry::Switch(events[0].clone()));
+        j.add(&Entry::Marker(mk(30, "Marker 2")));
+        j.add(&Entry::Marker(mk(50, "Oops")));
+        j.add(&Entry::Delete { at: 50 * NS_PER_SEC });
+        j.add(&Entry::Switch(events[1].clone()));
+        j.add(&Entry::Rename { at: 30 * NS_PER_SEC, name: "News".into() });
+        j.add(&Entry::Marker(mk(70, "Guest")));
+        j.add(&Entry::Switch(events[2].clone()));
+        j.add(&Entry::Ends { source: 9, length: 100 * NS_PER_SEC });
+        j.close();
+        let replay = journal::read(&b).unwrap();
+        rebuild_from_journal(&b, &replay, report_of(&b).files, length, vec!["  Program.mp4: recovered 120.0 s".into()]);
+
+        let read = |d: &std::path::Path, f: &str| std::fs::read_to_string(d.join(f)).unwrap_or_else(|_| panic!("{f} missing in {}", d.display()));
+        for f in ["Switches.csv", "Chapters.txt"] {
+            assert_eq!(read(&a, f), read(&b, f), "{f}");
+        }
+        assert!(read(&a, "Switches.csv").contains("\"Host\",cut"));
+        let same_place = |t: String| t.replace("rescued", "stopped");
+        for f in [format!("{name}.fcpxml"), format!("{name} (Premiere).xml"), format!("{name} (Resolve).lua")] {
+            assert_eq!(read(&a, &f), same_place(read(&b, &f)), "{f}");
+        }
+        assert!(read(&b, &format!("{name} (Resolve).lua")).contains("\n  edit = {"));
+        let (stopped, rescued) = (read(&a, "Take.txt"), read(&b, "Take.txt"));
+        let markers_of = |t: &str| t[t.find("\nMarkers:").unwrap()..].split("\n\n").next().unwrap().to_string();
+        assert_eq!(markers_of(&stopped), markers_of(&rescued));
+        assert!(rescued.starts_with("Cutaway take (recovered)\nRecorded: ") && rescued.contains("Length: ") && rescued.contains("Repair:\n  Program.mp4: recovered"), "{rescued}");
+        assert!(rescued.contains("  ISO_01_Wide.mp4  ("), "the files are listed with their sizes: {rescued}");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
