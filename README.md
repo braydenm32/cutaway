@@ -1055,7 +1055,7 @@ The remote keeps updating while the Cutaway window is minimised or hidden.
 
 Double-click `streamdeck/Cutaway.streamDeckPlugin` (or press **Install the
 Stream Deck plugin…** in More › Control › Stream Deck, which also lists
-all 26 of the plugin's keys and what each does; the Mac app carries it
+all 28 of the plugin's keys and what each does; the Mac app carries it
 inside). Drag Cutaway actions onto keys, and in any key's settings enter the
 address (`127.0.0.1:8790` on the same computer) and the PIN. Needs Stream
 Deck 6.5 or later, on macOS or Windows. See [streamdeck/README.md](streamdeck/README.md).
@@ -1063,9 +1063,14 @@ Deck 6.5 or later, on macOS or Windows. See [streamdeck/README.md](streamdeck/RE
 ![Stream Deck keys](docs/streamdeck.png)
 
 *Scene and source keys show live pictures (red on air); record shows its
-running time; Go Live says GOING LIVE… while it connects and "LIVE 1 of 2"
-while a destination isn't live, as the phone does; graphics, transitions
-and captions light up when on.*
+running time on a dark key with a red dot, an amber edge when something
+needs a look and SAVING 40% while a take is finished; Go Live (pink) says
+GOING LIVE… while it connects and "LIVE 1 of 2" while a destination isn't
+live, as the phone does; graphics, transitions and captions light up when
+on.* A Scene key does what the desk's scene button does unless you set it
+to always take, preview or cut; **Preview** and **Back** keys turn Preview
+mode on and off and go back to the last scene; a **Marker** key can carry a
+name (one of your quick marker names).
 
 ### OSC
 
