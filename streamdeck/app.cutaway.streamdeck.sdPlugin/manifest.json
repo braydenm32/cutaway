@@ -32,7 +32,7 @@
 		{
 			"UUID": "app.cutaway.streamdeck.scene",
 			"Name": "Scene",
-			"Tooltip": "Take a scene. Shows its live picture: red on air, green in preview.",
+			"Tooltip": "A scene, like its button on the desk (into preview with Preview on), or always take, preview or cut. Shows its live picture: red on air, green in preview.",
 			"Icon": "imgs/actions/scene/icon",
 			"Controllers": [
 				"Keypad"
@@ -72,6 +72,34 @@
 			]
 		},
 		{
+			"UUID": "app.cutaway.streamdeck.preview",
+			"Name": "Preview",
+			"Tooltip": "Preview mode on or off, as the desk's Preview button. Green while on, with the scene in preview.",
+			"Icon": "imgs/actions/preview/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/preview/key"
+				}
+			]
+		},
+		{
+			"UUID": "app.cutaway.streamdeck.back",
+			"Name": "Back",
+			"Tooltip": "Back to the last scene: the one on air before this one.",
+			"Icon": "imgs/actions/back/icon",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/back/key"
+				}
+			]
+		},
+		{
 			"UUID": "app.cutaway.streamdeck.transition",
 			"Name": "Transition",
 			"Tooltip": "Choose the transition: cut, mix, wipe, push, dip or stinger.",
@@ -88,7 +116,7 @@
 		{
 			"UUID": "app.cutaway.streamdeck.record",
 			"Name": "Record",
-			"Tooltip": "Start recording; hold to stop.",
+			"Tooltip": "Start recording; hold to stop. An amber edge when something needs a look; SAVING while the last take is finished.",
 			"Icon": "imgs/actions/record/icon",
 			"Controllers": [
 				"Keypad"
@@ -116,7 +144,7 @@
 		{
 			"UUID": "app.cutaway.streamdeck.marker",
 			"Name": "Marker",
-			"Tooltip": "Drop a marker in the recording.",
+			"Tooltip": "Drop a marker in the recording, unnamed or with a name (one of your quick marker names, or your own).",
 			"Icon": "imgs/actions/marker/icon",
 			"Controllers": [
 				"Keypad"

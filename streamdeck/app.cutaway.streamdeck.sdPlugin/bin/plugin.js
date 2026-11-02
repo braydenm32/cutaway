@@ -259,7 +259,7 @@ function onStreamDeck(m) {
     case "dialDown":
     case "touchTap": {
       const k = keys.get(ctx);
-      if (k && k.kind === "audio") run(ctx, `audio:${target(k.settings.input)}`);
+      if (k && k.kind === "audio") run(ctx, `audio:${cmdTarget(k.settings.input)}`);
       break;
     }
     case "propertyInspectorDidAppear":
@@ -391,6 +391,13 @@ function target(v) {
   return s;
 }
 
+/** The same, for a command: a number is sent as "#2", which always means
+ *  the place, even when something is named "2". */
+function cmdTarget(v) {
+  const s = target(v);
+  return /^\d+$/.test(s) ? `#${s}` : s;
+}
+
 /** Index (from 0) of a target in a list of {name}. */
 function indexIn(list, v) {
   const s = target(v);
@@ -421,12 +428,21 @@ function press(ctx) {
   }
   switch (k.kind) {
     case "scene": {
-      const how = s.press || "take";
-      run(ctx, `${how === "preview" ? "preview" : how === "cut" ? "cut" : "scene"}:${target(s.scene)}`);
+      // "desk" (the default): as the desk's scene button, to preview when
+      // Preview is on (Cutaway decides, from its own state).
+      const how = s.press || "desk";
+      const verb = { preview: "preview", cut: "cut", take: "scene" }[how] || "press";
+      run(ctx, `${verb}:${cmdTarget(s.scene)}`);
       break;
     }
     case "source":
-      run(ctx, `source:${target(s.source)}`);
+      run(ctx, `source:${cmdTarget(s.source)}`);
+      break;
+    case "preview":
+      run(ctx, st && st.preview_mode ? "preview:off" : "preview:on");
+      break;
+    case "back":
+      run(ctx, "back");
       break;
     case "take":
       run(ctx, s.how === "cut" ? "cut" : "take");
@@ -441,14 +457,18 @@ function press(ctx) {
       run(ctx, st && st.live ? "live:off" : "live:on");
       break;
     case "marker":
-      run(ctx, s.label && String(s.label).trim() ? `marker:${String(s.label).trim()}` : "marker");
+      if (!st || !st.recording) {
+        sdSend({ event: "showAlert", context: ctx });
+        break;
+      }
+      run(ctx, markerLabel(s) ? `marker:${markerLabel(s)}` : "marker");
       sdSend({ event: "showOk", context: ctx });
       break;
     case "graphic":
-      run(ctx, `graphic:${target(s.graphic)}`);
+      run(ctx, `graphic:${cmdTarget(s.graphic)}`);
       break;
     case "audio":
-      run(ctx, `audio:${target(s.input)}`);
+      run(ctx, `audio:${cmdTarget(s.input)}`);
       break;
     case "auto":
       run(ctx, "auto");
@@ -457,7 +477,7 @@ function press(ctx) {
       run(ctx, "captions");
       break;
     case "media":
-      run(ctx, `media:${target(s.player)}:${s.button || "toggle"}`);
+      run(ctx, `media:${cmdTarget(s.player)}:${s.button || "toggle"}`);
       break;
     case "command":
       if (s.command && String(s.command).trim()) run(ctx, String(s.command).trim());
@@ -465,11 +485,11 @@ function press(ctx) {
       break;
     case "pad":
       // Sound starts on the press; "while held" pads stop on the release.
-      run(ctx, `pad:${target(s.pad)}:press`);
-      k.down = `pad:${target(s.pad)}:release`;
+      run(ctx, `pad:${cmdTarget(s.pad)}:press`);
+      k.down = `pad:${cmdTarget(s.pad)}:release`;
       break;
     case "syrinscape":
-      run(ctx, `syrinscape:${target(s.button)}`);
+      run(ctx, `syrinscape:${cmdTarget(s.button)}`);
       break;
     case "talkback":
       if ((s.mode || "hold") === "hold") {
@@ -496,7 +516,7 @@ function press(ctx) {
     case "guest": {
       const g = (st && st.guests || [])[indexIn(st && st.guests, s.guest)];
       if (!g || !g.source) sdSend({ event: "showAlert", context: ctx });
-      else run(ctx, `${(s.press || "source") === "preview" ? "preview" : "source"}:${g.source}`);
+      else run(ctx, `${(s.press || "source") === "preview" ? "preview" : "source"}:#${g.source}`);
       break;
     }
     case "ftb":
@@ -512,7 +532,7 @@ function press(ctx) {
       }
       break;
     case "macro":
-      run(ctx, `macro:${target(s.macro)}`);
+      run(ctx, `macro:${cmdTarget(s.macro)}`);
       break;
     case "ptz": {
       const cam = ptzOf(s.camera);
@@ -521,12 +541,12 @@ function press(ctx) {
         break;
       }
       const button = s.button || "preset";
-      if (button === "preset") run(ctx, `ptz:${cam.source}:preset:${Math.max(1, Math.round(Number(s.preset) || 1))}`);
-      else if (button === "home") run(ctx, `ptz:${cam.source}:home`);
+      if (button === "preset") run(ctx, `ptz:#${cam.source}:preset:${Math.max(1, Math.round(Number(s.preset) || 1))}`);
+      else if (button === "home") run(ctx, `ptz:#${cam.source}:home`);
       else {
         // Moves while held.
-        run(ctx, `ptz:${cam.source}:${button}:${s.speed || "0.5"}`);
-        k.down = `ptz:${cam.source}:stop`;
+        run(ctx, `ptz:#${cam.source}:${button}:${s.speed || "0.5"}`);
+        k.down = `ptz:#${cam.source}:stop`;
       }
       break;
     }
@@ -541,6 +561,11 @@ function press(ctx) {
     default:
       break;
   }
+}
+
+/** A Marker key's name: one of the quick marker names, or its own. */
+function markerLabel(s) {
+  return String(s.label || "").trim();
 }
 
 /** A PTZ camera setting ("1" = the first PTZ camera, or a name). */
@@ -599,12 +624,14 @@ function rotate(ctx, ticks) {
   const db = Math.max(-60, Math.min(12, Math.round((base + ticks * step) * 2) / 2));
   k.gain = db;
   k.gainAt = Date.now();
-  run(ctx, `gain:${target(k.settings.input)}:${db}`);
+  run(ctx, `gain:${cmdTarget(k.settings.input)}:${db}`);
   render(ctx);
 }
 
 // ---- drawing ----------------------------------------------------------------------------
 
+// As on the desk: red means on air and nothing else; recording is a dark
+// key with a red dot; a live stream is pink; amber means "look at this".
 const C = {
   bg: "#15171c",
   raised: "#262a33",
@@ -614,6 +641,9 @@ const C = {
   green: "#2fbf5b",
   accent: "#3d7eff",
   amber: "#f2a516",
+  recBg: "#281e22",
+  live: "#d62878",
+  liveDim: "#4a1f35",
 };
 
 function esc(s) {
@@ -685,6 +715,8 @@ function offline(k) {
     rundown: "Rundown",
     guest: "Guest",
     ftb: "FTB",
+    preview: "Preview",
+    back: "Back",
     replay: "Replay",
     macro: "Macro",
     ptz: "PTZ",
@@ -726,10 +758,19 @@ function draw(k) {
     }
     case "record": {
       const holding = k.hold ? Math.min(1, (Date.now() - k.hold.at) / HOLD_MS) : 0;
-      if (st.recording) {
-        return { image: svg(ICONS.record(C.text) + label("REC", 108, 20) + label(clock(st.rec_seconds), 130, 16, C.text, 400) + holdBar(holding), { bg: C.red }) };
+      // An amber edge while something needs a look (drive nearly full, a
+      // source lost, a recording problem), as the desk's status light.
+      const border = (st.problems || []).length ? C.amber : null;
+      if (st.saving) {
+        // The last take is still being finished: not ready for a new one.
+        return { image: svg(label("SAVING", 62, 24, C.amber) + label(`${Math.round(st.saving.percent || 0)}%`, 96, 22, C.text, 400), { border }) };
       }
-      return { image: svg(ICONS.record(C.red) + label("REC", 112, 22, C.dim)) };
+      if (st.recording) {
+        // A dark key with a pulsing red dot, as the desk's REC pill.
+        const dot = Math.floor(Date.now() / 600) % 2 ? C.red : "#7a2a33";
+        return { image: svg(ICONS.record(dot) + label("REC", 108, 20) + label(clock(st.rec_seconds), 130, 16, C.text, 400) + holdBar(holding), { bg: C.recBg, border }) };
+      }
+      return { image: svg(ICONS.record(C.red) + label("REC", 112, 22, C.dim), { border }) };
     }
     case "live": {
       const holding = k.hold ? Math.min(1, (Date.now() - k.hold.at) / HOLD_MS) : 0;
@@ -737,19 +778,29 @@ function draw(k) {
       const sm = streamOf(st);
       switch (sm.state) {
         case "live":
-          return { image: svg(label("LIVE", 66, 32) + label(clock(st.live_seconds), 98, 17, C.text, 400) + holdBar(holding), { bg: C.red }) };
+          return { image: svg(label("LIVE", 66, 32) + label(clock(st.live_seconds), 98, 17, C.text, 400) + holdBar(holding), { bg: C.live }) };
         case "trouble":
-          // Some destinations aren't live ("1 of 2"): amber edge, red only if any is.
-          return { image: svg(label("LIVE", 62, 30) + label(`${sm.live_count} of ${sm.total}`, 94, 18, C.text, 400) + holdBar(holding), { bg: sm.live_count > 0 ? C.red : C.raised, border: C.amber }) };
+          // Some destinations aren't live ("1 of 2"): amber edge, pink only if any is.
+          return { image: svg(label("LIVE", 62, 30) + label(`${sm.live_count} of ${sm.total}`, 94, 18, C.text, 400) + holdBar(holding), { bg: sm.live_count > 0 ? C.live : C.raised, border: C.amber }) };
         case "connecting":
-          return { image: svg(label("GOING", 62, 22, C.amber) + label("LIVE…", 90, 22, C.amber) + holdBar(holding)) };
+          return { image: svg(label("GOING", 62, 22) + label("LIVE…", 90, 22) + holdBar(holding), { bg: C.liveDim, border: C.live }) };
         case "ending":
           return { image: svg(label("Ending", 64, 22, C.dim) + label("stream…", 90, 18, C.dim, 400)) };
       }
-      return { image: svg(label("GO", 60, 26, C.dim) + label("LIVE", 92, 30, C.dim) + holdBar(holding)) };
+      return { image: svg(label("GO", 60, 26, C.live) + label("LIVE", 92, 30, C.live) + holdBar(holding)) };
     }
-    case "marker":
-      return { image: svg(ICONS.marker(st.recording ? C.amber : C.dim) + label(st.recording ? `Marker ${st.markers + 1}` : "Marker", 112, 18, st.recording ? C.text : C.dim, 400)) };
+    case "marker": {
+      // A named marker key shows its name.
+      const name = markerLabel(s);
+      const words = name ? fit(name, 12) : st.recording ? `Marker ${st.markers + 1}` : "Marker";
+      return { image: svg(ICONS.marker(st.recording ? C.amber : C.dim) + label(words, 112, 18, st.recording ? C.text : C.dim, name ? 700 : 400)) };
+    }
+    case "preview": {
+      const on = st.preview_mode;
+      return { image: svg(label("PREVIEW", 66, 24, on ? "#111111" : C.text) + label(on ? (st.preview ? fit(st.preview, 12) : "on") : "off", 98, 16, on ? "#111111" : C.dim, 400), { bg: on ? C.green : C.bg }) };
+    }
+    case "back":
+      return { image: svg(label("⟲", 62, 40) + label("BACK", 104, 20) + label("last scene", 126, 13, C.dim, 400)) };
     case "graphic": {
       const g = st.graphics[indexIn(st.graphics, s.graphic)];
       if (!g) return { image: svg(label("No graphic", 72, 18, C.dim)) };
@@ -839,11 +890,11 @@ function draw(k) {
         if (!r.number) return { image: svg(label("START", 60, 26) + label(fit(r.next || "", 12), 96, 16, C.dim, 400), { bg: "#1d3a26" }) };
         return {
           image: svg(label(fit(r.name, 11), 34, 16, C.dim, 400) + label(r.left, 78, r.left.length > 5 ? 30 : 36, r.over ? C.red : C.text) + label(r.next ? `▶ ${fit(r.next, 10)}` : "last", 118, 15, C.text, 400), {
-            border: r.over ? C.red : null,
+            border: r.over ? C.amber : null,
           }),
         };
       }
-      const words = { previous: "◀ BACK", stop: "■ STOP" };
+      const words = { previous: "◀ PREV", stop: "■ STOP" };
       return { image: svg(label(words[btn] || btn, 72, 22, r.number ? C.text : C.dim) + label(r.number ? `${r.number}/${r.count}` : "", 104, 15, C.dim, 400)) };
     }
     case "guest": {
@@ -858,7 +909,7 @@ function draw(k) {
     }
     case "ftb":
       return st.black
-        ? { image: svg(label("BLACK", 66, 30, C.red) + label("fade back up", 98, 15, C.text, 400), { bg: "#000000", border: C.red }) }
+        ? { image: svg(label("BLACK", 66, 30, C.amber) + label("fade back up", 98, 15, C.text, 400), { bg: "#000000", border: C.amber }) }
         : { image: svg(label("FTB", 70, 34) + label("fade to black", 100, 15, C.dim, 400)) };
     case "replay": {
       if (st.replaying) return { image: svg(label("REPLAY", 66, 28) + label("press to stop", 98, 15, C.text, 400), { bg: C.red }) };
@@ -1028,6 +1079,7 @@ function sendLists(ctx, action) {
       guests: st ? (st.guests || []).map((x) => x.name) : [],
       macros: st ? (st.macros || []).map((x) => x.name) : [],
       ptz: st ? (st.ptz || []).map((x) => x.name) : [],
+      markerLabels: st ? st.marker_labels || [] : [],
     },
   });
 }
