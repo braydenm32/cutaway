@@ -1,11 +1,13 @@
-//! Press-and-hold buttons (REC's "hold to stop").
+//! Press-and-hold buttons (REC's "hold to stop", and the other things a
+//! slip mustn't do during a show: Fade to black, a mic OFF, disconnecting
+//! a remote guest).
 //!
 //! A hold is timed on egui's clock (`input.time`), and the widget must sense
 //! drags as well as clicks: egui stops reporting a click-only widget as
 //! "down" once the press is longer than a click can be (0.8 s) or has moved
 //! a few points, so a one-second hold on one never finished.
 
-use eframe::egui::{self, Rect, Response, Sense, Vec2};
+use eframe::egui::{self, Color32, Rect, Response, Sense, Vec2};
 
 /// How a hold-to-act widget senses the pointer. Click and drag: a click
 /// alone stops counting as "down" after 0.8 s or 6 points of movement.
@@ -90,6 +92,36 @@ pub(super) fn hold_area(ui: &mut egui::Ui, size: Vec2, hold: &mut Hold, secs: f3
     (rect, r, step)
 }
 
+/// A button that only acts when it's held for `secs`: a fill grows across
+/// it while it's held, `Done` comes once per press, and `LetGo` when it was
+/// let go too soon (say how, as REC does). The hold is kept in egui's memory
+/// under the button's id, and forgotten when the button wasn't drawn last
+/// frame (so one that comes back later starts fresh).
+pub(super) fn hold_button(ui: &mut egui::Ui, button: egui::Button, secs: f32, fill: Color32) -> (Response, HoldStep) {
+    let r = ui.add(button.sense(hold_sense()));
+    let id = r.id.with("hold");
+    let pass = ui.ctx().cumulative_pass_nr();
+    let (mut hold, last) = ui.data(|d| d.get_temp::<(Hold, u64)>(id)).unwrap_or_default();
+    if last + 1 < pass {
+        hold.reset();
+    }
+    let step = hold.step(held_on(&r, r.rect), ui.input(|i| i.time), secs);
+    ui.data_mut(|d| d.insert_temp(id, (hold, pass)));
+    let paint = |f: f32| {
+        let part = Rect::from_min_size(r.rect.min, egui::vec2(r.rect.width() * f, r.rect.height()));
+        ui.painter().with_clip_rect(part).rect_filled(r.rect, ui.visuals().widgets.inactive.corner_radius, fill);
+    };
+    match step {
+        HoldStep::Holding(f) => {
+            paint(f);
+            ui.ctx().request_repaint();
+        }
+        HoldStep::Done => paint(1.0),
+        _ => {}
+    }
+    (r, step)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,6 +201,40 @@ mod tests {
         assert_eq!(h.step(false, 12.6, 1.0), HoldStep::Up);
         h.step(true, 13.0, 1.0);
         assert_eq!(h.step(false, 13.2, 1.0), HoldStep::LetGo);
+    }
+
+    /// A hold button: a long press acts once, a click does nothing but
+    /// say so.
+    #[test]
+    fn hold_button_acts_only_when_held() {
+        fn run(hold_secs: f64) -> Vec<HoldStep> {
+            let ctx = egui::Context::default();
+            let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 200.0));
+            let at = pos2(30.0, 15.0);
+            let mut steps = Vec::new();
+            let total = (hold_secs * 60.0).round() as usize;
+            for i in 0..=total + 3 {
+                let mut input = RawInput { screen_rect: Some(screen), time: Some(i as f64 / 60.0), ..Default::default() };
+                input.events.push(Event::PointerMoved(at));
+                if i == 1 {
+                    input.events.push(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Default::default() });
+                }
+                if i == total + 1 {
+                    input.events.push(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
+                }
+                let mut out = ctx.run_ui(input, |ui| {
+                    let b = egui::Button::new("Fade to black").min_size(vec2(120.0, 40.0));
+                    steps.push(hold_button(ui, b, 1.0, Color32::WHITE).1);
+                });
+                out.textures_delta.clear();
+            }
+            steps
+        }
+        let long = run(1.3);
+        assert_eq!(long.iter().filter(|s| **s == HoldStep::Done).count(), 1, "{long:?}");
+        let short = run(0.2);
+        assert!(!short.contains(&HoldStep::Done), "{short:?}");
+        assert!(short.contains(&HoldStep::LetGo), "{short:?}");
     }
 
     /// Sliding off the pill lets go of it.

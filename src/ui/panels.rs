@@ -234,6 +234,7 @@ impl App {
             }
         }
         let mut kick = None;
+        let mut kick_hint = None;
         let mut copied = None;
         let mut qr = None;
         for g in &guests {
@@ -276,8 +277,17 @@ impl App {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if g.connected || g.connecting {
                         let tip = if g.screen { "Stop their screen share" } else if g.camera { "Disconnect the phone" } else { "Disconnect them" };
-                        if ui.small_button("✕").on_hover_text(tip).clicked() {
-                            kick = Some(g.id.clone());
+                        // A one-second hold: a slip beside Copy link mustn't
+                        // drop a guest's call mid-show (they'd have to rejoin).
+                        let (r, step) = super::hold::hold_button(ui, egui::Button::new("✕").small(), super::REC_HOLD_SECS, HOLD_FILL);
+                        r.on_hover_text(format!("{tip}: hold for a second"));
+                        match step {
+                            super::hold::HoldStep::Done => kick = Some(g.id.clone()),
+                            super::hold::HoldStep::LetGo => {
+                                let who = if g.guest_name.is_empty() { g.source.clone() } else { g.guest_name.clone() };
+                                kick_hint = Some(if g.screen { format!("Hold ✕ for a second to stop {who}'s screen share") } else { format!("Hold ✕ for a second to disconnect {who}") });
+                            }
+                            _ => {}
                         }
                     }
                     // (A screen is shared from the guest's own link.)
@@ -319,6 +329,9 @@ impl App {
         }
         if let Some(id) = kick {
             hub.kick(&id);
+        }
+        if let Some(h) = kick_hint {
+            self.toast(h, false);
         }
         if let Some(name) = copied {
             self.toast(format!("Copied {name}'s link: send it to them"), false);

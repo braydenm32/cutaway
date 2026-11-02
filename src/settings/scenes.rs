@@ -101,7 +101,7 @@ impl SettingsUi {
                 ui.set_width(250.0);
                 for i in 0..n {
                     let s = &self.draft.scenes[i];
-                    let key = if i < 9 { format!("{}", i + 1) } else { "  ".into() };
+                    let key = crate::control::shortcuts::number_label(i).unwrap_or_else(|| "  ".into());
                     let b = egui::Button::selectable(self.sel_scene == i, RichText::new(format!("{key}   {}", s.name)).size(TEXT_STATE)).min_size(vec2(250.0, 30.0));
                     let r = ui.add(b);
                     // The one on air: a red dot (red only means on air).
@@ -109,7 +109,7 @@ impl SettingsUi {
                     if on_air {
                         ui.painter().circle_filled(r.rect.right_center() - vec2(14.0, 0.0), 4.5, ON_AIR);
                     }
-                    let key = if i < 9 { format!("Key {}", i + 1) } else { "No number key (keys 1–9 take the first nine)".into() };
+                    let key = crate::control::shortcuts::number_label(i).map(|k| format!("Key {k}")).unwrap_or_else(|| "No number key (keys 1–9 and 0 take the first ten)".into());
                     if r.on_hover_text(if on_air { format!("{key} · on air now") } else { key }).clicked() {
                         self.commit_scene_rename();
                         self.sel_scene = i;
@@ -145,7 +145,7 @@ impl SettingsUi {
                     egui::Frame::new().fill(Color32::from_rgb(52, 30, 34)).corner_radius(6).inner_margin(10).show(ui, |ui| {
                         ui.label(RichText::new(format!("Delete {}?", all[i])).strong().color(Color32::WHITE));
                         if !uses.is_empty() {
-                            hint(ui, &format!("Used by: {}. They won't find it any more.", uses.join(", ")));
+                            hint(ui, &format!("Used by: {}. Those that pick it by name won't find it any more; those that pick it by number get the scene that moves up into its place.", uses.join(", ")));
                         }
                         ui.horizontal(|ui| {
                             if ui.add(egui::Button::new(RichText::new("Delete").color(Color32::WHITE)).fill(ERROR)).clicked() {
@@ -193,7 +193,7 @@ impl SettingsUi {
                     });
                     ui.end_row();
                     label(ui, "Number key");
-                    ui.label(if sel < 9 { format!("{}", sel + 1) } else { "None: only the first nine have one (move it up with ↑)".into() });
+                    ui.label(crate::control::shortcuts::number_label(sel).unwrap_or_else(|| "None: only the first ten have one (move it up with ↑)".into()));
                     ui.end_row();
                     label(ui, "Shows");
                     ui.vertical(|ui| {

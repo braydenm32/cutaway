@@ -218,7 +218,7 @@ impl Session {
             // Every angle full length, each on its own track above the edit.
             s.push_str("  angles = {\n");
             for a in &edit.angles {
-                let _ = writeln!(s, "    {{ file = {}, name = {}, frames = {} }},", path(&a.file), lua(&a.name), a.frames);
+                let _ = writeln!(s, "    {{ file = {}, name = {}, frames = {}, at = {} }},", path(&a.file), lua(&a.name), a.frames, a.at);
             }
             s.push_str("  },\n");
         }
@@ -246,6 +246,9 @@ pub struct ResolveAngle {
     pub file: String,
     pub name: String,
     pub frames: i64,
+    /// Where it starts in the edit, in program frames (0 unless the file
+    /// started during the take).
+    pub at: i64,
 }
 
 /// The live edit the Resolve script lays down (empty: it imports the .fcpxml).
@@ -269,7 +272,7 @@ impl ResolveEdit {
             .into_iter()
             .map(|e| ResolveCut { file: name(&te.files[e.file].path), scene: e.scene, at: e.start, length: e.end - e.start, from: e.src_in, to: e.src_out })
             .collect();
-        let angles = te.files.iter().map(|f| ResolveAngle { file: name(&f.path), name: f.name.clone(), frames: te.file_frames(f) }).collect();
+        let angles = te.files.iter().map(|f| ResolveAngle { file: name(&f.path), name: f.name.clone(), frames: te.file_frames(f), at: te.file_start(f) }).collect();
         let sound = if have_mix { None } else { te.sound().map(|f| name(&f.path)) };
         ResolveEdit { cuts, angles, sound, frames: te.frames }
     }
@@ -332,7 +335,7 @@ pub fn premiere_take(xml: &str) -> Option<PremiereTake> {
     let angles = tracks
         .filter_map(|t| {
             let item = t.split("<clipitem ").nth(1)?;
-            Some(ResolveAngle { file: file_of(item)?, name: xml_unescape(tag(item, "name")?), frames: num(item, "out")? })
+            Some(ResolveAngle { file: file_of(item)?, name: xml_unescape(tag(item, "name")?), frames: num(item, "out")?, at: num(item, "start").unwrap_or(0) })
         })
         .collect();
     let mut cuts = Vec::new();
@@ -666,6 +669,7 @@ mod tests {
             tc_frame: Some(37230 * fps),
             length: None,
             clean: false,
+            start: 0,
         };
         TakeExport {
             name: folder.file_name().unwrap().to_string_lossy().into(),
@@ -707,12 +711,17 @@ mod tests {
 
     /// Runs the script in the stand-in for Resolve; its calls, one a line.
     fn run_script(config_dir: &Path, picker: &str, mode: &str) -> Option<Vec<String>> {
+        run_script_with(config_dir, picker, mode, "-", "New project")
+    }
+
+    /// The same, with a project open in Resolve and the answer to give when asked.
+    fn run_script_with(config_dir: &Path, picker: &str, mode: &str, open: &str, answer: &str) -> Option<Vec<String>> {
         let lua = lua()?;
         let dir = config_dir.join("script");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("script.lua"), RESOLVE_SCRIPT).unwrap();
         std::fs::write(dir.join("harness.lua"), include_str!("resolve_script_harness.lua")).unwrap();
-        let o = std::process::Command::new(lua).arg(dir.join("harness.lua")).arg(dir.join("script.lua")).arg(config_dir).arg(picker).arg(mode).output().unwrap();
+        let o = std::process::Command::new(lua).arg(dir.join("harness.lua")).arg(dir.join("script.lua")).arg(config_dir).arg(picker).arg(mode).arg(open).arg(answer).output().unwrap();
         assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
         Some(String::from_utf8_lossy(&o.stdout).lines().map(String::from).collect())
     }
@@ -792,6 +801,52 @@ mod tests {
         let all = run_script(&config, "-", "inclusive").unwrap().join("\n");
         assert!(all.contains("PICKER") && all.contains("no folder chosen"), "{all}");
         assert!(!build_note_file(&config).exists());
+
+        // No live edit at all: a take rescued from an older Cutaway says so.
+        std::fs::write(folder.join(format!("{} (Resolve).lua", s.name)), s.resolve_lua(&folder, &videos, None, (1920, 1080), &ResolveEdit::default())).unwrap();
+        write_build_note(&config, &folder).unwrap();
+        let all = run_script(&config, "-", "inclusive").unwrap().join("\n");
+        assert!(all.contains("Editor timelines is on") && !all.contains("rescued"), "{all}");
+        std::fs::write(folder.join("Take.txt"), "Cutaway take (recovered)\n").unwrap();
+        write_build_note(&config, &folder).unwrap();
+        let all = run_script(&config, "-", "inclusive").unwrap().join("\n");
+        assert!(all.contains("rescued after Cutaway stopped while recording") && !all.contains("Editor timelines"), "{all}");
+        let _ = std::fs::remove_dir_all(folder.parent().unwrap());
+    }
+
+    /// A project from the same show and day is open (the take before a
+    /// break): the script offers to add this take to it, in a bin of its own.
+    #[test]
+    fn the_resolve_script_adds_to_the_open_project() {
+        let (folder, s) = take("add");
+        let config = folder.parent().unwrap().join("config");
+        let te = export_of(&folder);
+        for f in &te.files {
+            std::fs::write(&f.path, b"x").unwrap();
+        }
+        let videos: Vec<String> = te.files.iter().map(|f| f.path.file_name().unwrap().to_string_lossy().into()).collect();
+        std::fs::write(folder.join(format!("{} (Resolve).lua", s.name)), s.resolve_lua(&folder, &videos, Some("Take.fcpxml"), (1920, 1080), &ResolveEdit::from_export(&te, true))).unwrap();
+        let earlier = "Take_2026-10-18_18-30-00";
+        write_build_note(&config, &folder).unwrap();
+        let Some(calls) = run_script_with(&config, "-", "inclusive", earlier, "Add to this project") else { return };
+        let all = calls.join("\n");
+        assert!(all.contains("ASK\tThe project \"Take_2026-10-18_18-30-00\"") && all.contains("Add to this project\tNew project"), "{all}");
+        assert!(!all.contains("PROJECT\t") && !all.contains("SETTING\t"), "the open project, as it is: {all}");
+        let bins: Vec<&str> = calls.iter().filter(|c| c.starts_with("BIN\t")).map(|c| c.as_str()).collect();
+        assert_eq!(bins, vec!["BIN\tTake_2026-10-18_20-00-00", "BIN\tCameras", "BIN\tAudio"]);
+        assert!(all.contains("TIMELINE\tTake_2026-10-18_20-00-00 (live edit)") && appends(&calls).len() == 7, "{all}");
+        assert!(all.contains("added Take_2026-10-18_20-00-00 to the project \"Take_2026-10-18_18-30-00\""), "{all}");
+
+        // A new project after all.
+        write_build_note(&config, &folder).unwrap();
+        let all = run_script_with(&config, "-", "inclusive", earlier, "New project").unwrap().join("\n");
+        assert!(all.contains("ASK\t") && all.contains("PROJECT\tTake_2026-10-18_20-00-00") && all.contains("SETTING\ttimelineFrameRate"), "{all}");
+        // Another show, or another day: no question.
+        for open in ["Interview_2026-10-18_18-30-00", "Take_2026-10-11_18-30-00", "Untitled Project"] {
+            write_build_note(&config, &folder).unwrap();
+            let all = run_script_with(&config, "-", "inclusive", open, "Add to this project").unwrap().join("\n");
+            assert!(!all.contains("ASK\t") && all.contains("PROJECT\tTake_2026-10-18_20-00-00"), "{open}: {all}");
+        }
         let _ = std::fs::remove_dir_all(folder.parent().unwrap());
     }
 

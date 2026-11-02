@@ -209,7 +209,7 @@ impl App {
                         let body = if saved == 0 {
                             "Cutaway couldn't write to its folder. The files are still there as they were left."
                         } else {
-                            "It plays up to about the last second before Cutaway stopped. A note in the folder (Take.txt) says what was saved from each file."
+                            "It plays up to about the last second before Cutaway stopped, with its switches, markers and timelines. A note in the folder (Take.txt) says what was saved from each file."
                         };
                         ui.label(RichText::new(body).color(TEXT_DIM));
                         if let Some(dir) = st.rescued.first().or(st.takes.first()) {

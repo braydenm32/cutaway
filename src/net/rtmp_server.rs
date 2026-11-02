@@ -436,11 +436,12 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(false));
         let got: Arc<Mutex<Vec<Incoming>>> = Arc::new(Mutex::new(Vec::new()));
         let (s2, g2) = (stop.clone(), got.clone());
-        let server = std::thread::spawn(move || serve(19371, "secret", &s2, &mut |i| g2.lock_ok().push(i)));
+        let port = crate::util::free_tcp_port();
+        let server = std::thread::spawn(move || serve(port, "secret", &s2, &mut |i| g2.lock_ok().push(i)));
         std::thread::sleep(Duration::from_millis(300));
         let status = std::process::Command::new("ffmpeg")
             .args(["-v", "error", "-re", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:duration=2", "-f", "lavfi", "-i", "sine=duration=2"])
-            .args(["-c:v", "libx264", "-g", "25", "-c:a", "aac", "-f", "flv", "rtmp://127.0.0.1:19371/live/secret"])
+            .args(["-c:v", "libx264", "-g", "25", "-c:a", "aac", "-f", "flv"]).arg(format!("rtmp://127.0.0.1:{port}/live/secret"))
             .status()
             .unwrap();
         assert!(status.success());

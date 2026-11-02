@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::config::CustomKey;
-use crate::control::shortcuts::{builtin_keys, cheat_sheet, is_modifier, Builtin, KeyCombo, Keymap};
+use crate::control::shortcuts::{builtin_keys, capture_problem, cheat_sheet, is_modifier, Builtin, KeyCombo, Keymap, MAC_FN_KEYS};
 
 /// The shortcut waiting for a key press.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -25,7 +25,14 @@ impl SettingsUi {
                 i.events.retain(|e| match e {
                     egui::Event::Key { key, pressed, modifiers, .. } => {
                         if *pressed && got.is_none() && !is_modifier(*key) {
-                            got = Some(if *key == egui::Key::Escape { None } else { Some(KeyCombo::new(*key, *modifiers)) });
+                            got = Some(if *key == egui::Key::Escape {
+                                None
+                            } else if let Some(why) = capture_problem(*modifiers) {
+                                // (Saved without Control it would fire on its own.)
+                                Some(Err(why))
+                            } else {
+                                Some(Ok(KeyCombo::new(*key, *modifiers)))
+                            });
                         }
                         false
                     }
@@ -34,9 +41,12 @@ impl SettingsUi {
                 });
                 got
             });
-            if let Some(combo) = got {
+            if let Some(Some(Err(why))) = got {
+                // Still waiting for a key: say why that one wasn't taken.
+                self.message = Some((why.to_string(), true));
+            } else if let Some(combo) = got {
                 self.key_capture = None;
-                if let Some(c) = combo {
+                if let Some(Ok(c)) = combo {
                     match target {
                         KeyCapture::Builtin(b) => {
                             if b.defaults() == vec![c] {
@@ -55,6 +65,7 @@ impl SettingsUi {
             }
         }
         let map = Keymap::new(&self.draft.keys);
+        // Problems with a key show on its row too (below); all of them here.
         for p in &map.problems {
             ui.label(RichText::new(format!("⚠ {p}")).color(AMBER));
         }
@@ -63,9 +74,23 @@ impl SettingsUi {
         let mut capture = None;
         egui::Grid::new("builtin_keys").num_columns(3).spacing(TABLE_GAP).striped(true).show(ui, |ui| {
             for b in Builtin::ALL {
-                ui.label(b.describe());
+                // A key one of yours has taken: shown struck through, with why.
+                let taken: Vec<KeyCombo> = map.taken.iter().filter(|(x, _)| *x == b).map(|(_, c)| *c).collect();
+                ui.vertical(|ui| {
+                    ui.label(b.describe());
+                    for c in &taken {
+                        ui.label(RichText::new(format!("⚠ {} is taken by your own shortcut below, so it doesn't do this", c.label())).color(AMBER).size(TEXT_BODY));
+                    }
+                    for p in map.problems.iter().filter(|p| p.contains(b.describe()) || p.contains(&b.describe().to_lowercase())) {
+                        ui.label(RichText::new(format!("⚠ {p}")).color(AMBER).size(TEXT_BODY));
+                    }
+                });
                 let keys = builtin_keys(&self.draft.keys, b);
-                let shown = if keys.is_empty() { "off".to_string() } else { keys.iter().map(|k| k.label()).collect::<Vec<_>>().join(" / ") };
+                let shown = if keys.is_empty() {
+                    "off".to_string()
+                } else {
+                    keys.iter().map(|k| if taken.contains(k) { k.label().chars().flat_map(|ch| [ch, '\u{0336}']).collect() } else { k.label() }).collect::<Vec<String>>().join(" / ")
+                };
                 let waiting = self.key_capture == Some(KeyCapture::Builtin(b));
                 let text = if waiting { "press a key…".to_string() } else { shown };
                 let rich = if keys.is_empty() && !waiting { RichText::new(text).monospace().color(TEXT_DIM) } else { RichText::new(text).monospace().strong() };
@@ -108,6 +133,7 @@ impl SettingsUi {
                     capture = Some(if waiting { None } else { Some(KeyCapture::Custom(i)) });
                     r.surrender_focus();
                 }
+                let combo = KeyCombo::parse(&k.key);
                 let shown = commands.iter().find(|c| c.0 == k.command).map(|c| c.1.clone()).unwrap_or_else(|| if k.command.is_empty() { "choose…".into() } else { k.command.clone() });
                 egui::ComboBox::from_id_salt(("key_action", i)).selected_text(shown).width(280.0).show_ui(ui, |ui| {
                     for (code, text) in &commands {
@@ -118,6 +144,25 @@ impl SettingsUi {
                     remove = Some(i);
                 }
                 ui.end_row();
+                // Its problem (two jobs on one key, a key the numbered
+                // shortcuts use, a command Cutaway doesn't know) on its row.
+                let mine: Vec<&String> = match combo {
+                    Some(c) => map.problems.iter().filter(|p| p.starts_with(&c.label())).collect(),
+                    None => map.problems.iter().filter(|p| p.starts_with(&format!("Shortcut {}:", i + 1))).collect(),
+                };
+                let taking: Vec<&str> = combo.map(|c| map.taken.iter().filter(|(_, t)| *t == c).map(|(b, _)| b.describe()).collect()).unwrap_or_default();
+                if !mine.is_empty() || !taking.is_empty() {
+                    ui.label("");
+                    ui.vertical(|ui| {
+                        for p in mine {
+                            ui.label(RichText::new(format!("⚠ {p}")).color(AMBER).size(TEXT_BODY));
+                        }
+                        for b in taking {
+                            ui.label(RichText::new(format!("Replaces the built-in \"{}\" on this key", b.to_lowercase())).color(TEXT_DIM).size(TEXT_BODY));
+                        }
+                    });
+                    ui.end_row();
+                }
             }
         });
         if let Some(c) = capture {
@@ -147,10 +192,10 @@ impl SettingsUi {
 
         subtitle(ui, "Always");
         let rows: Vec<(&str, &str)> = vec![
-            ("1 – 9", "Take scene 1–9 (using the current transition)"),
-            ("Shift + 1 – 9", "Cut straight to scene 1–9"),
-            (if cfg!(target_os = "macos") { "Option + 1 – 9" } else { "Alt + 1 – 9" }, "Show / hide graphic 1–9"),
-            ("F1 – F12", "Sound pads 1–12 (hold for \"while held\" pads)"),
+            ("1 – 9, 0", "Take scene 1–9 (0 is scene 10) with the current transition; with Preview on, put it in preview"),
+            ("Shift + 1 – 9, 0", "Cut straight to scene 1–10, even with Preview on"),
+            (if cfg!(target_os = "macos") { "Option + 1 – 9, 0" } else { "Alt + 1 – 9, 0" }, "Show / hide graphic 1–10"),
+            ("F1 – F12", if cfg!(target_os = "macos") { "Sound pads 1–12 (hold for \"while held\" pads). On a MacBook, hold Fn too (see below)" } else { "Sound pads 1–12 (hold for \"while held\" pads)" }),
             ("Click a source", "Pick it, then Put on air (with Preview on: to preview). Shift+click cuts to it"),
             ("⋯ on a tile, or right-click", "Playlist, who to follow, split into close-ups"),
             ("Esc", "Leave a page, back to Show"),
@@ -163,5 +208,8 @@ impl SettingsUi {
                 ui.end_row();
             }
         });
+        if cfg!(target_os = "macos") {
+            hint(ui, MAC_FN_KEYS);
+        }
     }
 }
