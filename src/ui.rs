@@ -1342,6 +1342,15 @@ impl App {
             self.toast(msg, true);
         } else {
             self.guide_recorded = true;
+            self.warn_fat_drive();
+        }
+    }
+
+    /// A take just started on a FAT32 drive: say so while it's early.
+    fn warn_fat_drive(&mut self) {
+        let folder = self.cfg.output.folder.clone();
+        if crate::engine::health::fat_drive(&folder) {
+            self.toast(crate::engine::health::fat_warning(&folder), true);
         }
     }
 
@@ -1513,6 +1522,7 @@ impl App {
                     let e = self.engine.as_ref().ok_or("the engine isn't running")?;
                     if want {
                         e.start_recording().map_err(|e| format!("{e:#}"))?;
+                        self.warn_fat_drive();
                     } else {
                         e.stop_recording();
                     }

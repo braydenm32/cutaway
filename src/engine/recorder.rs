@@ -580,7 +580,7 @@ pub fn spawn_wav(
         .name("write wav".into())
         .spawn(move || {
             let label = base.file_name().unwrap_or_default().to_string_lossy().to_string();
-            let mut w = WavJob { base, format: SampleFormat::from_bits(bits), split, t0, writers: Vec::new(), scratch: Vec::new(), expected: None, fmt: None, opts };
+            let mut w = WavJob { base, format: SampleFormat::from_bits(bits), split, t0, writers: Vec::new(), scratch: Vec::new(), written: 0, fmt: None, opts };
             // Blocks are written once their time has come (a delayed input
             // runs ahead of the clock), so nothing past the end gets in.
             let mut held: VecDeque<AudioBlock> = VecDeque::new();
@@ -640,8 +640,9 @@ struct WavJob {
     t0: Ns,
     writers: Vec<(PathBuf, WavWriter)>,
     scratch: Vec<f32>,
-    /// Host time where the next sample belongs.
-    expected: Option<Ns>,
+    /// Samples (per channel) in the file so far, silence included: where
+    /// the next one lands is `t0` plus this many.
+    written: u64,
     /// The file's rate and channels (from its first block).
     fmt: Option<(u32, u16)>,
     opts: FileOpts,
@@ -665,13 +666,27 @@ impl WavJob {
             return Ok(());
         }
         let ch = b.channels as usize;
-        let first_at = b.pts + r.start as i64 * NS_PER_SEC / b.rate as i64;
-        // Silence for audio that never arrived: before the first block (an
-        // input that started late) or a dropout. Small differences are
-        // just clock jitter.
-        let gap = first_at - self.expected.unwrap_or(self.t0);
-        let silence = if gap > 20_000_000 { (gap as i128 * b.rate as i128 / NS_PER_SEC as i128) as usize } else { 0 };
-        self.expected = Some(first_at + r.len() as i64 * NS_PER_SEC / b.rate as i64);
+        // Where this block belongs, and where the file has got to, in
+        // samples from t0. Kept to the clock the way the mix is (AudioCursor):
+        // audio that never arrived (an input that started late, a dropout,
+        // a device running slow) becomes silence, and a device running fast
+        // loses a little, so the file never drifts from the pictures. Small
+        // differences are just clock jitter.
+        let block_start = ((b.pts - self.t0) as i128 * b.rate as i128 + NS_PER_SEC as i128 / 2).div_euclid(NS_PER_SEC as i128) as i64;
+        let at = block_start + r.start as i64;
+        let tolerance = (b.rate / 50) as i64; // 20 ms
+        let pushed = self.written as i64;
+        let mut silence = 0usize;
+        let mut skip = 0usize;
+        if at > pushed + tolerance {
+            silence = (at - pushed) as usize;
+        } else if at + tolerance < pushed {
+            skip = ((pushed - at) as usize).min(r.len());
+        }
+        let r = (r.start + skip)..r.end;
+        if r.is_empty() {
+            return Ok(());
+        }
         if self.writers.is_empty() {
             let bext = self.opts.tc_seconds.map(|secs| Bext {
                 description: format!("Cutaway {}", self.base.file_name().unwrap_or_default().to_string_lossy()),
@@ -698,7 +713,9 @@ impl WavJob {
             for (_, w) in self.writers.iter_mut() {
                 w.write(&vec![0.0f32; n * w.channels() as usize])?;
             }
+            self.written += n as u64;
         }
+        self.written += r.len() as u64;
         let samples = &b.samples[r.start * ch..r.end * ch];
         if self.writers.len() == 1 {
             self.writers[0].1.write(samples)?;
@@ -885,6 +902,28 @@ mod tests {
         assert_eq!(gap.len(), (1440 + 480) * 2);
         assert!(gap[..2880].iter().all(|s| *s == 0.0));
         assert_eq!(c.take(&blk(1_020_000_000), i64::MAX).len(), 0); // already covered: dropped
+    }
+
+    #[test]
+    fn input_wavs_keep_to_the_clock() {
+        // A device whose clock runs 1% fast (or slow): 10 ms of samples
+        // every 9.9 ms (or 10.1 ms). The file still ends where the time does.
+        for step in [9_900_000i64, 10_100_000] {
+            let dir = std::env::temp_dir().join(format!("cutaway-wav-clock-{}-{step}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let opts = FileOpts { take_folder: dir.clone(), backup_folder: None, tc_seconds: None, tc_date: Default::default(), markers: Default::default() };
+            let t0 = 1_000_000_000;
+            let mut job = WavJob { base: dir.join("Audio_01_Mic"), format: SampleFormat::from_bits(16), split: false, t0, writers: Vec::new(), scratch: Vec::new(), written: 0, fmt: None, opts };
+            let blocks = 6000; // about a minute
+            for i in 0..blocks {
+                let b = AudioBlock { pts: t0 + i * step, rate: 48000, channels: 1, samples: vec![0.1; 480] };
+                job.write(&b, i64::MAX).unwrap();
+            }
+            let want = (blocks * step) as f64 / 1e9 * 48000.0;
+            let off = (job.written as f64 - want).abs() / 48000.0;
+            assert!(off < 0.025, "{step}: {} samples written for {want}: {off} s off", job.written);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     #[test]

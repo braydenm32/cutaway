@@ -187,6 +187,9 @@ and [Install on Windows](#install-on-windows).
 - **No sleeping mid-show:** while recording or live, the computer and its
   screens stay awake, even when you only switch from a Stream Deck or the
   phone remote and nobody touches the laptop.
+- **FAT32 drives:** starting a take on a drive formatted as FAT32 (common on
+  older USB sticks and SD cards) warns straight away: no file there can be
+  bigger than 4 GB, so a long take would stop. Use exFAT, APFS or NTFS.
 - **No accidental quits:** closing the window (or Cmd+Q, Alt+F4) while
   recording or live, or while a take is still saving, the podcast copy is
   being made or an upload is running, asks first. Quitting anyway finishes
@@ -207,7 +210,8 @@ and [Install on Windows](#install-on-windows).
   a take**: a new project at the take's frame rate and size, with bins for
   the cameras and the audio, proxies linked, and a timeline with your live
   edit on V1, every camera (and the program) full length on its own track
-  above it, in sync, and the mix underneath.
+  above it, in sync, and the mix underneath. When it's done (or if Resolve
+  couldn't do something) a small Cutaway box in Resolve says what happened.
 - **Saving files** after you stop shows what it's finishing (each video, the
   sound, the timeline) and how far along it is, on the Record button.
 - **Take saved:** once it's done, a card under the Record button says how

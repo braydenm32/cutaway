@@ -129,6 +129,68 @@ pub fn disk_space(path: &Path) -> Option<(u64, u64)> {
     }
 }
 
+/// Whether the drive holding `path` is FAT (FAT32 and older), where no
+/// file can be bigger than 4 GB: one file reaching that stops the take.
+pub fn fat_drive(path: &Path) -> bool {
+    let mut p = path.to_path_buf();
+    while !p.exists() {
+        let Some(up) = p.parent() else { return false };
+        p = up.to_path_buf();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::ffi::{CStr, CString};
+        use std::os::unix::ffi::OsStrExt;
+        let Ok(c) = CString::new(p.as_os_str().as_bytes()) else { return false };
+        let mut st: libc::statfs = unsafe { std::mem::zeroed() };
+        if unsafe { libc::statfs(c.as_ptr(), &mut st) } != 0 {
+            return false;
+        }
+        // "msdos" is FAT12/16/32 ("exfat" has no 4 GB limit).
+        let kind = unsafe { CStr::from_ptr(st.f_fstypename.as_ptr()) };
+        kind.to_bytes() == b"msdos"
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        let Ok(c) = CString::new(p.as_os_str().as_bytes()) else { return false };
+        let mut st: libc::statfs = unsafe { std::mem::zeroed() };
+        if unsafe { libc::statfs(c.as_ptr(), &mut st) } != 0 {
+            return false;
+        }
+        st.f_type as i64 == 0x4d44 // MSDOS_SUPER_MAGIC
+    }
+    #[cfg(windows)]
+    {
+        use windows::core::HSTRING;
+        use windows::Win32::Storage::FileSystem::{GetVolumeInformationW, GetVolumePathNameW};
+        let mut root = [0u16; 261];
+        // SAFETY: plain calls with valid buffers.
+        if unsafe { GetVolumePathNameW(&HSTRING::from(p.as_os_str()), &mut root) }.is_err() {
+            return false;
+        }
+        let mut fs = [0u16; 32];
+        if unsafe { GetVolumeInformationW(windows::core::PCWSTR(root.as_ptr()), None, None, None, None, Some(&mut fs)) }.is_err() {
+            return false;
+        }
+        let name = String::from_utf16_lossy(&fs[..fs.iter().position(|&c| c == 0).unwrap_or(fs.len())]);
+        name.eq_ignore_ascii_case("FAT32") || name.eq_ignore_ascii_case("FAT")
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    {
+        false
+    }
+}
+
+/// What to tell someone recording to a FAT drive.
+pub fn fat_warning(path: &Path) -> String {
+    format!(
+        "The recording drive ({}) is formatted as FAT32, where no file can be bigger than 4 GB: a take stops when its first file gets there (often 20 to 40 minutes). Record to another drive, or reformat this one as exFAT (or APFS / NTFS)",
+        path.display()
+    )
+}
+
 /// Bytes per second a take writes with these settings (main drive).
 /// `estimate_rate` for a config's own audio inputs.
 pub fn estimate_for(cfg: &Config) -> f64 {

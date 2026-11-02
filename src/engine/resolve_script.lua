@@ -20,8 +20,29 @@ end
 local fusion = fu or resolve:Fusion()
 local sep = package.config:sub(1, 1)
 
-local function say(text)
+-- A box in Resolve with the message (Resolve's Console is out of sight, so
+-- what happened, and above all what went wrong, would go unseen).
+local function popup(text)
+  local ui = fusion.UIManager
+  local disp = bmd.UIDispatcher(ui)
+  local win = disp:AddWindow({ ID = "CutawayMessage", WindowTitle = "Cutaway", Geometry = { 300, 300, 520, 150 } }, ui:VGroup({
+    ui:Label({ ID = "Text", Text = text, WordWrap = true }),
+    ui:HGroup({ Weight = 0, ui:HGap(0, 1), ui:Button({ ID = "OK", Text = "OK" }) }),
+  }))
+  win.On.OK.Clicked = function() disp:ExitLoop() end
+  win.On.CutawayMessage.Close = function() disp:ExitLoop() end
+  win:Show()
+  disp:RunLoop()
+  win:Hide()
+end
+
+-- `show`: also in a box (the outcome; progress notes only go to the Console).
+local function say(text, show)
   print("Cutaway: " .. text)
+  if show then
+    local text_shown = text:sub(1, 1):upper() .. text:sub(2)
+    pcall(popup, text_shown)
+  end
 end
 
 -- Where Cutaway keeps its notes (next to its settings).
@@ -156,14 +177,14 @@ local file = take_file(folder)
 if file then
   local ok, t = pcall(dofile, file)
   if not ok or type(t) ~= "table" then
-    say("couldn't read " .. file)
+    say("couldn't read " .. file, true)
     return
   end
   take = t
 else
   take = take_from_folder(folder)
   if not take then
-    say("that folder isn't a Cutaway take (there are no videos in it). Pick the take's own folder, the one with Program.mp4 in it.")
+    say("that folder isn't a Cutaway take (there are no videos in it). Pick the take's own folder, the one with Program.mp4 in it.", true)
     return
   end
 end
@@ -217,7 +238,7 @@ if not project then
   project = pm:CreateProject(name)
 end
 if not project then
-  say("Resolve couldn't make a project called " .. name)
+  say("Resolve couldn't make a project called " .. name, true)
   return
 end
 -- The take's frame rate and picture size, before any media or timeline.
@@ -390,6 +411,7 @@ local function build_live_edit()
 end
 
 local timeline = nil
+local why_failed = nil
 local ok, built, why = pcall(build_live_edit)
 if ok and built then
   timeline = built
@@ -408,6 +430,7 @@ else
   if take.edit then
     say("building the live edit clip by clip didn't work (" .. tostring(why) .. "); importing the .fcpxml instead.")
   end
+  why_failed = why
 end
 
 -- Otherwise: the .fcpxml (Resolve brings in the live edit and every angle).
@@ -456,7 +479,20 @@ if how == "api" then
 elseif how == "fcpxml" then
   table.insert(parts, "the live edit")
 end
-say("made the project \"" .. name .. "\" with " .. table.concat(parts, ", ") .. ".")
+local done = "made the project \"" .. name .. "\" with " .. table.concat(parts, ", ") .. "."
+say(done)
 if not timeline then
-  say("there's no live edit for this take (Cutaway saves it when Record > Recording > Editing > Editor timelines is on).")
+  local why
+  if take.edit or take.timeline then
+    why = "Resolve couldn't build the live edit" .. (why_failed and (" (" .. tostring(why_failed) .. ")") or "") .. ". The cameras, program and sound are all in the project's bins"
+    if take.timeline then
+      why = why .. "; you can try File > Import > Timeline with " .. file_name(take.timeline)
+    end
+    why = why .. "."
+  else
+    why = "there's no live edit for this take (Cutaway saves it when Record > Recording > Editing > Editor timelines is on, and a take rescued after a crash has none)."
+  end
+  say(why)
+  done = done .. "\n\n" .. why:sub(1, 1):upper() .. why:sub(2)
 end
+pcall(popup, done:sub(1, 1):upper() .. done:sub(2))
