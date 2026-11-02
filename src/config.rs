@@ -2118,9 +2118,23 @@ pub struct RemoteConfig {
     /// Asked for once by each phone/tablet. Always set while the remote is
     /// on (one is made if it's empty).
     pub pin: String,
+    /// Quick names for markers, set once and picked from the phone's
+    /// ◆ ▾ and a Stream Deck Marker key (comma-separated).
+    pub marker_labels: String,
 }
 
 impl RemoteConfig {
+    /// The quick marker names, in order, without blanks or repeats.
+    pub fn marker_labels(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for l in self.marker_labels.split(',').map(str::trim).filter(|l| !l.is_empty()) {
+            if !out.iter().any(|o| o.eq_ignore_ascii_case(l)) {
+                out.push(l.to_string());
+            }
+        }
+        out
+    }
+
     /// Make a PIN if the remote is on without one. True if it made one.
     pub fn ensure_pin(&mut self) -> bool {
         if !self.enabled || !self.pin.trim().is_empty() {
@@ -2143,7 +2157,7 @@ pub fn new_pin() -> String {
 
 impl Default for RemoteConfig {
     fn default() -> Self {
-        RemoteConfig { enabled: false, port: 8790, pin: String::new() }
+        RemoteConfig { enabled: false, port: 8790, pin: String::new(), marker_labels: "Good, Retake, Cut here".into() }
     }
 }
 

@@ -593,7 +593,14 @@ impl Engine {
             match opened {
                 Err(e) => {
                     let mut st = status.lock_ok();
-                    st.push(LogLevel::Error, format!("{}: {e:#}. It will connect automatically when available.", sc.name));
+                    // (Screen Recording not allowed won't fix itself: no
+                    // "connects when available" after "restart".)
+                    let msg = format!("{e:#}");
+                    if msg.contains(crate::platform::capture::SCREEN_NOT_ALLOWED) {
+                        st.push(LogLevel::Error, format!("{}: {msg}.", sc.name));
+                    } else {
+                        st.push(LogLevel::Error, format!("{}: {msg}. It will connect automatically when available.", sc.name));
+                    }
                     st.offline.insert(sc.name.clone());
                 }
                 Ok(_) => {
@@ -1742,7 +1749,7 @@ impl Engine {
                 let names: Vec<String> = angles.iter().map(|a| a.0.clone()).collect();
                 // (By number: the source's place in the show, not among those recorded.)
                 let i = match t {
-                    crate::control::Target::Index(i) => self.sources.get(*i).and_then(|s| names.iter().position(|n| *n == s.name)),
+                    crate::control::Target::Index(i) | crate::control::Target::Place(i) => self.sources.get(*i).and_then(|s| names.iter().position(|n| *n == s.name)),
                     t => t.find(&names),
                 };
                 let Some(i) = i else {
