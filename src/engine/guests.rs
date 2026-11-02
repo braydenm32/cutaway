@@ -377,6 +377,19 @@ impl GuestHub {
         }
     }
 
+    /// Someone joined or left a spot: in the log, and a passing message on
+    /// the desk.
+    fn note(&self, text: String, source: &str, left: bool) {
+        let e = self.inner.lock_ok();
+        if let Some(l) = &e.engine {
+            let mut st = l.status.lock_ok();
+            st.push(LogLevel::Info, text.clone());
+            st.guest_notes.push(super::GuestNote { text, source: source.to_string(), left });
+        } else {
+            eprintln!("{text}");
+        }
+    }
+
     /// New settings: start, move or stop the guest page and the tunnel.
     pub fn apply(&self, cfg: &Config, waker: Arc<dyn Fn() + Send + Sync>) {
         *self.waker.lock_ok() = Some(waker.clone());
@@ -940,8 +953,7 @@ impl GuestHub {
                 drop(inner);
                 self.keyframe.store(true, Ordering::Relaxed);
                 if first {
-                    self.log(
-                        LogLevel::Info,
+                    self.note(
                         if screen {
                             format!("{who} is sharing their screen ({source})")
                         } else if camera {
@@ -949,6 +961,8 @@ impl GuestHub {
                         } else {
                             format!("{who} joined as {source}")
                         },
+                        &source,
+                        false,
                     );
                 }
             }
@@ -964,7 +978,7 @@ impl GuestHub {
                 drop(inner);
                 self.close_conn(c);
                 if was {
-                    self.log(LogLevel::Info, if screen { format!("{who} stopped sharing their screen ({source})") } else { format!("{who} left ({source})") });
+                    self.note(if screen { format!("{who} stopped sharing their screen ({source})") } else { format!("{who} left ({source})") }, &source, true);
                 } else if state == RTCPeerConnectionState::Failed {
                     self.log(LogLevel::Warning, format!("{who} couldn't connect to {source}: their network blocks direct connections. A TURN server (Sources › Guests) gets round that."));
                 }

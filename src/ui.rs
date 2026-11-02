@@ -438,6 +438,9 @@ pub struct App {
     bank_scroll_to: Option<f32>,
     /// The multiview tile picked with Preview off (it shows "Put on air").
     mv_selected: Option<usize>,
+    /// When it was picked: its Put on air ignores clicks for a moment, so
+    /// the second click of a double-click can't put it on air.
+    mv_selected_at: Option<Instant>,
     /// Sources known to have no signal (None: not looked yet with this
     /// engine, so the ones missing from the start don't count as drops).
     dropped: Option<HashSet<String>>,
@@ -552,6 +555,7 @@ impl App {
             bank_rows: 1,
             bank_scroll_to: None,
             mv_selected: None,
+            mv_selected_at: None,
             dropped: None,
             offline_sources: Vec::new(),
             scheduled_done: None,
@@ -1220,6 +1224,32 @@ impl App {
 
     fn preview_mode(&self) -> bool {
         self.cfg.transition.preview_mode
+    }
+
+    /// A remote guest joined or left: a passing message ("Maya joined as
+    /// Guest 1"). Leaving while their spot is on air is a warning too (the
+    /// status light), as their tile goes to "waiting" on air.
+    fn guest_notes(&mut self) {
+        let Some(e) = &self.engine else { return };
+        let notes = std::mem::take(&mut e.status.lock_ok().guest_notes);
+        if notes.is_empty() {
+            return;
+        }
+        let live = e.switcher.live().sources();
+        let on_air: Vec<String> = live.iter().filter_map(|i| e.sources.get(*i)).map(|s| s.name.clone()).collect();
+        let mut say = Vec::new();
+        for n in notes {
+            if n.left && on_air.iter().any(|s| s.eq_ignore_ascii_case(&n.source)) {
+                let text = format!("{}, while on air", n.text);
+                e.status.lock_ok().push(LogLevel::Warning, text.clone());
+                say.push(text);
+            } else {
+                say.push(n.text);
+            }
+        }
+        for text in say {
+            self.toast(text, false);
+        }
     }
 
     /// A scene button or number key: to preview (in preview mode) or air.
@@ -3678,7 +3708,8 @@ impl App {
                 let rb = ui.interact(br, ui.scope_id().with(("put_on_air", i)), Sense::click());
                 painter.rect_filled(br, 6.0, if rb.hovered() { TAKE_HOVER } else { TAKE });
                 painter.text(br.center(), Align2::CENTER_CENTER, "Put on air", FontId::proportional(TEXT_STATE), Color32::WHITE);
-                if rb.on_hover_text(format!("{} to {name} full screen", self.cfg.transition.mode.label())).clicked() {
+                let ready = self.mv_selected_at.is_none_or(|at| put_on_air_ready(at.elapsed()));
+                if rb.on_hover_text(format!("{} to {name} full screen", self.cfg.transition.mode.label())).clicked() && ready {
                     put_on_air = Some(i);
                 }
             }
@@ -3750,6 +3781,7 @@ impl App {
                 self.show_source(i, cut);
             } else {
                 self.mv_selected = if self.mv_selected == Some(i) { None } else { Some(i) };
+                self.mv_selected_at = Some(Instant::now());
             }
         }
     }
@@ -4763,7 +4795,15 @@ impl App {
                 // (a plain separator would take the whole column's height).
                 let (line, _) = ui.allocate_exact_size(vec2(9.0, meter_h + 20.0), Sense::hover());
                 ui.painter().vline(line.center().x, line.y_range(), Stroke::new(1.0, LINE));
-                for (key, label_text, l) in [("mix", "REC MIX", &loud.recording), ("stream", "STREAM", &loud.stream)] {
+                // STREAM only once there's somewhere to stream to (as the
+                // LIVE pill and the STREAM panel): otherwise it means nothing.
+                let streams = live || self.cfg.streaming.destinations.iter().any(|d| d.enabled);
+                let mixes: Vec<(&str, &str, &crate::engine::audio::Loudness)> = if streams {
+                    vec![("mix", "REC MIX", &loud.recording), ("stream", "STREAM", &loud.stream)]
+                } else {
+                    vec![("mix", "REC MIX", &loud.recording)]
+                };
+                for (key, label_text, l) in mixes {
                     ui.vertical(|ui| {
                         ui.set_width(70.0);
                         ui.label(RichText::new(label_text).strong().size(TEXT_BODY));
@@ -5899,6 +5939,7 @@ impl App {
         for a in alerts {
             self.toast(a, true);
         }
+        self.guest_notes();
     }
 }
 
@@ -6238,6 +6279,14 @@ fn cut_after_drop(dropped: &[String], sources: &[crate::config::SourceConfig], s
     (scene.name != live && !blind).then(|| scene.clone())
 }
 
+/// How long after a tile is picked its Put on air starts taking clicks
+/// (a double-click's second click lands well inside this).
+const PUT_ON_AIR_AFTER: Duration = Duration::from_millis(300);
+
+fn put_on_air_ready(picked_for: Duration) -> bool {
+    picked_for >= PUT_ON_AIR_AFTER
+}
+
 /// The time of day for the header: "15:05", or "3:05 PM".
 fn clock_text(t: chrono::NaiveTime, twelve: bool) -> String {
     t.format(crate::engine::timers::time_format(twelve, false)).to_string()
@@ -6423,6 +6472,14 @@ mod desk_tests {
         assert!((r.2 - 1080.0).abs() < 0.5 && (r.3 - 1080.0).abs() < 0.5);
         assert_eq!((uv.min.x, uv.max.x), (0.0, 0.5));
         assert!((uv.min.y - 1.0 / 18.0).abs() < 1e-4 && (uv.max.y - 17.0 / 18.0).abs() < 1e-4, "{uv:?}");
+    }
+
+    #[test]
+    fn put_on_air_waits_out_a_double_click() {
+        assert!(!put_on_air_ready(Duration::from_millis(0)));
+        assert!(!put_on_air_ready(Duration::from_millis(250)));
+        assert!(put_on_air_ready(Duration::from_millis(300)));
+        assert!(put_on_air_ready(Duration::from_secs(5)));
     }
 
     #[test]

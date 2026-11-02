@@ -273,7 +273,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Audio, "De-esser") => "Softens harsh 's' and 'sh' sounds louder than this.",
 
         // ---- Remote guests
-        (Guests, "Guests") => "Turns on the guest page, so people can join from a browser with a link: no app, no account. Each joins a guest spot below.",
+        (Guests, "Guests") => "Turns on the guest page, so people can join from a browser with a link: no app, no account. Each joins a guest spot below. The desk shows a short message as each one joins or leaves (a warning if they leave while their spot is on air).",
         (Guests, "Reached through") => "How guests' browsers find Cutaway. The free Cloudflare tunnel needs nothing set up, but its address is new each time Cutaway starts, so send links on the day. Tailscale Funnel gives an address that stays the same, so links can go out days ahead: install Tailscale and sign in (free) once. Or use your own https:// address forwarded to this computer.",
         (Guests, "Port") => "The port the guest page runs on, on this computer. With the tunnel or Tailscale only this computer uses it; with your own address, forward it here.",
         (Guests, "Guests see") => "Sends guests a small copy of the program, so they can see what's on air without much of their connection.",
