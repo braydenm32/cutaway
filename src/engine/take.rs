@@ -71,6 +71,12 @@ impl Engine {
         if let Some(problem) = self.disk_status().as_ref().and_then(space_problem) {
             bail!("{problem}");
         }
+        // A close-up recorded far bigger than the picture it holds: say so.
+        for s in cfg.sources.iter().filter(|s| s.record) {
+            if let Some((size, detail)) = s.oversized(&cfg.sources) {
+                self.status.lock_ok().push(LogLevel::Warning, crate::config::oversized_note(&s.name, size, detail));
+            }
+        }
         let codec = out.codec.video_codec();
         if let Some(p) = encode::codec_problem(codec) {
             bail!("{p}; choose H.264 or HEVC in Record › Recording");
@@ -205,7 +211,7 @@ impl Engine {
             let keep = out.clip_seconds.max(cfg.replay.seconds.ceil() as u32).clamp(5, 600);
             self.clips.start(folder.clone(), fps, brand, audio_cfg.clone(), keep);
             let (path, vtx, muxes) = add_video("Program".into(), format!("Program.{ext}"), fps, (cw, ch), true, rate, None, (fps as usize / 2).max(8), track_cfgs.clone(), Some(self.clips.clone()));
-            export_files.push(ExportFile { path, name: "Program".into(), width: cw, height: ch, fps, has_audio: audio_cfg.is_some(), source: None, tc_frame: tc_for(fps), length: None, clean: false });
+            export_files.push(ExportFile { path, name: "Program".into(), width: cw, height: ch, fps, has_audio: audio_cfg.is_some(), source: None, tc_frame: tc_for(fps), length: None, clean: false, start: 0 });
             self.video_taps.lock_ok().program = Some(ProgramTap { tx: vtx, from: t0 });
             program_muxes = muxes;
         }
@@ -215,7 +221,7 @@ impl Engine {
             let (cw, ch) = self.info.canvas;
             let rate = encode::record_bitrate_kbps(codec, out.program_bitrate_kbps, cw, ch, fps);
             let (path, vtx, _) = add_video("Program (clean)".into(), format!("Program_Clean.{ext}"), fps, (cw, ch), true, rate, None, (fps as usize / 2).max(8), Vec::new(), None);
-            export_files.push(ExportFile { path, name: "Program (clean)".into(), width: cw, height: ch, fps, has_audio: audio_cfg.is_some(), source: None, tc_frame: tc_for(fps), length: None, clean: true });
+            export_files.push(ExportFile { path, name: "Program (clean)".into(), width: cw, height: ch, fps, has_audio: audio_cfg.is_some(), source: None, tc_frame: tc_for(fps), length: None, clean: true, start: 0 });
             self.video_taps.lock_ok().clean = Some(ProgramTap { tx: vtx, from: t0 });
         }
 
@@ -232,13 +238,17 @@ impl Engine {
         let keep_angles = !matches!(codec, crate::media::VideoCodec::ProRes(_));
         let mut angles = Vec::new();
         let mut iso_slots = Vec::new();
+        let mut iso_numbers = Vec::new();
         for (i, s) in self.sources.iter().enumerate() {
             if !s.record {
                 continue;
             }
             iso_slots.push((s.name.clone(), s.slot.clone()));
             let label = format!("ISO {} ({})", i + 1, s.name);
-            let file = format!("ISO_{:02}_{}.{ext}", i + 1, safe_file_name(&s.name));
+            // Files are numbered 01 to n with no gaps (sources not recorded
+            // don't take a number); the name says which source it is.
+            let file = format!("ISO_{:02}_{}.{ext}", iso_slots.len(), safe_file_name(&s.name));
+            iso_numbers.push((s.uid, iso_slots.len()));
             let with_audio = out.iso_audio && audio_cfg.is_some();
             let rate = encode::record_bitrate_kbps(codec, out.iso_bitrate_kbps, s.size.0, s.size.1, s.fps);
             // Short queue: these can be camera buffers, and holding many
@@ -252,7 +262,7 @@ impl Engine {
             });
             let (path, vtx, _) = add_video(label, file, s.fps, s.size, with_audio, rate, retimer, 8, Vec::new(), angle);
             // (By identity: the switch log's angles stay right if sources move.)
-            export_files.push(ExportFile { path, name: s.name.clone(), width: s.size.0, height: s.size.1, fps: s.fps, has_audio: with_audio, source: Some(s.uid as usize), tc_frame: tc_for(s.fps), length: None, clean: false });
+            export_files.push(ExportFile { path, name: s.name.clone(), width: s.size.0, height: s.size.1, fps: s.fps, has_audio: with_audio, source: Some(s.uid as usize), tc_frame: tc_for(s.fps), length: None, clean: false, start: 0 });
             s.slot.start_iso_tap(vtx, t0);
         }
 
@@ -283,12 +293,12 @@ impl Engine {
 
         // WAVs.
         let mut raw_inputs = Vec::new();
-        for (i, a) in self.audio.iter().enumerate() {
+        for a in self.audio.iter() {
             if !a.record {
                 continue;
             }
             raw_inputs.push(a.shared.clone());
-            let base = folder.join(format!("Audio_{:02}_{}", i + 1, safe_file_name(&a.name)));
+            let base = folder.join(format!("Audio_{:02}_{}", raw_inputs.len(), safe_file_name(&a.name)));
             let (wtx, wrx) = bounded(3000);
             wavs.push((a.name.clone(), recorder::spawn_wav(wrx, base, out.wav_bit_depth, a.split, t0, t1.clone(), self.status.clone(), opts.clone())));
             a.shared.start_raw_tap(wtx, t0);
@@ -339,6 +349,17 @@ impl Engine {
             iso_slots,
             raw_inputs,
             journal,
+            late: recorder::LateFiles {
+                brand,
+                ext: ext.to_string(),
+                codec,
+                backend: backend.to_string(),
+                proxy_backend: proxy_backend.map(|b| b.to_string()),
+                proxy_width: out.proxy_width,
+                iso_bitrate_kbps: out.iso_bitrate_kbps,
+                tc_seconds: out.timecode.then_some(tc_secs),
+            },
+            iso_numbers,
         };
         *self.take_monitor.lock_ok() = Some(TakeMonitor::new(folder.clone(), backup_folder.clone(), stats));
         {
@@ -356,6 +377,77 @@ impl Engine {
         self.mix.reset_recording_loudness();
         (self.waker)();
         Ok(folder)
+    }
+
+    /// Source `i` joined the show, or restarted, during the take: it gets
+    /// a file of its own straight away, from the next program frame,
+    /// named for when it starts ("ISO_03_Cam_2 (from 00-20-14).mp4") and
+    /// placed there in the timelines. (No sound in it: the mix is in the
+    /// program and Mix.wav.) Returns the file's name.
+    pub(crate) fn start_late_iso(&self, i: usize) -> Option<String> {
+        let s = self.sources.get(i)?;
+        if !s.record {
+            return None;
+        }
+        let mut guard = self.take.lock_ok();
+        let take = guard.as_mut()?;
+        let late = take.late.clone();
+        let fps = self.info.fps;
+        // On the program's frame grid, like the take's start.
+        let from = next_boundary(fps);
+        let offset = from - take.t0;
+        let number = match take.iso_numbers.iter().find(|n| n.0 == s.uid) {
+            Some(n) => n.1,
+            None => {
+                let n = take.iso_numbers.iter().map(|n| n.1).max().unwrap_or(0) + 1;
+                take.iso_numbers.push((s.uid, n));
+                n
+            }
+        };
+        let when = fmt_duration(Duration::from_nanos(offset.max(0) as u64)).replace(':', "-");
+        let file = format!("ISO_{number:02}_{} (from {when}).{}", safe_file_name(&s.name), late.ext);
+        let path = take.folder.join(&file);
+        let label = format!("ISO {} ({}, from {when})", i + 1, s.name);
+        let mut opts = take.opts.clone();
+        opts.tc_seconds = late.tc_seconds.map(|t| t + offset as f64 / NS_PER_SEC as f64);
+        let (mtx, mrx) = unbounded();
+        take.writers.push((label.clone(), recorder::spawn_mp4(path.clone(), late.brand, s.fps, None, Vec::new(), mrx, self.status.clone(), label.clone(), opts.clone(), None)));
+        let rate = encode::record_bitrate_kbps(late.codec, late.iso_bitrate_kbps, s.size.0, s.size.1, s.fps);
+        let proxy = late.proxy_backend.as_ref().map(|backend| {
+            let plabel = format!("{label} proxy");
+            let (ptx, prx) = unbounded();
+            take.writers.push((plabel.clone(), recorder::spawn_mp4(take.folder.join("Proxies").join(&file), late.brand, s.fps, None, Vec::new(), prx, self.status.clone(), plabel, opts.clone(), None)));
+            let factor = recorder::proxy_factor(s.size.0, late.proxy_width);
+            let prate = encode::auto_bitrate_kbps(crate::media::VideoCodec::H264, s.size.0 / factor, s.size.1 / factor, s.fps).clamp(1_500, 6_000).min(rate.max(300));
+            recorder::ProxyJob { settings: recorder::video_settings(crate::media::VideoCodec::H264, s.fps, prate, backend), factor, mux: ptx }
+        });
+        let (vtx, vrx) = bounded(8);
+        let st = Arc::new(VideoStats::default());
+        let retimer = Some(recorder::Retimer::new(from, s.fps, s.slot.delay));
+        take.video_jobs.push((label.clone(), recorder::spawn_video(label.clone(), vrx, recorder::video_settings(late.codec, s.fps, rate, &late.backend), retimer, from, take.t1.clone(), mtx, self.status.clone(), st.clone(), proxy)));
+        let ef = ExportFile {
+            path,
+            name: s.name.clone(),
+            width: s.size.0,
+            height: s.size.1,
+            fps: s.fps,
+            has_audio: false,
+            source: Some(s.uid as usize),
+            tc_frame: opts.tc_seconds.map(|t| recorder::tc_frame(t, s.fps)),
+            length: None,
+            clean: false,
+            start: offset,
+        };
+        if let Some(j) = &take.journal {
+            j.add(&super::journal::Entry::File(journal_file(&ef)));
+        }
+        take.export_files.push(ef);
+        take.iso_slots.push((s.name.clone(), s.slot.clone()));
+        s.slot.start_iso_tap(vtx, from);
+        if let Some(m) = self.take_monitor.lock_ok().as_mut() {
+            m.add_file(label, st);
+        }
+        Some(file)
     }
 
     /// Drop a marker at what the program shows now. Returns its name.
@@ -1024,7 +1116,7 @@ mod tests {
         let length = Duration::from_secs(120);
         let t1 = t0 + 120 * NS_PER_SEC;
         let wall = chrono::DateTime::parse_from_rfc3339("2026-11-01T20:04:12+01:00").unwrap().with_timezone(&chrono::Local);
-        let file = |dir: &std::path::Path, f: &str, source| ExportFile { path: dir.join(f), name: f.trim_end_matches(".mp4").into(), width: 1920, height: 1080, fps: 30, has_audio: true, source, tc_frame: Some(72_252 * 30), length: None, clean: false };
+        let file = |dir: &std::path::Path, f: &str, source| ExportFile { path: dir.join(f), name: f.trim_end_matches(".mp4").into(), width: 1920, height: 1080, fps: 30, has_audio: true, source, tc_frame: Some(72_252 * 30), length: None, clean: false, start: 0 };
         let files_of = |dir: &std::path::Path| vec![file(dir, "Program.mp4", None), file(dir, "ISO_01_Wide.mp4", Some(7)), file(dir, "ISO_02_Host.mp4", Some(9))];
         let sw = |s: i64, scene: &str, angle| switcher::SwitchEvent { at: t0 + VIDEO_LATENCY + s * NS_PER_SEC, scene: scene.into(), mode: TransitionMode::Cut, duration_ms: 0, angle };
         let events = vec![sw(20, "Host", Some(9)), sw(45, "Both", None), sw(80, "Wide", Some(7))];

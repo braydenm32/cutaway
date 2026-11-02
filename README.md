@@ -78,8 +78,12 @@ and [Install on Windows](#install-on-windows).
 - **Change the line-up mid-show.** Add, remove or change sources and audio
   inputs while recording or live: only what changed opens or closes, and the
   rest never blinks. Removing one while recording or streaming asks first; its
-  own file in that take ends there (timelines know), and one added mid-take is
-  in the program at once and gets its own file from the next take. Only the
+  own file in that take ends there (timelines know). One added mid-take, or
+  one that restarts (a camera plugged back in, renamed or set to another
+  size), is in the program at once and gets a file of its own straight away,
+  named for when it starts (`ISO_04_Cam_2 (from 00-20-14).mp4`) and placed
+  right there in the timelines and the Resolve project. (Those files have no
+  sound of their own; the mix is in the program and Mix.wav.) Only the
   program's size and frame rate still need recording and streaming stopped.
 - **Network sources.** Take a feed from another computer, a phone app or an
   encoder over the network:
@@ -146,7 +150,12 @@ and [Install on Windows](#install-on-windows).
   close-up is sized to the part of the picture it shows (half a 4K camera
   is 1080p), so it stays sharp and is cheap to cut out. Applying also adds
   a scene "Cam 1: both" (or "all three") with the close-ups side by side,
-  unless a scene of that name is already there.
+  unless a scene of that name is already there. Split a camera that has
+  close-ups already and the button says **Replace the close-ups**: the new
+  ones take their place (and their names), rather than adding "Cam 1 left
+  2". A close-up set far bigger than the picture it really holds (a 4K file
+  of a part of a 1080p camera) gets a ⚠ in Sources, and a note when you
+  start recording.
 - **Lists work the same everywhere:** video sources, audio inputs, graphics,
   stream destinations, rundown segments and macros all have the same buttons
   under the list: **＋ Add**, **Duplicate**, **Remove**, **↑** and **↓**
@@ -246,8 +255,8 @@ Take_2026-10-16_19-30-02/
   Program.mp4                        the switched show (+ program audio)
   Program_Clean.mp4                  the show without graphics (if turned on)
   Program_Vertical.mp4               the 9:16 version (if turned on)
-  ISO_01_Wide.mp4                    each source, full quality (+ program audio)
-  ISO_02_Host.mp4
+  ISO_01_Wide.mp4                    each recorded source, full quality (+ program audio),
+  ISO_02_Host.mp4                      numbered 01, 02, 03… with no gaps
   ISO_03_Guest.mp4
   Audio_01_DAW.wav                   every channel captured from the interface
   Mix.wav                            the recording mix (if turned on, or for the podcast)

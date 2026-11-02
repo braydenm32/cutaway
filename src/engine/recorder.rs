@@ -784,6 +784,26 @@ pub struct Take {
     pub raw_inputs: Vec<Arc<super::audio::InputShared>>,
     /// The take's journal (for a rescue after a crash), if it could be written.
     pub journal: Option<Arc<super::journal::Journal>>,
+    /// How to make a source's file during the take (one that joins or restarts).
+    pub late: LateFiles,
+    /// Each recorded source's file number (by identity), so a source that
+    /// restarts keeps its number; new ones take the next.
+    pub iso_numbers: Vec<(u64, usize)>,
+}
+
+/// What a file started during the take needs: the take's settings.
+#[derive(Clone)]
+pub struct LateFiles {
+    pub brand: Brand,
+    pub ext: String,
+    pub codec: crate::media::VideoCodec,
+    pub backend: String,
+    /// Proxies too (the H.264 backend for them).
+    pub proxy_backend: Option<String>,
+    pub proxy_width: u32,
+    pub iso_bitrate_kbps: u32,
+    /// Time of day at the take's first frame, when files are stamped.
+    pub tc_seconds: Option<f64>,
 }
 
 impl Take {

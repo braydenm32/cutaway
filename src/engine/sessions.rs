@@ -218,7 +218,7 @@ impl Session {
             // Every angle full length, each on its own track above the edit.
             s.push_str("  angles = {\n");
             for a in &edit.angles {
-                let _ = writeln!(s, "    {{ file = {}, name = {}, frames = {} }},", path(&a.file), lua(&a.name), a.frames);
+                let _ = writeln!(s, "    {{ file = {}, name = {}, frames = {}, at = {} }},", path(&a.file), lua(&a.name), a.frames, a.at);
             }
             s.push_str("  },\n");
         }
@@ -246,6 +246,9 @@ pub struct ResolveAngle {
     pub file: String,
     pub name: String,
     pub frames: i64,
+    /// Where it starts in the edit, in program frames (0 unless the file
+    /// started during the take).
+    pub at: i64,
 }
 
 /// The live edit the Resolve script lays down (empty: it imports the .fcpxml).
@@ -269,7 +272,7 @@ impl ResolveEdit {
             .into_iter()
             .map(|e| ResolveCut { file: name(&te.files[e.file].path), scene: e.scene, at: e.start, length: e.end - e.start, from: e.src_in, to: e.src_out })
             .collect();
-        let angles = te.files.iter().map(|f| ResolveAngle { file: name(&f.path), name: f.name.clone(), frames: te.file_frames(f) }).collect();
+        let angles = te.files.iter().map(|f| ResolveAngle { file: name(&f.path), name: f.name.clone(), frames: te.file_frames(f), at: te.file_start(f) }).collect();
         let sound = if have_mix { None } else { te.sound().map(|f| name(&f.path)) };
         ResolveEdit { cuts, angles, sound, frames: te.frames }
     }
@@ -332,7 +335,7 @@ pub fn premiere_take(xml: &str) -> Option<PremiereTake> {
     let angles = tracks
         .filter_map(|t| {
             let item = t.split("<clipitem ").nth(1)?;
-            Some(ResolveAngle { file: file_of(item)?, name: xml_unescape(tag(item, "name")?), frames: num(item, "out")? })
+            Some(ResolveAngle { file: file_of(item)?, name: xml_unescape(tag(item, "name")?), frames: num(item, "out")?, at: num(item, "start").unwrap_or(0) })
         })
         .collect();
     let mut cuts = Vec::new();
@@ -666,6 +669,7 @@ mod tests {
             tc_frame: Some(37230 * fps),
             length: None,
             clean: false,
+            start: 0,
         };
         TakeExport {
             name: folder.file_name().unwrap().to_string_lossy().into(),

@@ -1009,9 +1009,9 @@ impl SettingsUi {
                 ui.label(format!("{} {} for a moment as soon as you apply, to take the new settings.", list_names(&check.restarting), if one { "restarts" } else { "restart" }));
                 if check.recording {
                     ui.label(if one {
-                        "Its own recording ends there and starts again from the next take; the program keeps recording."
+                        "Its own file ends there and a new one starts straight away; the program keeps recording."
                     } else {
-                        "Their own recordings end there and start again from the next take; the program keeps recording."
+                        "Their own files end there and new ones start straight away; the program keeps recording."
                     });
                 }
             } else {
@@ -2863,10 +2863,17 @@ mod tests {
         // Pixel for pixel: half a 4K picture is 1080p.
         assert_eq!((right.width, right.height), (1920, 1080));
         assert!(win.draft.validate().is_ok(), "{:?}", win.draft.validate());
-        // Again: three more, after the first two, with names of their own.
+        // Again, into three: they replace the two (the same names and
+        // identities where they fit), never "Wide left 2".
+        let (left, right) = (win.draft.sources[1].uid, win.draft.sources[2].uid);
         win.split_source(0, 3);
         let names: Vec<&str> = win.draft.sources.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names[3..6], ["Wide left 2", "Wide middle", "Wide right 2"]);
+        assert_eq!(names, ["Wide", "Wide left", "Wide middle", "Wide right", "Screen"]);
+        assert_eq!((win.draft.sources[1].uid, win.draft.sources[3].uid), (left, right));
+        assert_eq!(win.sel_source, 1);
+        win.split_source(0, 2);
+        let names: Vec<&str> = win.draft.sources.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["Wide", "Wide left", "Wide right", "Screen"]);
         // A close-up isn't split again.
         let before = win.draft.sources.len();
         win.split_source(1, 2);
