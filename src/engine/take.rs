@@ -71,6 +71,10 @@ impl Engine {
         if let Some(problem) = self.disk_status().as_ref().and_then(space_problem) {
             bail!("{problem}");
         }
+        // Record › Takes lists takes from the folders used before, too.
+        if let Some(dir) = crate::config::default_config_path().parent() {
+            crate::recovery::remember_folders(dir, &crate::recovery::folders(&cfg));
+        }
         // A close-up recorded far bigger than the picture it holds: say so.
         for s in cfg.sources.iter().filter(|s| s.record) {
             if let Some((size, detail)) = s.oversized(&cfg.sources) {

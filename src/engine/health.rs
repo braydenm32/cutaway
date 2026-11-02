@@ -217,6 +217,15 @@ pub fn estimate_rate(cfg: &Config, wav_channels: &[(u32, bool)]) -> f64 {
             kbps += proxy_kbps;
         }
     }
+    // The program without graphics: a second program file, with the mix (and its proxy).
+    if out.clean_program {
+        kbps += encode::record_bitrate_kbps(codec, out.program_bitrate_kbps, p.width, p.height, p.fps) as f64;
+        files_with_audio += 1.0;
+        if out.proxies {
+            kbps += proxy_kbps;
+            files_with_audio += 1.0;
+        }
+    }
     if cfg.vertical.enabled && cfg.vertical.record {
         let v = &cfg.vertical;
         kbps += encode::record_bitrate_kbps(codec, out.program_bitrate_kbps, v.width, v.height, p.fps) as f64;
@@ -562,6 +571,11 @@ mod tests {
         let r = estimate_rate(&cfg, &[(2, true)]);
         // Program + one ISO at ~12 Mbps each, AAC, 24-bit stereo WAV: ~3.3 MB/s.
         assert!(r > 3.0e6 && r < 3.8e6, "{r}");
+        // The program without graphics is a second program file.
+        cfg.output.clean_program = true;
+        let program = encode::record_bitrate_kbps(cfg.output.codec.video_codec(), cfg.output.program_bitrate_kbps, cfg.program.width, cfg.program.height, cfg.program.fps) as f64;
+        let with_clean = estimate_rate(&cfg, &[(2, true)]);
+        assert_eq!(with_clean - r, (program + cfg.output.audio_bitrate_kbps as f64) * 1000.0 / 8.0);
         assert_eq!(fmt_left(45.0 * 60.0), "45 min");
         assert_eq!(fmt_left(125.0 * 60.0), "2 h 5 min");
         assert_eq!(fmt_left(40.0), "under 1 min");
