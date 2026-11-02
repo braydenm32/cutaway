@@ -392,6 +392,9 @@ pub struct App {
     fit_window: bool,
     /// A recording was started (the guide's last step).
     guide_recorded: bool,
+    /// The scene on air when the guide first looked, to tick "Your scenes"
+    /// once another is taken.
+    guide_first_scene: Option<String>,
     /// The Settings page last open, so the window comes back to it (this run only).
     settings_page: Option<Section>,
     /// The input the guide heard sound on once while it was open (its
@@ -623,6 +626,7 @@ impl App {
             search: search::Search::default(),
             fit_window: false,
             guide_recorded: false,
+            guide_first_scene: None,
             settings_page: None,
             guide_heard: 0,
             guide_checked: false,
@@ -3521,6 +3525,7 @@ impl App {
         let left = area.center().x - total_w / 2.0;
         // Offline as everywhere else says it (numbers audit #29): marked by
         // the watchdog and still not delivering.
+        let why_offline = engine.status.lock_ok().why_offline.clone();
         let infos: Vec<(String, Arc<FrameSlot>, f32, bool, Option<String>)> = engine
             .sources
             .iter()
@@ -3565,7 +3570,9 @@ impl App {
             }
             let wait = waiting::TileWait::of(slot, *offline, detail.is_some());
             if wait != waiting::TileWait::Fine {
-                waiting::draw_tile_wait(&painter, pic, wait, detail.as_deref(), ctx.input(|i| i.time) as f32);
+                // A camera that isn't allowed says so on its tile, not just NO SIGNAL.
+                let why = if wait == waiting::TileWait::NoSignal { why_offline.get(name.as_str()).cloned() } else { None };
+                waiting::draw_tile_wait(&painter, pic, wait, detail.as_deref().or(why.as_deref()), ctx.input(|i| i.time) as f32);
                 if wait != waiting::TileWait::NoSignal {
                     ctx.request_repaint_after(Duration::from_millis(50));
                 }

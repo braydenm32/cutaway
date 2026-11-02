@@ -31,6 +31,12 @@ pub fn request_permissions() {
     camera::request_access();
 }
 
+/// Whether macOS is still waiting for an answer about the camera and the
+/// microphone: (camera, microphone).
+pub fn still_asking() -> (bool, bool) {
+    camera::still_asking()
+}
+
 /// True once after the user granted access; devices need reopening then.
 pub fn permissions_changed() -> bool {
     camera::permissions_changed()

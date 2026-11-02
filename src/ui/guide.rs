@@ -104,8 +104,19 @@ impl App {
         let named = people.iter().filter(|&&i| !self.cfg.sources[i].person.trim().is_empty()).count();
         let name_title = self.has_name_title();
         let timelines = self.cfg.output.export_timelines;
-        let scenes_seen = self.guide_scenes || self.edit_mode;
-        self.guide_scenes = scenes_seen;
+        // Ticked once you've taken another scene or changed one, not for
+        // opening Edit layout (review B9).
+        if let Some(live) = self.engine.as_ref().map(|e| e.switcher.live().name.clone()) {
+            match &self.guide_first_scene {
+                None => self.guide_first_scene = Some(live),
+                Some(first) if *first != live => self.guide_scenes = true,
+                _ => {}
+            }
+        }
+        if self.edit_mode && self.scenes_dirty {
+            self.guide_scenes = true;
+        }
+        let scenes_seen = self.guide_scenes;
 
         // Each step's state, for the steps and the folded button's count.
         let cam_state = if cams > 0 && cams_alive == cams { Step::Done } else { Step::Todo };
@@ -196,7 +207,11 @@ impl App {
                     clicked
                 };
 
+                // macOS's own question is up (or was dismissed unanswered):
+                // waiting, not a fault (review B7).
+                let (asking_cam, asking_mic) = crate::platform::still_asking();
                 let cam_text = match (cams, cams_alive) {
+                    (c, 0) if c > 0 && asking_cam => "Waiting for you to allow the camera in macOS's question (choose Allow).".to_string(),
                     (0, _) if tests > 0 => format!("No camera found yet: test pictures stand in for now. Plug one in and add it here (a capture card, a USB camera or a phone). If it's plugged in, check that no other app is using it and that Cutaway may use the camera ({CAMERA_PRIVACY})."),
                     (0, _) => "No cameras yet. Plug one in, then add it here (a capture card, a USB camera or a phone).".to_string(),
                     (1, 1) => "1 camera with a picture. Name it so scenes and titles make sense. Want your screen too? ＋ Add → Screen, window or app.".to_string(),
@@ -232,7 +247,9 @@ impl App {
                     step(ui, people_state, "Name your people", people_text, None, Some(&mut rows));
                 }
 
-                let mic_text = if mics == 0 || mic.is_none() {
+                let mic_text = if asking_mic && !heard {
+                    "Waiting for you to allow the microphone in macOS's question (choose Allow).".to_string()
+                } else if mics == 0 || mic.is_none() {
                     "No microphone yet. Add one so the recording has sound.".to_string()
                 } else if heard {
                     format!("Listening to {mic_name}, and Cutaway can hear you. Say a few words and watch its meter at the bottom.")
@@ -245,7 +262,7 @@ impl App {
                     go = Some(Section::Audio);
                 }
 
-                let scenes_text = "A scene is a layout: which cameras show and where (one full screen, side by side, picture in picture). The buttons along the bottom take them. Show › Edit layout (or E) lets you drag the frames on the picture to change them.".to_string();
+                let scenes_text = "A scene is a layout: which cameras show and where (one full screen, side by side, picture in picture). The buttons along the bottom take them. Show › Edit layout (or E) lets you drag the frames on the picture to change them. Try taking scene 2 (the 2 key), then change one.".to_string();
                 if step(ui, scenes_state, "Your scenes", scenes_text, Some("Edit layout"), None) {
                     edit_layout = true;
                 }
@@ -326,7 +343,6 @@ impl App {
         }
         if edit_layout {
             self.edit_mode = true;
-            self.guide_scenes = true;
         }
         if check {
             self.guide_checked = true;
