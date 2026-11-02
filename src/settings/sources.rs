@@ -217,22 +217,51 @@ impl SettingsUi {
         });
     }
 
-    /// ＋ Add, Duplicate, Remove, ↑ ↓ and Split… under the full list.
+    /// ＋ Add (a small menu of what to add), Duplicate, Remove, ↑ ↓ and
+    /// Split… under the full list.
     fn camera_list_buttons(&mut self, ui: &mut egui::Ui) {
         let n = self.draft.sources.len();
-        if let Some(edit) = list_buttons(ui, n, self.sel_source, Some("＋ Add")) {
-            let video = &self.video;
+        let mut add = None;
+        ui.menu_button("＋ Add", |ui| {
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+            let free = self.video.iter().any(|d| !self.draft.sources.iter().any(|s| s.device == d.name));
+            let camera = ui.add_enabled(free, egui::Button::new("Camera or capture card"));
+            let camera = if free { camera } else { camera.on_disabled_hover_text("Every camera this computer has is already a source. Plug another one in, or change a source's Device.") };
+            if camera.clicked() {
+                add = Some(SourceKind::Device);
+            }
+            if ui.button("Screen, window or app").on_hover_text("Share your screen, one window or one app, like in a video call").clicked() {
+                add = Some(SourceKind::Screen);
+            }
+            if ui.button("Test picture").on_hover_text("Colour bars or a pattern, to try things without a camera").clicked() {
+                add = Some(SourceKind::Test);
+            }
+            if ui.button("Media player").on_hover_text("Play videos, pictures and music from a playlist").clicked() {
+                add = Some(SourceKind::Media);
+            }
+        });
+        match add {
+            Some(SourceKind::Device) => {
+                let used: Vec<&str> = self.draft.sources.iter().map(|s| s.device.as_str()).collect();
+                if let Some(device) = self.video.iter().find(|d| !used.contains(&d.name.as_str())).map(|d| d.name.clone()) {
+                    self.add_source(SourceKind::Device, "Cam");
+                    if let Some(s) = self.draft.sources.last_mut() {
+                        s.device = device;
+                    }
+                }
+            }
+            Some(SourceKind::Screen) => self.add_source(SourceKind::Screen, "Screen"),
+            Some(SourceKind::Test) => self.add_source(SourceKind::Test, "Test picture"),
+            Some(SourceKind::Media) => self.add_source(SourceKind::Media, "Media"),
+            _ => {}
+        }
+        if let Some(edit) = list_buttons(ui, n, self.sel_source, None) {
             apply_list_edit(
                 &mut self.draft.sources,
                 &mut self.sel_source,
                 edit,
                 false,
-                |list| {
-                    let used: Vec<&str> = list.iter().map(|s| s.device.as_str()).collect();
-                    let device = video.iter().find(|d| !used.contains(&d.name.as_str())).map(|d| d.name.clone()).unwrap_or("test".into());
-                    let name = unique(list.iter().map(|s| s.name.clone()).collect(), "Cam");
-                    Some(SourceConfig { name, device, ..Default::default() })
-                },
+                |_| None, // ＋ Add is the menu above
                 |s, list| SourceConfig { name: unique(list.iter().map(|s| s.name.clone()).collect(), &s.name), ..s.clone() },
             );
         }

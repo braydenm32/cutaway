@@ -96,7 +96,8 @@ impl App {
             self.guide_heard = self.cfg.audio[i].uid;
         }
         let heard = mic_uid != 0 && self.guide_heard == mic_uid;
-        let recorded = self.engine.as_ref().is_some_and(|e| e.is_recording()) || self.guide_recorded;
+        let recording_now = self.engine.as_ref().is_some_and(|e| e.is_recording());
+        let recorded = recording_now || self.guide_recorded;
 
         // Who's on camera: as Sources › People & names lists them.
         let people: Vec<usize> = self.people_sources();
@@ -152,6 +153,7 @@ impl App {
         let mut go_part: Option<(Section, &str)> = None;
         let mut go: Option<Section> = None;
         let mut check = false;
+        let mut record = false;
         let mut done = false;
         egui::Window::new("Your first show")
             .open(&mut open)
@@ -162,6 +164,10 @@ impl App {
             .default_pos(ctx.content_rect().center())
             .show(ctx, |ui| {
                 ui.label(format!("A few steps to a first recording and its edit ({done_n} of {counted} done). Each button opens the right page and folds this down to a Guide button on the left, above More, to come back to."));
+                if cfg!(target_os = "macos") && !recorded {
+                    ui.add_space(4.0);
+                    ui.add(egui::Label::new(RichText::new("macOS asks whether Cutaway may use the camera and the microphone (and later the screen, if you add it): choose Allow each time.").color(AMBER)).wrap());
+                }
                 ui.add_space(8.0);
                 egui::ScrollArea::vertical().max_height((ctx.content_rect().height() - 220.0).max(240.0)).auto_shrink([true, true]).show(ui, |ui| {
                 let mut n = 0;
@@ -193,8 +199,8 @@ impl App {
                 let cam_text = match (cams, cams_alive) {
                     (0, _) if tests > 0 => format!("No camera found yet: test pictures stand in for now. Plug one in and add it here (a capture card, a USB camera or a phone). If it's plugged in, check that no other app is using it and that Cutaway may use the camera ({CAMERA_PRIVACY})."),
                     (0, _) => "No cameras yet. Plug one in, then add it here (a capture card, a USB camera or a phone).".to_string(),
-                    (1, 1) => "1 camera with a picture. Name it so scenes and titles make sense.".to_string(),
-                    (c, a) if a == c => format!("{c} cameras with a picture. Name them so scenes and titles make sense."),
+                    (1, 1) => "1 camera with a picture. Name it so scenes and titles make sense. Want your screen too? ＋ Add → Screen, window or app.".to_string(),
+                    (c, a) if a == c => format!("{c} cameras with a picture. Name them so scenes and titles make sense. Want your screen too? ＋ Add → Screen, window or app."),
                     (c, 0) => format!("{} Check the cable, that no other app is using {}, and that Cutaway may use the camera ({CAMERA_PRIVACY}).", if c == 1 { "The camera has no picture." } else { "None of the cameras has a picture." }, if c == 1 { "it" } else { "them" }),
                     (c, a) => format!("{a} of {c} cameras have a picture. Check the cable, or that no other app is using {}.", if c - a == 1 { "the one without" } else { "them" }),
                 };
@@ -273,14 +279,20 @@ impl App {
                     check = true;
                 }
 
-                step(
-                    ui,
-                    rec_state,
-                    "Record a test",
-                    format!("Press Record{}, talk for ten seconds while switching cameras, then hold REC to stop. Watch the take back from its folder before the real show.", record_key),
-                    None,
-                    None,
-                );
+                let (rec_text, rec_button) = if recording_now {
+                    ("Recording. Talk for ten seconds while switching cameras, then hold REC (top right) to stop.".to_string(), None)
+                } else if recorded {
+                    ("Recorded. Find it on the Take saved card, or in Record › Takes, and watch it back before the real show.".to_string(), Some("Takes…"))
+                } else {
+                    (format!("Press Record a test (or Record{record_key}), talk for ten seconds while switching cameras, then hold REC to stop."), Some("Record a test"))
+                };
+                if step(ui, rec_state, "Record a test", rec_text, rec_button, None) {
+                    if recorded {
+                        go_place = Some("record/takes/takes");
+                    } else {
+                        record = true;
+                    }
+                }
 
                 let edit_text = if timelines {
                     "On: every take also saves a project for DaVinci Resolve, Premiere Pro and Final Cut, with each camera on its own track, your live cuts as the first edit, and your markers."
@@ -320,8 +332,11 @@ impl App {
             self.guide_checked = true;
             self.start_precheck(None);
         }
+        if record {
+            self.toggle_record();
+        }
         // Gone to a page: out of its way, a click from coming back.
-        if go.is_some() || go_place.is_some() || go_part.is_some() || edit_layout || check {
+        if go.is_some() || go_place.is_some() || go_part.is_some() || edit_layout || check || record {
             self.guide_folded = true;
         }
         if done || !open {

@@ -2730,6 +2730,7 @@ impl App {
         }
         match profiles::load(&dir, name) {
             Ok(mut cfg) => {
+                cfg.ui.keep_this_computers(&self.cfg.ui);
                 let before = self.snapshot(undo::Kind::Settings, format!("Switch to \"{name}\""));
                 // Its own scenes (settings without any would keep this show's).
                 if cfg.scenes.is_empty() {
@@ -5690,8 +5691,10 @@ impl App {
         if cfg.scenes.is_empty() {
             cfg.scenes = cfg.effective_scenes();
         }
-        // The show it's saved as stays this one.
+        // The show it's saved as stays this one, and this computer's own
+        // settings (interface size, updates) stay as they are.
         cfg.ui.profile = self.cfg.ui.profile.clone();
+        cfg.ui.keep_this_computers(&self.cfg.ui);
         match self.apply_settings_as(cfg, ctx, true) {
             Ok(()) => {
                 self.history.record(before);
