@@ -68,6 +68,8 @@ pub struct RemoteShared {
 const TRIES: u32 = 5;
 /// How long it waits.
 const LOCKED_FOR: Duration = Duration::from_secs(60);
+/// A WebSocket that's had nothing for this long gets `{"type":"tick"}`.
+const TICK_EVERY: Duration = Duration::from_secs(2);
 
 impl RemoteShared {
     /// Whether `ip` is waiting after too many wrong PINs.
@@ -436,9 +438,12 @@ fn websocket(conn: TcpStream, key: &str, sh: &RemoteShared) -> std::io::Result<(
             let _ = ws::write_frame(&mut *w2.lock_ok(), 0x8, &[]);
             let _ = w2.lock_ok().shutdown(std::net::Shutdown::Both);
         });
-        // Writer: the state whenever it changes (at most 10 times a second).
+        // Writer: the state whenever it changes (at most 10 times a second),
+        // and a small tick when nothing has gone for two seconds, so a page
+        // can tell a quiet show from a lost connection.
         let mut seen = u64::MAX;
         let mut last_ping = Instant::now();
+        let mut last_sent = Instant::now();
         while !closed.load(Ordering::Relaxed) {
             let (generation, state) = sh.snapshot();
             if generation != seen {
@@ -446,7 +451,13 @@ fn websocket(conn: TcpStream, key: &str, sh: &RemoteShared) -> std::io::Result<(
                 if send_state(&writer, &state).is_err() {
                     break;
                 }
+                last_sent = Instant::now();
                 std::thread::sleep(Duration::from_millis(100));
+            } else if last_sent.elapsed() >= TICK_EVERY {
+                if ws::write_text(&mut *writer.lock_ok(), r#"{"type":"tick"}"#).is_err() {
+                    break;
+                }
+                last_sent = Instant::now();
             }
             if last_ping.elapsed() > Duration::from_secs(15) {
                 last_ping = Instant::now();
@@ -595,6 +606,14 @@ mod tests {
             if let ws::Message::Text(t) = ws::read_message(&mut c).unwrap() {
                 if t.contains("reply") {
                     assert!(t.contains("\"id\":7") && t.contains("Taken") && t.contains("\"ok\":true"), "{t}");
+                    break;
+                }
+            }
+        }
+        // Nothing changes: a tick still comes, within a few seconds.
+        loop {
+            if let ws::Message::Text(t) = ws::read_message(&mut c).unwrap() {
+                if t.contains("\"tick\"") {
                     break;
                 }
             }

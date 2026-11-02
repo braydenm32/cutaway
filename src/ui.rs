@@ -1457,6 +1457,26 @@ impl App {
                 self.set_preview_mode(on);
                 Ok(format!("Preview {}", if on { "on" } else { "off" }))
             }
+            Action::Precheck(start) => {
+                let pc = self.precheck.as_ref().ok_or("there's no pre-show check open")?;
+                if !start {
+                    self.precheck = None;
+                    return Ok("Pre-show check closed".into());
+                }
+                let then = pc.then.ok_or("this pre-show check has nothing to start: close it instead")?;
+                if pc.waiting > 0 {
+                    return Err("the pre-show check is still checking: wait a moment".into());
+                }
+                self.precheck = None;
+                match then {
+                    Then::Record => self.start_recording_now(),
+                    Then::Live => self.start_stream_now(),
+                }
+                Ok(match then {
+                    Then::Record => "Recording".into(),
+                    Then::Live => "Going live".into(),
+                })
+            }
             Action::Back => {
                 let name = self.back_to_last_scene()?;
                 Ok(format!("Back to {name}"))

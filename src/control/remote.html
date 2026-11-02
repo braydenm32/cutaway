@@ -57,6 +57,11 @@
   .sheet ul { margin:6px 0 0; padding-left:18px; }
   .sheet li { margin:2px 0; }
   .muted { color:var(--dim); font-size:13px; }
+  /* Nothing heard from Cutaway for a few seconds: say so, and dim what may be out of date. */
+  #conn { display:none; margin:0 0 6px; padding:6px 10px; border-radius:10px; background:#5a4520; color:#fff; font-size:14px; font-weight:650; text-align:center; }
+  body.stale #conn { display:block; }
+  body.stale main button, body.stale .pills button, body.stale .actions button { opacity:.45; }
+  .sheet .row { margin-top:8px; }
   .warntext { color:var(--amber); }
   .failtext { color:var(--red); }
 
@@ -185,6 +190,7 @@
 </head>
 <body>
 <header id="top" class="pad-x">
+  <div id="conn" role="status">Reconnecting to Cutaway…</div>
   <div class="statusline">
     <span class="show" id="showname">Cutaway</span>
     <button class="light" id="light"><i></i><span id="lighttext">All good</span></button>
@@ -255,6 +261,9 @@
   <div id="prompterwrap"><h2>Teleprompter</h2>
     <div class="row" id="prompter"><button id="pr_top">⏮</button><button id="pr_back">◀</button><button class="toggle" id="pr_play">▶ Roll</button><button id="pr_fwd">▶▶</button><button id="pr_slow">−</button><span class="muted" id="pr_wpm" style="align-self:center"></span><button id="pr_fast">＋</button></div>
     <a id="prompterlink" style="display:inline-block;padding:12px 0">Open the prompter on this device</a></div>
+  <h2>This phone</h2>
+  <div class="row"><button class="toggle" id="awake">Keep screen on</button></div>
+  <p class="muted">Keeps this phone's screen from going dark while the remote is open (uses more battery).</p>
   <h2>Tally lights</h2>
   <div class="row" id="tallies"></div>
   <p class="muted">Open a tally link on a phone mounted on each camera. Stream Deck and Companion: use <code>/api/action?do=scene:1</code> (see the README).</p>
@@ -404,15 +413,20 @@ function flash(text, bad) {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.style.display = 'none'; }, bad ? 4000 : 2500);
 }
 
-// Keep the screen on (tally phones sit on a camera for hours).
+// Keep the screen on: tally phones sit on a camera for hours, and the
+// remote stays awake while it's open and showing (its "Keep screen on"
+// switch, on unless turned off on this phone).
 let lock = null;
+function wantAwake() { return tallySource !== null || stored('cutaway_awake') !== '0'; }
 async function keepAwake() {
-  try { if ('wakeLock' in navigator && !lock && document.visibilityState === 'visible') { lock = await navigator.wakeLock.request('screen'); lock.addEventListener('release', () => { lock = null; }); } } catch (e) {}
+  try {
+    if (!wantAwake()) { if (lock) { const l = lock; lock = null; await l.release(); } return; }
+    if ('wakeLock' in navigator && !lock && document.visibilityState === 'visible') { lock = await navigator.wakeLock.request('screen'); lock.addEventListener('release', () => { lock = null; }); }
+  } catch (e) {}
 }
-if (tallySource !== null) {
-  keepAwake();
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') keepAwake(); });
-}
+keepAwake();
+// (Some phones only allow it after a tap.)
+document.addEventListener('pointerup', () => { if (!lock) keepAwake(); });
 function clock(s) { s = Math.floor(s); return [s / 3600, s / 60 % 60, s % 60].map(v => String(Math.floor(v)).padStart(2, '0')).join(':'); }
 function db(v) { v = Math.round(v * 2) / 2; return (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toFixed(1) + ' dB'; }
 
@@ -471,6 +485,7 @@ onTap($('replay'), () => act(state && state.replaying ? 'replay:stop' : 'replay'
 onTap($('rdback'), () => act('rundown:previous'));
 onTap($('nextseg'), () => act('rundown:next'));
 onTap($('rdstop'), () => act('rundown:stop'));
+onTap($('awake'), () => { store('cutaway_awake', wantAwake() ? '0' : '1'); keepAwake(); refresh(); });
 [['pr_top', 'top'], ['pr_back', 'back'], ['pr_play', 'toggle'], ['pr_fwd', 'forward'], ['pr_slow', 'slower'], ['pr_fast', 'faster']].forEach(([id, c]) => onTap($(id), () => act('prompter:' + c)));
 
 function render() {
@@ -536,13 +551,20 @@ function renderTop(s) {
     const lines = pc.items.map(i => (i.level === 'fail' ? '✖ ' : '⚠ ') + i.what + ': ' + i.detail);
     const done = pc.waiting === 0;
     const next = !done ? 'Checking' + (pc.waiting ? ' (contacting ' + pc.waiting + ' stream server' + (pc.waiting > 1 ? 's' : '') + ')' : '') + '…'
-      : pc.then ? 'Waiting for someone at the desk to press Start or Cancel.' : 'Open on the desk.';
+      : pc.then ? 'Start or cancel here, or on the desk.' : 'Open on the desk.';
     const key = [what, pc.verdict, next, pc.level].concat(lines).join('\n');
     if (box._key !== key) {
       box._key = key; box.innerHTML = '';
       box.append(el('div', 'title', what + ' · ' + (done ? pc.verdict : 'checking on the desk')));
       if (lines.length) { const ul = el('ul'); lines.forEach(l => ul.append(el('li', l.startsWith('✖') ? 'failtext' : 'warntext', l))); box.append(ul); }
       box.append(el('div', 'muted', next));
+      // Answer it from here: the desk's Start (anyway) and Cancel.
+      if (pc.then) {
+        const row = el('div', 'row');
+        if (done) row.append(onTap(el('button', pc.level === 'fail' ? '' : 'take', pc.level === 'fail' ? 'Start anyway' : 'Start'), () => act('precheck:start')));
+        row.append(onTap(el('button', '', 'Cancel'), () => act('precheck:cancel')));
+        box.append(row);
+      }
     }
     setClass(box, 'sheet' + (pc.level !== 'ok' ? ' warn' : ''));
     showIf(box, true);
@@ -550,7 +572,7 @@ function renderTop(s) {
     if (lastCheck && lastCheck.then) {
       // It closed: say what happened.
       const started = lastCheck.then === 'record' ? s.recording : s.live;
-      flash(started ? 'Pre-show check done: ' + (lastCheck.then === 'record' ? 'recording' : 'going live') : 'The pre-show check was closed on the desk', !started);
+      flash(started ? 'Pre-show check done: ' + (lastCheck.then === 'record' ? 'recording' : 'going live') : 'The pre-show check was closed', !started);
     }
     lastCheck = null;
     showIf(box, false);
@@ -824,6 +846,8 @@ function renderMore(s) {
     const href = '/prompter' + (pin ? '?pin=' + encodeURIComponent(pin) : '');
     if ($('prompterlink').getAttribute('href') !== href) $('prompterlink').href = href;
   }
+  setClass($('awake'), 'toggle' + (wantAwake() ? ' on' : ''));
+  setText($('awake'), wantAwake() ? 'Keep screen on: on' : 'Keep screen on: off');
   // Tally lights.
   list($('tallies'), s.sources, (src, i) => i + ':' + src.name, (src, i) => {
     const a = el('a', '', src.name); a.href = '/?tally=' + (i + 1) + (pin ? '&pin=' + encodeURIComponent(pin) : ''); a.style.cssText = 'margin-right:14px;padding:10px 0;display:inline-block'; return a;
@@ -853,8 +877,9 @@ async function poll() {
     if (r.status === 429) { askPin('Too many wrong PINs: wait a minute, then type the PIN shown in Cutaway under More › Control.'); return; }
     typed = false;
     state = await r.json();
+    heard();
     render();
-  } catch (e) { flash('Cutaway isn\'t answering…', true); }
+  } catch (e) { if (!document.body.classList.contains('stale')) flash('Cutaway isn\'t answering…', true); }
 }
 function refreshImage() {
   if (needPin || tallySource !== null || imgBusy || document.hidden || tab !== 'scenes') return;
@@ -872,12 +897,38 @@ function connectWs() {
   try { ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/ws?pin=' + encodeURIComponent(pin)); }
   catch (e) { return; }
   ws.onmessage = ev => {
+    heard();
     const m = JSON.parse(ev.data);
     if (m.type === 'state') { state = m.state; wsLive = true; render(); }
     else if (m.type === 'reply' && !m.ok) flash(m.message, true);
   };
-  ws.onclose = () => { wsLive = false; if (!needPin) setTimeout(connectWs, 3000); };
+  ws.onclose = () => { wsLive = false; if (!needPin) { clearTimeout(wsTimer); wsTimer = setTimeout(connectWs, 3000); } };
 }
+let wsTimer = null;
+// Cutaway sends something at least every two seconds (a "tick" when the
+// show is quiet). Nothing for five: say so, dim what may be out of date,
+// and start a fresh connection (a phone that slept or changed Wi-Fi can
+// hold one that's quietly dead).
+let lastHeard = Date.now();
+function heard() { lastHeard = Date.now(); if (document.body.classList.contains('stale')) { document.body.classList.remove('stale'); measure(); } }
+function reconnectNow() {
+  if (needPin) return;
+  if (ws) { try { ws.onclose = null; ws.close(); } catch (e) {} ws = null; }
+  wsLive = false; clearTimeout(wsTimer);
+  poll(); connectWs();
+}
+setInterval(() => {
+  if (needPin || tallySource !== null || document.hidden) return;
+  const quiet = Date.now() - lastHeard;
+  if (quiet > 5000 && !document.body.classList.contains('stale')) { document.body.classList.add('stale'); measure(); }
+  if (quiet > 5000 && wsLive) reconnectNow();
+}, 1000);
+// Back on screen (unlocked, switched back to): fresh state and connection now.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  keepAwake();
+  if (Date.now() - lastHeard > 2500 || !wsLive) reconnectNow(); else poll();
+});
 if (tallySource === null) { selectTab(tab); measure(); }
 poll(); connectWs();
 setInterval(() => { if (!wsLive) poll(); }, 500);
