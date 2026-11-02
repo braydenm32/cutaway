@@ -151,8 +151,8 @@ impl Person {
 #[derive(Default)]
 struct Follow {
     people: Vec<Person>,
-    /// The source filling the program when last looked (None: not yet).
-    lead: Option<Option<usize>>,
+    /// The sources filling the program when last looked (None: not yet).
+    lead: Option<Vec<usize>>,
     /// Who's being named: (name, role), None for nobody.
     on_air: Option<(String, String)>,
     /// When `on_air` was last worked out (guests' names arrive as they join).
@@ -322,20 +322,26 @@ impl Graphics {
         }
     }
 
-    /// The program's main source at `t` (see `Scene::main_source`): titles
-    /// that follow the program change to whoever is in it, come on by
-    /// themselves for someone new, and go off for nobody. Called every
-    /// program frame; `guest_name` finds the name a guest typed.
-    pub fn follow(&self, lead: Option<usize>, t: Ns, guest_name: &dyn Fn(&str) -> Option<String>) {
+    /// The program's main sources at `t` (see `Scene::main_sources`):
+    /// titles that follow the program change to whoever is in them (both,
+    /// when two frames are as big), come on by themselves for someone new,
+    /// and go off for nobody. Called every program frame; `guest_name`
+    /// finds the name a guest typed.
+    pub fn follow(&self, leads: &[usize], t: Ns, guest_name: &dyn Fn(&str) -> Option<String>) {
         let mut f = self.follow.lock_ok();
-        let moved = f.lead != Some(lead);
+        let moved = f.lead.as_deref() != Some(leads);
         if moved || f.checked == 0 || t - f.checked > 1_000_000_000 {
-            f.lead = Some(lead);
+            f.lead = Some(leads.to_vec());
             f.checked = t;
-            let person = lead.and_then(|i| f.people.get(i)).and_then(|p| {
-                let name = if p.name.is_empty() { p.guest.as_deref().and_then(guest_name).unwrap_or_default() } else { p.name.clone() };
-                (!name.trim().is_empty()).then(|| (name.trim().to_string(), p.role.clone()))
-            });
+            let named: Vec<(String, String)> = leads
+                .iter()
+                .filter_map(|i| f.people.get(*i))
+                .filter_map(|p| {
+                    let name = if p.name.is_empty() { p.guest.as_deref().and_then(guest_name).unwrap_or_default() } else { p.name.clone() };
+                    (!name.trim().is_empty()).then(|| (name.trim().to_string(), p.role.trim().to_string()))
+                })
+                .collect();
+            let person = together(&named);
             if person != f.on_air {
                 f.on_air = person.clone();
                 let mut items = self.items.lock_ok();
@@ -786,9 +792,52 @@ pub fn render_comment(c: &Comment, style: &crate::config::CommentsConfig, canvas
     img
 }
 
+/// One title for the people on air: one person as they are; two or three
+/// as "Maya Chen & Sam Lee" (roles the same way, when each has one, or the
+/// one role they share); nobody for none, or more than three (too many
+/// names to read, so it never guesses).
+fn together(people: &[(String, String)]) -> Option<(String, String)> {
+    fn join(v: &[&str]) -> String {
+        match v {
+            [] => String::new(),
+            [one] => one.to_string(),
+            [rest @ .., last] => format!("{} & {last}", rest.join(", ")),
+        }
+    }
+    match people.len() {
+        0 => None,
+        1 => Some(people[0].clone()),
+        2 | 3 => {
+            let names: Vec<&str> = people.iter().map(|p| p.0.as_str()).collect();
+            let roles: Vec<&str> = people.iter().map(|p| p.1.as_str()).collect();
+            let role = if roles.iter().all(|r| *r == roles[0]) {
+                roles[0].to_string()
+            } else if roles.iter().all(|r| !r.is_empty()) {
+                join(&roles)
+            } else {
+                String::new()
+            };
+            Some((join(&names), role))
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn two_people_share_one_title() {
+        let p = |n: &str, r: &str| (n.to_string(), r.to_string());
+        assert_eq!(together(&[]), None);
+        assert_eq!(together(&[p("Maya Chen", "Host")]), Some(p("Maya Chen", "Host")));
+        assert_eq!(together(&[p("Maya Chen", "Host"), p("Sam Lee", "Guest")]), Some(p("Maya Chen & Sam Lee", "Host & Guest")));
+        assert_eq!(together(&[p("Maya Chen", "Guest"), p("Sam Lee", "Guest")]), Some(p("Maya Chen & Sam Lee", "Guest")));
+        assert_eq!(together(&[p("Maya Chen", "Host"), p("Sam Lee", "")]), Some(p("Maya Chen & Sam Lee", "")));
+        assert_eq!(together(&[p("A", ""), p("B", ""), p("C", "")]), Some(p("A, B & C", "")));
+        assert_eq!(together(&[p("A", ""), p("B", ""), p("C", ""), p("D", "")]), None);
+    }
 
     #[test]
     fn names_follow_whoever_is_on_air() {
@@ -803,19 +852,19 @@ mod tests {
         let on = |g: &Graphics| g.items.lock_ok()[0].visible;
         let s = 1_000_000_000;
         let t = clock::now();
-        g.follow(Some(0), t, &guest);
+        g.follow(&[0], t, &guest);
         assert!(on(&g), "comes on by itself for someone new");
         assert_eq!(title(&g), "Ana Diaz");
-        g.follow(Some(0), t + 4 * s, &guest);
+        g.follow(&[0], t + 4 * s, &guest);
         assert!(on(&g));
-        g.follow(Some(0), t + 6 * s, &guest);
+        g.follow(&[0], t + 6 * s, &guest);
         assert!(!on(&g), "off after its seconds");
         // Nobody named on air, then Ana again soon after: not named again.
-        g.follow(Some(1), t + 7 * s, &guest);
-        g.follow(Some(0), t + 8 * s, &guest);
+        g.follow(&[1], t + 7 * s, &guest);
+        g.follow(&[0], t + 8 * s, &guest);
         assert!(!on(&g));
         // A guest, by the name they typed.
-        g.follow(Some(2), t + 9 * s, &guest);
+        g.follow(&[2], t + 9 * s, &guest);
         assert!(on(&g));
         assert_eq!(title(&g), "Sam Lee");
         // Its button: off ends the showing; on stays on through cuts, but
@@ -824,9 +873,9 @@ mod tests {
         assert!(!on(&g) && !g.is_visible(0));
         g.set_visible(0, true);
         assert!(on(&g));
-        g.follow(Some(1), t + 20 * s, &guest);
+        g.follow(&[1], t + 20 * s, &guest);
         assert!(!on(&g) && g.is_visible(0), "nobody on air: hidden, still wanted");
-        g.follow(Some(0), t + 21 * s, &guest);
+        g.follow(&[0], t + 21 * s, &guest);
         assert!(on(&g));
         assert_eq!(title(&g), "Ana Diaz");
         let log = g.on_air(t, t + 30 * s);

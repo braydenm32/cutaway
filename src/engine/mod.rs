@@ -2143,8 +2143,8 @@ impl CompositorLoop {
                     None => self.comp.set_replay(None, 0.0, false),
                 }
                 // Name titles that follow the program name whoever fills it.
-                let lead = self.switcher.scenes_now().1.main_source();
-                self.graphics.follow(lead, t, &|id| guests::hub().guest_name(id));
+                let leads = self.switcher.scenes_now().1.main_sources();
+                self.graphics.follow(&leads, t, &|id| guests::hub().guest_name(id));
                 let mut graphics = self.graphics.layers(t);
                 if let Some((_, c)) = &*self.captions.lock_ok() {
                     graphics.extend(c.layer());
