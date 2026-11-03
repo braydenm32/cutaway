@@ -28,7 +28,7 @@ dials and the Stream Deck app's virtual decks).
 | Go Live | hold to go live, hold to end | GOING LIVE… while it connects, then pink with the running time; "LIVE 1 of 2" with an amber edge while a destination isn't live, as on the phone; holds can be turned off |
 | Marker | drop a marker, plain or named (one of your quick marker names or your own) | shows its name |
 | Graphic | show/hide a logo, title or lower third | lit while on |
-| Audio Input | on/off, with a level meter | on a Stream Deck+ dial: turn for level, press or tap for on/off |
+| Audio Input | on/off, with a level meter; turning a mic off while recording or live takes a one-second hold (on is a press) | on a Stream Deck+ dial: turn for level, press or tap for on/off |
 | Auto Switching | follow who's talking on/off | |
 | Captions | live captions on/off | |
 | Media Player | play/pause, next, restart, previous | shows the item playing |
@@ -38,7 +38,7 @@ dials and the Stream Deck app's virtual decks).
 | Clip | save the last few seconds as a clip | while recording; the length is Cutaway's setting or the key's own |
 | Timer | start/pause, reset, start, pause or stop a countdown or stopwatch | shows its time |
 | Guest | a remote guest spot: show them full screen or in preview | green with their name when they're on; the border shows the tally |
-| Fade to Black | fade the program (picture and sound) to black, and back | "BLACK" with an amber edge while it's black |
+| Fade to Black | hold a second to fade the program (picture and sound) to black; a press fades back up | "BLACK" with an amber edge while it's black |
 | Instant Replay | play the last few seconds again (slow motion if set) while recording | red while it plays; press again to stop |
 | Macro | run one of Cutaway's macros | the macro's colour and name |
 | PTZ Camera | go to a preset, home, or pan/tilt/zoom while held (real or virtual PTZ) | the preset's name; the border shows the camera's tally |

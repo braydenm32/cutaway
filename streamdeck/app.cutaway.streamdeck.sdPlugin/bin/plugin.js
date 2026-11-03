@@ -259,7 +259,16 @@ function onStreamDeck(m) {
     case "dialDown":
     case "touchTap": {
       const k = keys.get(ctx);
-      if (k && k.kind === "audio") run(ctx, `audio:${cmdTarget(k.settings.input)}`);
+      if (!k || k.kind !== "audio") break;
+      if (micOffNeedsHold(k, cutaway.state)) {
+        // A dial press can't be held to confirm: mid-show, turn a mic off
+        // from its key (held) or the desk instead, so a bump can't cut it.
+        k.hint = Date.now() + 1500;
+        render(ctx);
+        setTimeout(() => render(ctx), 1600);
+        break;
+      }
+      run(ctx, `audio:${cmdTarget(k.settings.input)}`);
       break;
     }
     case "propertyInspectorDidAppear":
@@ -412,7 +421,17 @@ const HOLD_MS = 1000;
 function holdNeeded(k, st) {
   if (k.kind === "record") return st && st.recording && k.settings.holdToStop !== false;
   if (k.kind === "live") return st && (st.live ? k.settings.holdToEnd !== false : k.settings.holdToStart !== false);
+  // As on the desk: fading to black takes a hold (fading back up is a press),
+  // and so does turning a mic off while recording or live (on is a press).
+  if (k.kind === "ftb") return !!st && !st.black;
+  if (k.kind === "audio") return micOffNeedsHold(k, st);
   return false;
+}
+
+function micOffNeedsHold(k, st) {
+  if (!st || !(st.recording || st.live)) return false;
+  const input = st.inputs[indexIn(st.inputs, k.settings.input)];
+  return !!input && input.on;
 }
 
 function press(ctx) {
@@ -593,6 +612,8 @@ function finishHold(ctx) {
   const st = cutaway.state;
   if (k.kind === "record") run(ctx, st && st.recording ? "record:off" : "record:on");
   if (k.kind === "live") run(ctx, st && st.live ? "live:off" : "live:on");
+  if (k.kind === "ftb") run(ctx, "ftb");
+  if (k.kind === "audio") run(ctx, `audio:${cmdTarget(k.settings.input)}`);
   render(ctx);
 }
 
@@ -819,7 +840,8 @@ function draw(k) {
         label(fit(input.name, 11), 40, 19) +
         `<rect x="22" y="70" width="100" height="12" rx="3" fill="${C.raised}"/>` +
         meter +
-        label(input.on ? `${gain > 0 ? "+" : ""}${gain.toFixed(1)} dB` : "OFF", 116, 18, input.on ? C.text : C.red, input.on ? 400 : 700);
+        label(input.on ? `${gain > 0 ? "+" : ""}${gain.toFixed(1)} dB` : "OFF", 116, 18, input.on ? C.text : C.red, input.on ? 400 : 700) +
+        holdBar(k.hold ? Math.min(1, (Date.now() - k.hold.at) / HOLD_MS) : 0);
       return {
         image: svg(body, { bg: input.on ? C.bg : "#2a1418" }),
         feedback: {
@@ -910,7 +932,7 @@ function draw(k) {
     case "ftb":
       return st.black
         ? { image: svg(label("BLACK", 66, 30, C.amber) + label("fade back up", 98, 15, C.text, 400), { bg: "#000000", border: C.amber }) }
-        : { image: svg(label("FTB", 70, 34) + label("fade to black", 100, 15, C.dim, 400)) };
+        : { image: svg(label("FTB", 70, 34) + label("fade to black", 100, 15, C.dim, 400) + holdBar(k.hold ? Math.min(1, (Date.now() - k.hold.at) / HOLD_MS) : 0)) };
     case "replay": {
       if (st.replaying) return { image: svg(label("REPLAY", 66, 28) + label("press to stop", 98, 15, C.text, 400), { bg: C.red }) };
       const c = st.recording ? C.text : C.dim;
