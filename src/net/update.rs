@@ -6,6 +6,14 @@ use std::time::Duration;
 
 pub const REPO: &str = "braydenm32/cutaway";
 
+/// A page of the manual (docs/guide in the repository) as it was for this
+/// version, so it describes the app that opened it: "first-hour.md", or ""
+/// for the contents.
+pub fn manual_url(page: &str) -> String {
+    let page = if page.is_empty() { "README.md" } else { page };
+    format!("https://github.com/{REPO}/blob/v{}/docs/guide/{page}", env!("CARGO_PKG_VERSION"))
+}
+
 /// A release newer than this one.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Release {
