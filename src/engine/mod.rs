@@ -147,6 +147,16 @@ pub struct LogLine {
     pub text: String,
 }
 
+/// A remote guest joined or left a guest spot.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GuestNote {
+    /// "Maya joined as Guest 1".
+    pub text: String,
+    /// The guest spot (a source's name).
+    pub source: String,
+    pub left: bool,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Meter {
     pub peak_db: Vec<f32>,
@@ -183,6 +193,9 @@ pub struct Status {
     pub logged: u64,
     /// Warnings to put on screen, not just in the log (taken by the desk).
     pub alerts: Vec<String>,
+    /// Remote guests joining and leaving, for a passing message (taken by
+    /// the desk, which knows what's on air).
+    pub guest_notes: Vec<GuestNote>,
     pub rec: RecState,
     pub last_take: Option<recorder::TakeReport>,
     /// Names of sources/inputs that aren't delivering.
@@ -2189,8 +2202,8 @@ impl CompositorLoop {
                     None => self.comp.set_replay(None, 0.0, false),
                 }
                 // Name titles that follow the program name whoever fills it.
-                let lead = self.switcher.scenes_now().1.main_source();
-                self.graphics.follow(lead, t, &|id| guests::hub().guest_name(id));
+                let leads = self.switcher.scenes_now().1.main_sources();
+                self.graphics.follow(&leads, t, &|id| guests::hub().guest_name(id));
                 let mut graphics = self.graphics.layers(t);
                 if let Some((_, c)) = &*self.captions.lock_ok() {
                     graphics.extend(c.layer());

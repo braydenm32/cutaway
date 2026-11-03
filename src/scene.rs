@@ -90,21 +90,25 @@ impl Scene {
         v
     }
 
-    /// The source that fills most of the picture: the full-frame one, or
-    /// else the biggest frame (the first, if two are as big). Name titles
-    /// that follow the program name whoever is in it.
-    pub fn main_source(&self) -> Option<usize> {
+    /// The sources that fill most of the picture, left to right: the
+    /// full-frame one, or else the biggest frame, or every frame that's as
+    /// big as the biggest (two people side by side from one split camera).
+    /// Name titles that follow the program name them all.
+    pub fn main_sources(&self) -> Vec<usize> {
         if let Some(s) = self.full_frame_source() {
-            return Some(s);
+            return vec![s];
         }
         let area = |l: &Layer| l.w.clamp(0.0, 1.0) * l.h.clamp(0.0, 1.0);
-        let mut best: Option<&Layer> = None;
-        for l in &self.layers {
-            if best.is_none_or(|b| area(l) > area(b) + 1e-4) {
-                best = Some(l);
+        let biggest = self.layers.iter().map(area).fold(f32::MIN, f32::max);
+        let mut tied: Vec<&Layer> = self.layers.iter().filter(|l| area(l) >= biggest - 1e-4).collect();
+        tied.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+        let mut out: Vec<usize> = Vec::new();
+        for l in tied {
+            if !out.contains(&l.source) {
+                out.push(l.source);
             }
         }
-        best.map(|l| l.source)
+        out
     }
 
     /// The source this scene shows on its own, full frame (the top layer
@@ -388,17 +392,19 @@ mod tests {
     }
 
     #[test]
-    fn the_main_source_fills_most_of_the_picture() {
+    fn as_big_frames_are_all_main_left_to_right() {
         let p = presets(&names(3));
-        assert_eq!(p[1].main_source(), Some(1), "full screen");
-        let side = p.iter().find(|s| s.name == "Side by side").unwrap();
-        assert_eq!(side.main_source(), Some(side.layers[0].source), "as big: the first");
+        assert_eq!(p[1].main_sources(), vec![1], "full screen");
         let pip = p.iter().find(|s| s.name == "Picture in picture").unwrap();
-        assert_eq!(pip.main_source(), Some(pip.layers[0].source), "the big one, not the inset");
+        assert_eq!(pip.main_sources(), vec![pip.layers[0].source], "the big one, not the inset");
+        // One camera split in two (sources 3 and 4), side by side, drawn right first.
+        let mut both = Scene { name: "Cam 1: both".into(), ..Default::default() };
+        both.layers = vec![Layer::at(4, 0.5, 0.0, 0.5, 1.0), Layer::at(3, 0.0, 0.0, 0.5, 1.0)];
+        assert_eq!(both.main_sources(), vec![3, 4]);
         let mut two = Scene { name: "Two".into(), ..Default::default() };
         two.layers = vec![Layer::at(0, 0.0, 0.0, 0.3, 0.3), Layer::at(2, 0.3, 0.0, 0.7, 1.0)];
-        assert_eq!(two.main_source(), Some(2));
-        assert_eq!(Scene::default().main_source(), None);
+        assert_eq!(two.main_sources(), vec![2]);
+        assert!(Scene::default().main_sources().is_empty());
     }
 
     #[test]
