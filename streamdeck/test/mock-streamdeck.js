@@ -276,6 +276,25 @@ function check(ok, what) {
     key("keyUp", "k-clip", "clip");
     await sleep(800);
     check(!!last("showOk", "k-clip") && !last("showAlert", "k-clip"), "clip key saves a clip while recording");
+    // Mid-show, a mic key turns the mic off only when held (on is a press).
+    appear("k-mic", "audio", { input: "1" });
+    const micSet = { settings: { input: "1" } };
+    const micOn = async () => (await state()).inputs[0].on;
+    if (await micOn()) {
+      key("keyDown", "k-mic", "audio", micSet);
+      key("keyUp", "k-mic", "audio", micSet);
+      await sleep(800);
+      check(await micOn(), "a quick press on a mic key while recording leaves the mic on");
+      key("keyDown", "k-mic", "audio", micSet);
+      await sleep(1300);
+      key("keyUp", "k-mic", "audio", micSet);
+      await until("the mic to go off", async () => !(await micOn()), 8000);
+      check(true, "holding a mic key while recording turns it off");
+      key("keyDown", "k-mic", "audio", micSet);
+      key("keyUp", "k-mic", "audio", micSet);
+      await until("the mic back on", micOn, 8000);
+      check(true, "a press turns the mic back on");
+    }
     key("keyDown", "k-rec", "record");
     await sleep(1300);
     key("keyUp", "k-rec", "record");
@@ -284,6 +303,11 @@ function check(ok, what) {
     // Fade to black, macros, the teleprompter, PTZ and comments (when the show has them).
     appear("k-ftb", "ftb", {});
     key("keyDown", "k-ftb", "ftb");
+    key("keyUp", "k-ftb", "ftb");
+    await sleep(800);
+    check(!(await state()).black, "a quick press on the FTB key doesn't fade to black");
+    key("keyDown", "k-ftb", "ftb");
+    await sleep(1300);
     key("keyUp", "k-ftb", "ftb");
     await until("black", async () => (await state()).black, 8000);
     await until("the FTB key to say so", () => {
