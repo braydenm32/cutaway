@@ -21,11 +21,27 @@ pub const SIG: &str = "SHA256SUMS.txt.sig";
 /// The public half of the update key, in hex. While it's empty, updates
 /// don't need a signature (as before); once it's set, every update must be
 /// signed with the matching private key.
-pub const PUBLIC_KEY: &str = "";
+pub const PUBLIC_KEY: &str = "a5866fcaf643c85a2753012dac6a4af53bcb86bd0e51ab153ede7bc046eef425";
+
+/// The key updates are checked against: [`PUBLIC_KEY`] (a test can stand
+/// in a key of its own, so it can sign its own pretend releases).
+fn built_in() -> String {
+    #[cfg(test)]
+    if let Some(k) = TEST_KEY.with(|k| k.borrow().clone()) {
+        return k;
+    }
+    PUBLIC_KEY.to_string()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's own public key, in place of [`PUBLIC_KEY`] on this thread.
+    pub static TEST_KEY: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
 
 /// Whether updates must be signed.
 pub fn required() -> bool {
-    !PUBLIC_KEY.trim().is_empty()
+    !built_in().trim().is_empty()
 }
 
 const KEY_NOTE: &str = "Cutaway update key. Keep this file private and off line (for example on a USB stick and in a password manager): anyone who has it can sign updates that every copy of Cutaway will install. If it's lost, updates can't be signed until a new key is built into the app.";
@@ -63,7 +79,7 @@ pub fn verify(sums: &[u8], sig: Option<&str>) -> Result<()> {
     let Some(sig) = sig else {
         bail!("the update isn't signed, so it wasn't installed");
     };
-    verify_with(PUBLIC_KEY, sums, sig)
+    verify_with(&built_in(), sums, sig)
 }
 
 /// Make a new key at `path` (never over an existing file). Returns the
@@ -133,6 +149,13 @@ pub fn sign_file(sums: &Path, key: &Path) -> Result<(PathBuf, Option<String>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The key built into this version is a real Ed25519 public key.
+    #[test]
+    fn built_in_key_is_valid() {
+        assert!(required(), "this version checks update signatures");
+        public_key(PUBLIC_KEY).unwrap();
+    }
 
     #[test]
     fn hex_round_trips() {
