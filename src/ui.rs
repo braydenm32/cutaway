@@ -766,8 +766,11 @@ impl App {
             if ui.button("What's new").on_hover_text("Every version's release notes").clicked() {
                 ui.ctx().open_url(egui::OpenUrl::new_tab(format!("{repo}/releases")));
             }
-            if ui.button("Help and source").on_hover_text("Cutaway's guide and code on GitHub").clicked() {
-                ui.ctx().open_url(egui::OpenUrl::new_tab(&repo));
+            if ui.button("Manual").on_hover_text("How to use Cutaway, one page per part of the show").clicked() {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(crate::net::update::manual_url("")));
+            }
+            if ui.button("Your first hour").on_hover_text("What your computer needs, the first launch, permissions, privacy and the common first-show problems").clicked() {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(crate::net::update::manual_url("first-hour.md")));
             }
         });
     }

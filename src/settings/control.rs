@@ -179,7 +179,7 @@ impl SettingsUi {
                         ui.label(RichText::new(what).size(TEXT_BODY).color(TEXT_DIM));
                     });
                 }
-                hint(ui, "Each needs the PIN (pin=…). The full command list is in the README.");
+                hint(ui, "Each needs the PIN (pin=…). The full command list is in the manual (Remote control, Stream Deck, OSC and MIDI).");
             });
         });
         let remote_on = self.draft.remote.enabled;

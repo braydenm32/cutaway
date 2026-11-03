@@ -1477,6 +1477,15 @@ impl App {
             }
             ui.label(RichText::new("A few steps from your cameras to a first recording.").color(TEXT_DIM));
         });
+        ui.horizontal(|ui| {
+            if ui.button("Open the manual").clicked() {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(crate::net::update::manual_url("")));
+            }
+            if ui.button("Your first hour").clicked() {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(crate::net::update::manual_url("first-hour.md")));
+            }
+            ui.label(RichText::new("Everything Cutaway does, and fixes for the common first-show problems (opens in your browser).").color(TEXT_DIM));
+        });
         ui.add_space(10.0);
         ui.label(RichText::new("KEYS").size(TEXT_SMALL).color(TEXT_DIM));
         let map = match &self.keymap {
@@ -1599,7 +1608,7 @@ mod tests {
                 let p = e.path();
                 if p.is_dir() {
                     walk(&p, out);
-                } else if p.extension().is_some_and(|x| ["rs", "html", "js", "json"].contains(&x.to_str().unwrap_or(""))) {
+                } else if p.extension().is_some_and(|x| ["rs", "html", "js", "json", "md"].contains(&x.to_str().unwrap_or(""))) {
                     out.push(p);
                 }
             }
@@ -1607,9 +1616,37 @@ mod tests {
         let mut files = Vec::new();
         walk(&root.join("src"), &mut files);
         walk(&root.join("streamdeck/app.cutaway.streamdeck.sdPlugin"), &mut files);
+        // The manual, and the front page that points to it.
+        walk(&root.join("docs/guide"), &mut files);
+        files.push(root.join("README.md"));
         files.into_iter().map(|p| {
             let text = std::fs::read_to_string(&p).unwrap();
             let rust = p.extension().is_some_and(|x| x == "rs");
+            if p.extension().is_some_and(|x| x == "md") {
+                // Markdown wraps, so a place's name can run onto the next
+                // line: each paragraph or list item is read as one line (on
+                // the line it starts on), without the bold marks.
+                let mut lines: Vec<String> = Vec::new();
+                let mut start = None;
+                for l in text.lines() {
+                    let t = l.trim();
+                    let new_item = t.starts_with("- ") || t.starts_with("* ") || t.starts_with('|') || t.starts_with('#') || t.starts_with('>')
+                        || t.split_once(". ").is_some_and(|(n, _)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()));
+                    lines.push(String::new());
+                    match start {
+                        Some(i) if !t.is_empty() && !new_item => {
+                            let joined: &mut String = &mut lines[i];
+                            joined.push(' ');
+                            joined.push_str(&t.replace("**", ""));
+                        }
+                        _ => {
+                            *lines.last_mut().unwrap() = t.replace("**", "");
+                            start = if t.is_empty() { None } else { Some(lines.len() - 1) };
+                        }
+                    }
+                }
+                return (p.strip_prefix(root).unwrap().display().to_string(), lines);
+            }
             let lines = text.lines().filter(|l| !rust || !l.trim_start().starts_with("//")).map(|l| {
                 if !rust {
                     return l.to_string();
@@ -1659,6 +1696,49 @@ mod tests {
         for a in AREAS {
             assert!(rail_label(a.label).chars().count() <= 8, "{} is too long for the rail", a.label);
         }
+    }
+
+    /// Every link in the manual, the front page and DEVELOPING.md goes to a
+    /// file that's there, and to a heading that's in it.
+    #[test]
+    fn manual_links_work() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        // GitHub's name for a heading's anchor.
+        fn slug(h: &str) -> String {
+            h.trim().to_lowercase().chars().filter(|c| c.is_alphanumeric() || *c == '-' || *c == ' ' || *c == '_').map(|c| if c == ' ' { '-' } else { c }).collect::<String>().replace('_', "")
+        }
+        fn anchors(text: &str) -> Vec<String> {
+            text.lines().filter(|l| l.starts_with('#')).map(|l| slug(l.trim_start_matches('#').replace(['`', '*'], "").as_str())).collect()
+        }
+        let mut pages: Vec<std::path::PathBuf> = std::fs::read_dir(root.join("docs/guide")).unwrap().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "md")).collect();
+        pages.push(root.join("README.md"));
+        pages.push(root.join("docs/DEVELOPING.md"));
+        assert!(pages.iter().any(|p| p.ends_with("first-hour.md")) && pages.len() > 10);
+        let mut bad = Vec::new();
+        for page in &pages {
+            let text = std::fs::read_to_string(page).unwrap();
+            let mut rest = text.as_str();
+            while let Some(i) = rest.find("](") {
+                rest = &rest[i + 2..];
+                let Some(end) = rest.find(')') else { break };
+                let link = &rest[..end];
+                if link.contains("://") || link.starts_with("mailto:") || link.contains(' ') {
+                    continue;
+                }
+                let (file, anchor) = link.split_once('#').unwrap_or((link, ""));
+                let target = if file.is_empty() { page.clone() } else { page.parent().unwrap().join(file) };
+                let name = page.strip_prefix(root).unwrap().display().to_string();
+                if !target.exists() {
+                    bad.push(format!("{name}: {link} (no such file)"));
+                } else if !anchor.is_empty() && !anchors(&std::fs::read_to_string(&target).unwrap_or_default()).iter().any(|a| a == anchor) {
+                    bad.push(format!("{name}: {link} (no such heading)"));
+                }
+            }
+        }
+        assert!(bad.is_empty(), "links in the manual that go nowhere:\n{}", bad.join("\n"));
+        // Help and About open this version's manual.
+        assert_eq!(crate::net::update::manual_url("first-hour.md"), format!("https://github.com/braydenm32/cutaway/blob/v{}/docs/guide/first-hour.md", env!("CARGO_PKG_VERSION")));
+        assert!(crate::net::update::manual_url("").ends_with("/docs/guide/README.md"));
     }
 
     /// Every "Area › Tab" that text names is a real tab of that area.
