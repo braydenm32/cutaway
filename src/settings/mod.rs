@@ -361,7 +361,7 @@ pub struct SettingsUi {
     sel_source: usize,
     sel_audio: usize,
     sel_dest: usize,
-    /// Signing in to Google (Record › Upload).
+    /// Signing in to Google (Record & stream › Upload).
     google: Option<upload::GoogleSignIn>,
     /// Scheduling on YouTube, while it's under way.
     schedule_job: Option<scheduled::ScheduleJob>,
@@ -1434,13 +1434,13 @@ impl SettingsUi {
     // ---- Recording ----------------------------------------------------------------
 
     fn recording(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
-        title(ui, "Recording", "Where takes go, how they're encoded, and what's saved with them for editing.");
+        title(ui, "Recording", "Where recordings go, how they're encoded, and what's saved with them for editing.");
         let scan = self.encoders.lock_ok().clone();
         let show = self.draft.ui.profile.clone();
         let o = &mut self.draft.output;
         let (pw, ph, pfps) = (self.draft.program.width, self.draft.program.height, self.draft.program.fps);
         egui::Grid::new("recording").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
-            label(ui, "Save takes in");
+            label(ui, "Save recordings in");
             ui.horizontal(|ui| {
                 let mut folder = o.folder.display().to_string();
                 if ui.add(egui::TextEdit::singleline(&mut folder).desired_width(340.0)).changed() {
@@ -1459,7 +1459,7 @@ impl SettingsUi {
                 let named = crate::config::take_prefix_for(&o.take_prefix, &show);
                 let mut h = format!("→ {named}_{}", chrono::Local::now().format("%Y-%m-%d_%H-%M-%S"));
                 if o.take_prefix.trim().is_empty() || o.take_prefix.trim().eq_ignore_ascii_case("take") {
-                    h.push_str(if show.trim().is_empty() { "  (choose a show and takes are named after it)" } else { "  (named after the show)" });
+                    h.push_str(if show.trim().is_empty() { "  (choose a show and recordings are named after it)" } else { "  (named after the show)" });
                 }
                 hint(ui, &h);
             });
@@ -1499,10 +1499,10 @@ impl SettingsUi {
             hint(ui, &format!(
                 "These settings write about {}/hour ({}){}.",
                 crate::util::human_size((rate * 3600.0) as u64),
-                if measured.is_some() { "measured on this take" } else { "estimated" },
+                if measured.is_some() { "measured on this recording" } else { "estimated" },
                 free.map(|f| format!(" — the drive has room for about {}", crate::engine::health::fmt_left(f as f64 / rate.max(1.0)))).unwrap_or_default()
             ));
-            hint(ui, "Takes are written so that if Cutaway closes mid-take they keep everything up to about the last second, and after a power cut all but the last few seconds; Cutaway mends them next time it opens.");
+            hint(ui, "Recordings are written so that if Cutaway closes mid-recording they keep everything up to about the last second, and after a power cut all but the last few seconds; Cutaway mends them next time it opens.");
             if let Some(b) = cfg.output.backup_folder.as_ref() {
                 if b == &cfg.output.folder {
                     ui.label(RichText::new("⚠ The backup folder is the recording folder; pick a folder on another drive.").color(AMBER));
@@ -1620,13 +1620,13 @@ impl SettingsUi {
                 label(ui, "DaVinci Resolve");
                 ui.vertical(|ui| {
                     ui.horizontal(|ui| {
-                        ui.checkbox(&mut o.resolve_project, "a project from each take");
+                        ui.checkbox(&mut o.resolve_project, "a project from each recording");
                         if ui.button("Install the Resolve script").on_hover_text("Adds \"Cutaway - Build project from a take\" to Resolve's Workspace → Scripts menu").clicked() {
                             self.resolve_note = Some(match crate::engine::sessions::install_resolve_script() {
                                 Ok(p) => {
                                     // The script builds from what each take saves.
                                     o.resolve_project = true;
-                                    (format!("Installed in {}. In Resolve: Workspace → Scripts → Cutaway - Build project from a take (Open in Resolve on a take also installs it, and the script then builds that take).", p.display()), false)
+                                    (format!("Installed in {}. In Resolve: Workspace → Scripts → Cutaway - Build project from a take (Open in Resolve on a recording also installs it, and the script then builds that recording).", p.display()), false)
                                 }
                                 Err(e) => (format!("Couldn't install it: {e:#}"), true),
                             });
@@ -1672,7 +1672,7 @@ impl SettingsUi {
         part(ui, "rec_podcast", "Podcast", &state, false, |ui| {
             egui::Grid::new("podcast").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
                 label(ui, "Podcast copy");
-                ui.checkbox(&mut p.enabled, "an .m4a of the mix after each take");
+                ui.checkbox(&mut p.enabled, "an .m4a of the mix after each recording");
                 ui.end_row();
                 if p.enabled {
                     label(ui, "Loudness");
@@ -1929,7 +1929,7 @@ impl SettingsUi {
         self.sel_dest = self.draft.streaming.destinations.len() - 1;
     }
 
-    /// Record › Streaming for a show that only records: what streaming
+    /// Record & stream › Streaming for a show that only records: what streaming
     /// would add, and one way to start (nothing about it shows on the desk
     /// until then).
     fn streaming_empty(&mut self, ui: &mut egui::Ui) {
@@ -2017,7 +2017,7 @@ impl SettingsUi {
                 if ui.button("Save a problem report…").clicked() {
                     self.save_report(info);
                 }
-                hint(ui, "One .zip to send when something goes wrong: the log, the last take's note, your settings and devices. Stream keys and passwords are taken out.");
+                hint(ui, "One .zip to send when something goes wrong: the log, the last recording's note, your settings and devices. Stream keys and passwords are taken out.");
             });
             ui.end_row();
             for (k, v) in &info.engine_facts {

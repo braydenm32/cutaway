@@ -6,7 +6,7 @@ use crate::config::{CaptionPlace, SpeechModel};
 
 impl SettingsUi {
     pub(super) fn captions(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
-        title(ui, "Captions", "Live captions from what's said, recognised on this computer, and a transcript with every take.");
+        title(ui, "Captions", "Live captions from what's said, recognised on this computer, and a transcript with every recording.");
         let (lang, model) = (self.draft.captions.language.clone(), self.draft.captions.model);
         if let Some(p) = crate::platform::speech::problem(&lang, model) {
             ui.label(RichText::new(format!("⚠ Live captions can't run yet: {p}.")).color(AMBER));
@@ -112,7 +112,7 @@ impl SettingsUi {
             });
             ui.end_row();
             label(ui, "Transcript");
-            ui.checkbox(&mut c.transcript, "with each take (text, .srt and .vtt)");
+            ui.checkbox(&mut c.transcript, "with each recording (text, .srt and .vtt)");
             ui.end_row();
         });
         if cfg!(target_os = "macos") {

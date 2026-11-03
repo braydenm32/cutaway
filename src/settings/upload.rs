@@ -1,4 +1,4 @@
-//! Record › Upload: sending takes to YouTube and Google Drive after the
+//! Record & stream › Upload: sending takes to YouTube and Google Drive after the
 //! show, with your own Google sign-in.
 
 use crate::util::LockExt;
@@ -26,7 +26,7 @@ impl SettingsUi {
     }
 
     pub(super) fn upload(&mut self, ui: &mut egui::Ui) {
-        title(ui, "Upload after the show", "Send each take to YouTube and Google Drive once it's saved, with your own Google sign-in. Uploads run in the background and resume if the connection drops.");
+        title(ui, "Upload after the show", "Send each recording to YouTube and Google Drive once it's saved, with your own Google sign-in. Uploads run in the background and resume if the connection drops.");
         self.google_finished();
         egui::CollapsingHeader::new(RichText::new("Setting up your Google sign-in (once)").strong()).default_open(self.draft.upload.client_id.trim().is_empty()).show(ui, |ui| {
             for (i, step) in [
@@ -115,7 +115,7 @@ impl SettingsUi {
         ui.add_space(12.0);
         egui::Grid::new("upload_drive").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
             label(ui, "Google Drive");
-            ui.checkbox(&mut u.drive, "upload files from the take");
+            ui.checkbox(&mut u.drive, "upload files from the recording");
             ui.end_row();
             if u.drive {
                 label(ui, "What");
@@ -138,8 +138,8 @@ impl SettingsUi {
         egui::Grid::new("upload_when").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
             label(ui, "When");
             ui.vertical(|ui| {
-                ui.radio_value(&mut u.automatic, false, "when I press Upload (it appears as a take is saved)");
-                ui.radio_value(&mut u.automatic, true, "straight away, as each take is saved");
+                ui.radio_value(&mut u.automatic, false, "when I press Upload (it appears as a recording is saved)");
+                ui.radio_value(&mut u.automatic, true, "straight away, as each recording is saved");
             });
             ui.end_row();
         });
@@ -162,7 +162,7 @@ impl SettingsUi {
     }
 }
 
-/// Signing in to Google from Record › Upload.
+/// Signing in to Google from Record & stream › Upload.
 pub(super) struct GoogleSignIn {
     pub cancel: Arc<AtomicBool>,
     /// (refresh token, account, granted) or why not.

@@ -299,7 +299,7 @@ impl App {
                 let (rec_text, rec_button) = if recording_now {
                     ("Recording. Talk for ten seconds while switching cameras, then hold REC (top right) to stop.".to_string(), None)
                 } else if recorded {
-                    ("Recorded. Find it on the Take saved card, or in Record › Takes, and watch it back before the real show.".to_string(), Some("Takes…"))
+                    ("Recorded. Find it on the Recording saved card, or in Record & stream › Recordings, and watch it back before the real show.".to_string(), Some("Recordings…"))
                 } else {
                     (format!("Press Record a test (or Record{record_key}), talk for ten seconds while switching cameras, then hold REC to stop."), Some("Record a test"))
                 };
@@ -312,9 +312,9 @@ impl App {
                 }
 
                 let edit_text = if timelines {
-                    "On: every take also saves a project for DaVinci Resolve, Premiere Pro and Final Cut, with each camera on its own track, your live cuts as the first edit, and your markers."
+                    "On: every recording also saves a project for DaVinci Resolve, Premiere Pro and Final Cut, with each camera on its own track, your live cuts as the first edit, and your markers."
                 } else {
-                    "Optional: Cutaway can save a project for DaVinci Resolve, Premiere Pro or Final Cut with every take: each camera on its own track, your live cuts as the first edit, and your markers. Turn it on in Record › Recording › Editing."
+                    "Optional: Cutaway can save a project for DaVinci Resolve, Premiere Pro or Final Cut with every recording: each camera on its own track, your live cuts as the first edit, and your markers. Turn it on in Record & stream › Quality and files › Editing."
                 };
                 if step(ui, edit_state, "Editing afterwards", edit_text.into(), Some("For editing…"), None) {
                     go_part = Some((Section::Recording, "rec_editing"));

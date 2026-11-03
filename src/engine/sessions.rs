@@ -6,7 +6,7 @@
 //!   Cubase: the open DAWproject format, referring to the WAVs next to it.
 //! * `<take> (Resolve).lua`: what Cutaway's DaVinci Resolve script reads to
 //!   build a project (bins, media, proxies, the live edit). The script
-//!   itself is installed once from Record › Recording.
+//!   itself is installed once from Record & stream › Quality and files.
 //!
 //! Every file starts at the same instant, so every track starts at zero.
 
@@ -280,7 +280,7 @@ impl ResolveEdit {
 
 /// What a take's Premiere timeline says (written by `export::premiere_xml`):
 /// for takes whose Resolve take file has no cut list (older ones, or
-/// takes recorded without "a project from each take").
+/// takes recorded without "a project from each recording").
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PremiereTake {
     pub fps: u32,
@@ -492,7 +492,7 @@ pub fn last_take_file(config_dir: &Path) -> PathBuf {
 }
 
 /// Open in Resolve's note to the script, next to last-take.txt: "build
-/// this take now" (its folder, then when, in seconds since 1970). The
+/// this recording now" (its folder, then when, in seconds since 1970). The
 /// script builds it straight away, without asking for a folder, when the
 /// note is under 15 minutes old, and deletes it.
 pub fn build_note_file(config_dir: &Path) -> PathBuf {
@@ -502,7 +502,7 @@ pub fn build_note_file(config_dir: &Path) -> PathBuf {
 pub fn write_build_note(config_dir: &Path, folder: &Path) -> Result<()> {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     std::fs::create_dir_all(config_dir).with_context(|| format!("creating {}", config_dir.display()))?;
-    std::fs::write(last_take_file(config_dir), folder.to_string_lossy().as_bytes()).context("noting the take")?;
+    std::fs::write(last_take_file(config_dir), folder.to_string_lossy().as_bytes()).context("noting the recording")?;
     let path = build_note_file(config_dir);
     std::fs::write(&path, format!("{}\n{now}\n", folder.display())).with_context(|| format!("writing {}", path.display()))
 }
@@ -513,7 +513,7 @@ pub fn resolve_present() -> bool {
     find_resolve().is_some() || (cfg!(target_os = "macos") && crate::config::home_dir().join("Library/Application Support/Blackmagic Design/DaVinci Resolve").is_dir())
 }
 
-/// The take's "(Resolve).lua", if it has one.
+/// The recording's "(Resolve).lua", if it has one.
 pub fn resolve_take_file(folder: &Path) -> Option<PathBuf> {
     let mut found: Vec<PathBuf> = std::fs::read_dir(folder).ok()?.flatten().map(|e| e.path()).filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().ends_with("(Resolve).lua"))).collect();
     found.sort();

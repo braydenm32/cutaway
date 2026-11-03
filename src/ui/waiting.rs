@@ -184,14 +184,14 @@ impl App {
                     if !st.finished {
                         ui.label(RichText::new(format!("{line}{}", ellipsis(t))).size(TEXT_TITLE).color(Color32::WHITE));
                         ui.add_space(2.0);
-                        let what = if takes == 1 { "Your last take" } else { "Some takes" };
+                        let what = if takes == 1 { "Your last recording" } else { "Some recordings" };
                         ui.label(RichText::new(format!("{what} didn't finish properly (Cutaway stopped while recording). Everything up to about the last second is on disk, and Cutaway is turning it back into files that play.")).color(TEXT_DIM));
                         ui.add_space(10.0);
                         ui.add(egui::ProgressBar::new(st.fraction()).desired_height(8.0).fill(ACCENT));
                         ui.add_space(4.0);
                         let mut now = if st.file.is_empty() { "Looking at the files".to_string() } else { format!("{}: file {} of {}", st.file, st.file_index + 1, st.files) };
                         if takes > 1 {
-                            now = format!("Take {} of {takes} · {now}", st.take + 1);
+                            now = format!("Recording {} of {takes} · {now}", st.take + 1);
                         }
                         ui.label(RichText::new(now).monospace().size(TEXT_SMALL).color(TEXT_DIM));
                         ui.add_space(6.0);
@@ -199,10 +199,10 @@ impl App {
                     } else {
                         let saved = st.rescued.len();
                         let title = match (saved, takes) {
-                            (0, _) => "Your last take couldn't be rescued".to_string(),
-                            (1, 1) => "Your last take is safe".to_string(),
-                            (n, m) if n == m => format!("All {n} takes are safe"),
-                            (n, m) => format!("{n} of {m} takes are safe"),
+                            (0, _) => "Your last recording couldn't be rescued".to_string(),
+                            (1, 1) => "Your last recording is safe".to_string(),
+                            (n, m) if n == m => format!("All {n} recordings are safe"),
+                            (n, m) => format!("{n} of {m} recordings are safe"),
                         };
                         ui.label(RichText::new(title).size(TEXT_TITLE).color(Color32::WHITE));
                         ui.add_space(2.0);
@@ -227,8 +227,8 @@ impl App {
                                     close = true;
                                 }
                             }
-                            // It's in Record › Takes too, marked Recovered.
-                            if saved > 0 && ui.add(egui::Button::new("See it in Takes").min_size(vec2(0.0, 28.0))).clicked() {
+                            // It's in Record & stream › Recordings too, marked Recovered.
+                            if saved > 0 && ui.add(egui::Button::new("See it in Recordings").min_size(vec2(0.0, 28.0))).clicked() {
                                 to_takes = true;
                                 close = true;
                             }

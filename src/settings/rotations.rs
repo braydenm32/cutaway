@@ -113,7 +113,7 @@ impl SettingsUi {
                 let taken: Vec<String> = self.draft.rotations.iter().map(|r| r.name.clone()).collect();
                 self.draft.rotations.push(Rotation { name: unique(taken, "Sponsors"), ..Default::default() });
             }
-            hint(ui, "Each take's folder gets Graphics on air.csv: every graphic that was on screen, how many times and for how long. Handy for sponsors.");
+            hint(ui, "Each recording's folder gets Graphics on air.csv: every graphic that was on screen, how many times and for how long. Handy for sponsors.");
         });
         if let Some(name) = run {
             self.pending = Some(SettingsAction::Run(crate::control::Action::Rotation(crate::control::Target::Name(name), crate::control::Toggle::Toggle)));

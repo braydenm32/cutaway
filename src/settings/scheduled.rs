@@ -1,4 +1,4 @@
-//! Record › Scheduled: the next show set up ahead,
+//! Record & stream › Scheduled: the next show set up ahead,
 //! with its YouTube event (a page to share before you go live) and going
 //! live by itself at the start time.
 
@@ -138,7 +138,7 @@ impl SettingsUi {
                     ui.spinner();
                     ui.label(RichText::new("Talking to YouTube…").color(TEXT_DIM));
                 } else if u.client_id.trim().is_empty() || u.client_secret.trim().is_empty() {
-                    hint(ui, "To make the YouTube page, set up your Google sign-in first (Record › Upload, \"Setting up your Google sign-in\").");
+                    hint(ui, "To make the YouTube page, set up your Google sign-in first (Record & stream › Upload, \"Setting up your Google sign-in\").");
                 } else if self.google.is_some() {
                     ui.spinner();
                     ui.label(RichText::new("Finish signing in in your browser…").color(TEXT_DIM));

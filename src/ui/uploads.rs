@@ -1,4 +1,4 @@
-//! Uploading takes to YouTube and Google Drive (Record › Upload): a queue
+//! Uploading takes to YouTube and Google Drive (Record & stream › Upload): a queue
 //! worked through in the background, one upload at a time, shown in the
 //! UPLOADS panel. A take is offered once it's saved (or sent straight away
 //! when that's set). The queue is kept in uploads.json beside the settings
@@ -227,13 +227,13 @@ fn jobs_for(cfg: &Config, report: &TakeReport) -> (Vec<Job>, Vec<String>) {
                 }
                 jobs.push(job("YouTube".into(), Work::Youtube { file, title, description, privacy: u.youtube_privacy.api().to_string() }));
             }
-            Some(_) => problems.push("sign in again to allow YouTube (Record › Upload)".into()),
-            None => problems.push("the take has no program file for YouTube".into()),
+            Some(_) => problems.push("sign in again to allow YouTube (Record & stream › Upload)".into()),
+            None => problems.push("the recording has no program file for YouTube".into()),
         }
     }
     if u.drive {
         if !granted("drive") {
-            problems.push("sign in again to allow Google Drive (Record › Upload)".into());
+            problems.push("sign in again to allow Google Drive (Record & stream › Upload)".into());
         } else {
             let files: Vec<(PathBuf, Vec<String>)> = match u.drive_files {
                 DriveFiles::Program => file_named(report, "Program").into_iter().map(|f| (f, Vec::new())).collect(),
@@ -245,7 +245,7 @@ fn jobs_for(cfg: &Config, report: &TakeReport) -> (Vec<Job>, Vec<String>) {
                 }
             };
             if files.is_empty() {
-                problems.push("nothing in the take to send to Google Drive".into());
+                problems.push("nothing in the recording to send to Google Drive".into());
             } else {
                 let base = if u.drive_folder.trim().is_empty() { "Cutaway".to_string() } else { u.drive_folder.trim().to_string() };
                 jobs.push(job("Google Drive".into(), Work::Drive { base, take: take.clone(), files }));
@@ -494,7 +494,7 @@ impl App {
             });
             if go {
                 if !self.cfg.upload.ready() {
-                    self.toast("Sign in to Google again in Record › Upload, then Carry on.".into(), true);
+                    self.toast("Sign in to Google again in Record & stream › Upload, then Carry on.".into(), true);
                 } else {
                     let mut back = std::mem::take(&mut *self.uploads.resume.lock_ok());
                     for j in &mut back {
@@ -771,14 +771,14 @@ mod tests {
         job.client = crate::net::google::tests::client(g.port);
         let seen = Mutex::new(Vec::new());
         let link = run(&job, &|s, t| seen.lock_ok().push((s, t)), &|_| {}).unwrap();
-        assert_eq!(link, "https://drive.google.com/drive/folders/folder2", "the take's folder, inside Cutaway's");
+        assert_eq!(link, "https://drive.google.com/drive/folders/folder2", "the recording's folder, inside Cutaway's");
         // Every file went up whole, into the right folder.
         let files = g.files.lock_ok();
         let meta = g.meta.lock_ok();
         assert_eq!(files.len(), 5);
         let sizes: Vec<usize> = { let mut v: Vec<usize> = files.values().map(|f| f.len()).collect(); v.sort(); v };
         assert_eq!(sizes, vec![5, 100_000, 200_000, 300_000, 700_000]);
-        assert!(meta.values().any(|m| m.contains("Guest_1_backup.webm") && m.contains("folder3")), "the Guests folder inside the take's");
+        assert!(meta.values().any(|m| m.contains("Guest_1_backup.webm") && m.contains("folder3")), "the Guests folder inside the recording's");
         assert!(meta.values().any(|m| m.contains("Program.mp4") && m.contains("folder2")));
         let last = *seen.lock_ok().last().unwrap();
         assert_eq!(last.0, last.1, "all of it");

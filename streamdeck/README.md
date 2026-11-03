@@ -24,7 +24,7 @@ dials and the Stream Deck app's virtual decks).
 | Preview | Preview mode on/off, as the desk's Preview button | green while on, with the scene in preview |
 | Back | back to the last scene (the one on air before this) | |
 | Transition | cut, mix, wipe, push, dip, stinger | lit when it's the current one |
-| Record | start; hold a second to stop | dark with a pulsing red dot and the running time, as the desk's REC; an amber edge when something needs a look (drive nearly full, a source lost, a recording problem); SAVING 40% while the last take is finished |
+| Record | start; hold a second to stop | dark with a pulsing red dot and the running time, as the desk's REC; an amber edge when something needs a look (drive nearly full, a source lost, a recording problem); SAVING 40% while the last recording is finished |
 | Go Live | hold to go live, hold to end | GOING LIVE… while it connects, then pink with the running time; "LIVE 1 of 2" with an amber edge while a destination isn't live, as on the phone; holds can be turned off |
 | Marker | drop a marker, plain or named (one of your quick marker names or your own) | shows its name |
 | Graphic | show/hide a logo, title or lower third | lit while on |

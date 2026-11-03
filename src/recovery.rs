@@ -26,7 +26,7 @@ pub fn folders(cfg: &crate::config::Config) -> Vec<PathBuf> {
 }
 
 /// Where Cutaway notes the folders takes were recorded to (newest first),
-/// so Record › Takes lists last week's takes after the folder changes.
+/// so Record & stream › Recordings lists last week's takes after the folder changes.
 fn folders_file(config_dir: &Path) -> PathBuf {
     config_dir.join("take-folders.txt")
 }
@@ -289,10 +289,10 @@ mod tests {
         assert_eq!(done, vec![take.clone()]);
         let note = fs::read_to_string(take.join("Take.txt")).unwrap();
         assert!(note.contains("Audio_01_DAW.wav"), "{note}");
-        // When and how long, for Record › Takes and uploads.
+        // When and how long, for Record & stream › Recordings and uploads.
         assert!(note.contains("Recorded: 2026-01-01 00:00\nLength: 00:00:0"), "{note}");
         assert!(note.contains("  Audio_01_DAW.wav  ("), "listed with its size: {note}");
-        assert!(recover_unfinished(&root).is_empty(), "second pass leaves finished takes alone");
+        assert!(recover_unfinished(&root).is_empty(), "second pass leaves finished recordings alone");
         assert_eq!(stamp_of("Show_2026-11-01_20-04-12_2").map(|t| t.to_string()), Some("2026-11-01 20:04:12".into()));
         assert_eq!(stamp_of("My_Show_2026-11-01_20-04-12").map(|t| t.to_string()), Some("2026-11-01 20:04:12".into()));
         assert!(stamp_of("Other").is_none());
@@ -326,7 +326,7 @@ mod tests {
             std::mem::forget(w);
         }
         assert!(start_rescue(&[root.join("nothing here")], Arc::new(|| {})).is_none());
-        let st = start_rescue(&[root.clone()], Arc::new(|| {})).expect("one take to rescue");
+        let st = start_rescue(&[root.clone()], Arc::new(|| {})).expect("one recording to rescue");
         let t0 = std::time::Instant::now();
         while !st.lock_ok().finished && t0.elapsed() < std::time::Duration::from_secs(20) {
             std::thread::sleep(std::time::Duration::from_millis(20));

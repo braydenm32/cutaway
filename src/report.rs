@@ -63,7 +63,7 @@ impl Report<'_> {
         }
         if let Some((dir, note)) = last_take(&self.cfg.output.folder) {
             let name = dir.file_name().unwrap_or_default().to_string_lossy();
-            add(&format!("Last take ({name}).txt"), &scrub(&note))?;
+            add(&format!("Last recording ({name}).txt"), &scrub(&note))?;
         }
         zip.finish()?;
         Ok(())
@@ -150,7 +150,7 @@ mod tests {
             names.push(f.name().unwrap().to_string());
             f.read_to_string(&mut all).unwrap();
         }
-        assert!(names.iter().any(|n| n.starts_with("Last take")), "{names:?}");
+        assert!(names.iter().any(|n| n.starts_with("Last recording")), "{names:?}");
         assert!(all.contains("Program.mp4: 10 minutes"));
         assert!(all.contains("FaceTime camera"));
         assert!(all.contains("live2/[hidden]"));

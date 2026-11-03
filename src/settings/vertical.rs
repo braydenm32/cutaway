@@ -1,4 +1,4 @@
-//! Record › Vertical version: a 9:16 version of the show for Shorts,
+//! Record & stream › Vertical version: a 9:16 version of the show for Shorts,
 //! Reels and TikTok, with a tall layout per scene and a framing per source.
 
 use super::*;
@@ -27,7 +27,7 @@ impl SettingsUi {
             });
             ui.end_row();
             label(ui, "Record");
-            ui.checkbox(&mut v.record, "into each take");
+            ui.checkbox(&mut v.record, "into each recording");
             ui.end_row();
             label(ui, "Stream");
             hint(ui, "choose it for a destination in Streaming");

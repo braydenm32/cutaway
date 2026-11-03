@@ -664,7 +664,7 @@ impl GuestHub {
         if fresh {
             if let Some(at) = at_ms {
                 let note = format!(
-                    "{} — {}'s own recording, uploaded from their browser.\nIt starts {:.2} s after the take's recording (line them up by the sound if it matters).\n",
+                    "{} — {}'s own recording, uploaded from their browser.\nIt starts {:.2} s after the main recording (line them up by the sound if it matters).\n",
                     path.file_name().unwrap_or_default().to_string_lossy(),
                     source,
                     at / 1000.0
@@ -1962,7 +1962,7 @@ mod tests {
         assert_eq!(s["recording"], true);
         let token = s["take"].as_str().unwrap().to_string();
         assert!(s["elapsedMs"].as_u64().unwrap() >= 3000);
-        assert_eq!(state(id)["take"], token.as_str(), "the same take, the same token");
+        assert_eq!(state(id)["take"], token.as_str(), "the same recording, the same token");
         assert_eq!(state("backupphone1")["recording"], false, "phones don't record backups");
         assert!(post(port, &format!("/g/backupphone1/backup?take={token}&part=p1&seq=0&ext=webm"), b"x").starts_with("HTTP/1.1 404"));
 

@@ -186,7 +186,7 @@ pub fn fat_drive(path: &Path) -> bool {
 /// What to tell someone recording to a FAT drive.
 pub fn fat_warning(path: &Path) -> String {
     format!(
-        "The recording drive ({}) is formatted as FAT32, where no file can be bigger than 4 GB: a take stops when its first file gets there (often 20 to 40 minutes). Record to another drive, or reformat this one as exFAT (or APFS / NTFS)",
+        "The recording drive ({}) is formatted as FAT32, where no file can be bigger than 4 GB: a recording stops when its first file gets there (often 20 to 40 minutes). Record to another drive, or reformat this one as exFAT (or APFS / NTFS)",
         path.display()
     )
 }

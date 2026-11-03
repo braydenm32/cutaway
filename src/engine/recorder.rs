@@ -402,7 +402,7 @@ pub fn spawn_video(
                         warned_size = true;
                         status.lock_ok().push(
                             LogLevel::Warning,
-                            format!("{label}: the source changed to {}×{}; its file repeats the last picture until the next take", f.width, f.height),
+                            format!("{label}: the source changed to {}×{}; its file repeats the last picture until the next recording", f.width, f.height),
                         );
                     }
                     match &last_good {

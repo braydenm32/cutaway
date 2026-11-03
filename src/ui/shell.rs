@@ -53,7 +53,7 @@ pub(super) struct Shell {
     /// The status light's panel: open it on this tab next frame.
     pub open_status: Option<StatusTab>,
     pub status_tab: StatusTab,
-    /// When Record › Takes last looked for takes.
+    /// When Record & stream › Recordings last looked for takes.
     takes_looked: Option<Instant>,
     /// What's picked on an area's page, by name ("sources" → the source),
     /// so coming back lands on it (remembered on this computer).
@@ -116,9 +116,9 @@ fn place_in(area: usize, last: &HashMap<String, (String, String)>) -> (usize, us
 pub(super) enum Target {
     /// A Settings page, with one of its folded parts opened.
     Page(Section, Option<&'static str>),
-    /// Record › Takes: the takes so far.
+    /// Record & stream › Recordings: the takes so far.
     Takes,
-    /// Record › Recording › Before you start: the pre-show check.
+    /// Record & stream › Quality and files › Before you start: the pre-show check.
     Check,
     /// More › App › Updates & about.
     About,
@@ -498,7 +498,7 @@ impl App {
             let icon_c = if wide { rect.center_top() + vec2(0.0, 18.0) } else { rect.center() };
             draw_icon(p, area.icon, icon_c, color);
             if wide {
-                p.text(rect.center_bottom() - vec2(0.0, 8.0), Align2::CENTER_BOTTOM, area.label, FontId::proportional(TEXT_SMALL), color);
+                p.text(rect.center_bottom() - vec2(0.0, 8.0), Align2::CENTER_BOTTOM, rail_label(area.label), FontId::proportional(TEXT_SMALL), color);
             }
             // A dot: changes not applied yet in this area, or a new version (More).
             let mark = dirty.contains(&i) || (area.id == "more" && update);
@@ -686,7 +686,7 @@ impl App {
             let idle = "Works while recording";
             if ui
                 .add(egui::Button::new("✂ Clip").min_size(vec2(0.0, 30.0)))
-                .on_hover_text(format!("Save the last {} seconds as a clip in the take's Clips folder{}", self.cfg.output.clip_seconds, self.key_hint(Builtin::Clip)))
+                .on_hover_text(format!("Save the last {} seconds as a clip in the recording's Clips folder{}", self.cfg.output.clip_seconds, self.key_hint(Builtin::Clip)))
                 .on_disabled_hover_text(format!("{idle}: saves the last {} seconds as a clip", self.cfg.output.clip_seconds))
                 .clicked()
             {
@@ -694,7 +694,7 @@ impl App {
             }
             let gap = ui.spacing().item_spacing.x;
             ui.spacing_mut().item_spacing.x = 2.0;
-            let list = ui.add(egui::Button::new("▾").min_size(vec2(22.0, 30.0))).on_hover_text("This take's markers: name one, rename or take them out").on_disabled_hover_text(format!("{idle}: this take's markers"));
+            let list = ui.add(egui::Button::new("▾").min_size(vec2(22.0, 30.0))).on_hover_text("This recording's markers: name one, rename or take them out").on_disabled_hover_text(format!("{idle}: this recording's markers"));
             let mtext = match (roomy, markers) {
                 (_, 0) => "◆ Marker".to_string(),
                 (true, n) => format!("◆ Marker ({n})"),
@@ -768,7 +768,7 @@ impl App {
                 d.path.display(),
                 d.describe(),
                 crate::util::human_size(d.total),
-                if d.measured { "time left from this take's real write rate" } else { "time left estimated from your recording settings" }
+                if d.measured { "time left from this recording's real write rate" } else { "time left estimated from your recording settings" }
             );
             if let Some(b) = &backup {
                 tip.push_str(&format!("\nBackup drive: {}", b.describe()));
@@ -831,9 +831,9 @@ impl App {
         }
     }
 
-    /// REC: "● Record" until a take starts; then the time, with "hold to
-    /// stop" written under it all the time (a click never stops a take);
-    /// "Saving 40%" while it finishes. Returns where it is (for the take card).
+    /// REC: "● Record" until a recording starts; then the time, with "hold to
+    /// stop" written under it all the time (a click never stops a recording);
+    /// "Saving 40%" while it finishes. Returns where it is (for the recording card).
     fn rec_pill(&mut self, ui: &mut egui::Ui, rec: &RecState, roomy: bool) -> Rect {
         let w = if roomy { 150.0 } else { 122.0 };
         // Click and drag, so egui still reports a press past 0.8 s or a few
@@ -887,7 +887,7 @@ impl App {
                 let bar = Rect::from_min_size(rect.left_bottom() - vec2(-14.0, 5.0), vec2(rect.width() - 28.0, 3.0));
                 p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * done.clamp(0.02, 1.0), bar.height())), 1.5, ACCENT);
                 p.text(rect.center() - vec2(0.0, 2.0), Align2::CENTER_CENTER, format!("Saving {:.0}%", done * 100.0), FontId::proportional(TEXT_STATE), Color32::WHITE);
-                r.on_hover_text(format!("{step}\nFinishing the take in {}", folder.display()));
+                r.on_hover_text(format!("{step}\nFinishing the recording in {}", folder.display()));
                 ui.ctx().request_repaint_after(Duration::from_millis(100));
             }
             RecState::Idle => {
@@ -947,7 +947,7 @@ impl App {
                 self.toggle_stream();
             }
         }
-        // (Nowhere to stream to: nothing here. Record › Streaming sets it up.)
+        // (Nowhere to stream to: nothing here. Record & stream › Streaming sets it up.)
     }
 
     // ---- the status light -----------------------------------------------------------
@@ -1056,7 +1056,7 @@ impl App {
     fn status_tools(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             let screen_on = self.cfg.display.output != crate::config::DisplayOutput::Off;
-            if ui.add(egui::Button::selectable(screen_on, "Second screen")).on_hover_text("Program, multiview or prompter on another screen (Record › Screens & webcam). Esc closes it.").clicked() {
+            if ui.add(egui::Button::selectable(screen_on, "Second screen")).on_hover_text("Program, multiview or prompter on another screen (Record & stream › Screens & webcam). Esc closes it.").clicked() {
                 self.cfg.display.output = if screen_on { crate::config::DisplayOutput::Off } else { crate::config::DisplayOutput::Program };
                 self.cfg_dirty = true;
             }
@@ -1085,7 +1085,7 @@ impl App {
     }
 
     /// While recording: a clip of the last 10, 30 or 60 seconds (as
-    /// `clip:N` does; ✂ Clip saves the length set in Record › Recording).
+    /// `clip:N` does; ✂ Clip saves the length set in Record & stream › Quality and files).
     fn clip_row(&mut self, ui: &mut egui::Ui) {
         if !self.engine.as_ref().is_some_and(|e| e.is_recording()) {
             return;
@@ -1410,7 +1410,7 @@ impl App {
         ui.ctx().request_repaint_after(Duration::from_millis(200));
     }
 
-    /// Record › Takes: the takes so far, newest first.
+    /// Record & stream › Recordings: the takes so far, newest first.
     fn takes_page(&mut self, ui: &mut egui::Ui) {
         // Looked for again every few seconds, so a take just saved shows.
         if self.shell.takes_looked.is_none_or(|t| t.elapsed() > Duration::from_secs(3)) {
@@ -1424,7 +1424,7 @@ impl App {
         ui.ctx().request_repaint_after(Duration::from_secs(1));
     }
 
-    /// Record › Recording › Before you start.
+    /// Record & stream › Quality and files › Before you start.
     fn check_page(&mut self, ui: &mut egui::Ui) {
         ui.add_space(8.0);
         ui.label(RichText::new("Before you start").size(TEXT_HEADING).color(Color32::WHITE));
@@ -1561,6 +1561,13 @@ fn draw_icon(p: &egui::Painter, icon: Icon, c: egui::Pos2, color: Color32) {
     }
 }
 
+/// The name under an area's icon on the rail, which has room for one short
+/// word: "Record & stream" shows as "Record" there (its hover and every
+/// place text names it say the whole name).
+fn rail_label(label: &str) -> &str {
+    label.split(" & ").next().unwrap_or(label)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1643,6 +1650,15 @@ mod tests {
             }
         }
         assert!(bad.is_empty(), "text still names the old Settings window:\n{}", bad.join("\n"));
+    }
+
+    #[test]
+    fn rail_names_fit() {
+        assert_eq!(rail_label("Record & stream"), "Record");
+        assert_eq!(rail_label("Sound"), "Sound");
+        for a in AREAS {
+            assert!(rail_label(a.label).chars().count() <= 8, "{} is too long for the rail", a.label);
+        }
     }
 
     /// Every "Area › Tab" that text names is a real tab of that area.

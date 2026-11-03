@@ -100,7 +100,7 @@ pub fn transcript_files(cues: &[Cue], t0: Ns, take_name: &str) -> (String, Strin
         srt += &format!("{}\n{} --> {}\n{}\n\n", i + 1, stamp(c.start, ','), stamp(c.end, ','), lines_for_file(&c.text));
         vtt += &format!("{} --> {}\n{}\n\n", stamp(c.start, '.'), stamp(c.end, '.'), lines_for_file(&c.text));
     }
-    let mut txt = format!("Transcript: {take_name}\n(Times are from the start of the take's files.)\n");
+    let mut txt = format!("Transcript: {take_name}\n(Times are from the start of the recording's files.)\n");
     let mut last_end: Option<Ns> = None;
     for c in &rel {
         if last_end.is_none_or(|e| c.start - e > 2 * NS_PER_SEC) {

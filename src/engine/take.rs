@@ -32,7 +32,7 @@ pub fn space_problem(d: &DiskStatus) -> Option<String> {
     let left = d.seconds_left();
     if d.free < health::MIN_START_BYTES || left.is_some_and(|s| s < health::MIN_START_SECONDS) {
         Some(format!(
-            "not enough space on the drive for {} ({}). Free up space or choose another folder in Record › Recording",
+            "not enough space on the drive for {} ({}). Free up space or choose another folder in Record & stream › Quality and files",
             d.path.display(),
             d.describe(),
         ))
@@ -71,7 +71,7 @@ impl Engine {
         if let Some(problem) = self.disk_status().as_ref().and_then(space_problem) {
             bail!("{problem}");
         }
-        // Record › Takes lists takes from the folders used before, too.
+        // Record & stream › Recordings lists takes from the folders used before, too.
         if let Some(dir) = crate::config::default_config_path().parent() {
             crate::recovery::remember_folders(dir, &crate::recovery::folders(&cfg));
         }
@@ -83,7 +83,7 @@ impl Engine {
         }
         let codec = out.codec.video_codec();
         if let Some(p) = encode::codec_problem(codec) {
-            bail!("{p}; choose H.264 or HEVC in Record › Recording");
+            bail!("{p}; choose H.264 or HEVC in Record & stream › Quality and files");
         }
         let backend = encode::resolve_backend(codec, &out.encoder)?;
         let aac = if self.audio.is_empty() { None } else { Some(encode::create_aac(audio::MIX_RATE, 2, out.audio_bitrate_kbps)?) };
@@ -130,7 +130,7 @@ impl Engine {
                             Some(dir)
                         }
                         Err(e) => {
-                            self.status.lock_ok().push(LogLevel::Warning, format!("No backup for this take: can't create {} ({e}). Is the backup drive connected?", dir.display()));
+                            self.status.lock_ok().push(LogLevel::Warning, format!("No backup for this recording: can't create {} ({e}). Is the backup drive connected?", dir.display()));
                             None
                         }
                     }
@@ -487,10 +487,10 @@ impl Engine {
 
     fn edit_markers(&self, f: impl FnOnce(&mut Vec<Marker>) -> bool, logged: super::journal::Entry) -> Result<()> {
         let guard = self.take.lock_ok();
-        let Some(take) = guard.as_ref() else { bail!("the take has stopped, so its markers are saved") };
+        let Some(take) = guard.as_ref() else { bail!("the recording has stopped, so its markers are saved") };
         let mut markers = take.markers.lock_ok();
         if !f(&mut markers) {
-            bail!("that marker isn't in this take any more");
+            bail!("that marker isn't in this recording any more");
         }
         if let Some(j) = &take.journal {
             j.add(&logged);
@@ -541,7 +541,7 @@ impl Engine {
             let msg = match clips.save(seconds, number) {
                 Ok(clip) => {
                     let file = clip.path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                    (LogLevel::Info, format!("Saved {file} ({:.0} s) in the take's Clips folder", clip.seconds))
+                    (LogLevel::Info, format!("Saved {file} ({:.0} s) in the recording's Clips folder", clip.seconds))
                 }
                 Err(e) => (LogLevel::Warning, format!("{name} couldn't be saved: {e:#}")),
             };
@@ -1005,7 +1005,7 @@ fn take_info(setup: &str, report: &recorder::TakeReport, markers: &[Marker], tc_
     if rescued.is_some() {
         s += "\nThis take wasn't stopped normally (Cutaway closed, or the computer stopped, while recording).\n\
               Its files were repaired and play up to about the last second that was written. The switches\n\
-              and markers were saved as the take went, so its timelines, chapters and markers are here too.\n";
+              and markers were saved as the recording went, so its timelines, chapters and markers are here too.\n";
     }
     if timecode_on {
         let t = tc_seconds as u64;
@@ -1022,7 +1022,7 @@ fn take_info(setup: &str, report: &recorder::TakeReport, markers: &[Marker], tc_
         s += &format!("  Program: track 1 is the mix; then each input on its own track ({how})\n");
     }
     if cfg.podcast.enabled {
-        s += "  (Podcast).m4a  (made from Mix.wav after the take: levelled, with the markers as chapters)\n";
+        s += "  (Podcast).m4a  (made from Mix.wav after the recording: levelled, with the markers as chapters)\n";
     }
     if cfg.captions.enabled && cfg.captions.transcript {
         s += "  Transcript.txt, Captions.srt, Captions.vtt  (from live captions; import the .srt into an editor or YouTube)\n";
