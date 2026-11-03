@@ -1,5 +1,5 @@
-//! A take once it's saved: the "Take saved" card under the Record button
-//! (length, size, markers, whether everything was saved), Record › Takes
+//! A recording once it's saved: the "Recording saved" card under the Record button
+//! (length, size, markers, whether everything was saved), Record & stream › Recordings
 //! (the recent takes, each with its markers), and what to do with a take
 //! next: show it in Finder / Explorer, open it in Resolve, upload it.
 //!
@@ -22,13 +22,13 @@ pub struct Takes {
     seen: Option<PathBuf>,
     /// What Open in Resolve did for a take (shown on its card and its row).
     resolve_note: Option<(PathBuf, String)>,
-    /// Record › Takes' list, read again when the page opens.
+    /// Record & stream › Recordings' list, read again when the page opens.
     recent: Vec<RecentTake>,
     /// The frame the list was last drawn (a gap means it just opened).
     recent_frame: u64,
 }
 
-/// A take in Record › Takes, from its folder and Take.txt.
+/// A take in Record & stream › Recordings, from its folder and Take.txt.
 #[derive(Clone, Debug)]
 pub(super) struct RecentTake {
     pub folder: PathBuf,
@@ -54,7 +54,7 @@ fn parse_hms(s: &str) -> Option<Duration> {
     }
 }
 
-/// "  Program.mp4  (1.2 GB)" → "Program.mp4": a file the take recorded, as
+/// "  Program.mp4  (1.2 GB)" → "Program.mp4": a file the recording recorded, as
 /// Take.txt lists them (not its notes: "  Switches.csv  (every scene…)").
 fn listed_file(line: &str) -> Option<&str> {
     let (name, size) = line.trim().rsplit_once("  (")?;
@@ -155,7 +155,7 @@ pub(super) fn recent_takes_in(folders: &[PathBuf], n: usize) -> Vec<RecentTake> 
         .collect()
 }
 
-/// A take in one line, the same on the card and in Record › Takes:
+/// A take in one line, the same on the card and in Record & stream › Recordings:
 /// "42m 10s · 3.1 GB · 7 files".
 pub(super) fn take_line(length: Option<Duration>, size: u64, files: usize) -> String {
     let mut parts = Vec::new();
@@ -167,7 +167,7 @@ pub(super) fn take_line(length: Option<Duration>, size: u64, files: usize) -> St
     parts.join(" · ")
 }
 
-/// "◆ 3 markers", after the take line.
+/// "◆ 3 markers", after the recording line.
 pub(super) fn markers_text(n: usize) -> String {
     match n {
         0 => "no markers".to_string(),
@@ -212,7 +212,7 @@ pub(super) fn reveal_label() -> &'static str {
     }
 }
 
-/// A take's length, the way people say it: "42m 10s", "1h 02m".
+/// A recording's length, the way people say it: "42m 10s", "1h 02m".
 pub(super) fn fmt_length(d: Duration) -> String {
     let s = d.as_secs();
     if s >= 3600 {
@@ -240,9 +240,9 @@ fn resolve_message(opened: bool, ready: bool, timeline: bool) -> String {
     match (opened, ready, timeline) {
         (true, true, _) => format!("DaVinci Resolve is opening. One step left, in Resolve: {RESOLVE_STEP}. (If it shows the Project Manager, open any project first.)"),
         (true, false, true) => "Opening DaVinci Resolve. Its script couldn't be set up, so bring the timeline in yourself: File › Import › Timeline… (its path is copied).".into(),
-        (true, false, false) => "Opening DaVinci Resolve. This take has no timeline (Record › Recording › Editing saves one), so its folder is copied.".into(),
+        (true, false, false) => "Opening DaVinci Resolve. This recording has no timeline (Record & stream › Quality and files › Editing saves one), so its folder is copied.".into(),
         (false, _, true) => "DaVinci Resolve wasn't found. The timeline's path is copied: in Resolve, File › Import › Timeline…".into(),
-        (false, _, false) => "DaVinci Resolve wasn't found. The take's folder is copied.".into(),
+        (false, _, false) => "DaVinci Resolve wasn't found. The recording's folder is copied.".into(),
     }
 }
 
@@ -260,13 +260,13 @@ fn ready_resolve(folder: &Path, log: &mut Vec<String>) -> bool {
     }
     // Without it the script still imports the take's files and .fcpxml.
     if let Err(e) = sessions::prepare_resolve_take(folder) {
-        log.push(format!("writing the take's Resolve file: {e:#}"));
+        log.push(format!("writing the recording's Resolve file: {e:#}"));
     }
     let Some(dir) = crate::config::default_config_path().parent().map(Path::to_path_buf) else { return false };
     match sessions::write_build_note(&dir, folder) {
         Ok(()) => true,
         Err(e) => {
-            log.push(format!("noting the take for Resolve: {e:#}"));
+            log.push(format!("noting the recording for Resolve: {e:#}"));
             false
         }
     }
@@ -320,7 +320,7 @@ impl App {
         self.takes.recent_frame = 0;
     }
 
-    /// Record › Takes: the last ten takes in the recording folder, newest
+    /// Record & stream › Recordings: the last ten takes in the recording folder, newest
     /// first, each with its markers and the card's buttons. The newest
     /// take's markers are open; a rescued take says so.
     pub(super) fn takes_list(&mut self, ui: &mut egui::Ui) {
@@ -344,9 +344,9 @@ impl App {
         ui.horizontal(|ui| {
             let n = self.takes.recent.len();
             let what = match n {
-                0 => "No takes yet in".to_string(),
+                0 => "No recordings yet in".to_string(),
                 1 => "1 take · recording to".to_string(),
-                n => format!("The last {n} takes · recording to"),
+                n => format!("The last {n} recordings · recording to"),
             };
             ui.label(RichText::new(what).color(TEXT_DIM));
             ui.add(egui::Label::new(RichText::new(folder.display().to_string()).color(TEXT_DIM)).truncate());
@@ -357,7 +357,7 @@ impl App {
         ui.add_space(6.0);
         if self.takes.recent.is_empty() {
             ui.add_space(20.0);
-            ui.label(RichText::new("Press Record and each take shows here when it stops: how long, how big, its markers, and buttons to open it in Resolve, find it or upload it.").color(TEXT_DIM));
+            ui.label(RichText::new("Press Record and each recording shows here when it stops: how long, how big, its markers, and buttons to open it in Resolve, find it or upload it.").color(TEXT_DIM));
         }
         let upload = self.cfg.upload.ready();
         let sent: Vec<String> = self.uploads.jobs.lock_ok().iter().filter(|j| matches!(j.state, uploads::JobState::Waiting | uploads::JobState::Uploading | uploads::JobState::Done)).map(|j| j.take.clone()).collect();
@@ -382,7 +382,7 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.add(egui::Label::new(RichText::new(&name).size(TEXT_STATE).color(Color32::WHITE)).truncate()).on_hover_text(t.folder.display().to_string());
                             if t.recovered {
-                                ui.label(RichText::new("Recovered").size(TEXT_SMALL).color(AMBER)).on_hover_text("Rescued after Cutaway stopped mid-take: the files play up to about the last second written");
+                                ui.label(RichText::new("Recovered").size(TEXT_SMALL).color(AMBER)).on_hover_text("Rescued after Cutaway stopped mid-recording: the files play up to about the last second written");
                             }
                         });
                         let mut line = Vec::new();
@@ -410,7 +410,7 @@ impl App {
                         if ui.add(button(reveal_label())).clicked() {
                             action = Some(TakeAction::Reveal(t.folder.clone()));
                         }
-                        if ui.add(button("Open in Resolve")).on_hover_text("Start DaVinci Resolve and build a project from this take: every camera on its own track, with your live edit on top").clicked() {
+                        if ui.add(button("Open in Resolve")).on_hover_text("Start DaVinci Resolve and build a project from this recording: every camera on its own track, with your live edit on top").clicked() {
                             action = Some(TakeAction::Resolve(t.folder.clone()));
                         }
                     });
@@ -460,13 +460,13 @@ impl App {
                 self.takes.card = Some(r.folder.clone());
                 self.takes.card_since = Some(Instant::now());
                 self.takes.resolve_note = None;
-                // Record › Takes reads the folder again, so it's there first.
+                // Record & stream › Recordings reads the folder again, so it's there first.
                 self.look_for_takes_again();
             }
         }
     }
 
-    /// The "Take saved" card, under the Record button (`anchor`).
+    /// The "Recording saved" card, under the Record button (`anchor`).
     pub(super) fn take_card(&mut self, ctx: &egui::Context, anchor: Rect, last: Option<&TakeReport>) {
         let Some(r) = last.filter(|r| self.takes.card.as_ref() == Some(&r.folder)) else { return };
         let mut problems = r.problems.clone();
@@ -476,7 +476,7 @@ impl App {
             }
         }
         let name = r.folder.file_name().unwrap_or_default().to_string_lossy().to_string();
-        // The files it recorded: the same figure Record › Takes shows.
+        // The files it recorded: the same figure Record & stream › Recordings shows.
         let total: u64 = r.files.iter().map(|f| f.1).sum();
         let upload = self.cfg.upload.ready();
         let sent = self.uploads.jobs.lock_ok().iter().any(|j| j.take == name && matches!(j.state, uploads::JobState::Waiting | uploads::JobState::Uploading | uploads::JobState::Done));
@@ -494,9 +494,9 @@ impl App {
                 .show(ui, |ui| {
                     ui.set_width(360.0);
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Take saved").size(TEXT_HEADING).strong().color(Color32::WHITE));
+                        ui.label(RichText::new("Recording saved").size(TEXT_HEADING).strong().color(Color32::WHITE));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.add(egui::Button::new("✕").frame(false)).on_hover_text("Hide this card (the take stays first in Record › Takes)").clicked() {
+                            if ui.add(egui::Button::new("✕").frame(false)).on_hover_text("Hide this card (the recording stays first in Record & stream › Recordings)").clicked() {
                                 close = true;
                             }
                         });
@@ -508,7 +508,7 @@ impl App {
                         // The markers stay one click away once the take stops.
                         let n = r.markers.len();
                         if n > 0 {
-                            if ui.link(RichText::new(markers_text(n)).size(TEXT_BODY)).on_hover_text("See them in Record › Takes").clicked() {
+                            if ui.link(RichText::new(markers_text(n)).size(TEXT_BODY)).on_hover_text("See them in Record & stream › Recordings").clicked() {
                                 to_takes = true;
                             }
                         } else {
@@ -537,7 +537,7 @@ impl App {
                     ui.add_space(8.0);
                     let button = |text: &str| egui::Button::new(text).fill(Color32::from_rgb(46, 51, 62)).min_size(vec2(0.0, 28.0));
                     ui.horizontal(|ui| {
-                        if ui.add(button("Open in Resolve")).on_hover_text("Start DaVinci Resolve and build a project from this take: every camera on its own track, with your live edit on top").clicked() {
+                        if ui.add(button("Open in Resolve")).on_hover_text("Start DaVinci Resolve and build a project from this recording: every camera on its own track, with your live edit on top").clicked() {
                             action = Some(TakeAction::Resolve(r.folder.clone()));
                         }
                         if ui.add(button(reveal_label())).clicked() {
@@ -555,7 +555,7 @@ impl App {
                 });
         });
         // A take with nothing wrong: the card goes by itself after a while
-        // (it's still first in Record › Takes), so it doesn't sit over the
+        // (it's still first in Record & stream › Recordings), so it doesn't sit over the
         // panels between takes. One with a ⚠ stays until ✕.
         let now = Instant::now();
         if shown.response.contains_pointer() {
@@ -579,7 +579,7 @@ impl App {
     }
 }
 
-/// How long the "Take saved" card stays when the take has no problems.
+/// How long the "Recording saved" card stays when the recording has no problems.
 pub(super) const CARD_SECONDS: u64 = 20;
 
 /// Whether the card hides itself now: only a take with no problems (and
@@ -597,7 +597,7 @@ mod tests {
         let s = |n| Duration::from_secs(n);
         assert!(!card_goes_by_itself(false, false, s(19)));
         assert!(card_goes_by_itself(false, false, s(20)));
-        assert!(!card_goes_by_itself(true, false, s(600)), "a take with a problem keeps its card");
+        assert!(!card_goes_by_itself(true, false, s(600)), "a recording with a problem keeps its card");
         assert!(!card_goes_by_itself(false, true, s(60)), "still making the podcast copy");
     }
 

@@ -3274,7 +3274,7 @@ pub struct VerticalConfig {
     pub enabled: bool,
     pub width: u32,
     pub height: u32,
-    /// Record it in the take ("Program_Vertical").
+    /// Record it in the recording ("Program_Vertical").
     pub record: bool,
     /// The program's graphics (titles, logos), across its width, low down.
     pub graphics: bool,
@@ -3473,7 +3473,7 @@ impl DriveFiles {
         match self {
             DriveFiles::Program => "the program",
             DriveFiles::ProgramAndMix => "the program, the vertical version and the mix",
-            DriveFiles::Everything => "the whole take (every file)",
+            DriveFiles::Everything => "the whole recording (every file)",
         }
     }
 }

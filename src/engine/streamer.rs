@@ -277,14 +277,14 @@ impl StreamSession {
     pub fn start(cfg: &StreamingConfig, ctx: Context) -> Result<StreamSession> {
         let enabled: Vec<&StreamDestination> = cfg.destinations.iter().filter(|d| d.enabled).collect();
         if enabled.is_empty() {
-            bail!("no stream destinations are turned on (Record › Streaming)");
+            bail!("no stream destinations are turned on (Record & stream › Streaming)");
         }
         for d in &enabled {
             if let Some(p) = d.problem() {
                 bail!("{}: {p}", d.name);
             }
             if d.vertical && ctx.vertical.is_none() {
-                bail!("{} is set to get the vertical version, which is off (Record › Vertical version)", d.name);
+                bail!("{} is set to get the vertical version, which is off (Record & stream › Vertical version)", d.name);
             }
         }
         let backend = encode::resolve_backend(VideoCodec::H264, &cfg.encoder)?;
@@ -424,7 +424,7 @@ impl StreamSession {
                     Ok(())
                 })();
                 if let Err(e) = result {
-                    let why = format!("The stream's video encoder stopped ({e:#}). Stop the stream and go live again, or pick another encoder in Record › Streaming.");
+                    let why = format!("The stream's video encoder stopped ({e:#}). Stop the stream and go live again, or pick another encoder in Record & stream › Streaming.");
                     fan.video_failed(&why);
                     let mut st = status.lock_ok();
                     st.push(LogLevel::Error, format!("Stream encoder: {e:#}"));
@@ -693,14 +693,14 @@ pub fn explain_failure(raw: &str, service: Service) -> (String, bool) {
     let has = |words: &[&str]| words.iter().any(|w| lower.contains(&w.to_lowercase()));
     if has(&["rejected the stream", "badname", "rejected", "unauthorized", "authentication", "forbidden"]) {
         let text = if service.is_srt() {
-            "The receiver refused the stream. Check the stream ID (key) in Record › Streaming.".to_string()
+            "The receiver refused the stream. Check the stream ID (key) in Record & stream › Streaming.".to_string()
         } else {
-            format!("{name} didn't accept the stream key. Copy a fresh key from {} and paste it in Record › Streaming.", service.key_where())
+            format!("{name} didn't accept the stream key. Copy a fresh key from {} and paste it in Record & stream › Streaming.", service.key_where())
         };
         return (text, true);
     }
     if has(&["the address must", "the address has", "the address needs", "incomplete rtmp address", "bad port"]) {
-        return (format!("The server address isn't right ({raw}). Fix it in Record › Streaming."), true);
+        return (format!("The server address isn't right ({raw}). Fix it in Record & stream › Streaming."), true);
     }
     if has(&["can't find"]) {
         return ("Can't find the server. Check the internet connection and the server address.".into(), false);

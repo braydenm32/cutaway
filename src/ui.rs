@@ -342,7 +342,7 @@ pub struct App {
     /// Turn the virtual camera on once the engine is up.
     vcam_wanted: bool,
     /// Takes started this session, and whether one was recording last
-    /// frame (the starting slate's "TAKE n" is the next take).
+    /// frame (the starting slate's "TAKE n" is the next recording).
     takes_made: u32,
     was_recording: bool,
     scenes: Vec<Scene>,
@@ -377,7 +377,7 @@ pub struct App {
     settings: Option<SettingsUi>,
     confirm: Option<Confirm>,
     /// The REC button: when the hold to stop began, whether this press
-    /// already stopped the take, and until when "Hold to stop" shows.
+    /// already stopped the recording, and until when "Hold to stop" shows.
     rec_hold: hold::Hold,
     rec_hint_until: Option<Instant>,
     /// The self-test holds the REC button (for a screenshot).
@@ -470,7 +470,7 @@ pub struct App {
     settle_at: Option<Instant>,
     /// Uploads to YouTube and Google Drive.
     uploads: uploads::Uploads,
-    /// The "Take saved" card.
+    /// The "Recording saved" card.
     takes: takes::Takes,
     /// The live chat, the comment on screen, and the newest one shown.
     chat: Option<crate::net::chat::Chat>,
@@ -503,7 +503,7 @@ pub struct App {
     /// A marker's name being changed in the list under ◆ Marker ▾.
     marker_edit: Option<(crate::media::Ns, String)>,
     display_fullscreen: bool,
-    /// Full screen on or off asked for from Record › Screens & webcam.
+    /// Full screen on or off asked for from Record & stream › Screens & webcam.
     display_toggle_full: bool,
     /// The write rate expected for the settings the take in progress started with.
     take_rate_estimate: Option<f64>,
@@ -693,7 +693,7 @@ impl App {
                 Some(Outcome::Updated { from }) => {
                     let mut text = format!("Updated to {} (from {from})", env!("CARGO_PKG_VERSION"));
                     if crate::platform::vcam::needs_reinstall() {
-                        text.push_str(". The virtual camera changed too: reinstall it in Record › Screens & webcam");
+                        text.push_str(". The virtual camera changed too: reinstall it in Record & stream › Screens & webcam");
                     }
                     app.toast(text, false);
                     app.settle_at = Some(Instant::now() + crate::net::self_update::SETTLE);
@@ -1390,7 +1390,7 @@ impl App {
         if let Some(e) = &self.engine {
             let st = e.status.lock_ok();
             if let RecState::Finalizing { done, .. } = &st.rec {
-                what.push(format!("saving the last take ({:.0}%)", done * 100.0));
+                what.push(format!("saving the last recording ({:.0}%)", done * 100.0));
             }
             if let Some((step, _)) = &st.background {
                 what.push(step.to_lowercase());
@@ -2373,7 +2373,7 @@ impl App {
             return;
         }
         if !self.cfg.streaming.destinations.iter().any(|d| d.enabled) {
-            self.toast("It's the scheduled start time, but there's nowhere to stream to: add one in Record › Streaming".into(), true);
+            self.toast("It's the scheduled start time, but there's nowhere to stream to: add one in Record & stream › Streaming".into(), true);
             return;
         }
         self.toast("Going live: it's the scheduled start time".into(), false);
@@ -2655,7 +2655,7 @@ impl App {
                 }
                 4
             }
-            // Stop, to show the "Take saved" card.
+            // Stop, to show the "Recording saved" card.
             3 if t > 7.0 && std::env::var_os("CUTAWAY_UI_TEST_STOP").is_some() => {
                 // Two named markers, then stopped straight away (the key would ask first).
                 for name in ["Guest arrives", "Big laugh"] {
@@ -2666,7 +2666,7 @@ impl App {
                 }
                 5
             }
-            // STOP=takes: then Record › Takes.
+            // STOP=takes: then Record & stream › Recordings.
             5 if t > 11.0 && std::env::var("CUTAWAY_UI_TEST_STOP").is_ok_and(|v| v == "takes") => {
                 self.go("record/takes/takes");
                 6
@@ -3084,7 +3084,7 @@ impl App {
         painter.rect_filled(badge, 3.0, Color32::from_black_alpha(170));
         painter.text(badge.center(), Align2::CENTER_CENTER, "9:16", FontId::proportional(TEXT_SMALL), Color32::WHITE);
         let r = ui.interact(rect, ui.scope_id().with("tall_monitor"), Sense::click());
-        if r.on_hover_text("The vertical version (click to set its layouts and framing in Record › Vertical version)").clicked() {
+        if r.on_hover_text("The vertical version (click to set its layouts and framing in Record & stream › Vertical version)").clicked() {
             self.go("record/vertical/vertical");
         }
     }
@@ -4349,7 +4349,7 @@ impl App {
         let Some(which) = self.confirm.clone() else { return };
         let (title, body, button) = match &which {
             Confirm::EndStream => ("End the live stream?".to_string(), "Viewers on every destination will see the broadcast end.".to_string(), "End stream"),
-            Confirm::StopRecording => ("Stop recording?".to_string(), "The files for this take will be finished and saved.".to_string(), "Stop recording"),
+            Confirm::StopRecording => ("Stop recording?".to_string(), "The files for this recording will be finished and saved.".to_string(), "Stop recording"),
             Confirm::SwitchShow(n) => {
                 let keep = match self.unnamed_setup_name() {
                     Some(m) => format!("This setup isn't a show yet, so Cutaway first saves it as \"{m}\" (rename it in More › App › General)."),
@@ -4510,7 +4510,7 @@ impl App {
         self.scenes_moved(&before);
     }
 
-    /// Only once there's somewhere to stream to (Record › Streaming sets
+    /// Only once there's somewhere to stream to (Record & stream › Streaming sets
     /// that up; the column's ⋯ links there too).
     fn stream_panel(&mut self, ui: &mut egui::Ui) {
         if !self.panel_present("stream") {
@@ -4522,7 +4522,7 @@ impl App {
         }
         let Some(engine) = &self.engine else { return };
         let stream = engine.status.lock_ok().stream.clone();
-        // A stream scheduled within the day (set in Record › Scheduled).
+        // A stream scheduled within the day (set in Record & stream › Scheduled).
         if !engine.is_streaming() {
             if let Some((text, color)) = self.scheduled_line() {
                 ui.add(egui::Label::new(RichText::new(text).size(TEXT_BODY).color(color)).wrap());
@@ -4591,7 +4591,7 @@ impl App {
                     let tone = if d.state == DestState::Failed { ERROR } else { TEXT_DIM };
                     ui.add(egui::Label::new(RichText::new(m).size(TEXT_BODY).color(tone)).wrap());
                 }
-                if d.state == DestState::Failed && m.contains("Record › Streaming") && ui.small_button("Open streaming settings").clicked() {
+                if d.state == DestState::Failed && m.contains("Record & stream › Streaming") && ui.small_button("Open streaming settings").clicked() {
                     open_settings = true;
                 }
                 resp.on_hover_text(format!("{} — {m}", d.service.label()));
@@ -4624,7 +4624,7 @@ impl App {
         let mut ticking = false;
         // Time on screen since going live (or since the recording started).
         let since = engine.stream_started_at().map(|t| (t, "since you went live")).or_else(|| match &engine.status.lock_ok().rec {
-            crate::engine::RecState::Recording { since, .. } => Some((crate::media::clock::now() - since.elapsed().as_nanos() as i64, "in this take")),
+            crate::engine::RecState::Recording { since, .. } => Some((crate::media::clock::now() - since.elapsed().as_nanos() as i64, "in this recording")),
             _ => None,
         });
         let on_air = match since {
@@ -4873,10 +4873,10 @@ impl App {
     fn marker_list(&mut self, ui: &mut egui::Ui, markers: &[crate::engine::recorder::Marker]) {
         ui.set_min_width(380.0);
         if markers.is_empty() {
-            ui.label(RichText::new("No markers in this take yet.").color(TEXT_DIM));
+            ui.label(RichText::new("No markers in this recording yet.").color(TEXT_DIM));
             return;
         }
-        ui.label(RichText::new("Names can be changed until the take stops.").size(TEXT_SMALL).color(TEXT_DIM));
+        ui.label(RichText::new("Names can be changed until the recording stops.").size(TEXT_SMALL).color(TEXT_DIM));
         let mut rename: Option<(crate::media::Ns, String)> = None;
         let mut delete: Option<crate::media::Ns> = None;
         egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
@@ -4884,7 +4884,7 @@ impl App {
                 for m in markers {
                     ui.label(RichText::new(fmt_clock(Duration::from_nanos(m.at.max(0) as u64))).monospace());
                     if m.clip {
-                        ui.label(format!("✂ {}", m.name)).on_hover_text("Left by a saved clip (in the take's Clips folder): on the editing timelines, not a chapter");
+                        ui.label(format!("✂ {}", m.name)).on_hover_text("Left by a saved clip (in the recording's Clips folder): on the editing timelines, not a chapter");
                     } else {
                         let mut text = match &self.marker_edit {
                             Some((at, t)) if *at == m.at => t.clone(),
@@ -5073,7 +5073,7 @@ impl App {
                         // going live): shown only while there's one to count.
                         let counting = if key == "mix" { recording } else { live };
                         let since = if key == "mix" {
-                            take_since.map(|d| format!("this take, since REC started {} ago", crate::engine::timers::fmt_span(d, false))).unwrap_or_else(|| "this take".into())
+                            take_since.map(|d| format!("this recording, since REC started {} ago", crate::engine::timers::fmt_span(d, false))).unwrap_or_else(|| "this recording".into())
                         } else {
                             "since you went live".into()
                         };
@@ -6383,9 +6383,9 @@ struct Toast {
 /// What the quit confirmation says, for what's running.
 fn quit_text(recording: bool, live: bool, busy: Option<String>) -> (String, String, &'static str) {
     let (title, body) = match (recording, live, busy) {
-        (true, true, _) => ("Quit while recording and live?".into(), "Cutaway will finish and save this take, and the broadcast ends on every destination.".into()),
+        (true, true, _) => ("Quit while recording and live?".into(), "Cutaway will finish and save this recording, and the broadcast ends on every destination.".into()),
         (false, true, _) => ("Quit while live?".into(), "The broadcast ends on every destination.".into()),
-        (true, false, _) => ("Quit while recording?".into(), "Cutaway will finish and save this take.".into()),
+        (true, false, _) => ("Quit while recording?".into(), "Cutaway will finish and save this recording.".into()),
         (false, false, Some(b)) => (
             "Quit before Cutaway has finished?".to_string(),
             format!("Cutaway is still {b}. Saving finishes before Cutaway closes; uploads stop part way and carry on when you next open Cutaway, but the podcast copy has to be made again."),

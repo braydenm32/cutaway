@@ -250,10 +250,10 @@ fn verdict(n: usize, failed: &[(String, String)], notes: &[String], software: bo
     if let Some((first, why)) = failed.first() {
         let names: Vec<&str> = failed.iter().map(|(l, _)| l.as_str()).collect();
         let text = if n == 1 {
-            format!("The encoder won't start: {why}. Pick another encoder in Record › Recording.")
+            format!("The encoder won't start: {why}. Pick another encoder in Record & stream › Quality and files.")
         } else {
             format!(
-                "{} of {n} encoders couldn't start at the same time ({}; {first}: {why}). Those files would be empty. Record fewer sources (untick Record on some), use a smaller size, or pick another encoder in Record › Recording.",
+                "{} of {n} encoders couldn't start at the same time ({}; {first}: {why}). Those files would be empty. Record fewer sources (untick Record on some), use a smaller size, or pick another encoder in Record & stream › Quality and files.",
                 failed.len(),
                 names.join(", ")
             )

@@ -594,7 +594,7 @@ mod tests {
         // A sample, by hand.
         assert_eq!(breadcrumb(setting_at(Section::Sources, "Follow").0), "Sources › Close-ups & PTZ › Auto-framing");
         assert_eq!(setting_at(Section::Mixing, "Ducking").1, Some("mix_duck"));
-        assert_eq!(breadcrumb(setting_at(Section::Recording, "Timecode").0), "Record › Recording › Editing");
+        assert_eq!(breadcrumb(setting_at(Section::Recording, "Timecode").0), "Record & stream › Quality and files › Editing");
         // The old Switching page, in four (Scenes › Switching shows only the transition).
         assert_eq!(breadcrumb(setting_at(Section::Switching, "Length").0), "Scenes › Switching");
         assert_eq!(breadcrumb(setting_at(Section::Switching, "Fade length").0), "Scenes › Stinger & fade to black");

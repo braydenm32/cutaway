@@ -1,6 +1,6 @@
 //! Instant clips: while recording, the last stretch of the program (as
 //! encoded for its file) is kept in memory, and a button saves it as its
-//! own file in the take's "Clips" folder — for social media, a highlight,
+//! own file in the recording's "Clips" folder — for social media, a highlight,
 //! a blooper — while the recording carries on.
 
 use crate::util::LockExt;

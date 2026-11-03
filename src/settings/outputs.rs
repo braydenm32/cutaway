@@ -1,4 +1,4 @@
-//! Record › Screens & webcam: a full-screen output for another display,
+//! Record & stream › Screens & webcam: a full-screen output for another display,
 //! and the virtual camera for video-call apps.
 
 use crate::util::LockExt;

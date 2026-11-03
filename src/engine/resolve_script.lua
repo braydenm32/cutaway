@@ -12,7 +12,7 @@
 -- the sound below, and the markers.
 --
 -- Installed (and kept up to date) by Cutaway's Open in Resolve, or from
--- Record > Recording > Editing. Works in the free Resolve.
+-- Record & stream > Quality and files > Editing. Works in the free Resolve.
 
 local resolve = resolve or (Resolve and Resolve()) or bmd.scriptapp("Resolve")
 if not resolve then
@@ -192,7 +192,7 @@ if file then
 else
   take = take_from_folder(folder)
   if not take then
-    say("that folder isn't a Cutaway take (there are no videos in it). Pick the take's own folder, the one with Program.mp4 in it.", true)
+    say("that folder isn't a Cutaway recording (there are no videos in it). Pick the recording's own folder, the one with Program.mp4 in it.", true)
     return
   end
 end
@@ -286,7 +286,7 @@ local open_name = open and open.GetName and open:GetName() or nil
 local show, day = show_and_day(take.name)
 local open_show, open_day = show_and_day(open_name)
 if show and open_show == show and open_day == day and open_name ~= take.name then
-  local ok, answer = pcall(ask, "The project \"" .. open_name .. "\" (the same show, the same day) is open. Add this take to it, or make a new project?", "Add to this project", "New project")
+  local ok, answer = pcall(ask, "The project \"" .. open_name .. "\" (the same show, the same day) is open. Add this recording to it, or make a new project?", "Add to this project", "New project")
   if ok and answer == "Add to this project" then
     project = open
     adding = true
@@ -382,7 +382,7 @@ local switched_off = true
 -- V1 the cuts, then every angle on its own track, the sound on A1.
 local function build_live_edit()
   if type(take.edit) ~= "table" or #take.edit == 0 then
-    return nil, "this take has no cut list"
+    return nil, "this recording has no cut list"
   end
   for _, c in ipairs(take.edit) do
     if not item_for(c.file) then
@@ -566,9 +566,9 @@ if not timeline then
     end
     why = why .. "."
   elseif rescued_take(folder) then
-    why = "this take was rescued after Cutaway stopped while recording, and its switches weren't saved (it was recorded with an older Cutaway), so there's no live edit to build. The cameras, program and sound are all in the project's bins."
+    why = "this recording was rescued after Cutaway stopped while recording, and its switches weren't saved (it was recorded with an older Cutaway), so there's no live edit to build. The cameras, program and sound are all in the project's bins."
   else
-    why = "there's no live edit for this take (Cutaway saves it when Record > Recording > Editing > Editor timelines is on). The cameras, program and sound are all in the project's bins."
+    why = "there's no live edit for this recording (Cutaway saves it when Record & stream > Quality and files > Editing > Editor timelines is on). The cameras, program and sound are all in the project's bins."
   end
   say(why)
   done = done .. "\n\n" .. why:sub(1, 1):upper() .. why:sub(2)

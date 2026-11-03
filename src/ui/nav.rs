@@ -134,10 +134,10 @@ pub const AREAS: &[Area] = &[
         Tab { id: "web", label: "Tickers & web overlays", more: true, sections: &[
             Sect { id: "web", label: "Tickers and web pages", help: &[Page::Graphics], routes: &[] } ]},
     ]},
-    Area { id: "record", label: "Record", icon: Icon::RecordDot, key: Some(6), tabs: &[
-        Tab { id: "takes", label: "Takes", more: false, sections: &[
-            Sect { id: "takes", label: "Your takes", help: &[], routes: &["main.rec.recent"] } ]},
-        Tab { id: "recording", label: "Recording", more: false, sections: &[
+    Area { id: "record", label: "Record & stream", icon: Icon::RecordDot, key: Some(6), tabs: &[
+        Tab { id: "takes", label: "Recordings", more: false, sections: &[
+            Sect { id: "takes", label: "Your recordings", help: &[], routes: &["main.rec.recent"] } ]},
+        Tab { id: "recording", label: "Quality and files", more: false, sections: &[
             Sect { id: "quality", label: "Quality", help: &[Page::Recording], routes: &["set.output.recording"] },
             Sect { id: "editing", label: "Editing", help: &[Page::Recording], routes: &[] },
             Sect { id: "podcast", label: "Podcast", help: &[Page::Recording], routes: &[] },

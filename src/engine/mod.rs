@@ -1426,9 +1426,9 @@ impl Engine {
             }
             if recording && h.record {
                 notes.push(if still {
-                    format!("{}: changed, so its own file in this take ends here and a new one starts", h.name)
+                    format!("{}: changed, so its own file in this recording ends here and a new one starts", h.name)
                 } else {
-                    format!("{}: removed; its own file in this take ends here", h.name)
+                    format!("{}: removed; its own file in this recording ends here", h.name)
                 });
             }
             self.status.lock_ok().offline.remove(&h.name);
@@ -1526,9 +1526,9 @@ impl Engine {
             }
             if recording && h.record {
                 notes.push(if still {
-                    format!("{}: changed, so its WAV in this take ends here (it's recorded again from the next take)", h.name)
+                    format!("{}: changed, so its WAV in this recording ends here (it's recorded again from the next recording)", h.name)
                 } else {
-                    format!("{}: removed; its WAV in this take ends here", h.name)
+                    format!("{}: removed; its WAV in this recording ends here", h.name)
                 });
             }
             self.status.lock_ok().offline.remove(&h.name);
@@ -1536,7 +1536,7 @@ impl Engine {
         if recording {
             for (i, ac) in new.audio.iter().enumerate() {
                 if akeep[i].is_none() && ac.record && !old.audio.iter().any(|o| o.uid == ac.uid) {
-                    notes.push(format!("{}: in the mix now; its own WAV starts with the next take", ac.name));
+                    notes.push(format!("{}: in the mix now; its own WAV starts with the next recording", ac.name));
                 }
             }
         }
@@ -2232,7 +2232,7 @@ impl CompositorLoop {
                         if let (Some(f), Some((tx, _))) = (stream_frame, stream_now) {
                             if tx.try_send(f).is_err() && !warned_stream {
                                 warned_stream = true;
-                                self.status.lock_ok().push(LogLevel::Warning, "Stream: the encoder can't keep up, frames are being dropped. Lower the stream's size, frame rate or bitrate in Record › Streaming.");
+                                self.status.lock_ok().push(LogLevel::Warning, "Stream: the encoder can't keep up, frames are being dropped. Lower the stream's size, frame rate or bitrate in Record & stream › Streaming.");
                             }
                         }
                         let fresh = r.preview.is_some() || !r.thumbs.is_empty();
@@ -2415,12 +2415,12 @@ mod tests {
         // The take: every file there was at the start, finished cleanly.
         e.stop_recording();
         e.wait_finalized();
-        let report = e.status.lock_ok().last_take.clone().expect("a take");
+        let report = e.status.lock_ok().last_take.clone().expect("a recording");
         let names: Vec<String> = report.files.iter().map(|f| f.0.file_name().unwrap().to_string_lossy().to_string()).collect();
         for want in ["ISO_01_Dark", "ISO_02_Bars", "ISO_03_Snow", "Program", "Audio_01_Tone"] {
             assert!(names.iter().any(|n| n.starts_with(want)), "{want} in {names:?}");
         }
-        assert!(!names.iter().any(|n| n.contains("Tone_2")), "a new input waits for the next take: {names:?}");
+        assert!(!names.iter().any(|n| n.contains("Tone_2")), "a new input waits for the next recording: {names:?}");
         // Flat, which joined, has its own file from when it joined (numbered after the others).
         let flat_file = names.iter().find(|n| n.starts_with("ISO_04_Flat (from 00-00-0")).unwrap_or_else(|| panic!("Flat's file in {names:?}")).clone();
         assert!(report.problems.iter().all(|p| !p.contains("crashed")), "{:?}", report.problems);
