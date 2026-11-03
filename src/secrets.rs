@@ -14,6 +14,15 @@ use std::sync::Mutex;
 
 pub const PREFIX: &str = "@keychain:";
 
+/// Set when a key couldn't go in the safe place and stayed in the settings
+/// file, so the window can say so once (review G13).
+static WRITE_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// True once after keys had to stay in the settings file.
+pub fn take_write_failure() -> bool {
+    WRITE_FAILED.swap(false, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Where the list is kept.
 pub trait Store: Send {
     /// The saved text, or None if there isn't any yet.
@@ -88,6 +97,7 @@ impl<S: Store> Vault<S> {
             let text = serde_json::to_string(&*map).unwrap_or_default();
             if let Err(e) = self.store.write(&text) {
                 eprintln!("Couldn't save keys and passwords safely ({e}); keeping them in the settings file");
+                WRITE_FAILED.store(true, std::sync::atomic::Ordering::Relaxed);
                 if let Some(map) = self.map.as_mut() {
                     for id in &added {
                         map.remove(id);

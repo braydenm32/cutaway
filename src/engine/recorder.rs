@@ -43,7 +43,7 @@ pub struct TakeReport {
 }
 
 /// A marker dropped during a take (time from the start of the files).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Marker {
     pub at: Ns,
     pub name: String,
@@ -122,7 +122,7 @@ pub fn spawn_mp4(
     label: String,
     opts: FileOpts,
     clips: Option<Arc<super::clips::ClipBuffer>>,
-) -> JoinHandle<Result<(PathBuf, u64)>> {
+) -> JoinHandle<Result<Written>> {
     std::thread::Builder::new()
         .name(format!("write {label}"))
         .spawn(move || {
@@ -214,10 +214,19 @@ pub fn spawn_mp4(
                 }
             }
             if let Some(e) = failed {
-                if let Some((w, ..)) = writer {
-                    let _ = w.finish();
+                let Some((w, ..)) = writer else { return Err(e) };
+                // Close the file properly if the drive lets us; else mend it
+                // the way the rescue would, so it isn't left half-written.
+                let backup = opts.backup_for(&path);
+                let finished = w.finish().is_ok() || mend(&path);
+                if let Some(b) = backup.filter(|b| b.exists()) {
+                    mend(&b);
                 }
-                return Err(e);
+                if !finished {
+                    return Err(anyhow!("{label}: {e:#}. The file couldn't be repaired, so it may not open in every editor"));
+                }
+                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                return Ok(Written { path, size, problem: Some(format!("{label}: {e:#}. The file was repaired and plays up to there")) });
             }
             match writer {
                 Some((mut w, _, a)) => {
@@ -236,12 +245,35 @@ pub fn spawn_mp4(
                     let chapters = opts.markers.lock_ok().iter().filter(|m| !m.clip).map(|m| (m.at, m.name.clone())).collect();
                     w.set_chapters(chapters);
                     report_backup(&mut w);
-                    Ok((path, w.finish()?))
+                    match w.finish() {
+                        Ok(size) => Ok(Written { path, size, problem: None }),
+                        // The very end failed (the disk filled?): mend it.
+                        Err(e) if mend(&path) => {
+                            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                            Ok(Written { path, size, problem: Some(format!("{label}: couldn't finish the file ({e:#}); it was repaired instead")) })
+                        }
+                        Err(e) => Err(anyhow!("{label}: couldn't finish the file ({e:#}), and it couldn't be repaired, so it may not open in every editor")),
+                    }
                 }
                 None => Err(anyhow!("{label}: no video arrived, so no file was written")),
             }
         })
         .expect("thread")
+}
+
+/// A video file once its writer is done: where, how big, and what went
+/// wrong on the way (it still plays).
+#[derive(Debug)]
+pub struct Written {
+    pub path: PathBuf,
+    pub size: u64,
+    pub problem: Option<String>,
+}
+
+/// Turns a file left in its "while recording" form into an ordinary one
+/// (as the rescue does). True when it now plays.
+fn mend(path: &std::path::Path) -> bool {
+    matches!(crate::media::mp4::recover(path), Ok(crate::media::mp4::Recovery::Recovered { .. } | crate::media::mp4::Recovery::AlreadyComplete))
 }
 
 /// Puts a source's frames onto a constant frame rate starting at T0:
@@ -354,9 +386,13 @@ pub fn spawn_video(
                     settings.width = f.width;
                     settings.height = f.height;
                     let m = mux.clone();
-                    *enc = Some(encode::create_video(&settings, Arc::new(move |p| {
+                    let (e, note) = encode::create_video_noting(&settings, Arc::new(move |p| {
                         let _ = m.send(MuxMsg::Video(p));
-                    }))?);
+                    }))?;
+                    if let Some(note) = note {
+                        status.lock_ok().push(LogLevel::Warning, format!("{label}: {note}"));
+                    }
+                    *enc = Some(e);
                 }
                 // A device that came back in a different mode: keep the file
                 // going with the last good picture rather than failing it.
@@ -387,9 +423,9 @@ pub fn spawn_video(
                             p.settings.width = small.width;
                             p.settings.height = small.height;
                             let m = p.mux.clone();
-                            proxy_enc = Some(encode::create_video(&p.settings, Arc::new(move |pk| {
+                            proxy_enc = Some(encode::create_video_noting(&p.settings, Arc::new(move |pk| {
                                 let _ = m.send(MuxMsg::Video(pk));
-                            }))?);
+                            }))?.0);
                         }
                         proxy_enc.as_mut().unwrap().encode(&small, pts, false)
                     })();
@@ -580,7 +616,7 @@ pub fn spawn_wav(
         .name("write wav".into())
         .spawn(move || {
             let label = base.file_name().unwrap_or_default().to_string_lossy().to_string();
-            let mut w = WavJob { base, format: SampleFormat::from_bits(bits), split, t0, writers: Vec::new(), scratch: Vec::new(), expected: None, fmt: None, opts };
+            let mut w = WavJob { base, format: SampleFormat::from_bits(bits), split, t0, writers: Vec::new(), scratch: Vec::new(), written: 0, fmt: None, opts };
             // Blocks are written once their time has come (a delayed input
             // runs ahead of the clock), so nothing past the end gets in.
             let mut held: VecDeque<AudioBlock> = VecDeque::new();
@@ -640,8 +676,9 @@ struct WavJob {
     t0: Ns,
     writers: Vec<(PathBuf, WavWriter)>,
     scratch: Vec<f32>,
-    /// Host time where the next sample belongs.
-    expected: Option<Ns>,
+    /// Samples (per channel) in the file so far, silence included: where
+    /// the next one lands is `t0` plus this many.
+    written: u64,
     /// The file's rate and channels (from its first block).
     fmt: Option<(u32, u16)>,
     opts: FileOpts,
@@ -665,13 +702,27 @@ impl WavJob {
             return Ok(());
         }
         let ch = b.channels as usize;
-        let first_at = b.pts + r.start as i64 * NS_PER_SEC / b.rate as i64;
-        // Silence for audio that never arrived: before the first block (an
-        // input that started late) or a dropout. Small differences are
-        // just clock jitter.
-        let gap = first_at - self.expected.unwrap_or(self.t0);
-        let silence = if gap > 20_000_000 { (gap as i128 * b.rate as i128 / NS_PER_SEC as i128) as usize } else { 0 };
-        self.expected = Some(first_at + r.len() as i64 * NS_PER_SEC / b.rate as i64);
+        // Where this block belongs, and where the file has got to, in
+        // samples from t0. Kept to the clock the way the mix is (AudioCursor):
+        // audio that never arrived (an input that started late, a dropout,
+        // a device running slow) becomes silence, and a device running fast
+        // loses a little, so the file never drifts from the pictures. Small
+        // differences are just clock jitter.
+        let block_start = ((b.pts - self.t0) as i128 * b.rate as i128 + NS_PER_SEC as i128 / 2).div_euclid(NS_PER_SEC as i128) as i64;
+        let at = block_start + r.start as i64;
+        let tolerance = (b.rate / 50) as i64; // 20 ms
+        let pushed = self.written as i64;
+        let mut silence = 0usize;
+        let mut skip = 0usize;
+        if at > pushed + tolerance {
+            silence = (at - pushed) as usize;
+        } else if at + tolerance < pushed {
+            skip = ((pushed - at) as usize).min(r.len());
+        }
+        let r = (r.start + skip)..r.end;
+        if r.is_empty() {
+            return Ok(());
+        }
         if self.writers.is_empty() {
             let bext = self.opts.tc_seconds.map(|secs| Bext {
                 description: format!("Cutaway {}", self.base.file_name().unwrap_or_default().to_string_lossy()),
@@ -698,7 +749,9 @@ impl WavJob {
             for (_, w) in self.writers.iter_mut() {
                 w.write(&vec![0.0f32; n * w.channels() as usize])?;
             }
+            self.written += n as u64;
         }
+        self.written += r.len() as u64;
         let samples = &b.samples[r.start * ch..r.end * ch];
         if self.writers.len() == 1 {
             self.writers[0].1.write(samples)?;
@@ -752,7 +805,7 @@ pub struct Take {
     pub audio_job: Option<JoinHandle<Result<()>>>,
     /// One encoder per input track.
     pub track_jobs: Vec<(String, JoinHandle<Result<()>>)>,
-    pub writers: Vec<(String, JoinHandle<Result<(PathBuf, u64)>>)>,
+    pub writers: Vec<(String, JoinHandle<Result<Written>>)>,
     pub wavs: Vec<(String, JoinHandle<Result<Vec<(PathBuf, u64)>>>)>,
     pub mix_tap_ids: Vec<u64>,
     pub markers: Markers,
@@ -765,6 +818,28 @@ pub struct Take {
     /// started (they may be removed from the show before it ends).
     pub iso_slots: Vec<(String, Arc<super::sources::SourceSlot>)>,
     pub raw_inputs: Vec<Arc<super::audio::InputShared>>,
+    /// The take's journal (for a rescue after a crash), if it could be written.
+    pub journal: Option<Arc<super::journal::Journal>>,
+    /// How to make a source's file during the take (one that joins or restarts).
+    pub late: LateFiles,
+    /// Each recorded source's file number (by identity), so a source that
+    /// restarts keeps its number; new ones take the next.
+    pub iso_numbers: Vec<(u64, usize)>,
+}
+
+/// What a file started during the take needs: the take's settings.
+#[derive(Clone)]
+pub struct LateFiles {
+    pub brand: Brand,
+    pub ext: String,
+    pub codec: crate::media::VideoCodec,
+    pub backend: String,
+    /// Proxies too (the H.264 backend for them).
+    pub proxy_backend: Option<String>,
+    pub proxy_width: u32,
+    pub iso_bitrate_kbps: u32,
+    /// Time of day at the take's first frame, when files are stamped.
+    pub tc_seconds: Option<f64>,
 }
 
 impl Take {
@@ -806,7 +881,10 @@ impl Take {
         for (label, h) in self.writers {
             next(format!("Saving {label}"));
             match h.join() {
-                Ok(Ok(f)) => report.files.push(f),
+                Ok(Ok(f)) => {
+                    report.files.push((f.path, f.size));
+                    report.problems.extend(f.problem);
+                }
                 Ok(Err(e)) => report.problems.push(format!("{e:#}")),
                 Err(_) => report.problems.push(format!("{label}: writer crashed")),
             }
@@ -843,6 +921,24 @@ mod tests {
 
     fn frame(pts: Ns) -> VideoFrame {
         VideoFrame::new_nv12(2, 2, pts, vec![0; 4], vec![0; 2], 0)
+    }
+
+    /// A file left in its "while recording" form (the writer failed) is
+    /// mended so it plays.
+    #[test]
+    fn a_half_written_file_is_mended() {
+        use crate::media::mp4::{tests::fake_video_config, Brand, Mp4Writer};
+        let p = std::env::temp_dir().join(format!("cutaway-mend-{}.mp4", std::process::id()));
+        let mut w = Mp4Writer::create(&p, Brand::Mp4).unwrap();
+        let v = w.add_video(&fake_video_config(), 30);
+        for i in 0..90i64 {
+            w.write(v, i * NS_PER_SEC / 30, &[0, 0, 0, 1, 0x65], i % 30 == 0).unwrap();
+        }
+        drop(w);
+        assert!(mend(&p));
+        assert!(crate::media::mp4::duration_secs(&p).is_some_and(|d| d > 1.9));
+        assert!(mend(&p), "mending a mended file is harmless");
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]
@@ -885,6 +981,28 @@ mod tests {
         assert_eq!(gap.len(), (1440 + 480) * 2);
         assert!(gap[..2880].iter().all(|s| *s == 0.0));
         assert_eq!(c.take(&blk(1_020_000_000), i64::MAX).len(), 0); // already covered: dropped
+    }
+
+    #[test]
+    fn input_wavs_keep_to_the_clock() {
+        // A device whose clock runs 1% fast (or slow): 10 ms of samples
+        // every 9.9 ms (or 10.1 ms). The file still ends where the time does.
+        for step in [9_900_000i64, 10_100_000] {
+            let dir = std::env::temp_dir().join(format!("cutaway-wav-clock-{}-{step}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let opts = FileOpts { take_folder: dir.clone(), backup_folder: None, tc_seconds: None, tc_date: Default::default(), markers: Default::default() };
+            let t0 = 1_000_000_000;
+            let mut job = WavJob { base: dir.join("Audio_01_Mic"), format: SampleFormat::from_bits(16), split: false, t0, writers: Vec::new(), scratch: Vec::new(), written: 0, fmt: None, opts };
+            let blocks = 6000; // about a minute
+            for i in 0..blocks {
+                let b = AudioBlock { pts: t0 + i * step, rate: 48000, channels: 1, samples: vec![0.1; 480] };
+                job.write(&b, i64::MAX).unwrap();
+            }
+            let want = (blocks * step) as f64 / 1e9 * 48000.0;
+            let off = (job.written as f64 - want).abs() / 48000.0;
+            assert!(off < 0.025, "{step}: {} samples written for {want}: {off} s off", job.written);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     #[test]

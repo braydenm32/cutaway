@@ -10,6 +10,23 @@ use super::{Ns, NS_PER_SEC};
 
 pub const PATTERNS: &[&str] = &["smpte", "ball", "pinwheel", "spokes", "gradient", "colors", "snow", "circular"];
 
+/// A pattern's name as people see it.
+pub fn pattern_label(pattern: &str) -> &str {
+    match pattern {
+        "smpte" => "Colour bars",
+        "ball" => "Bouncing ball",
+        "pinwheel" => "Pinwheel",
+        "spokes" => "Spokes",
+        "gradient" => "Gradient",
+        "colors" => "Colours",
+        "snow" => "Snow",
+        "circular" => "Circles",
+        "clap" => "Clapper (sync test)",
+        "people" => "People",
+        p => p,
+    }
+}
+
 /// RGB (0..1) to BT.709 video-range YCbCr.
 pub fn rgb_to_yuv(r: f32, g: f32, b: f32) -> (u8, u8, u8) {
     let y = 16.0 + 219.0 * (0.2126 * r + 0.7152 * g + 0.0722 * b);

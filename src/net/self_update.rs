@@ -118,7 +118,10 @@ impl Install {
             Platform::Windows => vec![me.item.clone()],
         };
         if let Some(dir) = need.iter().find(|d| !writable(d)) {
-            return Err(format!("Cutaway isn't allowed to change {} from this account", dir.display()));
+            return Err(match me.platform {
+                Platform::Windows => format!("Cutaway can't change {} from this account. Move the Cutaway folder somewhere of your own, like Documents or the Desktop, and it can update itself again", dir.display()),
+                Platform::Mac => format!("Cutaway isn't allowed to change {} from this account (an administrator can update it, or download it from the Releases page)", dir.display()),
+            });
         }
         Ok(me)
     }
@@ -199,7 +202,17 @@ pub fn prepare(release: &Release, me: &Install, cancel: &AtomicBool, progress: &
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).with_context(|| format!("couldn't make {}", dir.display()))?;
     let sums_file = super::fetch::fetch(&sums.url, &dir.join(SUMS), b"", "GitHub", "the release's fingerprints", cancel, &mut |_, _| {})?;
-    let want = expected_sum(&std::fs::read_to_string(&sums_file).unwrap_or_default(), &name).ok_or_else(|| anyhow!("the release's fingerprints don't list {name}"))?;
+    // Signed by Cutaway's maker (once updates are signed): see signing.rs.
+    let sums_bytes = std::fs::read(&sums_file).unwrap_or_default();
+    let sig = match release.assets.iter().find(|a| a.name == super::signing::SIG) {
+        Some(a) if super::signing::required() => {
+            let f = super::fetch::fetch(&a.url, &dir.join(super::signing::SIG), b"", "GitHub", "the update's signature", cancel, &mut |_, _| {})?;
+            Some(std::fs::read_to_string(&f).unwrap_or_default())
+        }
+        _ => None,
+    };
+    super::signing::verify(&sums_bytes, sig.as_deref())?;
+    let want = expected_sum(&String::from_utf8_lossy(&sums_bytes), &name).ok_or_else(|| anyhow!("the release's fingerprints don't list {name}"))?;
     let file = super::fetch::fetch(&zip.url, &dir.join(&name), ZIP_MAGIC, "GitHub", "the update", cancel, progress)?;
     downloaded();
     if sha256(&file)? != want {
@@ -782,8 +795,39 @@ pub fn on_exit() -> Option<String> {
         Ok(()) => None,
         Err(e) => {
             crate::logging::note(&format!("update to {}: {e:#}", staged.version));
+            // Said at the next start, since the window has gone by now.
+            let _ = std::fs::write(missed_file(), format!("{}\n{}", staged.version, plain_reason(&format!("{e:#}"))));
             Some(format!("{e:#}"))
         }
+    }
+}
+
+fn missed_file() -> PathBuf {
+    crate::config::default_config_path().with_file_name("update-not-put-in.txt")
+}
+
+/// An update that couldn't be set going when Cutaway closed: (version,
+/// why), once.
+pub fn missed_at_exit() -> Option<(String, String)> {
+    let path = missed_file();
+    let text = std::fs::read_to_string(&path).ok()?;
+    let _ = std::fs::remove_file(&path);
+    let (v, why) = text.split_once('\n')?;
+    Some((v.trim().to_string(), why.trim().to_string()))
+}
+
+/// The updater's usual failures in plain words, with what to do (review
+/// G16); anything else as it is.
+pub fn plain_reason(why: &str) -> String {
+    let l = why.to_lowercase();
+    if l.contains("cannot access the file") || l.contains("being used by another process") || l.contains("resource busy") || l.contains("text file busy") {
+        "another program is using Cutaway's files (OBS, Zoom or Teams can hold its webcam). Close them, then update again".into()
+    } else if l.contains("access is denied") || l.contains("permission denied") || l.contains("operation not permitted") {
+        "Cutaway wasn't allowed to replace its own files. Move it to a folder of your own (Windows), or ask an administrator (Mac), then update again".into()
+    } else if l.contains("no space left") || l.contains("not enough space") || l.contains("disk full") {
+        "the drive is full. Free some space, then update again".into()
+    } else {
+        why.to_string()
     }
 }
 
@@ -810,6 +854,13 @@ mod tests {
         assert!(Install::of(Platform::Windows, Path::new("C:/src/cutaway/target/release/cutaway.exe"), Path::new("")).is_err());
         assert_eq!(Platform::Mac.asset_name("0.8.0"), "Cutaway-0.8.0-macos-arm64.zip");
         assert_eq!(Platform::Windows.asset_name("0.8.0"), "Cutaway-0.8.0-windows-x64.zip");
+    }
+
+    #[test]
+    fn failures_in_plain_words() {
+        assert!(plain_reason("couldn't put the new version in place (The process cannot access the file because it is being used by another process.)").starts_with("another program"));
+        assert!(plain_reason("Access is denied. (os error 5)").contains("allowed"));
+        assert_eq!(plain_reason("something else"), "something else");
     }
 
     #[test]

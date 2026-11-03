@@ -9,6 +9,7 @@ pub mod youtube_live;
 pub mod fetch;
 pub mod ndi_install;
 pub mod self_update;
+pub mod signing;
 pub mod update;
 pub mod tunnel;
 
@@ -63,16 +64,17 @@ mod tests {
         let (video, audio, acfg) = media();
 
         // RTMP
+        let rtmp_url = format!("rtmp://127.0.0.1:{}/live/test", crate::util::free_tcp_port());
         let flv_path = dir.join("rtmp.flv");
         let mut server = Command::new("ffmpeg")
-            .args(["-hide_banner", "-loglevel", "error", "-y", "-listen", "1", "-i", "rtmp://127.0.0.1:19350/live/test", "-c", "copy"])
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-listen", "1", "-i", rtmp_url.as_str(), "-c", "copy"])
             .arg(&flv_path)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
         std::thread::sleep(Duration::from_millis(700));
-        let mut p = super::rtmp::RtmpPublisher::connect("rtmp://127.0.0.1:19350/live/test", Duration::from_secs(5)).unwrap();
+        let mut p = super::rtmp::RtmpPublisher::connect(&rtmp_url, Duration::from_secs(5)).unwrap();
         p.send_metadata(&flv::metadata(&video[0].config, 30, 600, &acfg, 128)).unwrap();
         p.send_video(0, &flv::video_sequence_header(&video[0].config)).unwrap();
         p.send_audio(0, &flv::audio_sequence_header(&acfg)).unwrap();
@@ -93,16 +95,18 @@ mod tests {
         assert!(s.contains("h264") && s.contains("aac"), "rtmp: {s}");
 
         // SRT
+        let srt_port = crate::util::free_udp_port();
+        let srt_listen = format!("srt://127.0.0.1:{srt_port}?mode=listener");
         let ts_path = dir.join("srt.ts");
         let mut server = Command::new("ffmpeg")
-            .args(["-hide_banner", "-loglevel", "error", "-y", "-i", "srt://127.0.0.1:19351?mode=listener", "-c", "copy"])
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-i", srt_listen.as_str(), "-c", "copy"])
             .arg(&ts_path)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
         std::thread::sleep(Duration::from_millis(700));
-        let mut s = super::srt::SrtSender::connect("srt://127.0.0.1:19351", Duration::from_secs(5)).unwrap();
+        let mut s = super::srt::SrtSender::connect(&format!("srt://127.0.0.1:{srt_port}"), Duration::from_secs(5)).unwrap();
         let mut m = TsMuxer::new((*video[0].config).clone(), acfg.clone());
         let mut ai = 0;
         for v in &video {
