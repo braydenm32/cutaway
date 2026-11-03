@@ -601,7 +601,8 @@ Recordings start with the **Take name** from Record & stream › Quality and fil
   pads (with their progress), Syrinscape, talkback, instant clips, timers,
   the rundown (with the time left), remote guests, fade to black, instant
   replay, macros, PTZ presets and moves, the teleprompter and viewer
-  comments.
+  comments. As on the desk, fading to black and turning a mic off while
+  you're recording or live take a one-second hold.
 - **Show-control software:** OSC from QLab, Bitfocus Companion, TouchOSC or
   a lighting desk, with state sent back; a WebSocket API that pushes every
   change; and every action is also a plain web address.

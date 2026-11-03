@@ -996,8 +996,12 @@ mod tests {
         assert!(Command::new("zip").current_dir(d.join("src")).arg("-qr").arg(&zip_path).arg("Cutaway.app").status().unwrap().success());
         let zip = std::fs::read(&zip_path).unwrap();
         let good = format!("{}  {zip_name}\n", sha256(&zip_path).unwrap());
-        for (sums, ok) in [(good, true), (format!("{}  {zip_name}\n", "0".repeat(64)), false)] {
-            let url = serve(vec![("/zip".into(), zip.clone()), ("/sums".into(), sums.into_bytes())]);
+        // Releases are signed: this test signs its own with a key of its own.
+        let key = ed25519_dalek::SigningKey::from_bytes(&[7; 32]);
+        super::super::signing::TEST_KEY.with(|k| *k.borrow_mut() = Some(super::super::signing::hex(key.verifying_key().as_bytes())));
+        for (sums, ok) in [(good.clone(), true), (format!("{}  {zip_name}\n", "0".repeat(64)), false)] {
+            let sig = super::super::signing::signature(&key, sums.as_bytes());
+            let url = serve(vec![("/zip".into(), zip.clone()), ("/sums".into(), sums.into_bytes()), ("/sig".into(), sig.into_bytes())]);
             let release = Release {
                 version: "9.9.9".into(),
                 url: String::new(),
@@ -1005,6 +1009,7 @@ mod tests {
                 assets: vec![
                     super::super::update::Asset { name: zip_name.clone(), url: format!("{url}/zip"), size: zip.len() as u64 },
                     super::super::update::Asset { name: SUMS.into(), url: format!("{url}/sums"), size: 0 },
+                    super::super::update::Asset { name: super::super::signing::SIG.into(), url: format!("{url}/sig"), size: 0 },
                 ],
             };
             let me = Install { platform: Platform::Mac, item: d.join("Cutaway.app"), work: d.join(if ok { "w1" } else { "w2" }) };
@@ -1022,6 +1027,21 @@ mod tests {
                 assert!(!me.work.join("9.9.9/new").exists());
             }
         }
+        // A release that isn't signed isn't used.
+        let url = serve(vec![("/zip".into(), zip.clone()), ("/sums".into(), good.into_bytes())]);
+        let release = Release {
+            version: "9.9.9".into(),
+            url: String::new(),
+            notes: String::new(),
+            assets: vec![
+                super::super::update::Asset { name: zip_name.clone(), url: format!("{url}/zip"), size: zip.len() as u64 },
+                super::super::update::Asset { name: SUMS.into(), url: format!("{url}/sums"), size: 0 },
+            ],
+        };
+        let me = Install { platform: Platform::Mac, item: d.join("Cutaway.app"), work: d.join("w4") };
+        let e = prepare(&release, &me, &AtomicBool::new(false), &mut |_, _| {}, &mut || {}).unwrap_err().to_string();
+        assert!(e.contains("isn't signed"), "{e}");
+        assert!(!me.work.join("9.9.9/new").exists());
         // A release without fingerprints isn't used.
         let release = Release { version: "9.9.9".into(), url: String::new(), notes: String::new(), assets: vec![super::super::update::Asset { name: zip_name, url: "http://127.0.0.1:9/zip".into(), size: 1 }] };
         let me = Install { platform: Platform::Mac, item: d.join("Cutaway.app"), work: d.join("w3") };
