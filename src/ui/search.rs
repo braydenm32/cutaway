@@ -29,6 +29,8 @@ pub(super) struct Search {
     sel: usize,
     /// The query `sel` was picked for (a new query starts at the top).
     sel_for: String,
+    /// The results for `sel_for` (the search runs when the query changes, not every frame).
+    hits: Vec<Hit>,
 }
 
 /// Where a result goes.
@@ -404,8 +406,9 @@ impl App {
             if self.search.sel_for != self.search.query {
                 self.search.sel = 0;
                 self.search.sel_for = self.search.query.clone();
+                self.search.hits = search(&self.search.query, SHOWN);
             }
-            let hits = search(&self.search.query, SHOWN);
+            let hits = self.search.hits.clone();
             ui.add_space(6.0);
             if self.search.query.trim().is_empty() {
                 ui.label(RichText::new("Any setting by its name or what it does, any page, and the desk's buttons: try \"fade to black\", \"stream key\", \"headphones\" or \"12-hour\".").color(TEXT_DIM));

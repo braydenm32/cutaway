@@ -43,6 +43,8 @@ pub struct SourceSlot {
     keep: Ns,
     inner: Mutex<SlotInner>,
     serial: AtomicU64,
+    /// Frames delivered, repeats included (the health check's frame rate).
+    arrivals: AtomicU64,
     last_arrival: Mutex<Option<Instant>>,
 }
 
@@ -56,20 +58,35 @@ impl SourceSlot {
             keep: delay + lookback + NS_PER_SEC / 10,
             inner: Mutex::new(SlotInner { frames: VecDeque::new(), iso_tap: None, dropped: 0, watchers: Vec::new() }),
             serial: AtomicU64::new(0),
+            arrivals: AtomicU64::new(0),
             last_arrival: Mutex::new(None),
         })
     }
 
     /// Called by the source for every captured frame.
-    pub fn push(&self, mut frame: VideoFrame) {
-        frame.serial = self.serial.fetch_add(1, Ordering::Relaxed) + 1;
+    pub fn push(&self, frame: VideoFrame) {
+        self.deliver(frame, false);
+    }
+
+    /// The same picture as the last one, sent again (a still screen, a
+    /// paused player): it keeps the last one's serial, so the compositor
+    /// doesn't upload it or make its thumbnail again. (Only when it really
+    /// is the last frame's picture; anything else counts as new.)
+    pub fn push_repeat(&self, frame: VideoFrame) {
+        self.deliver(frame, true);
+    }
+
+    fn deliver(&self, frame: VideoFrame, repeat: bool) {
+        self.arrivals.fetch_add(1, Ordering::Relaxed);
         *self.last_arrival.lock_ok() = Some(Instant::now());
         // A delay means many frames held (here and in the recorder, which
         // waits for their time to come); holding that many camera buffers
         // would starve the capture pool, so they're copied.
-        let frame = if self.delay > 0 { frame.detached() } else { frame };
-        let newest = frame.pts;
+        let mut frame = if self.delay > 0 { frame.detached() } else { frame };
         let mut g = self.inner.lock_ok();
+        let same = repeat && g.frames.back().is_some_and(|b| Arc::ptr_eq(&b.pixels, &frame.pixels) && (b.width, b.height) == (frame.width, frame.height));
+        frame.serial = if same { self.serial.load(Ordering::Relaxed) } else { self.serial.fetch_add(1, Ordering::Relaxed) + 1 };
+        let newest = frame.pts;
         if let Some(tap) = g.iso_tap.as_ref() {
             if tap.try_send(frame.clone()).is_err() {
                 g.dropped += 1;
@@ -125,9 +142,9 @@ impl SourceSlot {
         self.inner.lock_ok().watchers.retain(|w| w.0 != id);
     }
 
-    /// Frames delivered so far.
+    /// Frames delivered so far (repeats included).
     pub fn frames(&self) -> u64 {
-        self.serial.load(Ordering::Relaxed)
+        self.arrivals.load(Ordering::Relaxed)
     }
 
     /// No frames for a while.
@@ -256,7 +273,7 @@ pub fn start_video(
         let r = super::guests::start_source(cfg, slot, hub.clone())?;
         return Ok((r, "guest's screen".into()));
     }
-    let sink: platform::FrameSink = Arc::new(move |f| slot.push(f));
+    let sink: platform::FrameSink = Arc::new(move |f: VideoFrame| if f.serial == VideoFrame::REPEAT { slot.push_repeat(f) } else { slot.push(f) });
     if let Some(target) = platform::capture::ScreenTarget::parse(spec) {
         let r = platform::open_screen(&target, cfg.width, cfg.height, cfg.fps, sink)?;
         return Ok((r, target.describe()));
@@ -338,4 +355,38 @@ pub fn start_audio(index: usize, cfg: &AudioConfig, devices: &[DeviceInfo], tx: 
         let _ = tx.send(b);
     });
     platform::open_audio_input(dev, cfg.channels, sink)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame(pts: Ns, v: u8) -> VideoFrame {
+        VideoFrame::new_nv12(4, 2, pts, vec![v; 8], vec![128; 4], 0)
+    }
+
+    /// A repeated still picture keeps its serial (nothing to upload again)
+    /// but still counts as a frame for the health check.
+    #[test]
+    fn repeats_keep_the_serial() {
+        let slot = SourceSlot::new(0, 0, 0);
+        // Nothing before it: a repeat is a new picture.
+        slot.push_repeat(frame(1, 10));
+        let first = slot.pick(i64::MAX).unwrap();
+        assert_eq!(first.serial, 1);
+        let mut again = first.clone();
+        again.pts = 2;
+        slot.push_repeat(again);
+        let f = slot.pick(i64::MAX).unwrap();
+        assert_eq!((f.serial, f.pts), (1, 2));
+        assert_eq!(slot.frames(), 2);
+        // A different picture sent as a "repeat" is still new.
+        slot.push_repeat(frame(3, 20));
+        assert_eq!(slot.pick(i64::MAX).unwrap().serial, 2);
+        slot.push(frame(4, 20));
+        assert_eq!(slot.pick(i64::MAX).unwrap().serial, 3);
+        assert_eq!(slot.frames(), 4);
+        // The marker a capture sets goes through the same way.
+        assert_eq!(VideoFrame::REPEAT, u64::MAX);
+    }
 }

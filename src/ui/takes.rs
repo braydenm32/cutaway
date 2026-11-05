@@ -26,6 +26,10 @@ pub struct Takes {
     recent: Vec<RecentTake>,
     /// The frame the list was last drawn (a gap means it just opened).
     recent_frame: u64,
+    /// A look at the folders on a worker (a big or sleeping drive is slow):
+    /// its answer waits here until the next frame takes it.
+    scanned: std::sync::Arc<std::sync::Mutex<Option<Vec<RecentTake>>>>,
+    scanning: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// A take in Record & stream › Recordings, from its folder and Take.txt.
@@ -279,6 +283,8 @@ impl App {
             TakeAction::Resolve(folder) => {
                 let note = self.open_in_resolve(&folder, ctx);
                 self.takes.resolve_note = Some((folder, note));
+                // (Its one instruction is on the card: the 90 seconds start now.)
+                self.takes.card_since = Some(Instant::now());
             }
             TakeAction::Upload(report) => {
                 if self.uploads.offer.as_ref().is_some_and(|o| o.folder == report.folder) {
@@ -325,17 +331,29 @@ impl App {
     /// take's markers are open; a rescued take says so.
     pub(super) fn takes_list(&mut self, ui: &mut egui::Ui) {
         let frame = ui.ctx().cumulative_frame_nr();
-        if frame > self.takes.recent_frame + 1 {
+        if let Some(list) = self.takes.scanned.lock_ok().take() {
+            self.takes.recent = list;
+        }
+        if frame > self.takes.recent_frame + 1 && !self.takes.scanning.swap(true, std::sync::atomic::Ordering::Relaxed) {
             // The recording folder (and its backup), then the folders used before.
-            let mut folders = crate::recovery::folders(&self.cfg);
-            if let Some(dir) = crate::config::default_config_path().parent() {
-                for f in crate::recovery::remembered_folders(dir) {
-                    if !folders.contains(&f) {
-                        folders.push(f);
+            let output = self.cfg.output.clone();
+            let (slot, flag, ctx) = (self.takes.scanned.clone(), self.takes.scanning.clone(), ui.ctx().clone());
+            let spawned = std::thread::Builder::new().name("take-scan".into()).spawn(move || {
+                let mut folders = crate::recovery::folders_of(&output);
+                if let Some(dir) = crate::config::default_config_path().parent() {
+                    for f in crate::recovery::remembered_folders(dir) {
+                        if !folders.contains(&f) {
+                            folders.push(f);
+                        }
                     }
                 }
+                *slot.lock_ok() = Some(recent_takes_in(&folders, 10));
+                flag.store(false, std::sync::atomic::Ordering::Relaxed);
+                ctx.request_repaint();
+            });
+            if spawned.is_err() {
+                self.takes.scanning.store(false, std::sync::atomic::Ordering::Relaxed);
             }
-            self.takes.recent = recent_takes_in(&folders, 10);
         }
         self.takes.recent_frame = frame;
         let folder = self.cfg.output.folder.clone();
@@ -562,7 +580,7 @@ impl App {
             self.takes.card_since = Some(now);
         }
         let since = *self.takes.card_since.get_or_insert(now);
-        if card_goes_by_itself(!problems.is_empty(), r.podcast_pending, now.duration_since(since)) {
+        if card_goes_by_itself(!problems.is_empty(), r.podcast_pending, now.duration_since(since), note.is_some()) {
             close = true;
         } else if problems.is_empty() {
             ctx.request_repaint_after(Duration::from_millis(500));
@@ -582,10 +600,15 @@ impl App {
 /// How long the "Recording saved" card stays when the recording has no problems.
 pub(super) const CARD_SECONDS: u64 = 20;
 
+/// ... and while it shows what to do next in Resolve (Resolve can take a while to open).
+pub(super) const CARD_SECONDS_WITH_NOTE: u64 = 90;
+
 /// Whether the card hides itself now: only a take with no problems (and
-/// not still making its podcast copy), after CARD_SECONDS.
-fn card_goes_by_itself(problems: bool, podcast_pending: bool, shown_for: Duration) -> bool {
-    !problems && !podcast_pending && shown_for >= Duration::from_secs(CARD_SECONDS)
+/// not still making its podcast copy), after CARD_SECONDS (longer while
+/// the Resolve note is on it).
+fn card_goes_by_itself(problems: bool, podcast_pending: bool, shown_for: Duration, resolve_note: bool) -> bool {
+    let limit = if resolve_note { CARD_SECONDS_WITH_NOTE } else { CARD_SECONDS };
+    !problems && !podcast_pending && shown_for >= Duration::from_secs(limit)
 }
 
 #[cfg(test)]
@@ -595,10 +618,12 @@ mod tests {
     #[test]
     fn take_card_goes_only_when_all_is_well() {
         let s = |n| Duration::from_secs(n);
-        assert!(!card_goes_by_itself(false, false, s(19)));
-        assert!(card_goes_by_itself(false, false, s(20)));
-        assert!(!card_goes_by_itself(true, false, s(600)), "a recording with a problem keeps its card");
-        assert!(!card_goes_by_itself(false, true, s(60)), "still making the podcast copy");
+        assert!(!card_goes_by_itself(false, false, s(19), false));
+        assert!(card_goes_by_itself(false, false, s(20), false));
+        assert!(!card_goes_by_itself(true, false, s(600), false), "a recording with a problem keeps its card");
+        assert!(!card_goes_by_itself(false, true, s(60), false), "still making the podcast copy");
+        assert!(!card_goes_by_itself(false, false, s(89), true), "the Resolve step stays for 90 seconds");
+        assert!(card_goes_by_itself(false, false, s(90), true));
     }
 
     #[test]

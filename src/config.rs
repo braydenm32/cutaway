@@ -2392,39 +2392,19 @@ impl Config {
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
+        write_settings_text(path, &self.save_text()?)
+    }
+
+    /// The text `save` writes (secrets hidden), for handing to a writer thread.
+    pub fn save_text(&self) -> Result<String> {
         let mut c = self.clone();
         let held = std::mem::take(&mut c.held_secrets);
         crate::secrets::hide(c.secrets_mut(), &held);
-        c.write_file(path)
+        Ok(toml::to_string_pretty(&c)?)
     }
 
     fn write_file(&self, path: &Path) -> Result<()> {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let text = toml::to_string_pretty(self)?;
-        // Write a copy and swap it in, so a crash or a full disk mid-write
-        // can't leave half a settings file. It holds stream keys and
-        // tokens (when the Keychain can't be used): on Mac only this user
-        // may read it.
-        let tmp = path.with_extension("toml.saving");
-        let write = || -> std::io::Result<()> {
-            let mut f = std::fs::File::create(&tmp)?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-            }
-            std::io::Write::write_all(&mut f, text.as_bytes())?;
-            f.sync_all()?;
-            drop(f);
-            std::fs::rename(&tmp, path)
-        };
-        write().map_err(|e| {
-            let _ = std::fs::remove_file(&tmp);
-            e
-        })
-        .with_context(|| format!("writing {}", path.display()))
+        write_settings_text(path, &toml::to_string_pretty(self)?)
     }
 
     /// The checks a settings file must pass to load and run. Settings asks
@@ -2690,9 +2670,152 @@ fn merge_lists(b: &[serde_json::Value], e: &[serde_json::Value], l: &[serde_json
     e.to_vec()
 }
 
+/// Write settings text to `path`: a copy first, then swapped in, so a crash
+/// or a full disk mid-write can't leave half a settings file. It holds
+/// stream keys and tokens (when the Keychain can't be used): on Mac only
+/// this user may read it.
+fn write_settings_text(path: &Path, text: &str) -> Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("toml.saving");
+    let write = || -> std::io::Result<()> {
+        let mut f = std::fs::File::create(&tmp)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        }
+        std::io::Write::write_all(&mut f, text.as_bytes())?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, path)
+    };
+    write().map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        e
+    })
+    .with_context(|| format!("writing {}", path.display()))
+}
+
+struct SaveJob {
+    path: PathBuf,
+    text: String,
+    /// The show's own copy: the profiles folder, and the settings to store.
+    profile: Option<(PathBuf, Box<Config>)>,
+    /// What the show's own copy counts as sent for once it is written.
+    key: Option<(String, u64)>,
+}
+
+/// Writes the settings file on one background thread, in the order asked,
+/// so a slow drive never holds up the desk. Asking is quick (the text is
+/// made by the caller); `wait` is for a save that must come last.
+pub struct Saver {
+    tx: crossbeam_channel::Sender<SaveJob>,
+    busy: std::sync::Arc<(std::sync::Mutex<usize>, std::sync::Condvar)>,
+    failed: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    /// The settings text the show's own copy was last sent for (with its name).
+    last_profile: std::sync::Arc<std::sync::Mutex<Option<(String, u64)>>>,
+}
+
+impl Saver {
+    pub fn new() -> Self {
+        let (tx, rx) = crossbeam_channel::unbounded::<SaveJob>();
+        let busy: std::sync::Arc<(std::sync::Mutex<usize>, std::sync::Condvar)> = Default::default();
+        let failed: std::sync::Arc<std::sync::Mutex<Option<String>>> = Default::default();
+        let last_profile: std::sync::Arc<std::sync::Mutex<Option<(String, u64)>>> = Default::default();
+        let (b2, f2, l2) = (busy.clone(), failed.clone(), last_profile.clone());
+        let _ = std::thread::Builder::new().name("save-settings".into()).spawn(move || {
+            for job in rx {
+                match write_settings_text(&job.path, &job.text) {
+                    Ok(()) => {
+                        if let Some((dir, cfg)) = &job.profile {
+                            // (Counted as sent only once it is on disk.)
+                            if crate::control::profiles::save(dir, &cfg.ui.profile, cfg).is_ok() {
+                                *l2.lock().unwrap_or_else(|p| p.into_inner()) = job.key.clone();
+                            }
+                        }
+                    }
+                    Err(e) => *f2.lock().unwrap_or_else(|p| p.into_inner()) = Some(format!("{e:#}")),
+                }
+                let (n, cv) = &*b2;
+                *n.lock().unwrap_or_else(|p| p.into_inner()) -= 1;
+                cv.notify_all();
+            }
+        });
+        Saver { tx, busy, failed, last_profile }
+    }
+
+    /// Queue `text` for `path`. `profile`: the show's own copy to keep in
+    /// step, written only when this text is not the one it was last sent for.
+    pub fn queue(&self, path: &Path, text: String, profile: Option<(PathBuf, &Config)>) {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        text.hash(&mut h);
+        let key = profile.as_ref().map(|(_, c)| (c.ui.profile.clone(), h.finish()));
+        let unsent = key.is_some() && *self.last_profile.lock().unwrap_or_else(|p| p.into_inner()) != key;
+        let profile = match profile {
+            Some((dir, cfg)) if unsent => Some((dir, Box::new(cfg.clone()))),
+            _ => None,
+        };
+        let key = if profile.is_some() { key } else { None };
+        *self.busy.0.lock().unwrap_or_else(|p| p.into_inner()) += 1;
+        if self.tx.send(SaveJob { path: path.to_path_buf(), text, profile, key }).is_err() {
+            *self.busy.0.lock().unwrap_or_else(|p| p.into_inner()) -= 1;
+        }
+    }
+
+    /// Wait until everything queued is on disk (before a save done right
+    /// here, so an older one can't land after it, and when quitting).
+    pub fn wait(&self) {
+        let (n, cv) = &*self.busy;
+        let mut g = n.lock().unwrap_or_else(|p| p.into_inner());
+        while *g > 0 {
+            g = cv.wait(g).unwrap_or_else(|p| p.into_inner());
+        }
+    }
+
+    /// Why a background save failed, once.
+    pub fn take_failure(&self) -> Option<String> {
+        self.failed.lock().unwrap_or_else(|p| p.into_inner()).take()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The background writer writes in order, keeps the show's own copy
+    /// only when the text changed, and `wait` returns once it is all on disk.
+    #[test]
+    fn saver_writes_in_the_background() {
+        let dir = std::env::temp_dir().join(format!("cutaway-saver-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("cutaway.toml");
+        let profiles = dir.join("shows");
+        let mut cfg = Config::default();
+        cfg.ui.profile = "Friday".into();
+        let saver = Saver::new();
+        saver.queue(&path, cfg.save_text().unwrap(), Some((profiles.clone(), &cfg)));
+        saver.wait();
+        assert!(path.exists());
+        let copies = |d: &Path| std::fs::read_dir(d).map(|r| r.count()).unwrap_or(0);
+        assert_eq!(copies(&profiles), 1);
+        let first = std::fs::read_dir(&profiles).unwrap().next().unwrap().unwrap().path();
+        std::fs::remove_file(&first).unwrap();
+        // Same text again: the show's own copy is not written again.
+        saver.queue(&path, cfg.save_text().unwrap(), Some((profiles.clone(), &cfg)));
+        saver.wait();
+        assert_eq!(copies(&profiles), 0);
+        // Changed text: it is.
+        cfg.ui.scale = 1.5;
+        saver.queue(&path, cfg.save_text().unwrap(), Some((profiles.clone(), &cfg)));
+        saver.wait();
+        assert_eq!(copies(&profiles), 1);
+        assert!(std::fs::read_to_string(&path).unwrap().contains("1.5"));
+        assert!(saver.take_failure().is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// Interface size and update choices belong to the computer, not the
     /// show (review D10).

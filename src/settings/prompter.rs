@@ -12,12 +12,13 @@ impl SettingsUi {
             ui.vertical(|ui| {
                 ui.add(egui::TextEdit::multiline(&mut p.script).desired_width(460.0).desired_rows(12).hint_text("Paste or type the script. A blank line starts a new paragraph (◀ ▶▶ jump between them)."));
                 ui.horizontal(|ui| {
-                    if ui.button("Load a text file…").clicked() {
-                        if let Some(f) = rfd::FileDialog::new().add_filter("Text", &["txt", "md"]).pick_file() {
-                            if let Ok(t) = std::fs::read_to_string(&f) {
-                                p.script = t;
-                            }
+                    if let Some(f) = super::picks::take_one("prompter-script") {
+                        if let Ok(t) = std::fs::read_to_string(&f) {
+                            p.script = t;
                         }
+                    }
+                    if ui.button("Load a text file…").clicked() {
+                        super::picks::start(ui.ctx(), "prompter-script", super::picks::What::File, Some(("Text", &["txt", "md"])));
                     }
                     let words = p.script.split_whitespace().count();
                     if words > 0 {

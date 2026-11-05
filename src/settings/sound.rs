@@ -33,19 +33,20 @@ impl SettingsUi {
             });
             ui.add_space(6.0);
         }
+        if let Some(files) = super::picks::take("pads-add") {
+            for f in files {
+                let stem = f.file_stem().unwrap_or_default().to_string_lossy().to_string();
+                let name = unique(self.draft.pads.iter().map(|p| p.name.clone()).collect(), stem.trim());
+                let color = PAD_COLORS[self.draft.pads.len() % PAD_COLORS.len()].to_string();
+                self.draft.pads.push(Pad { name, file: f, color, ..Default::default() });
+            }
+            if !self.draft.audio.iter().any(|a| a.is_pads()) {
+                self.draft.audio.push(pads_input());
+            }
+        }
         ui.horizontal(|ui| {
             if ui.button("＋ Add sounds…").clicked() {
-                if let Some(files) = rfd::FileDialog::new().add_filter("Sounds", crate::media::audiofile::EXTENSIONS).pick_files() {
-                    for f in files {
-                        let stem = f.file_stem().unwrap_or_default().to_string_lossy().to_string();
-                        let name = unique(self.draft.pads.iter().map(|p| p.name.clone()).collect(), stem.trim());
-                        let color = PAD_COLORS[self.draft.pads.len() % PAD_COLORS.len()].to_string();
-                        self.draft.pads.push(Pad { name, file: f, color, ..Default::default() });
-                    }
-                    if !self.draft.audio.iter().any(|a| a.is_pads()) {
-                        self.draft.audio.push(pads_input());
-                    }
-                }
+                super::picks::start(ui.ctx(), "pads-add", super::picks::What::Files, Some(("Sounds", crate::media::audiofile::EXTENSIONS)));
             }
             hint(ui, "WAV, AIFF, MP3, AAC/M4A, FLAC, Ogg or CAF, loaded into memory so they start instantly.");
         });
@@ -63,12 +64,14 @@ impl SettingsUi {
                 ui.add_sized([130.0, 22.0], egui::TextEdit::singleline(&mut p.name));
                 ui.horizontal(|ui| {
                     let shown = p.file.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| "choose a file".into());
-                    let missing = !p.file.as_os_str().is_empty() && !p.file.exists();
+                    let missing = !p.file.as_os_str().is_empty() && !crate::util::exists_recent(&p.file);
                     ui.add(egui::Label::new(RichText::new(shown).color(if missing { AMBER } else { Color32::WHITE })).truncate()).on_hover_text(if missing { format!("⚠ {} is missing", p.file.display()) } else { p.file.display().to_string() });
+                    let key = format!("pad-{i}-{}", p.name);
+                    if let Some(f) = super::picks::take_one(&key) {
+                        p.file = f;
+                    }
                     if ui.small_button("…").clicked() {
-                        if let Some(f) = rfd::FileDialog::new().add_filter("Sounds", crate::media::audiofile::EXTENSIONS).pick_file() {
-                            p.file = f;
-                        }
+                        super::picks::start(ui.ctx(), &key, super::picks::What::File, Some(("Sounds", crate::media::audiofile::EXTENSIONS)));
                     }
                 });
                 egui::ComboBox::from_id_salt(("pad_mode", i)).selected_text(p.mode.label()).width(100.0).show_ui(ui, |ui| {

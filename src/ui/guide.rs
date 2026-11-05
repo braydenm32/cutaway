@@ -111,7 +111,7 @@ impl App {
         let timelines = self.cfg.output.export_timelines;
         // Ticked once you've taken another scene or changed one, not for
         // opening Edit layout (review B9).
-        if let Some(live) = self.engine.as_ref().map(|e| e.switcher.live().name.clone()) {
+        if let Some(live) = self.live_scene().map(|s| s.name.clone()) {
             match &self.guide_first_scene {
                 None => self.guide_first_scene = Some(live),
                 Some(first) if *first != live => self.guide_scenes = true,

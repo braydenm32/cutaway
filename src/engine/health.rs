@@ -479,13 +479,17 @@ pub struct HealthMonitor {
 
 impl HealthMonitor {
     pub fn tick(&mut self) {
-        let cfg = self.cfg.lock_ok().clone();
         let (generation, sources, audio): (u64, Vec<Arc<VideoInput>>, Vec<Arc<AudioInputDev>>) = {
             let l = self.lineup.lock_ok();
             (l.generation, l.video.clone(), l.audio.clone())
         };
         let channels: Vec<(u32, bool)> = audio.iter().map(|a| (a.channels(), a.cfg.record)).collect();
-        let estimate = estimate_rate(&cfg, &channels);
+        // Only what's needed from the settings (not a copy of all of them,
+        // every second).
+        let (estimate, out_folder, backup_folder) = {
+            let cfg = self.cfg.lock_ok();
+            (estimate_rate(&cfg, &channels), cfg.output.folder.clone(), cfg.output.backup_folder.clone())
+        };
 
         // Sources: frame rate actually arriving. A fresh count (the engine
         // just started, or the sources changed) has nothing to measure
@@ -537,11 +541,9 @@ impl HealthMonitor {
         };
         // The drive the take is filling (the folder setting may have been
         // changed since it started).
-        let folder = take.as_ref().map(|t| t.folder.clone()).unwrap_or_else(|| cfg.output.folder.clone());
+        let folder = take.as_ref().map(|t| t.folder.clone()).unwrap_or(out_folder);
         let disk = disk_space(&folder).map(|(free, total)| DiskStatus { path: folder.clone(), free, total, rate: main_rate, measured });
-        let backup = cfg
-            .output
-            .backup_folder
+        let backup = backup_folder
             .as_ref()
             .filter(|p| !p.as_os_str().is_empty())
             .and_then(|p| disk_space(p).map(|(free, total)| DiskStatus { path: p.clone(), free, total, rate: main_rate, measured }));

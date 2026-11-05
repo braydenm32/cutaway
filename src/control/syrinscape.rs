@@ -66,6 +66,9 @@ pub struct Syrinscape {
     token: Arc<Mutex<String>>,
     pub state: Arc<Mutex<SyrinState>>,
     jobs: Sender<Job>,
+    /// Starts its thread, the first time there's something to do (most
+    /// shows never use it).
+    start: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 impl Syrinscape {
@@ -74,23 +77,25 @@ impl Syrinscape {
         let state = Arc::new(Mutex::new(SyrinState::default()));
         let (tx, rx) = unbounded::<Job>();
         let (t2, s2) = (token.clone(), state.clone());
-        let _ = std::thread::Builder::new().name("syrinscape".into()).spawn(move || {
-            let agent = crate::util::https_agent(Duration::from_secs(15));
-            while let Ok(job) = rx.recv() {
-                s2.lock_ok().busy = true;
-                let token = t2.lock_ok().clone();
-                let r = run(&agent, &token, &job, &s2);
-                let mut st = s2.lock_ok();
-                st.busy = false;
-                match r {
-                    Ok(()) => st.problem = None,
-                    Err(e) => st.problem = Some(format!("{e:#}")),
+        let start = move || {
+            let _ = std::thread::Builder::new().name("syrinscape".into()).spawn(move || {
+                let agent = crate::util::https_agent(Duration::from_secs(15));
+                while let Ok(job) = rx.recv() {
+                    s2.lock_ok().busy = true;
+                    let token = t2.lock_ok().clone();
+                    let r = run(&agent, &token, &job, &s2);
+                    let mut st = s2.lock_ok();
+                    st.busy = false;
+                    match r {
+                        Ok(()) => st.problem = None,
+                        Err(e) => st.problem = Some(format!("{e:#}")),
+                    }
+                    drop(st);
+                    waker();
                 }
-                drop(st);
-                waker();
-            }
-        });
-        Syrinscape { token, state, jobs: tx }
+            });
+        };
+        Syrinscape { token, state, jobs: tx, start: Mutex::new(Some(Box::new(start))) }
     }
 
     pub fn set_token(&self, token: &str) {
@@ -104,6 +109,9 @@ impl Syrinscape {
     fn send(&self, job: Job) -> Result<(), String> {
         if !self.has_token() && !matches!(job, Job::Check) {
             return Err("Syrinscape isn't set up: add your auth token in Sound › Syrinscape".into());
+        }
+        if let Some(start) = self.start.lock_ok().take() {
+            start();
         }
         self.jobs.send(job).map_err(|_| "Syrinscape control stopped".to_string())
     }

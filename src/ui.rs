@@ -245,12 +245,21 @@ pub fn run(cfg: Config, save_path: Option<PathBuf>, self_test: bool, made_pin: b
     // settings (eframe puts it back on a screen that's still there).
     let window_file = crate::config::default_config_path().parent().map(|d| d.join("Main window.ron"));
     let remembered = window_file.as_ref().is_some_and(|f| f.exists());
-    let options = eframe::NativeOptions {
+    let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_title("Cutaway").with_icon(app_icon()).with_inner_size([1480.0, 920.0]).with_min_inner_size(MIN_WINDOW),
         persist_window: true,
         persistence_path: window_file,
         ..Default::default()
     };
+    // The window draws with the system's own GPU interface when it has one
+    // (as the compositor does), rather than starting them all.
+    // (Otherwise eframe's own choice, as before.)
+    let backends = crate::engine::compositor::gpu_backends();
+    if cfg!(any(target_os = "macos", windows)) && eframe::wgpu::Backends::from_env().is_none() && backends != eframe::wgpu::Backends::all() {
+        if let eframe::egui_wgpu::WgpuSetup::CreateNew(new) = &mut options.wgpu_options.wgpu_setup {
+            new.instance_descriptor.backends = backends;
+        }
+    }
     eframe::run_native(
         "Cutaway",
         options,
@@ -350,6 +359,14 @@ pub struct App {
     cfg_dirty: bool,
     /// When the desk first changed something not yet written to disk.
     dirty_since: Option<Instant>,
+    /// Writes the settings file in the background (autosave).
+    saver: crate::config::Saver,
+    /// The live scene as of this frame (copied once, not for every reader).
+    live_memo: std::cell::RefCell<Option<(u64, std::rc::Rc<Scene>)>>,
+    /// egui's pass number of the frame being drawn.
+    pass: std::cell::Cell<u64>,
+    /// The answer of a FAT32 check made when a take started.
+    fat_warning: Option<crossbeam_channel::Receiver<String>>,
     textures: HashMap<String, (u64, egui::TextureHandle)>,
     /// The right-hand column's edge is being dragged.
     column_dragged: bool,
@@ -562,7 +579,7 @@ impl App {
         let remote_shared = remote::RemoteShared::new(requests_tx.clone(), waker.clone());
         let syrinscape = control::syrinscape::Syrinscape::new(&cfg.syrinscape, waker.clone());
         // A crash mid-take: put the files back together while the window opens.
-        let rescue = crate::recovery::start_rescue(&crate::recovery::folders(&cfg), waker.clone()).map(waiting::Rescue::new);
+        let rescue = Some(waiting::Rescue::new(crate::recovery::start_rescue(&crate::recovery::folders(&cfg), waker.clone())));
         let mut app = App {
             rescue,
             syrinscape,
@@ -624,6 +641,10 @@ impl App {
             scenes_dirty: false,
             cfg_dirty: false,
             dirty_since: None,
+            saver: crate::config::Saver::new(),
+            live_memo: Default::default(),
+            pass: Default::default(),
+            fat_warning: None,
             textures: HashMap::new(),
             column_dragged: false,
             column: Default::default(),
@@ -1011,6 +1032,8 @@ impl App {
             }
         }
         self.cfg_dirty = false;
+        // (An autosave still being written must not land after this one.)
+        self.saver.wait();
         if let Some(p) = &self.save_path {
             let disk = self.cfg_for_disk();
             match disk.save(p) {
@@ -1035,6 +1058,7 @@ impl App {
         if let Some(e) = &self.engine {
             let _ = e.update_config(&self.cfg);
         }
+        self.saver.wait();
         if let Some(p) = &self.save_path {
             let disk = self.cfg_for_disk();
             if disk.save(p).is_ok() && !self.cfg.ui.profile.trim().is_empty() {
@@ -1069,13 +1093,13 @@ impl App {
             }
         }
         self.cfg_dirty = false;
-        if let Some(p) = &self.save_path {
+        // The text is made here; writing it (and the fsync) happens on the saver's thread.
+        if let Some(p) = self.save_path.clone() {
             let disk = self.cfg_for_disk();
-            match disk.save(p) {
-                Ok(()) => {
-                    if !self.cfg.ui.profile.trim().is_empty() {
-                        let _ = profiles::save(&crate::config::profiles_dir(p), &self.cfg.ui.profile, &disk);
-                    }
+            match disk.save_text() {
+                Ok(text) => {
+                    let profile = (!self.cfg.ui.profile.trim().is_empty()).then(|| (crate::config::profiles_dir(&p), &disk));
+                    self.saver.queue(&p, text, profile);
                 }
                 Err(e) => self.log(LogLevel::Warning, format!("Couldn't save settings: {e:#}")),
             }
@@ -1161,6 +1185,21 @@ impl App {
     }
 
     // ---- undo ---------------------------------------------------------------------------
+
+    /// The scene on air, copied once for the whole frame. For what is drawn
+    /// (a tally, a name); code that acts on it asks the switcher itself.
+    fn live_scene(&self) -> Option<std::rc::Rc<Scene>> {
+        let e = self.engine.as_ref()?;
+        let pass = self.pass.get();
+        if let Some((p, s)) = &*self.live_memo.borrow() {
+            if *p == pass {
+                return Some(s.clone());
+            }
+        }
+        let s = std::rc::Rc::new(e.switcher.live());
+        *self.live_memo.borrow_mut() = Some((pass, s.clone()));
+        Some(s)
+    }
 
     fn snapshot(&self, kind: undo::Kind, label: impl Into<String>) -> undo::Snapshot {
         let live = self.engine.as_ref().map(|e| e.switcher.live().name).unwrap_or_default();
@@ -1452,9 +1491,18 @@ impl App {
 
     /// A take just started on a FAT32 drive: say so while it's early.
     fn warn_fat_drive(&mut self) {
+        // (Looked at on a thread: the drive may be slow to answer; the warning comes a moment later.)
         let folder = self.cfg.output.folder.clone();
-        if crate::engine::health::fat_drive(&folder) {
-            self.toast(crate::engine::health::fat_warning(&folder), true);
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        let waker = self.waker.clone();
+        let spawned = std::thread::Builder::new().name("fat-check".into()).spawn(move || {
+            if crate::engine::health::fat_drive(&folder) {
+                let _ = tx.send(crate::engine::health::fat_warning(&folder));
+                waker();
+            }
+        });
+        if spawned.is_ok() {
+            self.fat_warning = Some(rx);
         }
     }
 
@@ -2759,8 +2807,14 @@ impl App {
         }
         self.watch_dropped_sources();
         let Some(e) = &self.engine else { return };
-        // A sharper monitor picture while a second screen shows it.
-        let want = if self.cfg.display.output != DisplayOutput::Off { e.info.canvas.0.min(1920) } else { self.cfg.program.preview_width };
+        // A sharper monitor picture while a second screen shows it big (the
+        // multiview shows it half size; the prompter not at all).
+        let normal = self.cfg.program.preview_width;
+        let want = match self.cfg.display.output {
+            DisplayOutput::Program => e.info.canvas.0.min(1920).max(normal),
+            DisplayOutput::Multiview => e.info.canvas.0.min(1280).max(normal),
+            DisplayOutput::Off | DisplayOutput::Prompter => normal,
+        };
         e.preview_width.store(want, std::sync::atomic::Ordering::Relaxed);
     }
 
@@ -2942,7 +2996,7 @@ impl App {
     /// The same report as More › App › Diagnostics, for when the engine won't start.
     fn save_problem_report(&mut self) {
         let Some(path) = rfd::FileDialog::new().add_filter("Zip", &["zip"]).set_file_name(crate::report::file_name()).save_file() else { return };
-        let facts = self.settings_context().engine_facts;
+        let facts = self.settings_context(true).engine_facts;
         let devices: Vec<String> = crate::devices::list(crate::devices::Kind::Video)
             .iter()
             .map(|d| format!("Video: {} {}", d.name, d.summary))
@@ -3702,7 +3756,7 @@ impl App {
         let ctx = ui.ctx().clone();
         let engine = self.engine.as_ref().unwrap();
         let n = engine.sources.len();
-        let live_sources = engine.switcher.live().sources();
+        let live_sources = self.live_scene().map(|s| s.sources()).unwrap_or_default();
         let preview_sources = engine.switcher.preview().map(|p| p.sources()).unwrap_or_default();
         let gap = 10.0;
         let label_h = 22.0;
@@ -3984,7 +4038,7 @@ impl App {
     // ---- scene bank -------------------------------------------------------------
 
     fn scene_bank(&mut self, ui: &mut egui::Ui) {
-        let live_name = self.engine.as_ref().map(|e| e.switcher.live().name);
+        let live_name = self.live_scene().map(|s| s.name.clone());
         let preview_name = self.engine.as_ref().and_then(|e| e.switcher.preview()).map(|p| p.name);
         let mut press: Option<(usize, bool)> = None;
         // Scenes that show a source with no signal: its names.
@@ -5659,7 +5713,7 @@ impl App {
         let preview = self.textures.get("previewbus").map(|t| t.1.id());
         let engine = self.engine.as_ref().unwrap();
         let tiles: Vec<(String, Option<egui::TextureId>, f32, bool, bool)> = {
-            let live = engine.switcher.live().sources();
+            let live = self.live_scene().map(|s| s.sources()).unwrap_or_default();
             let pv = engine.switcher.preview().map(|p| p.sources()).unwrap_or_default();
             engine
                 .sources
@@ -5669,7 +5723,7 @@ impl App {
                 .collect()
         };
         let canvas_aspect = engine.info.canvas.0 as f32 / engine.info.canvas.1 as f32;
-        let live_name = engine.switcher.live().name;
+        let live_name = self.live_scene().map(|s| s.name.clone()).unwrap_or_default();
         let preview_name = engine.switcher.preview().map(|p| p.name);
         let recording = engine.is_recording();
         let clocks = self.cfg.display.clocks.then(|| {
@@ -5851,7 +5905,8 @@ impl App {
         }
     }
 
-    fn settings_context(&self) -> SettingsContext {
+    /// `diagnostics`: also the engine's log and facts (only that page and the problem report read them).
+    fn settings_context(&self, diagnostics: bool) -> SettingsContext {
         let mut facts = Vec::new();
         let (mut recording, mut streaming, mut log, mut levels, mut vcam_on) = (false, false, Vec::new(), Vec::new(), false);
         let (mut meters, mut on) = (Vec::new(), Vec::new());
@@ -5863,21 +5918,25 @@ impl App {
             meters = e.input_levels();
             on = (0..e.audio.len()).map(|i| e.is_on(i)).collect();
             let st = e.status.lock_ok();
-            log = st.log.iter().cloned().collect();
-            facts.push(("Recording encoder".into(), e.encoder_description()));
-            if !st.stream.encoder.is_empty() {
-                facts.push(("Stream encoder".into(), st.stream.encoder.clone()));
+            if diagnostics {
+                log = st.log.iter().cloned().collect();
             }
-            facts.push(("Compositor".into(), e.info.compositor.clone()));
-            facts.push(("Program".into(), format!("{}×{} @ {} fps", e.info.canvas.0, e.info.canvas.1, e.info.fps)));
-            for s in &e.sources {
-                facts.push((format!("Source: {}", s.name), s.description()));
+            if diagnostics {
+                facts.push(("Recording encoder".into(), e.encoder_description()));
+                if !st.stream.encoder.is_empty() {
+                    facts.push(("Stream encoder".into(), st.stream.encoder.clone()));
+                }
+                facts.push(("Compositor".into(), e.info.compositor.clone()));
+                facts.push(("Program".into(), format!("{}×{} @ {} fps", e.info.canvas.0, e.info.canvas.1, e.info.fps)));
+                for s in &e.sources {
+                    facts.push((format!("Source: {}", s.name), s.description()));
+                }
+                for a in &e.audio {
+                    facts.push((format!("Audio: {}", a.name), a.description()));
+                }
+                facts.push(("NDI".into(), if crate::engine::ndi::available() { "installed".into() } else { "not installed".into() }));
             }
-            for a in &e.audio {
-                facts.push((format!("Audio: {}", a.name), a.description()));
-            }
-            facts.push(("NDI".into(), if crate::engine::ndi::available() { "installed".into() } else { "not installed".into() }));
-        } else if let Some(err) = &self.engine_error {
+        } else if let (true, Some(err)) = (diagnostics, &self.engine_error) {
             facts.push(("Engine".into(), format!("not running: {err}")));
         }
         let (midi_last, midi_connected) = match &self.midi {
@@ -5917,8 +5976,8 @@ impl App {
             guest_base: crate::engine::guests::hub().base_url(),
             guest_status: crate::engine::guests::hub().guests(),
             ndi_watchers: self.engine.as_ref().and_then(|e| e.ndi_watchers()),
-            on_air: self.engine.as_ref().map(|e| e.switcher.live().layers.iter().filter_map(|l| self.cfg.sources.get(l.source).map(|s| s.uid)).collect()).unwrap_or_default(),
-            on_air_scene: self.engine.as_ref().map(|e| e.switcher.live().name),
+            on_air: self.live_scene().map(|live| live.layers.iter().filter_map(|l| self.cfg.sources.get(l.source).map(|s| s.uid)).collect()).unwrap_or_default(),
+            on_air_scene: self.live_scene().map(|live| live.name.clone()),
             undo: self.history.can_undo().map(String::from),
             redo: self.history.can_redo().map(String::from),
             pictures: Vec::new(),
@@ -5943,8 +6002,10 @@ impl App {
     /// What a Settings page shows from the running show, the sources'
     /// pictures (as the multiview shows them) included.
     fn settings_info(&mut self, ctx: &egui::Context) -> SettingsContext {
-        let mut info = self.settings_context();
-        if let Some(e) = &self.engine {
+        let section = self.settings.as_ref().map(|w| w.section());
+        let mut info = self.settings_context(section == Some(crate::settings::Section::Diagnostics));
+        // (Only the Sources page shows the pictures.)
+        if let (Some(e), Some(crate::settings::Section::Sources)) = (&self.engine, section) {
             let slots: Vec<(usize, u64, Arc<FrameSlot>)> = e.sources.iter().enumerate().map(|(i, s)| (i, s.uid, s.preview.clone())).collect();
             info.virtual_ptz = e.sources.iter().enumerate().filter_map(|(i, s)| Some((s.uid, e.ptz(i)?.virt.clone()?))).collect();
             for (i, uid, slot) in slots {
@@ -6314,8 +6375,12 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         // Closing the window (or Cmd+Q / Alt+F4) mid-show asks first, and
         // so do changes still waiting for Apply (they'd be lost).
-        let waiting = self.settings.as_ref().and_then(|w| w.waiting_for_apply());
-        if ctx.input(|i| i.viewport().close_requested()) && !self.quit_ok && (self.engine.as_ref().is_some_and(|e| e.is_recording() || e.is_streaming()) || self.busy().is_some() || waiting.is_some()) {
+        self.pass.set(ctx.cumulative_pass_nr());
+        if let Some(w) = &self.settings {
+            w.begin_pass(ctx.cumulative_pass_nr());
+        }
+        let closing = ctx.input(|i| i.viewport().close_requested()) && !self.quit_ok;
+        if closing && (self.engine.as_ref().is_some_and(|e| e.is_recording() || e.is_streaming()) || self.busy().is_some() || self.settings.as_ref().is_some_and(|w| w.waiting_for_apply().is_some())) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.confirm = Some(Confirm::Quit);
         }
@@ -6330,7 +6395,18 @@ impl eframe::App for App {
             self.toast(format!("Cutaway couldn't use the {place}, so your stream keys and passwords are saved in the settings file on this computer. Allow Cutaway to use the {place} to keep them there instead."), true);
         }
         self.tick_starting(&ctx);
+        if !self.is_starting() {
+            // (The first look at the devices waits for the engine to finish opening its cameras.)
+            crate::devices::release_catalog();
+        }
         self.autosave();
+        if let Some(w) = self.fat_warning.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.fat_warning = None;
+            self.toast(w, true);
+        }
+        if let Some(e) = self.saver.take_failure() {
+            self.log(LogLevel::Warning, format!("Couldn't save settings: {e}"));
+        }
         // Controllers' commands, the engine's status and the published state
         // are handled in `logic`, which runs just before this.
         self.run_queued();
@@ -6412,6 +6488,8 @@ impl eframe::App for App {
         if self.cfg_dirty || self.scenes_dirty {
             self.save_config();
         }
+        // (Whatever the autosave still has to write.)
+        self.saver.wait();
         // An update that's ready and told to go in: the helper takes over
         // once Cutaway has closed.
         if let Some(e) = crate::net::self_update::on_exit() {
