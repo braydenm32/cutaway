@@ -1265,6 +1265,13 @@ impl Compositor {
         self.graphics.retain(|_, g| g.used);
     }
 
+    /// Make every thumbnail again next time, changed or not.
+    pub fn forget_thumbs(&mut self) {
+        for s in &mut self.sources {
+            s.thumb_serial = None;
+        }
+    }
+
     /// Upload a source's newest frame (skipped if it's already there).
     pub fn upload(&mut self, index: usize, frame: &VideoFrame) {
         let Some(s) = self.sources.get(index) else { return };
@@ -2021,6 +2028,20 @@ mod tests {
         assert!(prev[0] > 240 && prev[1] < 15, "preview top-left should be red");
         assert_eq!(r.thumbs.len(), 1);
         assert!(r.thumbs[0].3[0] > 240);
+        // The same picture again: no new thumbnail, just "still the same".
+        let thumbs = || Wants { thumbs: vec![0], ..Default::default() };
+        c.upload(a, &solid(64, 36, (1.0, 0.0, 0.0), 1));
+        let r = c.render(&Layout::One(states.to_vec()), None, &[], 0, 1, &thumbs()).unwrap();
+        assert!(r.thumbs.is_empty());
+        assert_eq!(r.thumbs_same, vec![0]);
+        // A new picture, or new tiles: made again.
+        c.upload(a, &solid(64, 36, (0.0, 1.0, 0.0), 2));
+        let r = c.render(&Layout::One(states.to_vec()), None, &[], 0, 2, &thumbs()).unwrap();
+        assert_eq!(r.thumbs.len(), 1);
+        assert!(r.thumbs[0].3[1] > 240, "green now");
+        c.forget_thumbs();
+        let r = c.render(&Layout::One(states.to_vec()), None, &[], 0, 3, &thumbs()).unwrap();
+        assert_eq!((r.thumbs.len(), r.thumbs_same.len()), (1, 0));
     }
 
     /// Sources moved, removed and added while it runs keep their pictures.

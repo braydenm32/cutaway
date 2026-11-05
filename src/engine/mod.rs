@@ -2103,6 +2103,9 @@ impl CompositorLoop {
                 self.switcher.remap_sources(&l.from, l.aspects, l.uids);
                 self.slots = l.slots;
                 self.thumbs = l.thumbs;
+                // (New tiles get their thumbnails even if the picture
+                // hasn't changed.)
+                self.comp.forget_thumbs();
                 self.masks = l.masks;
                 self.lineup_done.store(l.generation, Ordering::Release);
             }
