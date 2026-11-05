@@ -28,7 +28,7 @@ serde = { version = "1", features = ["derive"] }
 toml = "1"
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
 rfd = "0.17"
 crossbeam-channel = "0.5"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
@@ -151,6 +151,16 @@ embed-resource = "3"
 [profile.release]
 opt-level = 3
 debug = false
+
+# The build the packaged apps ship (macos/bundle.sh, windows/build.ps1): smaller and a
+# little faster, at the cost of a slower build. Symbols are kept (only debug info is
+# stripped) so a crash report on macOS still names functions. Keep unwinding: util::guard
+# turns a panic in a driver into a message, so panic = "abort" would end a show.
+[profile.dist]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
 
 [profile.dev.package."*"]
 opt-level = 2

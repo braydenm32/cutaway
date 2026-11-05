@@ -38,7 +38,7 @@ fn panel_info(panel: &str) -> (&'static str, Section, &'static str) {
         "stream" => ("Stream", Section::Streaming, "when you have somewhere to stream to"),
         "sound" => ("Sound pads", Section::Pads, "when you have pads, Syrinscape or talkback"),
         "comments" => ("Viewer comments", Section::Comments, "when live chat is set up"),
-        "ptz" => ("PTZ", Section::Sources, "when a camera has PTZ or close-ups"),
+        "ptz" => ("Camera controls", Section::Sources, "when a camera can be moved or has close-ups"),
         "rundown" => ("Rundown", Section::Rundown, "when the rundown has segments"),
         "guests" => ("Guests", Section::Guests, "while guests are set up"),
         "uploads" => ("Uploads", Section::Upload, "while uploads are waiting"),

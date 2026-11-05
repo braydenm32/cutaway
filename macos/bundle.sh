@@ -15,13 +15,13 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
     exit 1
 fi
 
-cargo build --release --target aarch64-apple-darwin
+cargo build --profile dist --target aarch64-apple-darwin
 version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
 
 app=target/Cutaway.app
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp target/aarch64-apple-darwin/release/cutaway "$app/Contents/MacOS/Cutaway"
+cp target/aarch64-apple-darwin/dist/cutaway "$app/Contents/MacOS/Cutaway"
 sed "s/__VERSION__/$version/g" macos/Info.plist > "$app/Contents/Info.plist"
 cp macos/Cutaway.icns "$app/Contents/Resources/"
 # The Stream Deck plugin (Settings → Remote & MIDI → Install…).

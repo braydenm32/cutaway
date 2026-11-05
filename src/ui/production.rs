@@ -227,7 +227,7 @@ impl App {
             self.ptz_cam = cams[0].0;
         }
         ui.add_space(4.0);
-        if !self.section_heading(ui, "ptz", "PTZ", Section::Sources) {
+        if !self.section_heading(ui, "ptz", "Camera controls", Section::Sources) {
             return;
         }
         let live = self.engine.as_ref().map(|e| e.switcher.live().sources()).unwrap_or_default();

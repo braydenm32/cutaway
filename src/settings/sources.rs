@@ -77,8 +77,8 @@ impl SourceKind {
             SourceKind::SrtCall => "SRT (pull from an address)",
             SourceKind::Rtmp => "RTMP (OBS, phones, encoders)",
             SourceKind::Ndi => "NDI (from another computer or device)",
-            SourceKind::Framed => "Auto-framed close-up (follows the people)",
-            SourceKind::VirtualPtz => "Virtual PTZ camera (you aim it)",
+            SourceKind::Framed => "Close-up that follows people (part of a camera)",
+            SourceKind::VirtualPtz => "Close-up you aim (part of a camera)",
             SourceKind::Phone => "Phone camera (scan a QR code)",
             SourceKind::Guest => "Remote guest (set up in Remote guests)",
         }
@@ -440,7 +440,14 @@ impl SettingsUi {
                     ui.label(RichText::new(*group).size(TEXT_BODY).color(TEXT_DIM));
                     for &k in kinds.iter() {
                         let (on, text) = if k.is_network_feed() { (kind.is_network_feed(), "Network feed (SRT or RTMP)") } else { (k == kind, k.label()) };
-                        if ui.selectable_label(on, text).clicked() && !on {
+                        let resp = ui.selectable_label(on, text);
+                        // The old names, for anyone who learned them (the technical term is in the hover).
+                        let resp = match k {
+                            SourceKind::VirtualPtz => resp.on_hover_text("Virtual PTZ camera: a shot cut from a wide camera that you aim with presets"),
+                            SourceKind::Framed => resp.on_hover_text("Auto-framed close-up: a shot cut from a wide camera that follows the people"),
+                            _ => resp,
+                        };
+                        if resp.clicked() && !on {
                             chosen = Some(k);
                         }
                     }
@@ -460,7 +467,7 @@ impl SettingsUi {
             }
             if matches!(kind, SourceKind::VirtualPtz | SourceKind::Framed) {
                 ui.label("");
-                hint(ui, "Two people on one camera? Use Virtual PTZ (you aim it) or Auto-framed (it follows them).");
+                hint(ui, "Two people on one camera? Use a close-up you aim, or one that follows them.");
                 ui.end_row();
             }
             if let Some(k) = chosen {
@@ -907,7 +914,7 @@ fn ptz_editor(ui: &mut egui::Ui, p: &mut crate::config::PtzConfig, is_virtual: b
         }
     });
     if !is_virtual && p.control == PtzControl::None {
-        hint(ui, "For network PTZ cameras: most speak VISCA (Sony, BirdDog, PTZOptics, Panasonic, Lumens…).");
+        hint(ui, "For network PTZ cameras: most use VISCA (see the camera's manual for its port and number).");
         return;
     }
     ui.add_space(6.0);
@@ -1087,13 +1094,13 @@ fn look_editor(ui: &mut egui::Ui, l: &mut SourceLook, lut_check: &mut Option<(st
         label(ui, "Saturation");
         ui.add(egui::Slider::new(&mut l.saturation, 0.0..=2.0).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
         ui.end_row();
-        label(ui, "Colour LUT");
+        label(ui, "Colour look file");
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
                 let shown = l.lut.as_ref().and_then(|p| p.file_name()).map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| "none".into());
                 ui.label(shown);
                 if ui.button("Choose…").on_hover_text("A .cube file, e.g. your camera's log-to-Rec.709 LUT").clicked() {
-                    if let Some(f) = rfd::FileDialog::new().add_filter("Colour LUT", &["cube", "CUBE"]).pick_file() {
+                    if let Some(f) = rfd::FileDialog::new().add_filter("Colour look file", &["cube", "CUBE"]).pick_file() {
                         l.lut = Some(f);
                         l.lut_strength = 1.0;
                     }
