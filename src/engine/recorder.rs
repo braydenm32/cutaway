@@ -108,6 +108,9 @@ pub enum MuxMsg {
     TrackEnd(usize, Ns),
 }
 
+/// How much sound from before a file's first picture is kept for it.
+const EARLY_KEPT: Ns = 2 * NS_PER_SEC;
+
 /// Writes one MP4/MOV; created when the first video packet arrives (its
 /// decoder configuration is needed for the header).
 #[allow(clippy::too_many_arguments)]
@@ -133,8 +136,11 @@ pub fn spawn_mp4(
                 }
             };
             let mut writer: Option<(Mp4Writer, usize, Option<usize>)> = None;
-            let mut early_audio: Vec<(Ns, Arc<Vec<u8>>)> = Vec::new();
-            let mut early_tracks: Vec<(usize, Ns, Arc<Vec<u8>>)> = Vec::new();
+            // Sound that comes before the first picture. Only the last few
+            // seconds are kept: a camera that never arrives would otherwise
+            // hold the whole take's sound in memory, for no file.
+            let mut early_audio: VecDeque<(Ns, Arc<Vec<u8>>)> = VecDeque::new();
+            let mut early_tracks: VecDeque<(usize, Ns, Arc<Vec<u8>>)> = VecDeque::new();
             let mut track_ids: Vec<usize> = Vec::new();
             let mut track_ends: Vec<(usize, Ns)> = Vec::new();
             let mut failed: Option<anyhow::Error> = None;
@@ -191,7 +197,12 @@ pub fn spawn_mp4(
                         MuxMsg::Audio(t, d) => match writer.as_mut() {
                             Some((w, _, Some(a))) => w.write(*a, t, &d, true)?,
                             Some(_) => {}
-                            None => early_audio.push((t, d)),
+                            None => {
+                                early_audio.push_back((t, d));
+                                while early_audio.front().is_some_and(|(f, _)| *f < t - EARLY_KEPT) {
+                                    early_audio.pop_front();
+                                }
+                            }
                         },
                         MuxMsg::AudioEnd(ns) => audio_end = Some(ns),
                         MuxMsg::VideoEnd(ns) => video_end = Some(ns),
@@ -201,7 +212,12 @@ pub fn spawn_mp4(
                                     w.write(id, t, &d, true)?;
                                 }
                             }
-                            None => early_tracks.push((k, t, d)),
+                            None => {
+                                early_tracks.push_back((k, t, d));
+                                while early_tracks.front().is_some_and(|(_, f, _)| *f < t - EARLY_KEPT) {
+                                    early_tracks.pop_front();
+                                }
+                            }
                         },
                         MuxMsg::TrackEnd(k, ns) => track_ends.push((k, ns)),
                     }
