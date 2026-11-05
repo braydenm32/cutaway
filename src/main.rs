@@ -261,10 +261,10 @@ fn run() -> Result<()> {
     }
 
     // One Cutaway at a time (held until it exits). Test pictures and
-    // scripted screenshots still run beside another copy, but leave its
-    // takes alone.
+    // scripted screenshots don't take it: they run beside another copy,
+    // and only rescue takes when no other copy is running.
     let trial = args.demo.is_some() || args.ui_test;
-    let instance = if args.init || args.probe_encoders { Instance::Unknown } else { lock_instance() };
+    let instance = if args.init || args.probe_encoders { Instance::Unknown } else { lock_instance(!trial) };
     if matches!(instance, Instance::Another) && !trial {
         let text = "Cutaway is already open.";
         eprintln!("{text}");
@@ -275,9 +275,15 @@ fn run() -> Result<()> {
         }
         anyhow::bail!("{text}");
     }
-    // Only the copy that holds the lock looks for takes to rescue: a take
-    // without its Take.txt may be one the other copy is recording.
-    let rescue = !matches!(instance, Instance::Another);
+    // A take without its Take.txt may be one another copy is recording:
+    // only rescued when no other copy is running. Without the lock held
+    // (a trial run, or no lock could be made), a take still being written
+    // to is left alone too.
+    let rescue = match instance {
+        Instance::Another => None,
+        Instance::Only(Some(_)) => Some(recovery::Care::Holding),
+        _ => Some(recovery::Care::Careful),
+    };
 
     let cfg_path = args.config.clone().unwrap_or_else(config::default_config_path);
     let first_run = args.demo.is_none() && !cfg_path.exists();
@@ -340,9 +346,9 @@ fn run() -> Result<()> {
 
     // Takes a crash left unfinished are repaired first: here for the
     // command line, in the background (with a progress card) in the window.
-    if (args.measure_sync || args.headless) && rescue {
+    if let (true, Some(care)) = (args.measure_sync || args.headless, rescue) {
         for folder in recovery::folders(&cfg) {
-            for take in recovery::recover_unfinished(&folder) {
+            for take in recovery::recover_unfinished(&folder, care) {
                 eprintln!("Recovered an unfinished take: {}", take.display());
             }
         }
@@ -364,9 +370,10 @@ fn run() -> Result<()> {
 
 /// Whether this is the only Cutaway running for this user.
 enum Instance {
-    /// It is: the lock is held as long as this file stays open. The OS lets
-    /// go of it when Cutaway ends, even in a crash.
-    Only(#[allow(dead_code)] std::fs::File),
+    /// It is. With the file, the lock is held as long as it stays open (the
+    /// OS lets go of it when Cutaway ends, even in a crash); without, it
+    /// was only looked at.
+    Only(Option<std::fs::File>),
     /// Another copy holds the lock.
     Another,
     /// No lock could be made (a folder that can't be written, a file
@@ -374,17 +381,32 @@ enum Instance {
     Unknown,
 }
 
-fn lock_instance() -> Instance {
-    let Some(dir) = config::default_config_path().parent().map(|d| d.to_path_buf()) else { return Instance::Unknown };
+/// Takes the lock (`hold`), or only looks whether another copy has it.
+fn lock_instance(hold: bool) -> Instance {
+    let dir = lock_dir();
     let _ = std::fs::create_dir_all(&dir);
     let Ok(file) = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(dir.join("cutaway.lock")) else { return Instance::Unknown };
     match file.try_lock() {
-        Ok(()) => Instance::Only(file),
+        Ok(()) => Instance::Only(hold.then_some(file)),
         Err(std::fs::TryLockError::WouldBlock) => Instance::Another,
         Err(e) => {
             eprintln!("couldn't check for another Cutaway: {e}");
             Instance::Unknown
         }
+    }
+}
+
+/// A folder on this computer for the lock: not the settings folder, which
+/// may roam with the user (a network home), where a copy open on another
+/// computer would stop this one starting.
+fn lock_dir() -> PathBuf {
+    let var = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
+    if cfg!(windows) {
+        var("LOCALAPPDATA").unwrap_or_else(std::env::temp_dir).join("Cutaway")
+    } else if cfg!(target_os = "macos") {
+        config::home_dir().join("Library/Caches/Cutaway")
+    } else {
+        var("XDG_RUNTIME_DIR").or_else(|| var("XDG_CACHE_HOME")).unwrap_or_else(|| config::home_dir().join(".cache")).join("cutaway")
     }
 }
 
@@ -524,7 +546,9 @@ fn headless(cfg: &Config, seconds: f64, switch_every: Option<f64>, stream: bool,
         engine.stop_recording();
     }
     engine.wait_finalized();
-    engine::guests::hub().shutdown();
+    if let Some(h) = engine::guests::started_hub() {
+        h.shutdown();
+    }
     // Stream shutdown runs in the background too; give it a moment.
     let deadline = Instant::now() + Duration::from_secs(8);
     while engine.is_streaming() || engine.status.lock_ok().stream.stopping {

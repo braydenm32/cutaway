@@ -99,10 +99,10 @@ pub fn relaunch_soon() -> bool {
     // The app bundle when there is one (…/Cutaway.app/Contents/MacOS/cutaway).
     let bundle = exe.ancestors().find(|p| p.extension().is_some_and(|e| e == "app")).map(|p| p.to_path_buf());
     // Once this copy has gone (it may first finish saving a take): only
-    // then can a new one start. Given up after two minutes, as when
-    // quitting was called off.
+    // then can a new one start. Given up after 15 minutes (a long take
+    // still saving is waited for), as when quitting was called off.
     #[cfg(unix)]
-    let wait = format!("i=0; while kill -0 {} 2>/dev/null; do i=$((i+1)); [ $i -gt 600 ] && exit 0; sleep 0.2; done; ", std::process::id());
+    let wait = format!("i=0; while kill -0 {} 2>/dev/null; do i=$((i+1)); [ $i -gt 4500 ] && exit 0; sleep 0.2; done; ", std::process::id());
     #[cfg(target_os = "macos")]
     let r = match &bundle {
         // `open -n` starts a fresh one.

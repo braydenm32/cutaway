@@ -321,9 +321,16 @@ pub struct GuestHub {
     me: Mutex<Weak<GuestHub>>,
 }
 
+static HUB: OnceLock<Arc<GuestHub>> = OnceLock::new();
+
+/// The guest hub, if anything has made it yet (quitting needn't start its
+/// runtime just to close it).
+pub fn started_hub() -> Option<Arc<GuestHub>> {
+    HUB.get().cloned()
+}
+
 /// The app's guest hub.
 pub fn hub() -> Arc<GuestHub> {
-    static HUB: OnceLock<Arc<GuestHub>> = OnceLock::new();
     HUB.get_or_init(|| {
         let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).thread_name("guests").enable_all().build().expect("tokio runtime");
         let h = Arc::new(GuestHub {

@@ -240,7 +240,7 @@ fn first_window_size(inner: egui::Vec2, screen: egui::Vec2) -> egui::Vec2 {
     inner.min(room).max(egui::Vec2::from(MIN_WINDOW))
 }
 
-pub fn run(cfg: Config, save_path: Option<PathBuf>, self_test: bool, made_pin: bool, first_run: bool, rescue: bool) -> anyhow::Result<()> {
+pub fn run(cfg: Config, save_path: Option<PathBuf>, self_test: bool, made_pin: bool, first_run: bool, rescue: Option<crate::recovery::Care>) -> anyhow::Result<()> {
     // The window's size and place, remembered per computer beside the
     // settings (eframe puts it back on a screen that's still there).
     let window_file = crate::config::default_config_path().parent().map(|d| d.join("Main window.ron"));
@@ -542,7 +542,7 @@ pub struct App {
 }
 
 impl App {
-    fn new(cc: &eframe::CreationContext<'_>, mut cfg: Config, save_path: Option<PathBuf>, rescue: bool) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>, mut cfg: Config, save_path: Option<PathBuf>, rescue: Option<crate::recovery::Care>) -> Self {
         // Every source and input gets its identity for this session.
         cfg.assign_uids();
         // The displays' names (macOS only gives them on this thread; screen
@@ -557,7 +557,7 @@ impl App {
         let remote_shared = remote::RemoteShared::new(requests_tx.clone(), waker.clone());
         let syrinscape = control::syrinscape::Syrinscape::new(&cfg.syrinscape, waker.clone());
         // A crash mid-take: put the files back together while the window opens.
-        let rescue = if rescue { crate::recovery::start_rescue(&crate::recovery::folders(&cfg), waker.clone()).map(waiting::Rescue::new) } else { None };
+        let rescue = rescue.and_then(|care| crate::recovery::start_rescue(&crate::recovery::folders(&cfg), care, waker.clone())).map(waiting::Rescue::new);
         let mut app = App {
             rescue,
             syrinscape,
@@ -6375,7 +6375,9 @@ impl eframe::App for App {
             }
             e.shutdown();
         }
-        crate::engine::guests::hub().shutdown();
+        if let Some(h) = crate::engine::guests::started_hub() {
+            h.shutdown();
+        }
         // An update that's ready and told to go in: the helper takes over
         // once Cutaway has closed.
         if let Some(e) = crate::net::self_update::on_exit() {

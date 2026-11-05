@@ -70,8 +70,18 @@ fn media_in(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
+/// How sure the rescue can be that no other copy of Cutaway is recording.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Care {
+    /// This copy holds the one-at-a-time lock: nobody else can be writing.
+    Holding,
+    /// It doesn't (a test-picture run, or no lock could be made): a take
+    /// still being written to is left alone.
+    Careful,
+}
+
 /// Takes in `output` that need repairing (just a look at the folders: quick).
-pub fn find_unfinished(output: &Path) -> Vec<Unfinished> {
+pub fn find_unfinished(output: &Path, care: Care) -> Vec<Unfinished> {
     let Ok(entries) = fs::read_dir(output) else { return Vec::new() };
     let mut takes = Vec::new();
     for entry in entries.flatten() {
@@ -84,7 +94,7 @@ pub fn find_unfinished(output: &Path) -> Vec<Unfinished> {
             let name = p.file_name().unwrap_or_default().to_string_lossy();
             name.starts_with("Program.") || name.starts_with("ISO_") || name.starts_with("Audio_")
         }) || dir.join(crate::engine::journal::FILE).exists();
-        if ours && !files.is_empty() && !in_use(&dir, &files) {
+        if ours && !files.is_empty() && !(care == Care::Careful && in_use(&dir, &files)) {
             takes.push(Unfinished { dir, files });
         }
     }
@@ -205,8 +215,8 @@ pub fn repair(take: &Unfinished, mut on_file: impl FnMut(usize, &str)) -> bool {
 }
 
 /// Finds unfinished takes in `output` and repairs them. Returns their folders.
-pub fn recover_unfinished(output: &Path) -> Vec<PathBuf> {
-    find_unfinished(output).into_iter().filter(|t| repair(t, |_, _| {})).map(|t| t.dir).collect()
+pub fn recover_unfinished(output: &Path, care: Care) -> Vec<PathBuf> {
+    find_unfinished(output, care).into_iter().filter(|t| repair(t, |_, _| {})).map(|t| t.dir).collect()
 }
 
 /// How a rescue in the background is getting on.
@@ -240,8 +250,8 @@ impl RescueState {
 
 /// Rescues unfinished takes in these folders in the background. None if
 /// there's nothing to rescue.
-pub fn start_rescue(folders: &[PathBuf], waker: crate::engine::Waker) -> Option<Arc<Mutex<RescueState>>> {
-    let takes: Vec<Unfinished> = folders.iter().flat_map(|f| find_unfinished(f)).collect();
+pub fn start_rescue(folders: &[PathBuf], care: Care, waker: crate::engine::Waker) -> Option<Arc<Mutex<RescueState>>> {
+    let takes: Vec<Unfinished> = folders.iter().flat_map(|f| find_unfinished(f, care)).collect();
     if takes.is_empty() {
         return None;
     }
@@ -283,7 +293,7 @@ pub fn start_rescue(folders: &[PathBuf], waker: crate::engine::Waker) -> Option<
     if spawned.is_err() {
         // No thread: do it here instead.
         let mut st = state.lock_ok();
-        st.rescued = folders.iter().flat_map(|f| recover_unfinished(f)).collect();
+        st.rescued = folders.iter().flat_map(|f| recover_unfinished(f, care)).collect();
         st.finished = true;
     }
     Some(state)
@@ -318,10 +328,12 @@ mod tests {
         fs::write(&stray, b"x").unwrap();
         // Something that isn't ours is left alone.
         fs::create_dir_all(root.join("Other")).unwrap();
-        // Written to just now: maybe another copy of Cutaway is recording it.
-        assert!(find_unfinished(&root).is_empty(), "a take being written is left alone");
+        // Written to just now: maybe another copy of Cutaway is recording
+        // it, unless this one holds the lock (a crash, and a quick restart).
+        assert!(find_unfinished(&root, Care::Careful).is_empty(), "a take being written is left alone");
+        assert_eq!(find_unfinished(&root, Care::Holding).len(), 1, "with the lock held it's rescued");
         age(&take);
-        let done = recover_unfinished(&root);
+        let done = recover_unfinished(&root, Care::Careful);
         assert_eq!(done, vec![take.clone()]);
         let note = fs::read_to_string(take.join("Take.txt")).unwrap();
         assert!(note.contains("Audio_01_DAW.wav"), "{note}");
@@ -329,7 +341,7 @@ mod tests {
         // When and how long, for Record & stream › Recordings and uploads.
         assert!(note.contains("Recorded: 2026-01-01 00:00\nLength: 00:00:0"), "{note}");
         assert!(note.contains("  Audio_01_DAW.wav  ("), "listed with its size: {note}");
-        assert!(recover_unfinished(&root).is_empty(), "second pass leaves finished recordings alone");
+        assert!(recover_unfinished(&root, Care::Holding).is_empty(), "second pass leaves finished recordings alone");
         assert_eq!(stamp_of("Show_2026-11-01_20-04-12_2").map(|t| t.to_string()), Some("2026-11-01 20:04:12".into()));
         assert_eq!(stamp_of("My_Show_2026-11-01_20-04-12").map(|t| t.to_string()), Some("2026-11-01 20:04:12".into()));
         assert!(stamp_of("Other").is_none());
@@ -362,9 +374,8 @@ mod tests {
             w.write(&vec![0.1f32; 4800]).unwrap();
             std::mem::forget(w);
         }
-        age(&take);
-        assert!(start_rescue(&[root.join("nothing here")], Arc::new(|| {})).is_none());
-        let st = start_rescue(&[root.clone()], Arc::new(|| {})).expect("one recording to rescue");
+        assert!(start_rescue(&[root.join("nothing here")], Care::Holding, Arc::new(|| {})).is_none());
+        let st = start_rescue(&[root.clone()], Care::Holding, Arc::new(|| {})).expect("one recording to rescue");
         let t0 = std::time::Instant::now();
         while !st.lock_ok().finished && t0.elapsed() < std::time::Duration::from_secs(20) {
             std::thread::sleep(std::time::Duration::from_millis(20));
