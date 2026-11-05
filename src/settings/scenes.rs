@@ -205,18 +205,19 @@ impl SettingsUi {
                         let saved = self.original.scenes.iter().any(|s| s.name == scene.name);
                         if !saved {
                             hint(ui, "Edit its layout once its name is saved (leave the name box).");
-                        } else if preview || on_air {
-                            let tip = if preview { "Puts it in preview and opens Show › Edit layout: the program stays as it is until you Take" } else { "It's on air, so changes show in the recording and stream at once" };
+                        } else {
+                            let tip = if preview {
+                                "Puts it in preview and opens Show › Edit layout: the program stays as it is until you Take"
+                            } else if on_air {
+                                "It's on air, so changes show in the recording and stream at once"
+                            } else {
+                                "It isn't on air, so it goes in preview just for the edit; Preview turns off again when you're done"
+                            };
                             if ui.button("Edit its layout ›").on_hover_text(tip).clicked() {
                                 self.pending = Some(SettingsAction::EditLayout(scene.name.clone()));
                             }
                             if on_air && !preview {
                                 ui.label(RichText::new("● On air: changes show at once").color(ON_AIR).size(TEXT_SMALL));
-                            }
-                        } else {
-                            hint(ui, "It isn't on air, so its frames are moved in preview first:");
-                            if ui.button("Turn on Preview").on_hover_text("Pick the next scene in a preview monitor, then Take it (Scenes › Switching). Then Edit its layout here puts it in preview").clicked() {
-                                self.draft.transition.preview_mode = true;
                             }
                         }
                     });

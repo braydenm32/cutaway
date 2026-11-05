@@ -7,7 +7,8 @@
 - **Your first show:** the first time Cutaway opens, a short guide walks
   through cameras, **naming your people**, the microphone, **your scenes**,
   where recordings go, going live (optional), the pre-show check, a test
-  recording and (optional) **editing afterwards**. Each step has a button to
+  recording, (optional) **editing afterwards** and (optional) **switching from
+  a phone or Stream Deck**. Each step has a button to
   the right page and ticks itself off when it's done. The cameras step counts
   real cameras only: test pictures standing in when none was found don't
   tick it, and it says where to let Cutaway use the camera. The microphone
@@ -18,7 +19,9 @@
   People & names** that behave the same way: who's in each picture and their
   role are saved as you type, and a camera's new name when you press Enter or
   click elsewhere (it restarts that camera for a moment, so it waits while
-  you're recording or live). The step also offers **＋ Make a name title** and
+  you're recording or live). The step also offers **＋ Make a name title**
+  (with nobody named yet it takes you straight on to **Sources › People &
+  names**, so the first name box is the next click) and
   **Close-ups…** (a close-up of each person from one camera). The cameras
   step also says how to add your screen (**＋ Add → Screen, window or app**).
   **Record a test** has a button that starts recording; once a recording is
@@ -26,13 +29,19 @@
   Recordings) with a **Recordings…** button. On a Mac the guide says up front that macOS
   will ask about the camera and microphone (choose Allow). Your scenes turns on **Edit layout**, and Editing
   afterwards opens **Record & stream › Quality and files › Editing**, where the DaVinci Resolve,
-  Premiere Pro and Final Cut projects are switched on. A step's button folds
+  Premiere Pro and Final Cut projects are switched on. **Switch from a phone
+  or Stream Deck** is skipped like Going live until you want it: its button
+  turns Remote control on and opens **More › Control › Phone remote**, where
+  the QR code is. A step's button folds
   the guide down to a small **Guide 3 of 7** button on the left, just above
   More, so the page it opened can be used; click it to carry on. Open
   it again any time from **More › App › Help** (or **First-show guide** under
   the status light). What it has ticked off (the mic heard you, the check
   was run, a test recorded) is remembered between launches, and if you quit
-  with the guide open it opens again next time.
+  with the guide open it opens again next time, unless every step that counts
+  is done: the Done row then says *All set: this closes itself next time*, and
+  it stays closed. Skipped optional steps don't hold it open, and you can
+  still open it from **More › App › Help** or the status light.
 - **Auto-setup:** on first launch Cutaway writes a settings file with every
   camera and capture card it finds, plus your microphone (a USB mic or
   interface before the computer's own; a loopback or a phone nearby only if
@@ -138,7 +147,7 @@
   feed gone) puts a red chip on the program monitor ("Cam 2: no signal,
   reconnecting…"), one error message at the bottom, and a ⚠ on every scene
   button that uses it, until it's back. To have Cutaway cut away by itself,
-  set **Sources › Cameras → If it drops while on air** (the first setting of each source) to a scene
+  set **Sources › Cameras → If it drops while on air** (on each source's page, under its Name, Type and Device) to a scene
   (say, the wide shot for a close-up camera): it cuts there once, as the
   signal goes, unless that scene also needs a source with no signal. It
   doesn't switch back when the source returns.

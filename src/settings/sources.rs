@@ -392,23 +392,6 @@ impl SettingsUi {
         let mut go_people = false;
         let mut media_cmd = None;
         egui::Grid::new("source_detail").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
-            // First: what happens if it drops while it's on air (forensics settings #5).
-            label(ui, "If it drops while on air");
-            let shown = if src.on_drop_scene.is_empty() {
-                "Don't switch".to_string()
-            } else if scene_names.contains(&src.on_drop_scene) {
-                format!("Cut to {}", src.on_drop_scene)
-            } else {
-                format!("Cut to {} (no such scene now)", src.on_drop_scene)
-            };
-            egui::ComboBox::from_id_salt("src_on_drop").selected_text(shown).width(240.0).show_ui(ui, |ui| {
-                ui.selectable_value(&mut src.on_drop_scene, String::new(), "Don't switch");
-                for n in &scene_names {
-                    ui.selectable_value(&mut src.on_drop_scene, n.clone(), format!("Cut to {n}"));
-                }
-            });
-            ui.end_row();
-
             label(ui, "Name");
             if running {
                 ui.horizontal(|ui| {
@@ -623,6 +606,24 @@ impl SettingsUi {
                 }
                 SourceKind::Screen | SourceKind::Media | SourceKind::Phone | SourceKind::Guest => {}
             }
+
+            // After the Name, Type and Device rows, which come first on the
+            // page: what happens if it drops while it's on air (forensics settings #5).
+            label(ui, "If it drops while on air");
+            let shown = if src.on_drop_scene.is_empty() {
+                "Don't switch".to_string()
+            } else if scene_names.contains(&src.on_drop_scene) {
+                format!("Cut to {}", src.on_drop_scene)
+            } else {
+                format!("Cut to {} (no such scene now)", src.on_drop_scene)
+            };
+            egui::ComboBox::from_id_salt("src_on_drop").selected_text(shown).width(240.0).show_ui(ui, |ui| {
+                ui.selectable_value(&mut src.on_drop_scene, String::new(), "Don't switch");
+                for n in &scene_names {
+                    ui.selectable_value(&mut src.on_drop_scene, n.clone(), format!("Cut to {n}"));
+                }
+            });
+            ui.end_row();
 
             let network = matches!(kind, SourceKind::SrtListen | SourceKind::SrtCall | SourceKind::Rtmp | SourceKind::Ndi | SourceKind::Phone | SourceKind::Guest);
             label(ui, match kind {

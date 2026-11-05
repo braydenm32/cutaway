@@ -305,12 +305,16 @@ impl App {
                 let named = self.cfg.sources.iter().filter(|s| !s.person.trim().is_empty()).count();
                 self.toast(
                     if named == 0 {
-                        format!("Made \"{name}\". Now say who's in each picture: Sources › People & names")
+                        format!("Made \"{name}\". Now say who's in each picture")
                     } else {
                         format!("Made \"{name}\": whoever is on air is named for 6 s after each cut. Click it to keep it on")
                     },
                     false,
                 );
+                // Nobody named yet: the first name box is the next click.
+                if named == 0 {
+                    self.go("sources/people/who");
+                }
                 Some(name)
             }
             Err(e) => {

@@ -393,6 +393,8 @@ pub struct App {
     /// It's folded down to a small button on the rail, out of the
     /// way of the page one of its steps went to.
     guide_folded: bool,
+    /// Every counted step of the guide is done (it won't reopen by itself).
+    guide_complete: bool,
     /// ⌘K search (ui/search.rs).
     search: search::Search,
     /// No remembered window yet: fit the first one to the screen.
@@ -500,6 +502,9 @@ pub struct App {
     rec_rect: Option<Rect>,
     /// Edit layout was open last frame (to see it open).
     edit_seen: bool,
+    /// The user's own Preview setting, while Edit its layout has turned
+    /// Preview on just for the edit (put back when Edit layout closes).
+    edit_restore_preview: Option<bool>,
     /// A marker's name being changed in the list under ◆ Marker ▾.
     marker_edit: Option<(crate::media::Ns, String)>,
     display_fullscreen: bool,
@@ -642,6 +647,7 @@ impl App {
             quit_ok: false,
             guide_open: false,
             guide_folded: false,
+            guide_complete: false,
             search: search::Search::default(),
             fit_window: false,
             guide_recorded: false,
@@ -668,6 +674,7 @@ impl App {
             marker_name: None,
             rec_rect: None,
             edit_seen: false,
+            edit_restore_preview: None,
             marker_edit: None,
             self_test: None,
             guest_link: (None, None, false),
@@ -974,6 +981,16 @@ impl App {
         }
     }
 
+    /// The settings as they go to disk: Preview as the user set it, not as
+    /// Edit its layout has it just for the edit.
+    fn cfg_for_disk(&self) -> Config {
+        let mut c = self.cfg.clone();
+        if let Some(was) = self.edit_restore_preview {
+            c.transition.preview_mode = was;
+        }
+        c
+    }
+
     fn save_config(&mut self) {
         if self.scenes_dirty {
             self.cfg.scenes = self.scenes.clone();
@@ -984,11 +1001,12 @@ impl App {
         }
         self.cfg_dirty = false;
         if let Some(p) = &self.save_path {
-            match self.cfg.save(p) {
+            let disk = self.cfg_for_disk();
+            match disk.save(p) {
                 Ok(()) => {
                     // Keep the current show's profile in step.
                     if !self.cfg.ui.profile.trim().is_empty() {
-                        let _ = profiles::save(&crate::config::profiles_dir(p), &self.cfg.ui.profile, &self.cfg);
+                        let _ = profiles::save(&crate::config::profiles_dir(p), &self.cfg.ui.profile, &disk);
                     }
                     crate::secrets::tidy(p);
                     if !self.quiet_save {
@@ -1007,8 +1025,9 @@ impl App {
             let _ = e.update_config(&self.cfg);
         }
         if let Some(p) = &self.save_path {
-            if self.cfg.save(p).is_ok() && !self.cfg.ui.profile.trim().is_empty() {
-                let _ = profiles::save(&crate::config::profiles_dir(p), &self.cfg.ui.profile, &self.cfg);
+            let disk = self.cfg_for_disk();
+            if disk.save(p).is_ok() && !self.cfg.ui.profile.trim().is_empty() {
+                let _ = profiles::save(&crate::config::profiles_dir(p), &self.cfg.ui.profile, &disk);
             }
         }
     }
@@ -1040,10 +1059,11 @@ impl App {
         }
         self.cfg_dirty = false;
         if let Some(p) = &self.save_path {
-            match self.cfg.save(p) {
+            let disk = self.cfg_for_disk();
+            match disk.save(p) {
                 Ok(()) => {
                     if !self.cfg.ui.profile.trim().is_empty() {
-                        let _ = profiles::save(&crate::config::profiles_dir(p), &self.cfg.ui.profile, &self.cfg);
+                        let _ = profiles::save(&crate::config::profiles_dir(p), &self.cfg.ui.profile, &disk);
                     }
                 }
                 Err(e) => self.log(LogLevel::Warning, format!("Couldn't save settings: {e:#}")),
@@ -1302,6 +1322,8 @@ impl App {
     /// Preview on or off, from the bank's Preview button or a controller.
     /// Turned off, nothing is left waiting in preview.
     fn set_preview_mode(&mut self, on: bool) {
+        // Chosen by hand: no longer just for the edit.
+        self.edit_restore_preview = None;
         if self.cfg.transition.preview_mode == on {
             return;
         }
@@ -4433,8 +4455,12 @@ impl App {
             s.retain_sources(e.sources.len());
             e.switcher.set_preview(Some(s));
         } else if e.switcher.live().name != name {
-            self.toast(format!("{name} isn't on air: turn on Preview to edit it first"), false);
-            return;
+            // Preview just for this edit; Edit layout closing puts it back.
+            s.retain_sources(e.sources.len());
+            e.switcher.set_preview(Some(s));
+            self.edit_restore_preview = Some(false);
+            self.cfg.transition.preview_mode = true;
+            self.mv_selected = None;
         }
         self.selected_layer = None;
         self.go("show/edit/canvas");
@@ -6301,6 +6327,11 @@ impl eframe::App for App {
             self.edit_opened();
         }
         self.edit_seen = self.edit_mode;
+        if !self.edit_mode {
+            if let Some(was) = self.edit_restore_preview.take() {
+                self.set_preview_mode(was);
+            }
+        }
         if self.settle_at.is_some_and(|t| Instant::now() >= t) {
             self.settle_at = None;
             if let Ok(me) = crate::net::self_update::Install::here() {
