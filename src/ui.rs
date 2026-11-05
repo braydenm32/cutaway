@@ -6287,7 +6287,7 @@ impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Before anything is drawn or a controller's command is read, so no
         // page or button sees the Preview that was on just for the edit.
-        if temp_preview_ends(self.edit_restore_preview.is_some(), self.edit_mode, self.shell.area) {
+        if temp_preview_ends(self.edit_restore_preview.is_some(), self.edit_mode, !self.on_show()) {
             self.end_temp_preview();
         }
         self.handle_requests();
@@ -6644,9 +6644,9 @@ fn edit_turns_preview_on(recording_or_live: bool, preview_on: bool) -> bool {
 }
 
 /// Whether the Preview turned on just for an edit goes back now: Edit
-/// layout has closed, or the Show area has been left (area 0 is Show).
-fn temp_preview_ends(temporary: bool, edit_mode: bool, area: usize) -> bool {
-    temporary && (!edit_mode || area != 0)
+/// layout has closed, or the Show area has been left .
+fn temp_preview_ends(temporary: bool, edit_mode: bool, away_from_show: bool) -> bool {
+    temporary && (!edit_mode || away_from_show)
 }
 
 /// The time of day for the header: "15:05", or "3:05 PM".
@@ -6848,10 +6848,10 @@ mod desk_tests {
     #[test]
     fn temporary_preview_goes_back_when_the_edit_ends_or_show_is_left() {
         use super::temp_preview_ends;
-        assert!(!temp_preview_ends(true, true, 0), "still editing");
-        assert!(temp_preview_ends(true, false, 0), "Edit layout closed");
-        assert!(temp_preview_ends(true, true, 3), "went to another area");
-        assert!(!temp_preview_ends(false, false, 3), "the user's own Preview is left alone");
+        assert!(!temp_preview_ends(true, true, false), "still editing");
+        assert!(temp_preview_ends(true, false, false), "Edit layout closed");
+        assert!(temp_preview_ends(true, true, true), "went to another area");
+        assert!(!temp_preview_ends(false, false, true), "the user's own Preview is left alone");
     }
 
     #[test]
