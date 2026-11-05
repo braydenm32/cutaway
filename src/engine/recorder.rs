@@ -147,7 +147,9 @@ pub fn spawn_mp4(
                 if failed.is_some() {
                     continue; // keep draining so producers never block
                 }
-                let r = (|| -> Result<()> {
+                // (A bug here fails the file, as a write error does, rather
+                // than leaving the encoder sending into nowhere.)
+                let r = crate::util::guard("writing the file", || -> Result<()> {
                     match msg {
                         MuxMsg::Video(p) => {
                             if writer.is_none() {
@@ -204,7 +206,7 @@ pub fn spawn_mp4(
                         MuxMsg::TrackEnd(k, ns) => track_ends.push((k, ns)),
                     }
                     Ok(())
-                })();
+                });
                 if let Err(e) = r {
                     let msg = format!("{label}: {e:#}");
                     let mut st = status.lock_ok();
@@ -218,7 +220,7 @@ pub fn spawn_mp4(
                 // Close the file properly if the drive lets us; else mend it
                 // the way the rescue would, so it isn't left half-written.
                 let backup = opts.backup_for(&path);
-                let finished = w.finish().is_ok() || mend(&path);
+                let finished = crate::util::guard("closing the file", || w.finish()).is_ok() || mend(&path);
                 if let Some(b) = backup.filter(|b| b.exists()) {
                     mend(&b);
                 }
@@ -462,7 +464,9 @@ pub fn spawn_video(
                     if t0 + pts >= end || result.is_err() {
                         continue;
                     }
-                    if let Err(e) = run(&f, pts, &mut enc) {
+                    // A crash in the encoder fails this file now (and shows in
+                    // the health panel), not only when the take stops.
+                    if let Err(e) = crate::util::guard("the encoder", || run(&f, pts, &mut enc)) {
                         status.lock_ok().push(LogLevel::Error, format!("{label}: {e:#}"));
                         stats.failed.store(true, Ordering::Relaxed);
                         result = Err(e);
@@ -481,7 +485,7 @@ pub fn spawn_video(
                 if let Some(r) = retimer.as_mut() {
                     let end = if left { crate::media::clock::now() } else { t1.load(Ordering::Relaxed) } - t0;
                     for (pts, f) in r.finish(end) {
-                        run(&f, pts, &mut enc)?;
+                        crate::util::guard("the encoder", || run(&f, pts, &mut enc))?;
                     }
                 }
             }
@@ -494,10 +498,10 @@ pub fn spawn_video(
                 }
             }
             if let Some(mut e) = enc {
-                e.finish()?;
+                crate::util::guard("the encoder", || e.finish())?;
             }
             if let Some(mut e) = proxy_enc {
-                let _ = e.finish();
+                let _ = crate::util::guard("the proxy encoder", || e.finish());
             }
             result
         })
@@ -541,10 +545,10 @@ pub fn spawn_audio(rx: Receiver<AudioBlock>, t0: Ns, t1: Arc<AtomicI64>, mut aac
                 let samples = cursor.take(&b, t1.load(Ordering::Relaxed));
                 if !samples.is_empty() {
                     let samples = if mono { samples.chunks_exact(2).map(|f| f[0]).collect() } else { samples };
-                    send(aac.push(&samples)?);
+                    send(crate::util::guard("the sound encoder", || aac.push(&samples))?);
                 }
             }
-            send(aac.finish()?);
+            send(crate::util::guard("the sound encoder", || aac.finish())?);
             let end = cursor.position_ns();
             for o in &outs {
                 let _ = o.send(match track {
@@ -636,7 +640,7 @@ pub fn spawn_wav(
                     }
                     let b = held.pop_front().unwrap();
                     if result.is_ok() {
-                        result = w.write(&b, t1.load(Ordering::Relaxed));
+                        result = crate::util::guard("writing the file", || w.write(&b, t1.load(Ordering::Relaxed)));
                         for (_, wr) in w.writers.iter_mut() {
                             if let Some(e) = wr.take_backup_error() {
                                 status.lock_ok().push(LogLevel::Warning, format!("{label}: {e}. The main recording continues."));

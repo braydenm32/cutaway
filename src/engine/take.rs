@@ -586,95 +586,117 @@ impl Engine {
         let captions = self.captions().filter(|_| cfg.captions.enabled && cfg.captions.transcript);
         // Everything up to t1 has been captured, mixed and composited by then.
         let settle = (VIDEO_LATENCY + 2 * NS_PER_SEC / fps as i64).max(self.audio_latency + audio::BLOCK_NS).max(300_000_000) + 100_000_000;
+        let (status2, waker2, folder2) = (status.clone(), waker.clone(), folder.clone());
         let handle = std::thread::spawn(move || {
-            clock::sleep_until(t1 + settle);
-            {
-                let mut t = taps.lock_ok();
-                t.program = None;
-                t.tall = None;
-                t.clean = None;
-            }
-            let mut problems = Vec::new();
-            for (name, s) in &slots {
-                let dropped = s.stop_iso_tap();
-                if dropped > 0 {
-                    problems.push(format!("{name}: {dropped} frames were dropped because the encoder couldn't keep up (they were repeated in the file)"));
+            // A bug while saving mustn't leave Cutaway "saving" for good (no
+            // new take could start). The files stay, and so does the journal,
+            // so the next start can rebuild the notes.
+            let saved = crate::util::guard("saving the recording", move || {
+                clock::sleep_until(t1 + settle);
+                {
+                    let mut t = taps.lock_ok();
+                    t.program = None;
+                    t.tall = None;
+                    t.clean = None;
                 }
-            }
-            mix_taps.lock_ok().retain(|(i, ..)| !take.mix_tap_ids.contains(i));
-            for i in &inputs {
-                i.stop_raw_tap();
-            }
-            let t0 = take.t0;
-            let wall = take.wall;
-            let side = SideFiles {
-                folder: folder.clone(),
-                backup: take.opts.backup_folder.clone(),
-                first_scene: take.first_scene.clone(),
-                first_angle: take.first_angle,
-                markers: take.markers.lock_ok().clone(),
-                export_files: take.export_files.clone(),
-                tc_seconds: take.tc_seconds,
-                on_air: graphics.on_air(take.t0, t1),
-                rescued: None,
-                note_latest: true,
-            };
-            let journal = take.journal.clone();
-            // What the window shows while it saves.
-            let saving = |what: String, done: f32| {
-                if let RecState::Finalizing { step, done: d, .. } = &mut status.lock_ok().rec {
-                    *step = what;
-                    *d = done;
+                let mut problems = Vec::new();
+                for (name, s) in &slots {
+                    let dropped = s.stop_iso_tap();
+                    if dropped > 0 {
+                        problems.push(format!("{name}: {dropped} frames were dropped because the encoder couldn't keep up (they were repeated in the file)"));
+                    }
                 }
+                mix_taps.lock_ok().retain(|(i, ..)| !take.mix_tap_ids.contains(i));
+                for i in &inputs {
+                    i.stop_raw_tap();
+                }
+                let t0 = take.t0;
+                let wall = take.wall;
+                let side = SideFiles {
+                    folder: folder.clone(),
+                    backup: take.opts.backup_folder.clone(),
+                    first_scene: take.first_scene.clone(),
+                    first_angle: take.first_angle,
+                    markers: take.markers.lock_ok().clone(),
+                    export_files: take.export_files.clone(),
+                    tc_seconds: take.tc_seconds,
+                    on_air: graphics.on_air(take.t0, t1),
+                    rescued: None,
+                    note_latest: true,
+                };
+                let journal = take.journal.clone();
+                // What the window shows while it saves.
+                let saving = |what: String, done: f32| {
+                    if let RecState::Finalizing { step, done: d, .. } = &mut status.lock_ok().rec {
+                        *step = what;
+                        *d = done;
+                    }
+                    waker();
+                };
+                // Most of the work: the encoders finish and the files close
+                // (90% of the bar); then the notes and timelines.
+                let mut report = take.collect_with(|what, f| saving(what, f * 0.9));
+                *monitor.lock_ok() = None;
+                // The last words of the take, once recognised.
+                let cues = captions.map(|c| {
+                    saving("Waiting for the last captions".into(), 0.9);
+                    c.settle(t1, Duration::from_secs(8));
+                    c.cues_between(t0, t1)
+                });
+                report.problems.extend(problems);
+                report.duration = Duration::from_nanos((t1 - t0).max(0) as u64);
+                report.markers = side.markers.iter().filter(|m| !m.clip).map(|m| (m.at as f64 / NS_PER_SEC as f64, m.name.clone())).collect();
+                report.podcast_pending = cfg.podcast.enabled && folder.join("Mix.wav").exists();
+                let events = switcher.events_between(t0 + VIDEO_LATENCY, t1 + VIDEO_LATENCY);
+                saving("Writing the timeline and notes".into(), 0.95);
+                let (written, backup_problem) = side.write(&cfg, &report, &summary, &events, t0, t1, wall, fps, (cw, ch), stream_since, cues.as_deref());
+                report.problems.extend(backup_problem);
+                // Saved: the journal kept for a rescue isn't needed.
+                if let Some(j) = journal {
+                    j.remove();
+                }
+                let mut st = status.lock_ok();
+                let total: u64 = report.files.iter().map(|f| f.1).sum();
+                st.push(
+                    LogLevel::Info,
+                    format!("Saved {} files ({}), {} long, to {}", report.files.len(), human_size(total), fmt_duration(report.duration), folder.display()),
+                );
+                if !written.is_empty() {
+                    st.push(LogLevel::Info, format!("Also saved: {}", written.join(", ")));
+                }
+                for p in &report.problems {
+                    st.push(LogLevel::Warning, p.clone());
+                }
+                st.rec = RecState::Idle;
+                let pending = report.podcast_pending;
+                st.last_take = Some(report);
+                drop(st);
                 waker();
-            };
-            // Most of the work: the encoders finish and the files close
-            // (90% of the bar); then the notes and timelines.
-            let mut report = take.collect_with(|what, f| saving(what, f * 0.9));
-            *monitor.lock_ok() = None;
-            // The last words of the take, once recognised.
-            let cues = captions.map(|c| {
-                saving("Waiting for the last captions".into(), 0.9);
-                c.settle(t1, Duration::from_secs(8));
-                c.cues_between(t0, t1)
+                if pending {
+                    let made = make_podcast(&cfg, &folder, side.backup.as_deref(), &side.markers, wall, &status, &waker);
+                    // Now uploads can go, with the podcast.
+                    if let Some(r) = status.lock_ok().last_take.as_mut().filter(|r| r.folder == folder) {
+                        r.podcast_pending = false;
+                        r.podcast = made;
+                    }
+                    waker();
+                }
+                Ok(())
             });
-            report.problems.extend(problems);
-            report.duration = Duration::from_nanos((t1 - t0).max(0) as u64);
-            report.markers = side.markers.iter().filter(|m| !m.clip).map(|m| (m.at as f64 / NS_PER_SEC as f64, m.name.clone())).collect();
-            report.podcast_pending = cfg.podcast.enabled && folder.join("Mix.wav").exists();
-            let events = switcher.events_between(t0 + VIDEO_LATENCY, t1 + VIDEO_LATENCY);
-            saving("Writing the timeline and notes".into(), 0.95);
-            let (written, backup_problem) = side.write(&cfg, &report, &summary, &events, t0, t1, wall, fps, (cw, ch), stream_since, cues.as_deref());
-            report.problems.extend(backup_problem);
-            // Saved: the journal kept for a rescue isn't needed.
-            if let Some(j) = journal {
-                j.remove();
-            }
-            let mut st = status.lock_ok();
-            let total: u64 = report.files.iter().map(|f| f.1).sum();
-            st.push(
-                LogLevel::Info,
-                format!("Saved {} files ({}), {} long, to {}", report.files.len(), human_size(total), fmt_duration(report.duration), folder.display()),
-            );
-            if !written.is_empty() {
-                st.push(LogLevel::Info, format!("Also saved: {}", written.join(", ")));
-            }
-            for p in &report.problems {
-                st.push(LogLevel::Warning, p.clone());
-            }
-            st.rec = RecState::Idle;
-            let pending = report.podcast_pending;
-            st.last_take = Some(report);
-            drop(st);
-            waker();
-            if pending {
-                let made = make_podcast(&cfg, &folder, side.backup.as_deref(), &side.markers, wall, &status, &waker);
-                // Now uploads can go, with the podcast.
-                if let Some(r) = status.lock_ok().last_take.as_mut().filter(|r| r.folder == folder) {
-                    r.podcast_pending = false;
-                    r.podcast = made;
+            if let Err(e) = saved {
+                let mut st = status2.lock_ok();
+                if matches!(st.rec, RecState::Finalizing { .. }) {
+                    st.rec = RecState::Idle;
                 }
-                waker();
+                if st.background.as_ref().is_some_and(|b| b.0 == "Making the podcast") {
+                    st.background = None;
+                }
+                if let Some(r) = st.last_take.as_mut().filter(|r| r.folder == folder2) {
+                    r.podcast_pending = false;
+                }
+                st.push(LogLevel::Error, format!("{e:#}. The recording's files are in {}", folder2.display()));
+                drop(st);
+                waker2();
             }
         });
         self.finalizers.lock_ok().push(handle);
