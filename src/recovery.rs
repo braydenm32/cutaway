@@ -117,6 +117,14 @@ fn stamp_of(name: &str) -> Option<chrono::NaiveDateTime> {
 /// With its journal, the take gets back its side files too (switch log,
 /// timelines, Resolve take file, chapters, markers).
 pub fn repair(take: &Unfinished, mut on_file: impl FnMut(usize, &str)) -> bool {
+    // Sound kept on disk for a picture that never came: not needed now.
+    for d in [take.dir.clone(), take.dir.join("Proxies")] {
+        for f in fs::read_dir(&d).into_iter().flatten().flatten() {
+            if f.file_name().to_string_lossy().ends_with(crate::engine::recorder::EARLY_SUFFIX) {
+                let _ = fs::remove_file(f.path());
+            }
+        }
+    }
     let journal = crate::engine::journal::read(&take.dir);
     // Chapters in the files, as Stop puts them there.
     let chapters: Vec<(i64, String)> = journal.as_ref().map(|j| j.markers.iter().filter(|m| !m.clip).map(|m| (m.at, m.name.clone())).collect()).unwrap_or_default();
@@ -305,6 +313,9 @@ mod tests {
         // Over a second, so some of it reached the disk.
         w.write(&vec![0.25f32; 2 * 48_000 * 2 + 9600]).unwrap();
         std::mem::forget(w); // simulate a crash: no finish()
+        // Sound left on disk for a picture that never came goes.
+        let stray = take.join(format!("ISO_01_Cam.mp4{}", crate::engine::recorder::EARLY_SUFFIX));
+        fs::write(&stray, b"x").unwrap();
         // Something that isn't ours is left alone.
         fs::create_dir_all(root.join("Other")).unwrap();
         // Written to just now: maybe another copy of Cutaway is recording it.
@@ -314,6 +325,7 @@ mod tests {
         assert_eq!(done, vec![take.clone()]);
         let note = fs::read_to_string(take.join("Take.txt")).unwrap();
         assert!(note.contains("Audio_01_DAW.wav"), "{note}");
+        assert!(!stray.exists());
         // When and how long, for Record & stream › Recordings and uploads.
         assert!(note.contains("Recorded: 2026-01-01 00:00\nLength: 00:00:0"), "{note}");
         assert!(note.contains("  Audio_01_DAW.wav  ("), "listed with its size: {note}");

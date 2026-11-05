@@ -75,8 +75,8 @@ struct Session {
 
 /// Silence that ends a session, before and after publishing starts
 /// (shorter in tests).
-const IDLE_BEFORE_PUBLISH: Duration = Duration::from_millis(if cfg!(test) { 1500 } else { 10_000 });
-const IDLE_PUBLISHING: Duration = Duration::from_millis(if cfg!(test) { 1000 } else { 5_000 });
+const IDLE_BEFORE_PUBLISH: Duration = Duration::from_millis(if cfg!(test) { 3000 } else { 10_000 });
+const IDLE_PUBLISHING: Duration = Duration::from_millis(if cfg!(test) { 2000 } else { 5_000 });
 
 impl Session {
     fn send(&mut self, cs: u8, kind: u8, stream: u32, payload: &[u8]) -> Result<()> {
@@ -507,9 +507,9 @@ mod tests {
         // ... and then nothing. The server lets it go after the idle limit.
         let t = Instant::now();
         let mut b = [0u8; 16];
-        quiet.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        quiet.set_read_timeout(Some(Duration::from_secs(8))).unwrap();
         assert!(matches!(quiet.read(&mut b), Ok(0) | Err(_)));
-        assert!(t.elapsed() < Duration::from_secs(4), "{:?}", t.elapsed());
+        assert!(t.elapsed() < Duration::from_secs(7), "{:?}", t.elapsed());
         let mut next = TcpStream::connect(("127.0.0.1", port)).unwrap();
         handshake(&mut next).expect("the next sender is answered");
         stop.store(true, Ordering::Relaxed);

@@ -108,8 +108,95 @@ pub enum MuxMsg {
     TrackEnd(usize, Ns),
 }
 
-/// How much sound from before a file's first picture is kept for it.
+/// How much sound from before a file's first picture is kept in memory;
+/// older sound waits in a temporary file beside it.
 const EARLY_KEPT: Ns = 2 * NS_PER_SEC;
+
+/// What a temporary file of early sound is called after (".early.tmp").
+pub const EARLY_SUFFIX: &str = ".early.tmp";
+
+/// Sound (the mix, `None`, or input track `k`) that comes before a file's
+/// first picture: a camera or phone that joins late still gets all of it,
+/// without holding the take's sound in memory meanwhile (one that never
+/// arrives would hold all of it, for no file). The last few seconds stay in
+/// memory, older packets go to a temporary file. The file is removed once
+/// it's been played back, and whenever this is dropped (no picture came, an
+/// error).
+struct EarlySound {
+    path: PathBuf,
+    spill: Option<std::io::BufWriter<std::fs::File>>,
+    /// Writing to the file failed: the rest stays in memory, as it used to.
+    spill_failed: bool,
+    mem: VecDeque<(Option<usize>, Ns, Arc<Vec<u8>>)>,
+}
+
+impl EarlySound {
+    fn new(file: &std::path::Path) -> Self {
+        let name = format!("{}{EARLY_SUFFIX}", file.file_name().unwrap_or_default().to_string_lossy());
+        EarlySound { path: file.with_file_name(name), spill: None, spill_failed: false, mem: VecDeque::new() }
+    }
+
+    fn push(&mut self, track: Option<usize>, t: Ns, d: Arc<Vec<u8>>) {
+        self.mem.push_back((track, t, d));
+        while !self.spill_failed && self.mem.front().is_some_and(|(_, f, _)| *f < t - EARLY_KEPT) {
+            let (k, f, d) = self.mem.pop_front().unwrap();
+            if let Err(e) = self.spill_one(k, f, &d) {
+                eprintln!("{}: couldn't keep early sound on disk ({e}); keeping it in memory", self.path.display());
+                self.spill_failed = true;
+                self.mem.push_front((k, f, d));
+            }
+        }
+    }
+
+    fn spill_one(&mut self, k: Option<usize>, t: Ns, d: &[u8]) -> std::io::Result<()> {
+        use std::io::Write;
+        if self.spill.is_none() {
+            self.spill = Some(std::io::BufWriter::new(std::fs::File::create(&self.path)?));
+        }
+        let w = self.spill.as_mut().unwrap();
+        // (track + 1, 0 for the mix), time, length, bytes.
+        let k = k.map_or(0, |k| k as u32 + 1);
+        w.write_all(&k.to_le_bytes())?;
+        w.write_all(&t.to_le_bytes())?;
+        w.write_all(&(d.len() as u32).to_le_bytes())?;
+        w.write_all(d)
+    }
+
+    /// Everything kept, oldest first (the file, then memory); the file goes.
+    fn replay(&mut self, mut out: impl FnMut(Option<usize>, Ns, &[u8]) -> Result<()>) -> Result<()> {
+        if let Some(mut w) = self.spill.take() {
+            use std::io::{Read, Write};
+            w.flush()?;
+            drop(w);
+            let mut r = std::io::BufReader::new(std::fs::File::open(&self.path)?);
+            let mut head = [0u8; 16];
+            // (A record cut short by a failed write ends it.)
+            while r.read_exact(&mut head).is_ok() {
+                let k = u32::from_le_bytes(head[..4].try_into().unwrap());
+                let t = Ns::from_le_bytes(head[4..12].try_into().unwrap());
+                let mut d = vec![0u8; u32::from_le_bytes(head[12..].try_into().unwrap()) as usize];
+                if r.read_exact(&mut d).is_err() {
+                    break;
+                }
+                out(k.checked_sub(1).map(|k| k as usize), t, &d)?;
+            }
+            drop(r);
+            let _ = std::fs::remove_file(&self.path);
+        }
+        for (k, t, d) in self.mem.drain(..) {
+            out(k, t, &d)?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for EarlySound {
+    fn drop(&mut self) {
+        if self.spill.take().is_some() || self.path.exists() {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
 
 /// Writes one MP4/MOV; created when the first video packet arrives (its
 /// decoder configuration is needed for the header).
@@ -136,11 +223,7 @@ pub fn spawn_mp4(
                 }
             };
             let mut writer: Option<(Mp4Writer, usize, Option<usize>)> = None;
-            // Sound that comes before the first picture. Only the last few
-            // seconds are kept: a camera that never arrives would otherwise
-            // hold the whole take's sound in memory, for no file.
-            let mut early_audio: VecDeque<(Ns, Arc<Vec<u8>>)> = VecDeque::new();
-            let mut early_tracks: VecDeque<(usize, Ns, Arc<Vec<u8>>)> = VecDeque::new();
+            let mut early = EarlySound::new(&path);
             let mut track_ids: Vec<usize> = Vec::new();
             let mut track_ends: Vec<(usize, Ns)> = Vec::new();
             let mut failed: Option<anyhow::Error> = None;
@@ -178,16 +261,16 @@ pub fn spawn_mp4(
                                 writer = Some((w, v, a));
                             }
                             let (w, v, a) = writer.as_mut().unwrap();
-                            if let Some(a) = a {
-                                for (t, d) in early_audio.drain(..) {
-                                    w.write(*a, t, &d, true)?;
+                            early.replay(|k, t, d| {
+                                let id = match k {
+                                    None => *a,
+                                    Some(k) => track_ids.get(k).copied(),
+                                };
+                                match id {
+                                    Some(id) => w.write(id, t, d, true),
+                                    None => Ok(()),
                                 }
-                            }
-                            for (k, t, d) in early_tracks.drain(..) {
-                                if let Some(&id) = track_ids.get(k) {
-                                    w.write(id, t, &d, true)?;
-                                }
-                            }
+                            })?;
                             w.write(*v, p.dts, &p.data, p.keyframe)?;
                             if p.keyframe {
                                 report_backup(w);
@@ -197,12 +280,8 @@ pub fn spawn_mp4(
                         MuxMsg::Audio(t, d) => match writer.as_mut() {
                             Some((w, _, Some(a))) => w.write(*a, t, &d, true)?,
                             Some(_) => {}
-                            None => {
-                                early_audio.push_back((t, d));
-                                while early_audio.front().is_some_and(|(f, _)| *f < t - EARLY_KEPT) {
-                                    early_audio.pop_front();
-                                }
-                            }
+                            None if audio.is_some() => early.push(None, t, d),
+                            None => {}
                         },
                         MuxMsg::AudioEnd(ns) => audio_end = Some(ns),
                         MuxMsg::VideoEnd(ns) => video_end = Some(ns),
@@ -212,12 +291,8 @@ pub fn spawn_mp4(
                                     w.write(id, t, &d, true)?;
                                 }
                             }
-                            None => {
-                                early_tracks.push_back((k, t, d));
-                                while early_tracks.front().is_some_and(|(_, f, _)| *f < t - EARLY_KEPT) {
-                                    early_tracks.pop_front();
-                                }
-                            }
+                            None if audio.is_some() && k < tracks.len() => early.push(Some(k), t, d),
+                            None => {}
                         },
                         MuxMsg::TrackEnd(k, ns) => track_ends.push((k, ns)),
                     }
@@ -990,6 +1065,49 @@ mod tests {
         assert!(crate::media::mp4::duration_secs(&p).is_some_and(|d| d > 1.9));
         assert!(mend(&p), "mending a mended file is harmless");
         let _ = std::fs::remove_file(&p);
+    }
+
+    /// A camera that comes 3.5 s into the take still gets all the sound
+    /// from the start (kept on disk meanwhile, not in memory); one that
+    /// never comes leaves no temporary file behind.
+    #[test]
+    fn early_sound_waits_on_disk_for_a_late_picture() {
+        use crate::media::mp4::tests::{audio_config, fake_video_config};
+        for picture in [true, false] {
+            let dir = std::env::temp_dir().join(format!("cutaway-early-{}-{picture}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("ISO_01_Cam.mp4");
+            let tmp = dir.join(format!("ISO_01_Cam.mp4{EARLY_SUFFIX}"));
+            let opts = FileOpts { take_folder: dir.clone(), backup_folder: None, tc_seconds: None, tc_date: Default::default(), markers: Default::default() };
+            let (tx, rx) = crossbeam_channel::unbounded();
+            let h = spawn_mp4(path.clone(), Brand::Mp4, 30, Some(audio_config()), Vec::new(), rx, Arc::new(Mutex::new(Status::default())), "ISO 1".into(), opts, None);
+            let frame = AAC_FRAME as i64 * NS_PER_SEC / 48_000;
+            let n = (3_500_000_000 / frame) as usize;
+            for i in 0..n {
+                tx.send(MuxMsg::Audio(i as i64 * frame, Arc::new(vec![0xAA; 300]))).unwrap();
+            }
+            let t = std::time::Instant::now();
+            while !tmp.exists() && t.elapsed() < Duration::from_secs(10) {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert!(tmp.exists(), "sound older than 2 s waits on disk");
+            if picture {
+                let config = Arc::new(fake_video_config());
+                for i in 0..30i64 {
+                    let dts = 3_500_000_000 + i * NS_PER_SEC / 30;
+                    tx.send(MuxMsg::Video(VideoPacket { pts: dts, dts, keyframe: i == 0, data: Arc::new(vec![0, 0, 0, 1, 0x65]), config: config.clone() })).unwrap();
+                }
+                drop(tx);
+                let w = h.join().unwrap().unwrap();
+                assert!(w.size > (n * 300) as u64, "all {n} packets of sound are in the file ({} bytes)", w.size);
+            } else {
+                drop(tx);
+                assert!(h.join().unwrap().is_err(), "no picture, no file");
+            }
+            assert!(!tmp.exists(), "the temporary file is gone");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     #[test]
