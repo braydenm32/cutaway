@@ -24,7 +24,8 @@ pub type Ns = i64;
 pub const NS_PER_SEC: i64 = 1_000_000_000;
 
 /// An NV12 picture (BT.709, video range) from a BGRA one (`pitch` bytes
-/// per row), scaled to `w`×`h` (bilinear). Screen captures on Windows.
+/// per row), scaled to `w`×`h` (bilinear). Screen captures on Windows when the
+/// graphics card can't convert them (it does the same, see `win::screen`).
 ///
 /// Whole-number arithmetic, a row at a time: a 4K screen is converted
 /// every frame, so this is kept quick.
@@ -155,6 +156,25 @@ pub fn readback_buffer(data: &[u8]) -> Vec<u8> {
     let mut v = pool::take(data.len());
     v.extend_from_slice(data);
     v
+}
+
+/// An NV12 frame `w`×`h` from a mapped GPU picture: Y rows `pitch` bytes
+/// apart, then the CbCr rows (same pitch) from `pitch * h`. Copied into
+/// readback-pool memory. None if `data` is too short.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn readback_nv12(data: &[u8], pitch: usize, w: usize, h: usize, pts: Ns) -> Option<VideoFrame> {
+    if w == 0 || h < 2 || pitch < w || data.len() < pitch * (h + h / 2 - 1) + w {
+        return None;
+    }
+    let rows = |first: usize, n: usize| {
+        let mut v = pool::take(w * n);
+        for r in 0..n {
+            v.extend_from_slice(&data[(first + r) * pitch..][..w]);
+        }
+        v
+    };
+    let (y, uv) = (rows(0, h), rows(h, h / 2));
+    Some(VideoFrame { width: w as u32, height: h as u32, pts, pixels: Arc::new(Pixels::Nv12 { y, y_stride: w, uv, uv_stride: w, recycle: true }), serial: 0 })
 }
 
 /// Free readback buffers that haven't been needed for a while.
@@ -668,6 +688,29 @@ mod convert_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn readback_nv12_drops_the_row_padding() {
+        // 4×4 picture, rows padded to 8 bytes: Y rows 0-3, CbCr rows 4-5.
+        let (w, h, pitch) = (4, 4, 8);
+        let mut data = vec![0xEEu8; pitch * 6];
+        for r in 0..6 {
+            for x in 0..w {
+                data[r * pitch + x] = (r * 10 + x) as u8;
+            }
+        }
+        let f = readback_nv12(&data, pitch, w, h, 7).unwrap();
+        assert_eq!((f.width, f.height, f.pts), (4, 4, 7));
+        f.pixels.with_planes(|p| {
+            assert_eq!((p.y_stride, p.uv_stride), (4, 4));
+            assert_eq!(p.y, &[0, 1, 2, 3, 10, 11, 12, 13, 20, 21, 22, 23, 30, 31, 32, 33]);
+            assert_eq!(p.uv, &[40, 41, 42, 43, 50, 51, 52, 53]);
+        });
+        // The last row needn't carry its padding.
+        assert!(readback_nv12(&data[..pitch * 5 + w], pitch, w, h, 0).is_some());
+        assert!(readback_nv12(&data[..pitch * 5 + w - 1], pitch, w, h, 0).is_none());
+        assert!(readback_nv12(&data, 3, w, h, 0).is_none());
+    }
 
     /// Plain bilinear, one pixel at a time, to check the quicker paths.
     fn reference(f: &VideoFrame, rect: [f32; 4], ow: usize, oh: usize) -> (Vec<u8>, Vec<u8>) {

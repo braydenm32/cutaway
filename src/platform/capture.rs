@@ -177,6 +177,52 @@ pub fn fit_inside(w: u32, h: u32, fw: u32, fh: u32) -> (u32, u32, u32, u32) {
     (((fw - sw) / 2) & !1, ((fh - sh) / 2) & !1, sw, sh)
 }
 
+/// Where a captured screen picture goes in the output frame: the part of
+/// the `tex` texture that holds the picture (`content`, clamped to it, from
+/// the top left), the even output size, and the picture's place in it (see
+/// [`fit_inside`]). The same for the GPU and CPU conversions, so both look
+/// the same.
+#[cfg_attr(not(windows), allow(dead_code))] // (used by Windows capture)
+pub fn screen_layout(content: (u32, u32), tex: (u32, u32), frame: (u32, u32)) -> ScreenLayout {
+    let src = (content.0.max(1).min(tex.0), content.1.max(1).min(tex.1));
+    let frame = (frame.0 & !1, frame.1 & !1);
+    let (x, y, w, h) = fit_inside(src.0, src.1, frame.0, frame.1);
+    ScreenLayout { src, frame, place: (x, y, w, h) }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScreenLayout {
+    /// The picture's size in the captured texture (from its top left).
+    pub src: (u32, u32),
+    /// The output frame's size (even).
+    pub frame: (u32, u32),
+    /// (x, y, w, h) of the picture in the frame; black around it.
+    pub place: (u32, u32, u32, u32),
+}
+
+impl ScreenLayout {
+    /// The picture fills the whole frame (no black around it).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn fills(&self) -> bool {
+        (self.place.2, self.place.3) == self.frame
+    }
+}
+
+/// Whether CUTAWAY_CPU_SCREEN_CONVERT asks for Windows screen pictures to be
+/// converted on the CPU (troubleshooting): set to anything but "" or "0".
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn cpu_screen_convert_forced(var: Option<&std::ffi::OsStr>) -> bool {
+    var.is_some_and(|v| !v.is_empty() && v != "0")
+}
+
+/// Direct3D 11's video processor colour space bits (for drivers without
+/// the newer DXGI colour space call): RGB full range in, BT.709 video
+/// range out, as [`crate::media::bgra_to_nv12`] does. Bits: Usage 0,
+/// RGB_Range 1 (0 = 0-255), YCbCr_Matrix 2 (1 = BT.709), xvYCC 3,
+/// Nominal_Range 4-5 (1 = 16-235).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub const VP_COLOR_SPACE_709_VIDEO: u32 = (1 << 2) | (1 << 4);
+
 /// Put an NV12 picture (`y`, `uv`, `w`×`h`) on black in a `fw`×`fh` frame
 /// at `(x, y)` (all even).
 #[cfg_attr(not(windows), allow(dead_code))] // (used by Windows capture)
@@ -243,6 +289,48 @@ pub fn bgra_to_rgba(t: &mut Thumb) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn screen_layout_matches_the_cpu_placement() {
+        // 4K screen into a 1080p show: fills it.
+        let l = screen_layout((3840, 2160), (3840, 2160), (1920, 1080));
+        assert_eq!(l, ScreenLayout { src: (3840, 2160), frame: (1920, 1080), place: (0, 0, 1920, 1080) });
+        assert!(l.fills());
+        // 16:10 screen into 16:9: black at the sides, all even.
+        let l = screen_layout((2560, 1600), (2560, 1600), (1920, 1080));
+        assert_eq!(l.place, (96, 0, 1728, 1080));
+        assert!(!l.fills());
+        // A window smaller than its texture (the pool not resized yet): only
+        // the picture's part, clamped to the texture.
+        let l = screen_layout((801, 3000), (1000, 600), (1281, 721));
+        assert_eq!(l.src, (801, 600));
+        assert_eq!(l.frame, (1280, 720));
+        assert_eq!(l.place, fit_inside(801, 600, 1280, 720));
+        let (x, y, w, h) = l.place;
+        assert!(x % 2 == 0 && y % 2 == 0 && w % 2 == 0 && h % 2 == 0);
+        assert!(x + w <= 1280 && y + h <= 720);
+        // No size reported yet: never a zero-sized source.
+        assert_eq!(screen_layout((0, 0), (640, 480), (640, 480)).src, (1, 1));
+    }
+
+    #[test]
+    fn cpu_screen_convert_env() {
+        use std::ffi::OsStr;
+        assert!(!cpu_screen_convert_forced(None));
+        assert!(!cpu_screen_convert_forced(Some(OsStr::new(""))));
+        assert!(!cpu_screen_convert_forced(Some(OsStr::new("0"))));
+        assert!(cpu_screen_convert_forced(Some(OsStr::new("1"))));
+        assert!(cpu_screen_convert_forced(Some(OsStr::new("yes"))));
+    }
+
+    #[test]
+    fn video_processor_color_space_bits() {
+        // RGB full range, BT.709 matrix, 16-235: D3D11's bit layout.
+        assert_eq!(VP_COLOR_SPACE_709_VIDEO & 0b10, 0);
+        assert_eq!((VP_COLOR_SPACE_709_VIDEO >> 2) & 1, 1);
+        assert_eq!((VP_COLOR_SPACE_709_VIDEO >> 4) & 0b11, 1);
+        assert_eq!(VP_COLOR_SPACE_709_VIDEO, 0x14);
+    }
 
     #[test]
     fn devices_round_trip() {
