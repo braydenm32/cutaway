@@ -22,6 +22,8 @@
   /* No double-tap zoom on a quick second tap. */
   button { touch-action:manipulation; }
   button.dim { opacity:.45; }
+  /* A tap sent and not yet answered. */
+  button[data-sending] { opacity:.6; }
   a { color:var(--accent); }
   .pad-x { padding-left:max(12px,env(safe-area-inset-left)); padding-right:max(12px,env(safe-area-inset-right)); }
 
@@ -29,7 +31,7 @@
   #top { position:sticky; top:0; z-index:5; background:var(--bg); padding-top:max(8px,env(safe-area-inset-top)); padding-bottom:8px; border-bottom:1px solid var(--panel); }
   .statusline { display:flex; align-items:center; gap:8px; min-height:32px; font-size:14px; }
   .show { font-weight:650; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:0 1 auto; }
-  .light { min-height:32px; padding:4px 10px; border-radius:16px; font-size:13px; display:inline-flex; align-items:center; gap:6px; flex:0 0 auto; background:var(--panel); }
+  .light { min-height:44px; padding:4px 10px; border-radius:16px; font-size:13px; display:inline-flex; align-items:center; gap:6px; flex:0 0 auto; background:var(--panel); }
   .light i { width:9px; height:9px; border-radius:50%; background:var(--green); display:inline-block; }
   .light.warn i { background:var(--amber); }
   .light.warn { color:var(--amber); border-color:#5a4520; }
@@ -43,9 +45,10 @@
   @keyframes recdot { 50% { opacity:.35; } }
   .pill.live { color:var(--live); border-color:#6a2a48; }
   .pill.live.on { background:var(--live); border-color:var(--live); color:#fff; }
-  .pill.live.going { background:#4a1f35; border-color:var(--live); color:#fff; animation:going 1.4s ease-in-out infinite; }
+  .pill.live.going { background:#4a1f35; border-color:var(--live); color:#fff; position:relative; isolation:isolate; }
+  .pill.live.going::before { content:''; position:absolute; inset:0; z-index:-1; background:#7a2a55; opacity:0; animation:going 1.4s ease-in-out infinite; }
   .pill.live.trouble { background:#6b3a10; border-color:var(--amber); color:#fff; }
-  @keyframes going { 50% { background:#7a2a55; } }
+  @keyframes going { 50% { opacity:1; } }
   .dests { display:flex; flex-wrap:wrap; gap:4px 12px; margin-top:6px; font-size:13px; color:var(--dim); }
   .dests span::before { content:'●'; margin-right:5px; }
   .dests .d-live::before { color:var(--green); } .dests .d-connecting::before, .dests .d-retrying::before { color:var(--amber); } .dests .d-failed::before { color:var(--red); }
@@ -119,7 +122,7 @@
   .actions button { min-height:50px; font-weight:650; }
   .mk { display:flex; gap:4px; min-width:0; }
   .mk #marker { flex:1 1 auto; min-width:0; white-space:nowrap; padding-left:6px; padding-right:6px; }
-  .mk #markmore { flex:0 0 34px; padding:10px 0; }
+  .mk #markmore { flex:0 0 44px; padding:10px 0; }
   #marks { display:flex; flex-wrap:wrap; gap:8px; padding-top:8px; }
   #marks button { flex:1 1 30%; min-height:44px; }
   .tabs { display:grid; grid-template-columns:repeat(4,1fr); }
@@ -312,15 +315,40 @@ function askPin(why) {
   if (ws) { try { ws.onclose = null; ws.close(); } catch (e) {} ws = null; wsLive = false; }
 }
 function savePin() { pin = $('pinbox').value.trim(); store('cutaway_pin', pin); needPin = false; typed = true; $('pin').style.display = 'none'; poll(); connectWs(); }
-async function act(cmd) {
+// This page's name for Cutaway: it lets Cutaway let go of what a lost phone
+// was holding (talkback, a pad, a camera move) if it stops saying so.
+const me = Math.random().toString(36).slice(2, 10);
+// A request that gives up after `ms`.
+function within(ms) {
+  if (window.AbortSignal && AbortSignal.timeout) return AbortSignal.timeout(ms);
+  const c = new AbortController(); setTimeout(() => c.abort(), ms); return c.signal;
+}
+// Commands that mean the same sent twice: only these are tried again.
+const REPEATABLE = /^(record|live|ftb|preview|talkback):(on|off)$|^(pad:[^:]+:release|ptz:[^:]+:stop)$/i;
+// The button last touched shows "sending" if the answer takes a moment.
+let lastBtn = null, lastBtnAt = 0;
+document.addEventListener('pointerdown', e => { const b = e.target.closest && e.target.closest('button'); lastBtn = b; lastBtnAt = Date.now(); }, true);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+// Sends a command; true if Cutaway ran it.
+async function act(cmd, again) {
+  const btn = !again && lastBtn && Date.now() - lastBtnAt < 1500 ? lastBtn : null;
+  const slow = btn ? setTimeout(() => { btn.dataset.sending = '1'; }, 250) : null;
   try {
     // (keepalive: a "let go" sent as the page goes away still arrives.)
-    const r = await fetch(api('/api/action?do=' + encodeURIComponent(cmd)), { method: 'POST', keepalive: true });
+    const r = await fetch(api('/api/action?do=' + encodeURIComponent(cmd) + '&who=' + me), { method: 'POST', keepalive: true, signal: within(8000) });
     const t = await r.text();
+    if (r.status === 409 && !again && REPEATABLE.test(cmd)) { await sleep(700); return act(cmd, true); }
     if (!r.ok) flash(t, true);
     else if (/pre-show check/i.test(t)) flash(t + '…');
     if (!wsLive) poll();
-  } catch (e) { flash('Cutaway isn\'t answering', true); }
+    return r.ok;
+  } catch (e) {
+    if (!again && REPEATABLE.test(cmd)) { await sleep(700); return act(cmd, true); }
+    flash('Cutaway isn\'t answering', true);
+    return false;
+  } finally {
+    if (btn) { clearTimeout(slow); delete btn.dataset.sending; }
+  }
 }
 
 // ---- small DOM helpers that only touch what changed ----
@@ -414,10 +442,10 @@ function flash(text, bad) {
 }
 
 // Keep the screen on: tally phones sit on a camera for hours, and the
-// remote stays awake while it's open and showing (its "Keep screen on"
-// switch, on unless turned off on this phone).
+// remote stays awake only if its "Keep screen on" switch was turned on
+// on this phone (off until then, to spare the battery).
 let lock = null;
-function wantAwake() { return tallySource !== null || stored('cutaway_awake') !== '0'; }
+function wantAwake() { return tallySource !== null || stored('cutaway_awake') === '1'; }
 async function keepAwake() {
   try {
     if (!wantAwake()) { if (lock) { const l = lock; lock = null; await l.release(); } return; }
@@ -485,7 +513,7 @@ onTap($('replay'), () => act(state && state.replaying ? 'replay:stop' : 'replay'
 onTap($('rdback'), () => act('rundown:previous'));
 onTap($('nextseg'), () => act('rundown:next'));
 onTap($('rdstop'), () => act('rundown:stop'));
-onTap($('awake'), () => { store('cutaway_awake', wantAwake() ? '0' : '1'); keepAwake(); refresh(); });
+onTap($('awake'), () => { if (tallySource !== null) return; store('cutaway_awake', wantAwake() ? '0' : '1'); keepAwake(); refresh(); });
 [['pr_top', 'top'], ['pr_back', 'back'], ['pr_play', 'toggle'], ['pr_fwd', 'forward'], ['pr_slow', 'slower'], ['pr_fast', 'faster']].forEach(([id, c]) => onTap($(id), () => act('prompter:' + c)));
 
 function render() {
@@ -655,14 +683,28 @@ function renderActions(s) {
 }
 
 // Hold-to-play: the release goes out when the finger lifts anywhere.
-let held = null;
-function hold(down, up) { if (held) act(held); held = up; act(down); }
-function letGo() { if (held) { const up = held; held = null; act(up); } }
+// `owed` is every release not yet confirmed: it's sent again if the first
+// try fails, when the connection comes back and when the page is shown, so
+// talkback or a camera move never stays on. While held the page also says
+// every second that it still is; Cutaway lets go by itself if that stops.
+let held = null, owed = new Set(), heldTimer = null;
+function giveBack(up) {
+  owed.add(up);
+  act(up).then(ok => { if (ok) owed.delete(up); });
+}
+function resendOwed() { owed.forEach(up => { act(up).then(ok => { if (ok) owed.delete(up); }); }); }
+function hold(down, up) {
+  if (held) giveBack(held);
+  held = up; owed.delete(up);
+  clearInterval(heldTimer);
+  heldTimer = setInterval(() => { fetch(api('/api/alive?who=' + me), { method: 'POST', keepalive: true, signal: within(3000) }).catch(() => {}); }, 1000);
+  act(down);
+}
+function letGo() { if (held) { const up = held; held = null; clearInterval(heldTimer); giveBack(up); } }
 ['pointerup', 'pointercancel'].forEach(ev => document.addEventListener(ev, letGo));
-// The phone locking, another app or the page closing mid-hold lets go too,
-// so talkback or a camera move never stays on.
+// The phone locking, another app or the page closing mid-hold lets go too.
 ['blur', 'pagehide'].forEach(ev => window.addEventListener(ev, letGo));
-document.addEventListener('visibilitychange', () => { if (document.hidden) letGo(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) letGo(); else resendOwed(); });
 $('talk').onpointerdown = e => { e.preventDefault(); hold('talkback:on', 'talkback:off'); };
 
 // Faders: at most ~8 changes a second while dragging, and the last one always.
@@ -866,10 +908,12 @@ function renderTally() {
 
 // Whether the PIN in use was just typed here (so a 401 means a typo).
 let typed = false;
+let polling = false;
 async function poll() {
-  if (needPin) return;
+  if (needPin || document.hidden || polling) return;
+  polling = true;
   try {
-    const r = await fetch(api('/api/state'));
+    const r = await fetch(api('/api/state'), { signal: within(3000) });
     if (r.status === 401) {
       askPin(typed ? 'That PIN didn\'t work. The PIN is shown in Cutaway under More › Control.' : pin ? 'The PIN has changed. The new one is shown in Cutaway under More › Control.' : 'It\'s shown in Cutaway under More › Control.');
       return;
@@ -880,28 +924,40 @@ async function poll() {
     heard();
     render();
   } catch (e) { if (!document.body.classList.contains('stale')) flash('Cutaway isn\'t answering…', true); }
+  finally { polling = false; }
 }
-function refreshImage() {
+// The picture is asked for with the tag of the one already shown: when
+// nothing has changed Cutaway answers "not modified" and sends no picture.
+let imgTag = '', imgUrl = '';
+async function refreshImage() {
   if (needPin || tallySource !== null || imgBusy || document.hidden || tab !== 'scenes') return;
   imgBusy = true;
-  const img = $('program');
-  const next = new Image();
-  next.onload = () => { img.src = next.src; imgBusy = false; };
-  next.onerror = () => { imgBusy = false; };
-  next.src = api('/api/program.jpg?t=' + Date.now());
+  try {
+    const r = await fetch(api('/api/program.jpg'), { headers: imgTag ? { 'If-None-Match': imgTag } : {}, signal: within(5000) });
+    if (r.status === 200) {
+      const url = URL.createObjectURL(await r.blob());
+      $('program').src = url;
+      if (imgUrl) URL.revokeObjectURL(imgUrl);
+      imgUrl = url; imgTag = r.headers.get('ETag') || '';
+    }
+  } catch (e) {}
+  imgBusy = false;
 }
 // Live updates over WebSocket; polling while it isn't connected.
 let wsLive = false, ws = null;
 function connectWs() {
   if (needPin || (ws && ws.readyState <= 1)) return;
-  try { ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/ws?pin=' + encodeURIComponent(pin)); }
+  try { ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/ws?pin=' + encodeURIComponent(pin) + (tallySource !== null ? '&mode=tally' : '')); }
   catch (e) { return; }
   ws.onmessage = ev => {
     heard();
     const m = JSON.parse(ev.data);
-    if (m.type === 'state') { state = m.state; wsLive = true; render(); }
+    if (m.type === 'state') { state = m.state; wsLive = true; frozen(false); render(); }
+    else if (m.type === 'tally') { state = { sources: m.sources }; wsLive = true; render(); }
+    else if (m.type === 'tick') frozen(m.age_ms > 2000);
     else if (m.type === 'reply' && !m.ok) flash(m.message, true);
   };
+  ws.onopen = () => resendOwed();
   ws.onclose = () => { wsLive = false; if (!needPin) { clearTimeout(wsTimer); wsTimer = setTimeout(connectWs, 3000); } };
 }
 let wsTimer = null;
@@ -910,17 +966,24 @@ let wsTimer = null;
 // and start a fresh connection (a phone that slept or changed Wi-Fi can
 // hold one that's quietly dead).
 let lastHeard = Date.now();
+// Cutaway is answering but its show hasn't been updated for a while (the
+// tick says how long): say so, as for a lost connection.
+function frozen(on) {
+  const c = $('conn');
+  if (on) { setText(c, 'Cutaway isn\'t updating'); if (!document.body.classList.contains('stale')) { document.body.classList.add('stale'); measure(); } }
+  else if (c.textContent !== 'Reconnecting to Cutaway…') { setText(c, 'Reconnecting to Cutaway…'); }
+}
 function heard() { lastHeard = Date.now(); if (document.body.classList.contains('stale')) { document.body.classList.remove('stale'); measure(); } }
 function reconnectNow() {
   if (needPin) return;
   if (ws) { try { ws.onclose = null; ws.close(); } catch (e) {} ws = null; }
   wsLive = false; clearTimeout(wsTimer);
-  poll(); connectWs();
+  poll(); connectWs(); resendOwed();
 }
 setInterval(() => {
   if (needPin || tallySource !== null || document.hidden) return;
   const quiet = Date.now() - lastHeard;
-  if (quiet > 5000 && !document.body.classList.contains('stale')) { document.body.classList.add('stale'); measure(); }
+  if (quiet > 5000) { setText($('conn'), 'Reconnecting to Cutaway…'); if (!document.body.classList.contains('stale')) { document.body.classList.add('stale'); measure(); } }
   if (quiet > 5000 && wsLive) reconnectNow();
 }, 1000);
 // Back on screen (unlocked, switched back to): fresh state and connection now.
@@ -932,7 +995,7 @@ document.addEventListener('visibilitychange', () => {
 if (tallySource === null) { selectTab(tab); measure(); }
 poll(); connectWs();
 setInterval(() => { if (!wsLive) poll(); }, 500);
-setInterval(refreshImage, 700);
+setInterval(refreshImage, 1500);
 </script>
 </body>
 </html>

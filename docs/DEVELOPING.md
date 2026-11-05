@@ -36,6 +36,14 @@ sources and controllers each run on their own threads with their own queues.
 A full disk, a slow encoder, a stream server that goes away or a network
 source that drops can't stall the cameras, the program or the other outputs.
 
+The remote server (`src/control/remote.rs`) uses one thread to accept, one to
+let go of holds from a phone that stopped saying it was holding, one for each
+request while it is answered, and two for each WebSocket controller (a
+reader and a writer; 1 + 2N threads with N controllers). A controller that
+sends nothing for 40 seconds or can't be written to for 10 is dropped. The
+app only builds the state for the remote while a controller is connected or
+something asked for it in the last few seconds.
+
 | File | What's in it |
 |---|---|
 | `src/engine/mod.rs` | Starts sources, the compositor and mixer; takes and streams |

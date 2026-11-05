@@ -67,12 +67,15 @@ you can answer it from across the room (or answer it on the desk), and
 whether it started.
 
 The remote keeps updating while the Cutaway window is minimised or hidden.
-It keeps the phone's screen on while it's open and showing; turn that off on
-the More tab (**Keep screen on**) to save battery. If nothing has come from
+The phone's screen is allowed to go dark as usual; to keep it on while the
+remote is open and showing, turn on **Keep screen on** on the More tab (it
+uses more battery). A tally light page always keeps its screen on. If nothing has come from
 Cutaway for five seconds (the phone left the Wi-Fi, the laptop went to
 sleep), a **Reconnecting to Cutaway…** strip shows at the top and the
 buttons dim, so a frozen screen never looks live; Cutaway sends a small sign
-of life every two seconds, so a quiet show isn't mistaken for a lost one.
+of life every two seconds, so a quiet show isn't mistaken for a lost one. If
+Cutaway itself stops updating the show (it is stuck, not the Wi-Fi), the
+strip says **Cutaway isn't updating**.
 Coming back to the page (unlocking the phone, switching back to the browser)
 fetches the show and reconnects straight away.
 
