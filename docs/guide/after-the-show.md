@@ -51,7 +51,9 @@ Cutaway only sees the Drive files it made.
   take** (if Resolve shows its Project Manager, open any project first).
   Within 15 minutes of Open in Resolve the script builds that recording straight
   away; later (or run on its own) it asks for the recording's folder, starting
-  at the latest recording. You get a project named after the recording, at its frame
+  at the latest recording. With a project from the same show and day already open
+  (the recording before a break), it asks whether to add this recording to it, in a
+  bin of its own with its own timeline, or make a new project. You get a project named after the recording, at its frame
   rate and picture size, with bins for the cameras and the audio, proxies
   linked, and the timeline **… (live edit)**: your cuts on V1, every camera
   and the program full length on its own track above (V2 and up, named

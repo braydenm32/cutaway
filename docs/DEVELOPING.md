@@ -82,6 +82,12 @@ FDK-AAC in place of the system encoders (neither is part of the Mac or
 Windows app), and, like Windows, Whisper for captions and ONNX Runtime for
 finding people (set `ORT_DYLIB_PATH` to `libonnxruntime.so`).
 
+The shipped build uses its own profile, `dist` (in Cargo.toml: link-time
+optimisation, one codegen unit, debug info stripped). It is slower to build, so
+the day-to-day loop uses `--release`. Build it with `cargo build --profile dist`:
+the binary is `target/dist/cutaway` (the scripts in `macos/` and `windows/` do
+this for the packages, and CI's tests keep using `--release`).
+
 Checking the other systems' code from Linux:
 
 ```sh

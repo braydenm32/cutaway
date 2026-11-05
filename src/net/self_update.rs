@@ -92,7 +92,7 @@ impl Install {
             Platform::Windows => {
                 let dir = exe.parent().ok_or("this copy of Cutaway isn't in a folder")?;
                 let name = exe.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                let built = dir.file_name().is_some_and(|n| n == "release" || n == "debug") && dir.parent().and_then(|p| p.file_name()).is_some_and(|n| n == "target");
+                let built = dir.file_name().is_some_and(|n| n == "release" || n == "debug" || n == "dist") && dir.parent().and_then(|p| p.file_name()).is_some_and(|n| n == "target");
                 if !name.eq_ignore_ascii_case("Cutaway.exe") || built {
                     return Err("this copy of Cutaway runs from a build, not the download".into());
                 }
@@ -848,10 +848,12 @@ mod tests {
         assert_eq!(mac.item, Path::new("/Applications/Cutaway.app"));
         assert_eq!(mac.work, Path::new("/Users/me/Library/Application Support/Cutaway/Updates"));
         assert!(Install::of(Platform::Mac, Path::new("/Users/me/cutaway/target/release/cutaway"), Path::new("/x")).is_err(), "a build isn't the app");
+        assert!(Install::of(Platform::Mac, Path::new("/Users/me/cutaway/target/dist/cutaway"), Path::new("/x")).is_err(), "a build isn't the app");
         let win = Install::of(Platform::Windows, Path::new("D:/Shows/Cutaway/Cutaway.exe"), Path::new("")).unwrap();
         assert_eq!(win.item, Path::new("D:/Shows/Cutaway"));
         assert_eq!(win.work, Path::new("D:/Shows/Cutaway/.update"));
         assert!(Install::of(Platform::Windows, Path::new("C:/src/cutaway/target/release/cutaway.exe"), Path::new("")).is_err());
+        assert!(Install::of(Platform::Windows, Path::new("C:/src/cutaway/target/dist/cutaway.exe"), Path::new("")).is_err());
         assert_eq!(Platform::Mac.asset_name("0.8.0"), "Cutaway-0.8.0-macos-arm64.zip");
         assert_eq!(Platform::Windows.asset_name("0.8.0"), "Cutaway-0.8.0-windows-x64.zip");
     }

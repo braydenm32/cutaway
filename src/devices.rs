@@ -55,6 +55,128 @@ pub fn list(kind: Kind) -> Vec<DeviceInfo> {
     })
 }
 
+/// What this computer has plugged in, kept for the whole run and filled on
+/// a worker thread: listing cameras can open each one (slow on Windows),
+/// so no screen waits for it.
+#[derive(Debug, Default)]
+pub struct Catalog {
+    pub video: Vec<DeviceInfo>,
+    pub audio: Vec<DeviceInfo>,
+    /// Sound outputs (headphones, talkback).
+    pub outputs: Vec<DeviceInfo>,
+    /// Video encoders found for H.264 and H.265, best first.
+    pub h264: Vec<String>,
+    pub h265: Vec<String>,
+    /// Bumped on every refresh, so a reader knows when to copy again.
+    pub generation: u64,
+}
+
+struct CatalogState {
+    current: std::sync::Arc<Catalog>,
+    loaded: bool,
+    running: bool,
+    again: bool,
+    /// The engine has finished opening its sources: only then may a look
+    /// at the devices begin (it opens cameras, which must not overlap).
+    released: bool,
+    last: Option<std::time::Instant>,
+}
+
+/// Background refresh at most this often when something asks.
+const CATALOG_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(30);
+
+fn catalog_state() -> &'static std::sync::Mutex<CatalogState> {
+    static S: std::sync::OnceLock<std::sync::Mutex<CatalogState>> = std::sync::OnceLock::new();
+    S.get_or_init(|| std::sync::Mutex::new(CatalogState { current: Default::default(), loaded: false, running: false, again: false, released: false, last: None }))
+}
+
+fn build_catalog(generation: u64) -> Catalog {
+    // Media Foundation and WASAPI need COM on this thread.
+    #[cfg(windows)]
+    crate::platform::win::com();
+    let encoders = |c: crate::config::Codec| crate::engine::encode::video_backends(c.video_codec()).into_iter().map(String::from).collect::<Vec<_>>();
+    Catalog {
+        video: list(Kind::Video),
+        audio: list(Kind::Audio),
+        outputs: crate::util::guard("Listing sound outputs", || Ok(crate::platform::list_output_devices())).unwrap_or_default(),
+        h264: encoders(crate::config::Codec::H264),
+        h265: encoders(crate::config::Codec::H265),
+        generation,
+    }
+}
+
+/// Look again in the background. A request made while a look is under way
+/// makes it go round once more, so a camera plugged in meanwhile shows up.
+pub fn refresh_catalog() {
+    let Ok(mut s) = catalog_state().lock() else { return };
+    if s.running || !s.released {
+        // (Not yet released: it goes ahead when the engine is up.)
+        s.again = true;
+        return;
+    }
+    s.running = true;
+    drop(s);
+    let spawned = std::thread::Builder::new().name("device-catalog".into()).spawn(|| loop {
+        let generation = catalog_state().lock().map(|s| s.current.generation + 1).unwrap_or(1);
+        let found = std::sync::Arc::new(build_catalog(generation));
+        let Ok(mut s) = catalog_state().lock() else { return };
+        s.current = found;
+        s.loaded = true;
+        s.last = Some(std::time::Instant::now());
+        if s.again {
+            s.again = false;
+        } else {
+            s.running = false;
+            return;
+        }
+    });
+    if spawned.is_err() {
+        if let Ok(mut s) = catalog_state().lock() {
+            s.running = false;
+        }
+    }
+}
+
+/// The engine is up (or could not start): looking at the devices may begin,
+/// and does so now if it was asked for or has never run.
+pub fn release_catalog() {
+    let go = match catalog_state().lock() {
+        Ok(mut s) if !s.released => {
+            s.released = true;
+            let go = s.again || !s.loaded;
+            s.again = false;
+            go
+        }
+        _ => false,
+    };
+    if go {
+        refresh_catalog();
+    }
+}
+
+/// The devices last found (empty until the first look is done), starting a
+/// background look when it has never run or is older than 30 s. Never waits.
+pub fn catalog() -> std::sync::Arc<Catalog> {
+    let (current, stale) = match catalog_state().lock() {
+        Ok(s) => (s.current.clone(), !s.running && s.last.is_none_or(|t| t.elapsed() > CATALOG_MAX_AGE)),
+        Err(_) => return Default::default(),
+    };
+    if stale {
+        refresh_catalog();
+    }
+    current
+}
+
+/// The devices last found, without starting a look.
+pub fn catalog_now() -> std::sync::Arc<Catalog> {
+    catalog_state().lock().map(|s| s.current.clone()).unwrap_or_default()
+}
+
+/// True until the first look has finished, or while one is under way.
+pub fn catalog_busy() -> bool {
+    catalog_state().lock().map(|s| s.running || !s.loaded).unwrap_or(false)
+}
+
 /// How likely a sound input is the mic someone speaks into: a USB or
 /// interface mic (2) before the computer's own (1), before virtual cables,
 /// app loopbacks and a nearby phone (0). By name: that's all the systems

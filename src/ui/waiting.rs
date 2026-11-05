@@ -163,6 +163,14 @@ impl App {
     pub(super) fn rescue_card(&mut self, ctx: &egui::Context) {
         let Some(r) = &self.rescue else { return };
         let st = r.state.lock_ok().clone();
+        if st.scanning {
+            return;
+        }
+        if st.takes.is_empty() {
+            // Nothing was left unfinished.
+            self.rescue = None;
+            return;
+        }
         let t = r.since.elapsed().as_secs_f32();
         let line = RESCUE_LINES[r.line];
         let mut close = false;

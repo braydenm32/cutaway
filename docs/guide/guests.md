@@ -48,7 +48,7 @@
 - **Firewalls:** guests connect directly to Cutaway (WebRTC), which works on
   almost every home and mobile network. A few office, school and hotel
   networks block that; set a TURN server (Cloudflare Calls, Twilio, your own
-  coturn) under **Strict networks** to relay for them.
+  coturn) under **Strict networks (TURN)**, in the **TURN server** box, to relay for them.
 - **Links that stay the same (Tailscale Funnel):** install
   [Tailscale](https://tailscale.com/download) and sign in (a free account),
   then choose **Tailscale Funnel** under **Reached through** and apply.

@@ -107,7 +107,7 @@ pub const AREAS: &[Area] = &[
         Tab { id: "auto", label: "Auto-switching", more: true, sections: &[
             Sect { id: "rules", label: "Rules", help: &[Page::Switching], routes: &[] } ]},
         Tab { id: "stinger", label: "Stinger & fade to black", more: true, sections: &[
-            Sect { id: "stinger", label: "Stinger and FTB", help: &[Page::Switching], routes: &[] } ]},
+            Sect { id: "stinger", label: "Stinger and fade to black", help: &[Page::Switching], routes: &[] } ]},
     ]},
     Area { id: "sound", label: "Sound", icon: Icon::Wave, key: Some(4), tabs: &[
         Tab { id: "mixer", label: "Mixer", more: false, sections: &[

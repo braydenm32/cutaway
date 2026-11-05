@@ -54,7 +54,9 @@ status list or pre-show check scrolls inside its box.
 Taps you can't take back need a one-second hold (a fill grows across the
 button, and letting go sooner only says **Hold to…**): stopping the recording,
 going live and ending the stream, fade to black, and turning a mic off.
-Starting a recording, turning a mic on and coming back from black are one tap.
+On the desk, the same holds apply to Fade to black, turning a mic off while you're recording or
+live, and disconnecting a remote guest (✕). Starting a recording, turning a mic on and coming
+back from black are one tap, on the desk and the remote alike.
 Each button sends what it means (start or stop, never "switch over"), so a
 screen that's a moment out of date can't stop a recording with a tap. The
 rundown's **◀ Previous** (on the More tab) goes to the previous segment;
@@ -66,7 +68,9 @@ check found, with **Start** (or **Start anyway**) and **Cancel** buttons so
 you can answer it from across the room (or answer it on the desk), and
 whether it started.
 
-The remote keeps updating while the Cutaway window is minimised or hidden.
+The remote keeps working while the Cutaway window is minimised or hidden, but a
+minimised window can take up to a tenth of a second longer to act on a tap. For the quickest
+response, keep Cutaway open behind other windows rather than minimised.
 The phone's screen is allowed to go dark as usual; to keep it on while the
 remote is open and showing, turn on **Keep screen on** on the More tab (it
 uses more battery). A tally light page always keeps its screen on. If nothing has come from
@@ -114,7 +118,8 @@ Stream Deck plugin…** in More › Control › Stream Deck, which also lists
 all 28 of the plugin's keys and what each does; the Mac app carries it
 inside). Drag Cutaway actions onto keys, and in any key's settings enter the
 address (`127.0.0.1:8790` on the same computer) and the PIN. Needs Stream
-Deck 6.5 or later, on macOS or Windows. See [streamdeck/README.md](../../streamdeck/README.md).
+Deck 6.5 or later, on macOS or Windows. As with the phone, keep Cutaway open behind other
+windows rather than minimised for the quickest response. See [streamdeck/README.md](../../streamdeck/README.md).
 
 ![Stream Deck keys](../streamdeck.png)
 

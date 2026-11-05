@@ -54,6 +54,8 @@
 //! directly: they change `App::cfg`, call `remember` for Undo and save.
 
 use super::*;
+use std::collections::HashMap;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 /// The pages that save as you go: all of them.
@@ -285,6 +287,25 @@ fn scenes_label(before: &[crate::scene::Scene], after: &[crate::scene::Scene]) -
     "Scenes".into()
 }
 
+/// A default `Config`, built once (compared against by `held`).
+fn default_config() -> &'static Config {
+    static D: std::sync::OnceLock<Config> = std::sync::OnceLock::new();
+    D.get_or_init(Config::default)
+}
+
+/// What one frame has worked out about the draft (see `begin_pass`).
+#[derive(Default)]
+pub(super) struct Memo {
+    pass: Option<u64>,
+    live: Option<Rc<Config>>,
+    live_framed: Option<Rc<Config>>,
+    draft_framed: Option<Rc<Config>>,
+    unapplied: Option<bool>,
+    problem: Option<Option<String>>,
+    audio_differs: Option<bool>,
+    held: HashMap<Section, bool>,
+}
+
 /// The audio inputs as far as reopening goes (not their levels, which an
 /// old page may have changed and which apply live).
 fn audio_keys(c: &Config) -> Vec<(u64, crate::config::AudioConfig)> {
@@ -302,46 +323,118 @@ impl SettingsUi {
         Some(if list.is_empty() { "changes".to_string() } else { list.join(", ") })
     }
 
+    /// A new frame starts (egui's pass number): what was worked out for the
+    /// last one is dropped. Without this call nothing is remembered.
+    pub fn begin_pass(&self, pass: u64) {
+        let mut m = self.memo.borrow_mut();
+        if m.pass != Some(pass) {
+            *m = Memo { pass: Some(pass), ..Default::default() };
+        }
+    }
+
+    /// The draft or the settings in effect changed: forget what was worked out.
+    pub(super) fn forget_derived(&self) {
+        let mut m = self.memo.borrow_mut();
+        let pass = m.pass;
+        *m = Memo { pass, ..Default::default() };
+    }
+
     /// The settings in effect plus every change on a live page that can be
     /// applied without interrupting anything.
     pub(super) fn live_part(&self) -> Config {
+        (*self.live_rc()).clone()
+    }
+
+    /// `live_part`, worked out once per frame (the full copies are costly on a big show).
+    fn live_rc(&self) -> Rc<Config> {
+        if let Some(c) = &self.memo.borrow().live {
+            return c.clone();
+        }
         let mut c = self.original.clone();
         for s in LIVE {
             copy_section(*s, &self.draft, &mut c);
         }
-        without_reopening(&self.original, &c)
+        let c = Rc::new(without_reopening(&self.original, &c));
+        self.remember(|m| m.live = Some(c.clone()));
+        c
+    }
+
+    fn live_framed(&self) -> Rc<Config> {
+        if let Some(c) = &self.memo.borrow().live_framed {
+            return c.clone();
+        }
+        let c = Rc::new(self.live_rc().with_framed_rates());
+        self.remember(|m| m.live_framed = Some(c.clone()));
+        c
     }
 
     /// The draft without its live pages' changes held back for Apply.
-    fn draft_compared(&self) -> Config {
-        self.draft.with_framed_rates()
+    fn draft_compared(&self) -> Rc<Config> {
+        if let Some(c) = &self.memo.borrow().draft_framed {
+            return c.clone();
+        }
+        let c = Rc::new(self.draft.with_framed_rates());
+        self.remember(|m| m.draft_framed = Some(c.clone()));
+        c
+    }
+
+    /// Keep a worked-out value for the rest of this frame (only once a frame has begun).
+    fn remember(&self, set: impl FnOnce(&mut Memo)) {
+        let mut m = self.memo.borrow_mut();
+        if m.pass.is_some() {
+            set(&mut m);
+        }
+    }
+
+    /// Whether the live pages' changes differ from the settings in effect.
+    pub(super) fn live_differs(&self) -> bool {
+        *self.live_rc() != self.original
     }
 
     /// Changes not applied yet that the page doesn't save by itself: held
     /// back on a live page, or anything on an old one.
     pub(super) fn unapplied(&self) -> bool {
-        self.draft_compared() != self.live_part().with_framed_rates() || self.scene_rename_pending() || self.live_problem().is_some()
+        if let Some(v) = self.memo.borrow().unapplied {
+            return v;
+        }
+        let v = *self.draft_compared() != *self.live_framed() || self.scene_rename_pending() || self.live_problem().is_some();
+        self.remember(|m| m.unapplied = Some(v));
+        v
     }
 
     /// A change that saves as you go but can't be saved (a value that
     /// isn't allowed): it holds back every later change too, so leaving
     /// asks rather than dropping them without a word (review D6).
     pub(super) fn live_problem(&self) -> Option<String> {
-        let lp = self.live_part();
-        if lp == self.original {
-            return None;
+        if let Some(v) = &self.memo.borrow().problem {
+            return v.clone();
         }
-        lp.check().err().map(|e| format!("{e:#}"))
+        let lp = self.live_rc();
+        let v = if *lp == self.original { None } else { lp.check().err().map(|e| format!("{e:#}")) };
+        self.remember(|m| m.problem = Some(v.clone()));
+        v
     }
 
     /// Changes on a live page held back for "Apply (restarts cameras)".
     pub(super) fn held(&self, s: Section) -> bool {
-        let (lp, d) = (self.live_part().with_framed_rates(), self.draft_compared());
-        let mut a = Config::default();
-        let mut b = Config::default();
+        if let Some(v) = self.memo.borrow().held.get(&s) {
+            return *v;
+        }
+        let (lp, d) = (self.live_framed(), self.draft_compared());
+        let audio_differs = match self.memo.borrow().audio_differs {
+            Some(v) => v,
+            None => audio_keys(&lp) != audio_keys(&d),
+        };
+        let mut a = default_config().clone();
+        let mut b = default_config().clone();
         copy_section(s, &lp, &mut a);
         copy_section(s, &d, &mut b);
-        a != b || audio_keys(&lp) != audio_keys(&d)
+        let v = a != b || audio_differs;
+        self.remember(|m| {
+            m.audio_differs = Some(audio_differs);
+            m.held.insert(s, v);
+        });
+        v
     }
 
     /// Keep the draft on top of the settings in effect (`now`): what was
@@ -350,6 +443,7 @@ impl SettingsUi {
         if self.original == *now {
             return;
         }
+        self.forget_derived();
         // (Changed elsewhere: "Undo changes on this page" keeps that too.)
         if let Some((_, start)) = self.page_start.as_mut() {
             *start = now.with_edits(&self.original, start);
@@ -363,14 +457,14 @@ impl SettingsUi {
         // (A clock just added takes the show's 12/24-hour format, as the app
         // would make it: otherwise it would be sent again and again.)
         self.draft.sync_clock_format();
-        let lp = self.live_part();
-        if lp == self.original {
+        if !self.live_differs() {
             // (Nothing to save: an "Undo changes on this page" that only
             // dropped held changes doesn't name a later change.)
             self.next_label = None;
             return None;
         }
-        if self.failed.as_deref() == Some(&lp) || lp.check().is_err() {
+        let lp = self.live_part();
+        if self.failed.as_deref() == Some(&lp) || self.live_problem().is_some() {
             return None;
         }
         // Still typing: wait for Enter or a click elsewhere.
@@ -392,6 +486,7 @@ impl SettingsUi {
         // (A scene's new name still in its box counts.)
         self.commit_scene_rename();
         self.draft.sync_clock_format();
+        self.forget_derived();
         let lp = self.live_part();
         if lp == self.original || lp.check().is_err() {
             return None;
@@ -400,12 +495,14 @@ impl SettingsUi {
         let base = Box::new(self.original.clone());
         // Counted as applied from here (the app applies it next).
         self.original = lp.clone();
+        self.forget_derived();
         Some(SettingsAction::Live { cfg: lp, base, label })
     }
 
     /// Called by the app after it applied a live change (`sent`), with the
     /// settings now in effect.
     pub fn applied_live(&mut self, result: Result<(), String>, sent: &Config, now: &Config) {
+        self.forget_derived();
         match result {
             Ok(()) => {
                 // Why the last change didn't save goes; what a button did
@@ -433,6 +530,7 @@ impl SettingsUi {
     /// Everything was replaced (a show loaded, settings imported or reset):
     /// the page starts again from `now`, with nothing held.
     pub fn replaced(&mut self, now: &Config) {
+        self.forget_derived();
         self.draft = now.clone();
         self.original = now.clone();
         self.failed = None;
@@ -441,6 +539,7 @@ impl SettingsUi {
     }
 
     fn rebase_any(&mut self, now: &Config) {
+        self.forget_derived();
         if self.original != *now {
             self.draft = now.with_edits(&self.original, &self.draft);
             self.original = now.clone();
@@ -525,6 +624,7 @@ impl SettingsUi {
     /// "Undo changes on this page": back to how it was when it was opened,
     /// as one Undo step (what restarts a source waits on the bar as usual).
     pub(super) fn undo_page(&mut self) {
+        self.forget_derived();
         let section = self.section;
         let start = self.page_start().clone();
         self.scene_rename = None;
@@ -540,7 +640,7 @@ impl SettingsUi {
         let (held, restarts) = held_list(&self.original, &self.draft);
         let held = if self.held(self.section) { held } else { Vec::new() };
         let live = info.recording || info.streaming;
-        let typing = ui.ctx().egui_wants_keyboard_input() && self.live_part() != self.original;
+        let typing = ui.ctx().egui_wants_keyboard_input() && self.live_differs();
         let changed = self.page_changed();
         let key = &info.undo_key;
         ui.horizontal(|ui| {
@@ -621,6 +721,36 @@ impl SettingsUi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Within one frame the held-change answers are worked out once, and
+    /// are worked out again after the draft or the settings change.
+    #[test]
+    fn one_frame_remembers_and_then_forgets() {
+        let applied = two();
+        let mut win = SettingsUi::new(applied.clone());
+        win.begin_pass(1);
+        assert!(!win.unapplied());
+        win.draft.sources[1].device = "test:bars".into();
+        // (Remembered: the edit isn't seen until something says the draft changed.)
+        assert!(!win.unapplied());
+        win.forget_derived();
+        assert!(win.unapplied());
+        assert!(win.held(Section::Sources));
+        assert!(!win.held(Section::Audio));
+        // A new frame starts from scratch.
+        win.draft.sources[1].device = "test".into();
+        win.begin_pass(2);
+        assert!(!win.unapplied());
+    }
+
+    /// Without a frame begun, nothing is remembered (as in every other test).
+    #[test]
+    fn no_frame_no_memory() {
+        let mut win = SettingsUi::new(two());
+        assert!(!win.unapplied());
+        win.draft.sources[1].device = "test:bars".into();
+        assert!(win.unapplied());
+    }
 
     fn two() -> Config {
         let mut c = Config::default();

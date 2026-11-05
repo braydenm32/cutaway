@@ -122,7 +122,7 @@ Nothing about you or your shows, unless you ask it to.
    (YouTube Studio, say) into **Record & stream › Streaming**. Cutaway stops
    retrying a refused key and says so.
 8. **A guest can't connect.** A few office, school and hotel networks block
-   direct connections. Set a relay under **Strict networks** in the guest
+   direct connections. Set a relay under **Strict networks (TURN)**, in the **TURN server** box, in the guest
    settings (see [Remote guests](guests.md)).
 9. **The drive is filling up, or the recording stops at 4 GB.** The time
    left shows beside REC. A drive formatted as FAT32 can't hold a file over

@@ -8,7 +8,7 @@ use crate::platform::displays::{self, Display};
 use eframe::egui::{pos2, Align2, FontId, Rect, Sense, Stroke, StrokeKind};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-type Found = Arc<Mutex<Option<Result<Vec<CaptureTarget>, String>>>>;
+type Found = Arc<Mutex<Option<Result<Arc<Vec<CaptureTarget>>, String>>>>;
 
 pub(super) struct CapturePicker {
     found: Found,
@@ -33,7 +33,7 @@ impl CapturePicker {
         }
         let (found, busy, listings) = (self.found.clone(), self.busy.clone(), self.listings.clone());
         std::thread::spawn(move || {
-            let r = crate::platform::capture_targets().map_err(|e| format!("{e:#}"));
+            let r = crate::platform::capture_targets().map(Arc::new).map_err(|e| format!("{e:#}"));
             *found.lock_ok() = Some(r);
             listings.fetch_add(1, Ordering::Relaxed);
             busy.store(false, Ordering::Relaxed);
@@ -64,7 +64,7 @@ impl CapturePicker {
             self.shown = listing;
             self.textures.clear();
             if let Some(Ok(list)) = &found {
-                for t in list {
+                for t in list.iter() {
                     if let Some(th) = &t.thumb {
                         let img = egui::ColorImage::from_rgba_unmultiplied(th.size, &th.rgba);
                         let tex = ui.ctx().load_texture(format!("capture {}", t.device), img, egui::TextureOptions::LINEAR);
@@ -105,9 +105,9 @@ impl CapturePicker {
                         }
                     });
                 }
-                Vec::new()
+                Default::default()
             }
-            None => Vec::new(),
+            None => Default::default(),
         };
         match tab {
             TargetKind::Display => {
