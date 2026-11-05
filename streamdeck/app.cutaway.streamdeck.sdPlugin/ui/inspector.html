@@ -169,7 +169,7 @@
   <div class="row"><label for="address">Address</label><div class="field"><input type="text" id="address" data-global="address" placeholder="127.0.0.1:8790"></div></div>
   <div class="row"><label for="pin">PIN</label><div class="field"><input type="password" id="pin" data-global="pin" placeholder="as set in Cutaway"></div></div>
   <div class="row"><label for="thumbnails">Live pictures</label><div class="field"><select id="thumbnails" data-global="thumbnails">
-    <option value="250">Smooth (4 a second)</option>
+    <option value="500">Smooth (2 a second)</option>
     <option value="1000">Normal (1 a second)</option>
     <option value="3000">Slow (every 3 seconds)</option>
     <option value="off">Off (names only)</option>
@@ -219,7 +219,9 @@
 
   function showGlobal() {
     document.querySelectorAll("[data-global]").forEach((el) => {
-      const v = global[el.dataset.global];
+      let v = global[el.dataset.global];
+      // (The old "Smooth" was 250 ms.)
+      if (el.id === "thumbnails" && v === "250") v = "500";
       if (v !== undefined && document.activeElement !== el) el.value = v;
     });
   }
