@@ -1251,8 +1251,13 @@ impl SettingsUi {
                     }
                 }
                 ui.add_space(6.0);
+                // (Until the first look for devices is done, a new input would just be "default".)
+                let loading = self.audio.is_empty() && devices::catalog_busy();
                 ui.horizontal_wrapped(|ui| {
-                    if let Some(edit) = list_buttons(ui, n, self.sel_audio, Some("＋ Add")) {
+                    if loading {
+                        hint(ui, "Looking for devices…");
+                    }
+                    if let Some(edit) = list_buttons(ui, n, self.sel_audio, Some("＋ Add")).filter(|e| !(loading && matches!(e, ListEdit::Add))) {
                         let audio = &self.audio;
                         apply_list_edit(
                             &mut self.draft.audio,

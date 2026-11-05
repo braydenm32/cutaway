@@ -66,7 +66,7 @@ impl SettingsUi {
                     let shown = p.file.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| "choose a file".into());
                     let missing = !p.file.as_os_str().is_empty() && !crate::util::exists_recent(&p.file);
                     ui.add(egui::Label::new(RichText::new(shown).color(if missing { AMBER } else { Color32::WHITE })).truncate()).on_hover_text(if missing { format!("⚠ {} is missing", p.file.display()) } else { p.file.display().to_string() });
-                    let key = format!("pad-{i}");
+                    let key = format!("pad-{i}-{}", p.name);
                     if let Some(f) = super::picks::take_one(&key) {
                         p.file = f;
                     }

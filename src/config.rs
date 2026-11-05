@@ -2703,6 +2703,8 @@ struct SaveJob {
     text: String,
     /// The show's own copy: the profiles folder, and the settings to store.
     profile: Option<(PathBuf, Box<Config>)>,
+    /// What the show's own copy counts as sent for once it is written.
+    key: Option<(String, u64)>,
 }
 
 /// Writes the settings file on one background thread, in the order asked,
@@ -2713,7 +2715,7 @@ pub struct Saver {
     busy: std::sync::Arc<(std::sync::Mutex<usize>, std::sync::Condvar)>,
     failed: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     /// The settings text the show's own copy was last sent for (with its name).
-    last_profile: Option<(String, u64)>,
+    last_profile: std::sync::Arc<std::sync::Mutex<Option<(String, u64)>>>,
 }
 
 impl Saver {
@@ -2721,13 +2723,17 @@ impl Saver {
         let (tx, rx) = crossbeam_channel::unbounded::<SaveJob>();
         let busy: std::sync::Arc<(std::sync::Mutex<usize>, std::sync::Condvar)> = Default::default();
         let failed: std::sync::Arc<std::sync::Mutex<Option<String>>> = Default::default();
-        let (b2, f2) = (busy.clone(), failed.clone());
+        let last_profile: std::sync::Arc<std::sync::Mutex<Option<(String, u64)>>> = Default::default();
+        let (b2, f2, l2) = (busy.clone(), failed.clone(), last_profile.clone());
         let _ = std::thread::Builder::new().name("save-settings".into()).spawn(move || {
             for job in rx {
                 match write_settings_text(&job.path, &job.text) {
                     Ok(()) => {
                         if let Some((dir, cfg)) = &job.profile {
-                            let _ = crate::control::profiles::save(dir, &cfg.ui.profile, cfg);
+                            // (Counted as sent only once it is on disk.)
+                            if crate::control::profiles::save(dir, &cfg.ui.profile, cfg).is_ok() {
+                                *l2.lock().unwrap_or_else(|p| p.into_inner()) = job.key.clone();
+                            }
                         }
                     }
                     Err(e) => *f2.lock().unwrap_or_else(|p| p.into_inner()) = Some(format!("{e:#}")),
@@ -2737,25 +2743,24 @@ impl Saver {
                 cv.notify_all();
             }
         });
-        Saver { tx, busy, failed, last_profile: None }
+        Saver { tx, busy, failed, last_profile }
     }
 
     /// Queue `text` for `path`. `profile`: the show's own copy to keep in
     /// step, written only when this text is not the one it was last sent for.
-    pub fn queue(&mut self, path: &Path, text: String, profile: Option<(PathBuf, &Config)>) {
+    pub fn queue(&self, path: &Path, text: String, profile: Option<(PathBuf, &Config)>) {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         text.hash(&mut h);
         let key = profile.as_ref().map(|(_, c)| (c.ui.profile.clone(), h.finish()));
-        let profile = match (profile, key) {
-            (Some((dir, cfg)), Some(k)) if self.last_profile.as_ref() != Some(&k) => {
-                self.last_profile = Some(k);
-                Some((dir, Box::new(cfg.clone())))
-            }
+        let unsent = key.is_some() && *self.last_profile.lock().unwrap_or_else(|p| p.into_inner()) != key;
+        let profile = match profile {
+            Some((dir, cfg)) if unsent => Some((dir, Box::new(cfg.clone()))),
             _ => None,
         };
+        let key = if profile.is_some() { key } else { None };
         *self.busy.0.lock().unwrap_or_else(|p| p.into_inner()) += 1;
-        if self.tx.send(SaveJob { path: path.to_path_buf(), text, profile }).is_err() {
+        if self.tx.send(SaveJob { path: path.to_path_buf(), text, profile, key }).is_err() {
             *self.busy.0.lock().unwrap_or_else(|p| p.into_inner()) -= 1;
         }
     }
@@ -2790,7 +2795,7 @@ mod tests {
         let profiles = dir.join("shows");
         let mut cfg = Config::default();
         cfg.ui.profile = "Friday".into();
-        let mut saver = Saver::new();
+        let saver = Saver::new();
         saver.queue(&path, cfg.save_text().unwrap(), Some((profiles.clone(), &cfg)));
         saver.wait();
         assert!(path.exists());

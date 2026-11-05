@@ -371,11 +371,11 @@ impl SettingsUi {
                         if ui.add(egui::TextEdit::singleline(&mut text).desired_width(280.0)).changed() {
                             g.image = PathBuf::from(text);
                         }
-                        if let Some(f) = super::picks::take_one("graphic-image") {
+                        if let Some(f) = super::picks::take_one(&format!("graphic-image-{}", g.name)) {
                             g.image = f;
                         }
                         if ui.button("Choose…").clicked() {
-                            super::picks::start(ui.ctx(), "graphic-image", super::picks::What::File, Some(("Images", &["png", "jpg", "jpeg"])));
+                            super::picks::start(ui.ctx(), &format!("graphic-image-{}", g.name), super::picks::What::File, Some(("Images", &["png", "jpg", "jpeg"])));
                         }
                     });
                     ui.end_row();

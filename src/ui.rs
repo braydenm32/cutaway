@@ -561,8 +561,6 @@ impl App {
         cc.egui_ctx.set_zoom_factor(cfg.ui.scale.clamp(0.5, 3.0));
         let ctx = cc.egui_ctx.clone();
         let waker: Waker = Arc::new(move || ctx.request_repaint());
-        // Cameras, mics and encoders are looked for in the background, so Settings has them ready.
-        crate::devices::refresh_catalog();
         let (requests_tx, requests_rx) = unbounded();
         let remote_shared = remote::RemoteShared::new(requests_tx.clone(), waker.clone());
         let syrinscape = control::syrinscape::Syrinscape::new(&cfg.syrinscape, waker.clone());
@@ -4021,8 +4019,7 @@ impl App {
             if let Some(x) = self.bank_scroll_to.take() {
                 area = area.horizontal_scroll_offset(x);
             }
-            // (The buttons read only each name and whether it has sound cues: not the layers.)
-            let scenes: Vec<Scene> = self.scenes.iter().map(|s| Scene { name: s.name.clone(), audio_on: s.audio_on.clone(), audio_off: s.audio_off.clone(), ..Default::default() }).collect();
+            let scenes = self.scenes.clone();
             let out = area.show(ui, |ui| {
                 ui.vertical(|ui| {
                     for row in scenes.chunks(per_row).enumerate() {
