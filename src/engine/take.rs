@@ -72,8 +72,10 @@ impl Engine {
             bail!("{problem}");
         }
         // Record & stream › Recordings lists takes from the folders used before, too.
-        if let Some(dir) = crate::config::default_config_path().parent() {
-            crate::recovery::remember_folders(dir, &crate::recovery::folders(&cfg));
+        // (On a thread: a backup folder on a sleeping drive can be slow to look at.)
+        if let Some(dir) = crate::config::default_config_path().parent().map(|d| d.to_path_buf()) {
+            let output = out.clone();
+            std::thread::spawn(move || crate::recovery::remember_folders(&dir, &crate::recovery::folders_of(&output)));
         }
         // A close-up recorded far bigger than the picture it holds: say so.
         for s in cfg.sources.iter().filter(|s| s.record) {

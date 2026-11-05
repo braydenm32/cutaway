@@ -194,7 +194,8 @@ Everything Cutaway can do, area by area. For the steps of a first show, see [Get
   a backup copy that didn't finish). Its buttons: **Open in Resolve** (see
   [Editing your recordings](after-the-show.md#editing-your-recordings)), **Show in Finder** (Explorer on
   Windows) and **Upload** (when uploads are set up). When all went well the
-  card goes by itself after 20 seconds (hovering over it keeps it), so it
+  card goes by itself after 20 seconds (hovering over it keeps it; after
+  **Open in Resolve** it stays 90 seconds, so the one step left in Resolve is still there), so it
   doesn't sit over the panels between takes; one with a ⚠ stays until you
   close it. ✕ hides it any time (the recording stays first in Record & stream › Recordings),
   and the next recording hides it too.

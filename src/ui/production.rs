@@ -230,7 +230,7 @@ impl App {
         if !self.section_heading(ui, "ptz", "Camera controls", Section::Sources) {
             return;
         }
-        let live = self.engine.as_ref().map(|e| e.switcher.live().sources()).unwrap_or_default();
+        let live = self.live_scene().map(|s| s.sources()).unwrap_or_default();
         ui.horizontal_wrapped(|ui| {
             for (i, name) in &cams {
                 let on_air = live.contains(i);

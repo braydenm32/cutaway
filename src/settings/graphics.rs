@@ -57,6 +57,10 @@ fn graphic_key(i: usize) -> Option<String> {
 
 impl SettingsUi {
     pub(super) fn graphics(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
+        if let Some(f) = super::picks::take_one("logo-add") {
+            let names = self.draft.graphics.iter().map(|g| g.name.clone()).collect();
+            self.add_graphic(Graphic { name: unique(names, "Logo"), visible: true, image: f, ..Default::default() });
+        }
         let view = self.gview;
         if view == GraphicsView::Turns {
             title(ui, "Taking turns", "Graphics that come on one after another by themselves: sponsors, your social handles, a reminder to subscribe. Each still has its own button too.");
@@ -170,7 +174,7 @@ impl SettingsUi {
                     self.add_graphic(Graphic::title(&unique(names.clone(), "Title"), "Your Name", "Role or topic"));
                 }
                 if wide(ui, "＋ Logo").clicked() {
-                    self.add_logo(names.clone());
+                    self.add_logo(ui.ctx());
                 }
                 ui.horizontal(|ui| {
                     ui.menu_button("＋ More kinds…", |ui| {
@@ -213,11 +217,9 @@ impl SettingsUi {
         }
     }
 
-    fn add_logo(&mut self, names: Vec<String>) {
-        // Cancelling the picker adds nothing.
-        if let Some(f) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg"]).pick_file() {
-            self.add_graphic(Graphic { name: unique(names, "Logo"), visible: true, image: f, ..Default::default() });
-        }
+    fn add_logo(&mut self, ctx: &egui::Context) {
+        // (The picture is added when the choice comes back; cancelling adds nothing.)
+        super::picks::start(ctx, "logo-add", super::picks::What::File, Some(("Images", &["png", "jpg", "jpeg"])));
     }
 
     fn add_web_page(&mut self, names: Vec<String>) {
@@ -230,7 +232,6 @@ impl SettingsUi {
     /// name title first, as on the desk, then the other kinds.
     fn graphics_empty(&mut self, ui: &mut egui::Ui) {
         ui.add_space(24.0);
-        let names: Vec<String> = Vec::new();
         ui.vertical_centered(|ui| {
             egui::Frame::new().fill(RAISED).corner_radius(8.0).inner_margin(egui::Margin::same(20)).show(ui, |ui| {
                 ui.set_max_width(520.0);
@@ -250,7 +251,7 @@ impl SettingsUi {
                             self.add_graphic(Graphic::title("Title", "Your Name", "Role or topic"));
                         }
                         if ui.add(egui::Button::new("＋ Logo").stroke(egui::Stroke::new(1.0, LINE))).clicked() {
-                            self.add_logo(names.clone());
+                            self.add_logo(ui.ctx());
                         }
                         if ui.add(egui::Button::new("Clocks & timers ›").stroke(egui::Stroke::new(1.0, LINE))).clicked() {
                             self.pending = Some(SettingsAction::Go("graphics/timers/timers"));
@@ -370,10 +371,11 @@ impl SettingsUi {
                         if ui.add(egui::TextEdit::singleline(&mut text).desired_width(280.0)).changed() {
                             g.image = PathBuf::from(text);
                         }
+                        if let Some(f) = super::picks::take_one(&format!("graphic-image-{}", g.name)) {
+                            g.image = f;
+                        }
                         if ui.button("Choose…").clicked() {
-                            if let Some(f) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg"]).pick_file() {
-                                g.image = f;
-                            }
+                            super::picks::start(ui.ctx(), &format!("graphic-image-{}", g.name), super::picks::What::File, Some(("Images", &["png", "jpg", "jpeg"])));
                         }
                     });
                     ui.end_row();

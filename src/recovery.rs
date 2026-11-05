@@ -15,8 +15,13 @@ fn is_media(p: &Path, exts: &[&str]) -> bool {
 
 /// Where takes are recorded: the output folder and the backup folder.
 pub fn folders(cfg: &crate::config::Config) -> Vec<PathBuf> {
-    let mut folders = vec![cfg.output.folder.clone()];
-    folders.extend(cfg.output.backup_folder.clone().filter(|p| !p.as_os_str().is_empty()));
+    folders_of(&cfg.output)
+}
+
+/// `folders`, from just the output settings (so a worker can take a copy).
+pub fn folders_of(output: &crate::config::OutputConfig) -> Vec<PathBuf> {
+    let mut folders = vec![output.folder.clone()];
+    folders.extend(output.backup_folder.clone().filter(|p| !p.as_os_str().is_empty()));
     // The backup set to the same folder: look there once.
     let same = |a: &Path, b: &Path| a == b || fs::canonicalize(a).ok().is_some_and(|a| fs::canonicalize(b).ok() == Some(a));
     if folders.len() == 2 && same(&folders[0], &folders[1]) {
@@ -72,12 +77,26 @@ fn media_in(dir: &Path) -> Vec<PathBuf> {
 
 /// Takes in `output` that need repairing (just a look at the folders: quick).
 pub fn find_unfinished(output: &Path) -> Vec<Unfinished> {
+    find_unfinished_before(output, None)
+}
+
+/// `find_unfinished`, leaving out takes begun at or after `before`: a take
+/// started while Cutaway is running is not unfinished, it is recording.
+pub fn find_unfinished_before(output: &Path, before: Option<std::time::SystemTime>) -> Vec<Unfinished> {
     let Ok(entries) = fs::read_dir(output) else { return Vec::new() };
     let mut takes = Vec::new();
     for entry in entries.flatten() {
         let dir = entry.path();
         if !dir.is_dir() || dir.join("Take.txt").exists() {
             continue;
+        }
+        if let Some(t) = before {
+            // Its name's time, or anything written in it, is after the start.
+            let named_later = entry.file_name().to_str().and_then(stamp_of).is_some_and(|n| n >= chrono::DateTime::<chrono::Local>::from(t).naive_local());
+            let touched_later = entry.metadata().and_then(|m| m.modified()).is_ok_and(|m| m >= t);
+            if named_later || touched_later {
+                continue;
+            }
         }
         let files = media_in(&dir);
         let ours = files.iter().any(|p| {
@@ -190,6 +209,9 @@ pub fn recover_unfinished(output: &Path) -> Vec<PathBuf> {
 /// How a rescue in the background is getting on.
 #[derive(Clone, Default)]
 pub struct RescueState {
+    /// Still looking for unfinished takes (done in the background, as a
+    /// big or cold drive can be slow); nothing shows until it is false.
+    pub scanning: bool,
     /// The takes being rescued, and which one it's on.
     pub takes: Vec<PathBuf>,
     pub take: usize,
@@ -216,20 +238,28 @@ impl RescueState {
     }
 }
 
-/// Rescues unfinished takes in these folders in the background. None if
-/// there's nothing to rescue.
-pub fn start_rescue(folders: &[PathBuf], waker: crate::engine::Waker) -> Option<Arc<Mutex<RescueState>>> {
-    let takes: Vec<Unfinished> = folders.iter().flat_map(|f| find_unfinished(f)).collect();
-    if takes.is_empty() {
-        return None;
-    }
-    let state = Arc::new(Mutex::new(RescueState {
-        takes: takes.iter().map(|t| t.dir.clone()).collect(),
-        files_total: takes.iter().map(|t| t.files.len()).sum(),
-        ..Default::default()
-    }));
+/// Looks for unfinished takes in these folders and rescues them, all in the
+/// background. The state says `scanning` first; when that ends with no takes
+/// there was nothing to rescue.
+pub fn start_rescue(folders: &[PathBuf], waker: crate::engine::Waker) -> Arc<Mutex<RescueState>> {
+    let state = Arc::new(Mutex::new(RescueState { scanning: true, ..Default::default() }));
     let s2 = state.clone();
+    let folders2 = folders.to_vec();
+    // (A take started after this is recording, not unfinished.)
+    let started = std::time::SystemTime::now();
     let spawned = std::thread::Builder::new().name("rescue".into()).spawn(move || {
+        let takes: Vec<Unfinished> = folders2.iter().flat_map(|f| find_unfinished_before(f, Some(started))).collect();
+        {
+            let mut st = s2.lock_ok();
+            st.takes = takes.iter().map(|t| t.dir.clone()).collect();
+            st.files_total = takes.iter().map(|t| t.files.len()).sum();
+            st.scanning = false;
+            st.finished = takes.is_empty();
+        }
+        waker();
+        if takes.is_empty() {
+            return;
+        }
         // (Screenshots of this screen: go slowly.)
         let slow = std::env::var("CUTAWAY_UI_TEST_SLOW_RESCUE").ok().and_then(|v| v.parse::<f64>().ok()).map(|s| std::time::Duration::from_secs_f64(s.clamp(0.0, 30.0)));
         let mut done = 0;
@@ -262,9 +292,11 @@ pub fn start_rescue(folders: &[PathBuf], waker: crate::engine::Waker) -> Option<
         // No thread: do it here instead.
         let mut st = state.lock_ok();
         st.rescued = folders.iter().flat_map(|f| recover_unfinished(f)).collect();
+        st.takes = st.rescued.clone();
+        st.scanning = false;
         st.finished = true;
     }
-    Some(state)
+    state
 }
 
 #[cfg(test)]
@@ -315,6 +347,26 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// A take begun after the scan started is being recorded: left alone.
+    #[test]
+    fn a_take_begun_after_the_scan_is_not_unfinished() {
+        let root = std::env::temp_dir().join(format!("cutaway-recording-now-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let old = root.join("Show_2020-01-01_00-00-00");
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join("Program.mp4"), b"x").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        let before = std::time::SystemTime::now();
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        let live = root.join("Show_2020-01-01_00-00-01");
+        fs::create_dir_all(&live).unwrap();
+        fs::write(live.join("Program.mp4"), b"x").unwrap();
+        let found: Vec<_> = find_unfinished_before(&root, Some(before)).into_iter().map(|t| t.dir).collect();
+        assert_eq!(found, vec![old]);
+        assert_eq!(find_unfinished(&root).len(), 2);
+        let _ = fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn rescues_in_the_background() {
         let root = std::env::temp_dir().join(format!("cutaway-rescue-{}", std::process::id()));
@@ -325,8 +377,13 @@ mod tests {
             w.write(&vec![0.1f32; 4800]).unwrap();
             std::mem::forget(w);
         }
-        assert!(start_rescue(&[root.join("nothing here")], Arc::new(|| {})).is_none());
-        let st = start_rescue(&[root.clone()], Arc::new(|| {})).expect("one recording to rescue");
+        let none = start_rescue(&[root.join("nothing here")], Arc::new(|| {}));
+        let t0 = std::time::Instant::now();
+        while none.lock_ok().scanning && t0.elapsed() < std::time::Duration::from_secs(20) {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(none.lock_ok().takes.is_empty(), "nothing to rescue");
+        let st = start_rescue(&[root.clone()], Arc::new(|| {}));
         let t0 = std::time::Instant::now();
         while !st.lock_ok().finished && t0.elapsed() < std::time::Duration::from_secs(20) {
             std::thread::sleep(std::time::Duration::from_millis(20));

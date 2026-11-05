@@ -200,6 +200,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn exists_recent_remembers_for_a_moment() {
+        let p = std::env::temp_dir().join(format!("cutaway-exists-{}", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        assert!(!exists_recent(&p));
+        std::fs::write(&p, b"x").unwrap();
+        assert!(!exists_recent(&p), "the earlier answer is kept for a moment");
+        assert!(p.exists());
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
     fn one_size_format() {
         assert_eq!(human_size(412_345_000_000), "412 GB");
         assert_eq!(human_size(10_000_000_000), "10 GB");
@@ -341,4 +352,29 @@ pub fn percent_decode(s: &str, plus_is_space: bool) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+/// `path.exists()`, but asked again only every couple of seconds: Settings
+/// pages ask every frame, and a sleeping drive or NAS would stall each one.
+pub fn exists_recent(path: &std::path::Path) -> bool {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+    static CACHE: OnceLock<Mutex<HashMap<std::path::PathBuf, (Instant, bool)>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Ok(c) = cache.lock() {
+        if let Some((t, v)) = c.get(path) {
+            if t.elapsed() < Duration::from_secs(2) {
+                return *v;
+            }
+        }
+    }
+    let v = path.exists();
+    if let Ok(mut c) = cache.lock() {
+        if c.len() > 512 {
+            c.clear();
+        }
+        c.insert(path.to_path_buf(), (Instant::now(), v));
+    }
+    v
 }
