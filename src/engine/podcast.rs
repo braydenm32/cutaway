@@ -10,6 +10,7 @@ use crate::media::wav::WavReader;
 use crate::media::{Ns, AAC_FRAME, NS_PER_SEC};
 use anyhow::{bail, Context, Result};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// What a finished podcast file measured.
 #[derive(Debug, Clone)]
@@ -32,8 +33,9 @@ pub struct Episode {
 
 const CHUNK: usize = 48_000;
 
-/// Make `out` from the mix WAV. `progress` gets 0..1.
-pub fn make(wav: &Path, out: &Path, backup: Option<&Path>, cfg: &PodcastConfig, episode: &Episode, chapters: &[(Ns, String)], progress: &mut dyn FnMut(f32)) -> Result<PodcastReport> {
+/// Make `out` from the mix WAV. `progress` gets 0..1. Setting `stop`
+/// (Cutaway is quitting) ends it part way, with nothing left behind.
+pub fn make(wav: &Path, out: &Path, backup: Option<&Path>, cfg: &PodcastConfig, episode: &Episode, chapters: &[(Ns, String)], progress: &mut dyn FnMut(f32), stop: &AtomicBool) -> Result<PodcastReport> {
     // Pass 1: how loud is it?
     let mut r = WavReader::open(wav)?;
     if r.rate != 48_000 || r.channels != 2 {
@@ -46,6 +48,9 @@ pub fn make(wav: &Path, out: &Path, backup: Option<&Path>, cfg: &PodcastConfig, 
         let block = r.read(CHUNK)?;
         if block.is_empty() {
             break;
+        }
+        if stop.load(Ordering::Relaxed) {
+            bail!("stopped");
         }
         meter.push(&block);
         done += (block.len() / 2) as u64;
@@ -95,6 +100,15 @@ pub fn make(wav: &Path, out: &Path, backup: Option<&Path>, cfg: &PodcastConfig, 
         if block.is_empty() {
             break;
         }
+        if stop.load(Ordering::Relaxed) {
+            // A part-made copy isn't kept.
+            drop(w);
+            let _ = std::fs::remove_file(out);
+            if let Some(b) = backup {
+                let _ = std::fs::remove_file(b);
+            }
+            bail!("stopped");
+        }
         done += (block.len() / 2) as u64;
         for s in &mut block {
             *s *= gain;
@@ -136,7 +150,7 @@ mod tests {
         let cfg = PodcastConfig { enabled: true, ..Default::default() };
         let ep = Episode { title: "Episode 12".into(), show: "The Show".into(), author: "Host".into(), date: "2026-10-18".into() };
         let mut last = 0.0;
-        let rep = make(&wav, &out, None, &cfg, &ep, &[(2_000_000_000, "Guest arrives".into())], &mut |p| last = p).unwrap();
+        let rep = make(&wav, &out, None, &cfg, &ep, &[(2_000_000_000, "Guest arrives".into())], &mut |p| last = p, &AtomicBool::new(false)).unwrap();
         assert_eq!(last, 1.0);
         assert!((rep.measured_lufs - -30.0).abs() < 1.0, "{}", rep.measured_lufs);
         assert!((rep.gain_db - 14.0).abs() < 1.0, "{}", rep.gain_db);
@@ -156,6 +170,11 @@ mod tests {
                 assert!(i.is_some_and(|i| (i - -16.0).abs() < 1.0), "{i:?}");
             }
         }
+        // Stopped part way (Cutaway quitting): no part-made file is left.
+        let stop = AtomicBool::new(false);
+        let _ = std::fs::remove_file(&out);
+        let r = make(&wav, &out, None, &cfg, &ep, &[], &mut |p| stop.store(p > 0.5, Ordering::Relaxed), &stop);
+        assert!(r.is_err() && !out.exists());
         std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -7,7 +7,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// What arrives from a publisher.
 #[derive(Debug, Clone)]
@@ -66,7 +66,17 @@ struct Session {
     last_ts: Option<u32>,
     ts_high: i64,
     video_codec: VideoCodec,
+    /// When something last arrived, and how long a silence ends the
+    /// session: a sender that drops off the network sends no goodbye, and
+    /// until this one ends its reconnection isn't answered.
+    last_data: Instant,
+    idle: Duration,
 }
+
+/// Silence that ends a session, before and after publishing starts
+/// (shorter in tests).
+const IDLE_BEFORE_PUBLISH: Duration = Duration::from_millis(if cfg!(test) { 6000 } else { 15_000 });
+const IDLE_PUBLISHING: Duration = Duration::from_millis(if cfg!(test) { 5000 } else { 10_000 });
 
 impl Session {
     fn send(&mut self, cs: u8, kind: u8, stream: u32, payload: &[u8]) -> Result<()> {
@@ -127,6 +137,7 @@ impl Session {
             match self.conn.read(&mut buf) {
                 Ok(0) => bail!("the publisher disconnected"),
                 Ok(n) => {
+                    self.last_data = Instant::now();
                     self.in_buf.extend_from_slice(&buf[..n]);
                     self.received += n as u64;
                     if self.received - self.acked > self.window / 2 {
@@ -135,7 +146,11 @@ impl Session {
                         self.send(2, MSG_ACK, 0, &seq)?;
                     }
                 }
-                Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {}
+                Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {
+                    if self.last_data.elapsed() > self.idle {
+                        bail!("the sender stopped sending");
+                    }
+                }
                 Err(e) => bail!("connection lost: {e}"),
             }
         }
@@ -264,10 +279,13 @@ pub fn serve(port: u16, key: &str, stop: &AtomicBool, out: &mut dyn FnMut(Incomi
             last_ts: None,
             ts_high: 0,
             video_codec: VideoCodec::H264,
+            last_data: Instant::now(),
+            idle: IDLE_BEFORE_PUBLISH,
         };
         let r = (|| -> Result<()> {
             s.conn.set_read_timeout(Some(Duration::from_secs(5)))?;
             s.handshake()?;
+            s.last_data = Instant::now();
             s.conn.set_read_timeout(Some(Duration::from_millis(200)))?;
             let mut publishing: Option<String> = None;
             let result = loop {
@@ -332,6 +350,7 @@ pub fn serve(port: u16, key: &str, stop: &AtomicBool, out: &mut dyn FnMut(Incomi
                                 )?;
                                 out(Incoming::Started(stream.clone()));
                                 publishing = Some(stream);
+                                s.idle = IDLE_PUBLISHING;
                             }
                             "FCUnpublish" | "deleteStream" | "closeStream" => break Ok(()),
                             _ => {}
@@ -456,5 +475,46 @@ mod tests {
         assert!(got.iter().any(|i| matches!(i, Incoming::AudioConfig { .. })));
         assert!(got.iter().filter(|i| matches!(i, Incoming::Audio { .. })).count() > 80);
         assert!(matches!(got.last(), Some(Incoming::Ended(_))));
+    }
+
+    /// A sender that goes quiet without closing (it left the Wi-Fi) is let
+    /// go, so the next connection is answered.
+    #[test]
+    fn a_silent_sender_lets_the_next_one_in() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let ended: Arc<Mutex<Vec<Option<String>>>> = Arc::new(Mutex::new(Vec::new()));
+        let (s2, e2) = (stop.clone(), ended.clone());
+        let port = crate::util::free_tcp_port();
+        let server = std::thread::spawn(move || {
+            serve(port, "", &s2, &mut |i| {
+                if let Incoming::Ended(why) = i {
+                    e2.lock_ok().push(why);
+                }
+            })
+        });
+        std::thread::sleep(Duration::from_millis(300));
+        let handshake = |c: &mut TcpStream| -> std::io::Result<()> {
+            c.set_read_timeout(Some(Duration::from_secs(3)))?;
+            let mut c0c1 = vec![3u8];
+            c0c1.extend_from_slice(&[0u8; 1536]);
+            c.write_all(&c0c1)?;
+            let mut s0s1s2 = vec![0u8; 1 + 1536 * 2];
+            c.read_exact(&mut s0s1s2)?;
+            c.write_all(&[0u8; 1536])
+        };
+        let mut quiet = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        handshake(&mut quiet).unwrap();
+        // ... and then nothing. The server lets it go after the idle limit.
+        let t = Instant::now();
+        let mut b = [0u8; 16];
+        quiet.set_read_timeout(Some(Duration::from_secs(15))).unwrap();
+        assert!(matches!(quiet.read(&mut b), Ok(0) | Err(_)));
+        assert!(t.elapsed() < Duration::from_secs(12), "{:?}", t.elapsed());
+        let mut next = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        handshake(&mut next).expect("the next sender is answered");
+        stop.store(true, Ordering::Relaxed);
+        drop(next);
+        server.join().unwrap().unwrap();
+        assert!(ended.lock_ok().iter().any(|e| e.as_deref().is_some_and(|e| e.contains("stopped sending"))), "{:?}", ended.lock_ok());
     }
 }

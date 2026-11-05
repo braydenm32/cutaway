@@ -453,7 +453,7 @@ impl StreamSession {
         let (atx, arx) = bounded(500);
         let audio_job = {
             let (fan, tall_fan) = (fan.clone(), tall_fan.clone());
-            let status = ctx.status.clone();
+            let (status, waker) = (ctx.status.clone(), ctx.waker.clone());
             std::thread::Builder::new().name("stream audio".into()).spawn(move || {
                 let rate = acfg.rate as i64;
                 let mut cursor = AudioCursor::new(s0, acfg.rate, acfg.channels as usize);
@@ -475,10 +475,16 @@ impl StreamSession {
                     if samples.is_empty() {
                         continue;
                     }
-                    match aac.push(&samples) {
+                    match crate::util::guard("the sound encoder", || aac.push(&samples)) {
                         Ok(frames) => send(frames),
                         Err(e) => {
-                            status.lock_ok().push(LogLevel::Error, format!("Stream audio encoder: {e:#}"));
+                            // Said on the desk, as for the video: the stream
+                            // would otherwise go on without sound unnoticed.
+                            let mut st = status.lock_ok();
+                            st.push(LogLevel::Error, format!("Stream audio encoder: {e:#}"));
+                            st.stream.error = Some(format!("The stream's sound encoder stopped ({e:#}), so the stream has no sound. Stop the stream and go live again."));
+                            drop(st);
+                            waker();
                             for _ in arx.iter() {}
                             return;
                         }

@@ -108,6 +108,96 @@ pub enum MuxMsg {
     TrackEnd(usize, Ns),
 }
 
+/// How much sound from before a file's first picture is kept in memory;
+/// older sound waits in a temporary file beside it.
+const EARLY_KEPT: Ns = 2 * NS_PER_SEC;
+
+/// What a temporary file of early sound is called after (".early.tmp").
+pub const EARLY_SUFFIX: &str = ".early.tmp";
+
+/// Sound (the mix, `None`, or input track `k`) that comes before a file's
+/// first picture: a camera or phone that joins late still gets all of it,
+/// without holding the take's sound in memory meanwhile (one that never
+/// arrives would hold all of it, for no file). The last few seconds stay in
+/// memory, older packets go to a temporary file. The file is removed once
+/// it's been played back, and whenever this is dropped (no picture came, an
+/// error).
+struct EarlySound {
+    path: PathBuf,
+    spill: Option<std::io::BufWriter<std::fs::File>>,
+    /// Writing to the file failed: the rest stays in memory, as it used to.
+    spill_failed: bool,
+    mem: VecDeque<(Option<usize>, Ns, Arc<Vec<u8>>)>,
+}
+
+impl EarlySound {
+    fn new(file: &std::path::Path) -> Self {
+        let name = format!("{}{EARLY_SUFFIX}", file.file_name().unwrap_or_default().to_string_lossy());
+        EarlySound { path: file.with_file_name(name), spill: None, spill_failed: false, mem: VecDeque::new() }
+    }
+
+    fn push(&mut self, track: Option<usize>, t: Ns, d: Arc<Vec<u8>>) {
+        self.mem.push_back((track, t, d));
+        while !self.spill_failed && self.mem.front().is_some_and(|(_, f, _)| *f < t - EARLY_KEPT) {
+            let (k, f, d) = self.mem.pop_front().unwrap();
+            if let Err(e) = self.spill_one(k, f, &d) {
+                eprintln!("{}: couldn't keep early sound on disk ({e}); keeping it in memory", self.path.display());
+                self.spill_failed = true;
+                self.mem.push_front((k, f, d));
+            }
+        }
+    }
+
+    fn spill_one(&mut self, k: Option<usize>, t: Ns, d: &[u8]) -> std::io::Result<()> {
+        use std::io::Write;
+        if self.spill.is_none() {
+            self.spill = Some(std::io::BufWriter::new(std::fs::File::create(&self.path)?));
+        }
+        let w = self.spill.as_mut().unwrap();
+        // (track + 1, 0 for the mix), time, length, bytes.
+        let k = k.map_or(0, |k| k as u32 + 1);
+        w.write_all(&k.to_le_bytes())?;
+        w.write_all(&t.to_le_bytes())?;
+        w.write_all(&(d.len() as u32).to_le_bytes())?;
+        w.write_all(d)
+    }
+
+    /// Everything kept, oldest first (the file, then memory); the file goes.
+    fn replay(&mut self, mut out: impl FnMut(Option<usize>, Ns, &[u8]) -> Result<()>) -> Result<()> {
+        if let Some(mut w) = self.spill.take() {
+            use std::io::{Read, Write};
+            w.flush()?;
+            drop(w);
+            let mut r = std::io::BufReader::new(std::fs::File::open(&self.path)?);
+            let mut head = [0u8; 16];
+            // (A record cut short by a failed write ends it.)
+            while r.read_exact(&mut head).is_ok() {
+                let k = u32::from_le_bytes(head[..4].try_into().unwrap());
+                let t = Ns::from_le_bytes(head[4..12].try_into().unwrap());
+                let mut d = vec![0u8; u32::from_le_bytes(head[12..].try_into().unwrap()) as usize];
+                if r.read_exact(&mut d).is_err() {
+                    break;
+                }
+                out(k.checked_sub(1).map(|k| k as usize), t, &d)?;
+            }
+            drop(r);
+            let _ = std::fs::remove_file(&self.path);
+        }
+        for (k, t, d) in self.mem.drain(..) {
+            out(k, t, &d)?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for EarlySound {
+    fn drop(&mut self) {
+        if self.spill.take().is_some() || self.path.exists() {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
 /// Writes one MP4/MOV; created when the first video packet arrives (its
 /// decoder configuration is needed for the header).
 #[allow(clippy::too_many_arguments)]
@@ -133,8 +223,7 @@ pub fn spawn_mp4(
                 }
             };
             let mut writer: Option<(Mp4Writer, usize, Option<usize>)> = None;
-            let mut early_audio: Vec<(Ns, Arc<Vec<u8>>)> = Vec::new();
-            let mut early_tracks: Vec<(usize, Ns, Arc<Vec<u8>>)> = Vec::new();
+            let mut early = EarlySound::new(&path);
             let mut track_ids: Vec<usize> = Vec::new();
             let mut track_ends: Vec<(usize, Ns)> = Vec::new();
             let mut failed: Option<anyhow::Error> = None;
@@ -147,7 +236,9 @@ pub fn spawn_mp4(
                 if failed.is_some() {
                     continue; // keep draining so producers never block
                 }
-                let r = (|| -> Result<()> {
+                // (A bug here fails the file, as a write error does, rather
+                // than leaving the encoder sending into nowhere.)
+                let r = crate::util::guard("writing the file", || -> Result<()> {
                     match msg {
                         MuxMsg::Video(p) => {
                             if writer.is_none() {
@@ -170,16 +261,16 @@ pub fn spawn_mp4(
                                 writer = Some((w, v, a));
                             }
                             let (w, v, a) = writer.as_mut().unwrap();
-                            if let Some(a) = a {
-                                for (t, d) in early_audio.drain(..) {
-                                    w.write(*a, t, &d, true)?;
+                            early.replay(|k, t, d| {
+                                let id = match k {
+                                    None => *a,
+                                    Some(k) => track_ids.get(k).copied(),
+                                };
+                                match id {
+                                    Some(id) => w.write(id, t, d, true),
+                                    None => Ok(()),
                                 }
-                            }
-                            for (k, t, d) in early_tracks.drain(..) {
-                                if let Some(&id) = track_ids.get(k) {
-                                    w.write(id, t, &d, true)?;
-                                }
-                            }
+                            })?;
                             w.write(*v, p.dts, &p.data, p.keyframe)?;
                             if p.keyframe {
                                 report_backup(w);
@@ -189,7 +280,8 @@ pub fn spawn_mp4(
                         MuxMsg::Audio(t, d) => match writer.as_mut() {
                             Some((w, _, Some(a))) => w.write(*a, t, &d, true)?,
                             Some(_) => {}
-                            None => early_audio.push((t, d)),
+                            None if audio.is_some() => early.push(None, t, d),
+                            None => {}
                         },
                         MuxMsg::AudioEnd(ns) => audio_end = Some(ns),
                         MuxMsg::VideoEnd(ns) => video_end = Some(ns),
@@ -199,12 +291,13 @@ pub fn spawn_mp4(
                                     w.write(id, t, &d, true)?;
                                 }
                             }
-                            None => early_tracks.push((k, t, d)),
+                            None if audio.is_some() && k < tracks.len() => early.push(Some(k), t, d),
+                            None => {}
                         },
                         MuxMsg::TrackEnd(k, ns) => track_ends.push((k, ns)),
                     }
                     Ok(())
-                })();
+                });
                 if let Err(e) = r {
                     let msg = format!("{label}: {e:#}");
                     let mut st = status.lock_ok();
@@ -218,7 +311,7 @@ pub fn spawn_mp4(
                 // Close the file properly if the drive lets us; else mend it
                 // the way the rescue would, so it isn't left half-written.
                 let backup = opts.backup_for(&path);
-                let finished = w.finish().is_ok() || mend(&path);
+                let finished = crate::util::guard("closing the file", || w.finish()).is_ok() || mend(&path);
                 if let Some(b) = backup.filter(|b| b.exists()) {
                     mend(&b);
                 }
@@ -276,6 +369,14 @@ fn mend(path: &std::path::Path) -> bool {
     matches!(crate::media::mp4::recover(path), Ok(crate::media::mp4::Recovery::Recovered { .. } | crate::media::mp4::Recovery::AlreadyComplete))
 }
 
+/// The longest an encoder or WAV writer sleeps with nothing due.
+const IDLE_WAKE: Ns = 250_000_000;
+
+/// How long a source must have sent nothing before its file is filled,
+/// and how far behind the source's own pace the filling stays, so its
+/// next frame never lands in a slot already filled.
+const GAP_MARGIN: Ns = NS_PER_SEC;
+
 /// Puts a source's frames onto a constant frame rate starting at T0:
 /// repeats a frame when the source skips, drops extras when it's fast.
 pub struct Retimer {
@@ -284,6 +385,8 @@ pub struct Retimer {
     delay: Ns,
     next: i64,
     last: Option<VideoFrame>,
+    /// When the last frame was taken in, and where the frames ended then.
+    heard: Option<(Ns, Ns)>,
     /// Slots filled by repeating a picture (the source skipped).
     pub repeated: u64,
     /// Pictures that arrived for an already-filled slot.
@@ -292,7 +395,7 @@ pub struct Retimer {
 
 impl Retimer {
     pub fn new(t0: Ns, fps: u32, delay: Ns) -> Self {
-        Retimer { t0, fps: fps.max(1), delay, next: 0, last: None, repeated: 0, dropped: 0 }
+        Retimer { t0, fps: fps.max(1), delay, next: 0, last: None, heard: None, repeated: 0, dropped: 0 }
     }
 
     pub fn slot_time(&self, k: i64) -> Ns {
@@ -330,6 +433,28 @@ impl Retimer {
     /// Where the frames so far end (relative to T0).
     pub fn end(&self) -> Ns {
         self.slot_time(self.next)
+    }
+
+    /// A frame was just taken in (`now` is the clock, any base).
+    pub fn heard(&mut self, now: Ns) {
+        self.heard = Some((now, self.end()));
+    }
+
+    /// Nothing has come for a while (`now` on the clock `heard` used): the
+    /// file carries on from where the source was, at the clock's pace, a
+    /// second behind, repeating the last picture (counted as repeated). A
+    /// source that runs behind the clock (a jitter buffer, a delay) keeps
+    /// that lag, so its frames still land in their own slots when it's back.
+    pub fn fill_gap(&mut self, now: Ns) -> Vec<(Ns, VideoFrame)> {
+        let Some((at, end)) = self.heard else { return Vec::new() };
+        let quiet = now - at;
+        let to = end + quiet - GAP_MARGIN;
+        if self.last.is_none() || quiet <= GAP_MARGIN || to <= self.end() {
+            return Vec::new();
+        }
+        let out = self.finish(to);
+        self.repeated += out.len() as u64;
+        out
     }
 
     /// Repeat the last frame up to `end` (relative to T0).
@@ -444,12 +569,25 @@ pub fn spawn_video(
             let mut result = Ok(());
             let mut open = true;
             while open || !held.is_empty() {
-                match rx.recv_timeout(Duration::from_millis(10)) {
+                // Asleep until the next frame comes or the held one is due
+                // (no polling: there can be ten of these threads in a take).
+                let wait = held.front().map_or(IDLE_WAKE, |(pts, _)| (t0 + pts - crate::media::clock::now()).clamp(0, IDLE_WAKE));
+                match rx.recv_timeout(Duration::from_nanos(wait as u64)) {
                     Ok(frame) => match retimer.as_mut() {
-                        Some(r) => held.extend(r.push(frame)),
+                        Some(r) => {
+                            held.extend(r.push(frame));
+                            r.heard(crate::media::clock::now());
+                        }
                         None => held.push_back((frame.pts - t0, frame)),
                     },
-                    Err(RecvTimeoutError::Timeout) => {}
+                    // Nothing waiting: a source that went quiet (unplugged,
+                    // no signal) has its file repeat the last picture as the
+                    // time passes, not all at once when it comes back.
+                    Err(RecvTimeoutError::Timeout) => {
+                        if let Some(r) = retimer.as_mut() {
+                            held.extend(r.fill_gap(crate::media::clock::now()));
+                        }
+                    }
                     Err(RecvTimeoutError::Disconnected) => open = false,
                 }
                 let now = crate::media::clock::now();
@@ -462,7 +600,9 @@ pub fn spawn_video(
                     if t0 + pts >= end || result.is_err() {
                         continue;
                     }
-                    if let Err(e) = run(&f, pts, &mut enc) {
+                    // A crash in the encoder fails this file now (and shows in
+                    // the health panel), not only when the take stops.
+                    if let Err(e) = crate::util::guard("the encoder", || run(&f, pts, &mut enc)) {
                         status.lock_ok().push(LogLevel::Error, format!("{label}: {e:#}"));
                         stats.failed.store(true, Ordering::Relaxed);
                         result = Err(e);
@@ -481,7 +621,7 @@ pub fn spawn_video(
                 if let Some(r) = retimer.as_mut() {
                     let end = if left { crate::media::clock::now() } else { t1.load(Ordering::Relaxed) } - t0;
                     for (pts, f) in r.finish(end) {
-                        run(&f, pts, &mut enc)?;
+                        crate::util::guard("the encoder", || run(&f, pts, &mut enc))?;
                     }
                 }
             }
@@ -494,10 +634,10 @@ pub fn spawn_video(
                 }
             }
             if let Some(mut e) = enc {
-                e.finish()?;
+                crate::util::guard("the encoder", || e.finish())?;
             }
             if let Some(mut e) = proxy_enc {
-                let _ = e.finish();
+                let _ = crate::util::guard("the proxy encoder", || e.finish());
             }
             result
         })
@@ -541,10 +681,10 @@ pub fn spawn_audio(rx: Receiver<AudioBlock>, t0: Ns, t1: Arc<AtomicI64>, mut aac
                 let samples = cursor.take(&b, t1.load(Ordering::Relaxed));
                 if !samples.is_empty() {
                     let samples = if mono { samples.chunks_exact(2).map(|f| f[0]).collect() } else { samples };
-                    send(aac.push(&samples)?);
+                    send(crate::util::guard("the sound encoder", || aac.push(&samples))?);
                 }
             }
-            send(aac.finish()?);
+            send(crate::util::guard("the sound encoder", || aac.finish())?);
             let end = cursor.position_ns();
             for o in &outs {
                 let _ = o.send(match track {
@@ -622,21 +762,23 @@ pub fn spawn_wav(
             let mut held: VecDeque<AudioBlock> = VecDeque::new();
             let mut open = true;
             let mut result = Ok(());
+            let due = |b: &AudioBlock| b.pts + b.frames() as i64 * NS_PER_SEC / b.rate.max(1) as i64;
             while open || !held.is_empty() {
-                match rx.recv_timeout(Duration::from_millis(20)) {
+                // Asleep until a block comes or the held one is due.
+                let wait = held.front().map_or(IDLE_WAKE, |b| (due(b) - crate::media::clock::now()).clamp(0, IDLE_WAKE));
+                match rx.recv_timeout(Duration::from_nanos(wait as u64)) {
                     Ok(b) => held.push_back(b),
                     Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => open = false,
                 }
                 let now = crate::media::clock::now();
                 while let Some(b) = held.front() {
-                    let end_of_block = b.pts + b.frames() as i64 * NS_PER_SEC / b.rate.max(1) as i64;
-                    if open && end_of_block > now {
+                    if open && due(b) > now {
                         break;
                     }
                     let b = held.pop_front().unwrap();
                     if result.is_ok() {
-                        result = w.write(&b, t1.load(Ordering::Relaxed));
+                        result = crate::util::guard("writing the file", || w.write(&b, t1.load(Ordering::Relaxed)));
                         for (_, wr) in w.writers.iter_mut() {
                             if let Some(e) = wr.take_backup_error() {
                                 status.lock_ok().push(LogLevel::Warning, format!("{label}: {e}. The main recording continues."));
@@ -941,6 +1083,49 @@ mod tests {
         let _ = std::fs::remove_file(&p);
     }
 
+    /// A camera that comes 3.5 s into the take still gets all the sound
+    /// from the start (kept on disk meanwhile, not in memory); one that
+    /// never comes leaves no temporary file behind.
+    #[test]
+    fn early_sound_waits_on_disk_for_a_late_picture() {
+        use crate::media::mp4::tests::{audio_config, fake_video_config};
+        for picture in [true, false] {
+            let dir = std::env::temp_dir().join(format!("cutaway-early-{}-{picture}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("ISO_01_Cam.mp4");
+            let tmp = dir.join(format!("ISO_01_Cam.mp4{EARLY_SUFFIX}"));
+            let opts = FileOpts { take_folder: dir.clone(), backup_folder: None, tc_seconds: None, tc_date: Default::default(), markers: Default::default() };
+            let (tx, rx) = crossbeam_channel::unbounded();
+            let h = spawn_mp4(path.clone(), Brand::Mp4, 30, Some(audio_config()), Vec::new(), rx, Arc::new(Mutex::new(Status::default())), "ISO 1".into(), opts, None);
+            let frame = AAC_FRAME as i64 * NS_PER_SEC / 48_000;
+            let n = (3_500_000_000 / frame) as usize;
+            for i in 0..n {
+                tx.send(MuxMsg::Audio(i as i64 * frame, Arc::new(vec![0xAA; 300]))).unwrap();
+            }
+            let t = std::time::Instant::now();
+            while !tmp.exists() && t.elapsed() < Duration::from_secs(10) {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert!(tmp.exists(), "sound older than 2 s waits on disk");
+            if picture {
+                let config = Arc::new(fake_video_config());
+                for i in 0..30i64 {
+                    let dts = 3_500_000_000 + i * NS_PER_SEC / 30;
+                    tx.send(MuxMsg::Video(VideoPacket { pts: dts, dts, keyframe: i == 0, data: Arc::new(vec![0, 0, 0, 1, 0x65]), config: config.clone() })).unwrap();
+                }
+                drop(tx);
+                let w = h.join().unwrap().unwrap();
+                assert!(w.size > (n * 300) as u64, "all {n} packets of sound are in the file ({} bytes)", w.size);
+            } else {
+                drop(tx);
+                assert!(h.join().unwrap().is_err(), "no picture, no file");
+            }
+            assert!(!tmp.exists(), "the temporary file is gone");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
     #[test]
     fn retimer_starts_with_the_earlier_picture_if_slot_0_is_missed() {
         let t0 = 1_000_000_000;
@@ -969,6 +1154,77 @@ mod tests {
         // Finish up to 200 ms: slots 4, 5 repeat (133, 166 ms).
         let out = r.finish(200_000_000);
         assert_eq!(out.iter().map(|o| o.0).collect::<Vec<_>>(), vec![133_333_333, 166_666_666]);
+    }
+
+    #[test]
+    fn retimer_fills_a_long_gap_as_it_happens() {
+        let t0 = 1_000_000_000;
+        for delay in [0, 400_000_000] {
+            let mut r = Retimer::new(t0, 30, delay);
+            let slot = |pts: Ns| ((pts + delay - t0) as i128 * 30 / NS_PER_SEC as i128) as Ns * NS_PER_SEC / 30;
+            assert!(r.fill_gap(t0 + 5 * NS_PER_SEC).is_empty(), "no picture yet: nothing to repeat");
+            assert_eq!(r.push(frame(t0 + 10_000_000)).len(), 1 + (delay * 30 / NS_PER_SEC) as usize);
+            r.heard(t0 + 20_000_000);
+            // Just quiet for a moment: nothing is filled.
+            assert!(r.fill_gap(t0 + 500_000_000).is_empty());
+            // The camera goes quiet for five minutes: checked every 250 ms,
+            // each check fills only the time that passed.
+            let mut filled = 0;
+            let mut most = 0;
+            let mut now = t0 + 250_000_000;
+            while now < t0 + 300 * NS_PER_SEC {
+                let out = r.fill_gap(now);
+                most = most.max(out.len());
+                filled += out.len();
+                assert!(out.iter().all(|o| t0 + o.0 < now + delay), "nothing filled ahead of its time");
+                now += 250_000_000;
+            }
+            assert!(most <= 9, "at the pace of the clock: {most} at once");
+            assert!(filled > 298 * 30 - 15, "{filled}");
+            assert_eq!(r.repeated as usize, filled + (delay * 30 / NS_PER_SEC) as usize);
+            // It comes back: about a second of repeats, not five minutes',
+            // and the frame lands in its own slot (in step with the others).
+            let back = t0 + 300 * NS_PER_SEC + 5_000_000;
+            let out = r.push(frame(back));
+            assert!(out.len() <= 40, "{}", out.len());
+            assert_eq!(out.last().map(|o| (o.0, o.1.pts)), Some((slot(back), back)));
+            assert_eq!(r.dropped, 0);
+        }
+    }
+
+    /// Frames that queued up while the encoder stalled, and a source that
+    /// runs well behind the clock, keep every frame in its own slot.
+    #[test]
+    fn retimer_fills_nothing_for_late_or_queued_frames() {
+        let t0 = 1_000_000_000;
+        let step = NS_PER_SEC / 30;
+        // Lag: frames reach us 0 or 1.5 s after their time. The encoder
+        // thread hears each one as it comes, and in between finds nothing
+        // waiting (a timeout) and asks about a gap.
+        for lag in [0, 1_500_000_000] {
+            let mut r = Retimer::new(t0, 30, 0);
+            for i in 0..300 {
+                let pts = t0 + i * step + 1_000_000;
+                let now = pts + lag;
+                r.push(frame(pts));
+                r.heard(now);
+                assert!(r.fill_gap(now + step / 2).is_empty(), "lag {lag}: frame {i}");
+            }
+            assert_eq!((r.dropped, r.repeated), (0, 0), "lag {lag}");
+        }
+        // A 2 s stall: 60 frames waited in the queue. They're taken in one
+        // after another (no timeout between them), each in its own slot.
+        let mut r = Retimer::new(t0, 30, 0);
+        let mut slots = Vec::new();
+        for i in 0..90 {
+            let pts = t0 + i * step + 1_000_000;
+            let now = if i < 30 { pts } else { t0 + 3 * NS_PER_SEC + i * 1_000_000 };
+            slots.extend(r.push(frame(pts)).into_iter().map(|o| o.0));
+            r.heard(now);
+        }
+        assert!(r.fill_gap(t0 + 3 * NS_PER_SEC + 100_000_000).is_empty(), "just heard: no gap");
+        assert_eq!(slots, (0..90).map(|i| i * NS_PER_SEC / 30).collect::<Vec<_>>());
+        assert_eq!((r.dropped, r.repeated), (0, 0));
     }
 
     #[test]
