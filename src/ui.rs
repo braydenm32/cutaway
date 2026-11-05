@@ -4120,7 +4120,7 @@ impl App {
                 ui.close();
             }
         });
-        more.on_hover_text("More transitions: Wipe, Push, Dip, Stinger");
+        more.on_hover_text("More transitions: Wipe, Push, Dip (through a colour), Stinger (a video over the change)");
         if mode != self.cfg.transition.mode {
             self.cfg.transition.mode = mode;
             self.cfg_dirty = true;
@@ -5109,7 +5109,7 @@ impl App {
                         draw_meter(ui, vec2(36.0, meter_h), &m.peak_db, &m.rms_db, &hold, false, false);
                         let fmt = |v: f32| if v < -99.0 { "—".to_string() } else { format!("{v:.0}") };
                         ui.label(RichText::new(format!("{} LUFS", fmt(l.short_term))).monospace().size(TEXT_BODY))
-                            .on_hover_text(format!("Short-term loudness (3 s). Momentary (0.4 s): {} LUFS", fmt(l.momentary)));
+                            .on_hover_text(format!("Loudness, in LUFS (a standard unit). Short-term (3 s): {}. Momentary (0.4 s): {} LUFS", fmt(l.short_term), fmt(l.momentary)));
                         // Integrated loudness counts from the start of each take (or
                         // going live): shown only while there's one to count.
                         let counting = if key == "mix" { recording } else { live };

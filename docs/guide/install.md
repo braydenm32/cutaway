@@ -86,7 +86,7 @@ NDI's free runtime from NDI and opens its installer, which asks for your
 password. Cutaway picks NDI up as soon as it's installed, without a restart,
 and starts any NDI sources and NDI output that were waiting for it. The
 pre-show check offers the same when a show uses NDI on a computer without
-it. NDI Tools or the NDI SDK from [ndi.video](https://ndi.video/tools/) work
+it. NDI Tools, from [ndi.video](https://ndi.video/tools/), works
 too. Nothing else changes if NDI isn't installed.
 
 NDI® is a registered trademark of Vizrt NDI AB.

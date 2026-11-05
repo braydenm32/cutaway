@@ -112,7 +112,7 @@ $dml = Get-NuGet "Microsoft.AI.DirectML" "DirectML.dll" "bin\x64-win\DirectML.dl
 
 # ---- build --------------------------------------------------------------------------------
 
-$cargoArgs = @("build", "--release")
+$cargoArgs = @("build", "--profile", "dist")
 # The default features are whisper and a macOS-only one, so this drops just whisper here.
 if ($NoWhisper) { $cargoArgs += @("--no-default-features") }
 if ($features.Count -gt 0) { $cargoArgs += @("--features", ($features -join ",")) }
@@ -130,7 +130,7 @@ $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select
 $dist = Join-Path $root "dist\Cutaway"
 if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
-Copy-Item target\release\cutaway.exe (Join-Path $dist "Cutaway.exe")
+Copy-Item target\dist\cutaway.exe (Join-Path $dist "Cutaway.exe")
 Copy-Item windows\vcam\target\release\cutaway_vcam.dll $dist
 Copy-Item $ort $dist
 Copy-Item $dml $dist

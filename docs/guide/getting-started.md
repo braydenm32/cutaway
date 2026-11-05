@@ -28,13 +28,13 @@
   saved, the step says where to find it (the Recording saved card, or Record & stream ›
   Recordings) with a **Recordings…** button. On a Mac the guide says up front that macOS
   will ask about the camera and microphone (choose Allow). Your scenes turns on **Edit layout**, and Editing
-  afterwards opens **Record & stream › Quality and files › Editing**, where the DaVinci Resolve,
+  afterwards opens **Record & stream › Quality and files › Editing** (its For editing part), where the DaVinci Resolve,
   Premiere Pro and Final Cut projects are switched on. **Switch from a phone
   or Stream Deck** is skipped like Going live until you want it: its button
   turns Remote control on and opens **More › Control › Phone remote**, where
   the QR code is. A step's button folds
-  the guide down to a small **Guide 3 of 7** button on the left, just above
-  More, so the page it opened can be used; click it to carry on. Open
+  the guide down to a small **Guide** button on the left, just above More, that shows
+  how many steps are done (3 of 8, or 3/8 when the window is narrow), so the page it opened can be used; click it to carry on. Open
   it again any time from **More › App › Help** (or **First-show guide** under
   the status light). What it has ticked off (the mic heard you, the check
   was run, a test recorded) is remembered between launches, and if you quit
@@ -51,7 +51,7 @@
   Change anything in the areas down the left of the window, or edit the
   file directly. `cutaway.example.toml` explains every option.
 - **The rail down the left** has the areas: **Show** (the live desk),
-  **Sources**, **Scenes**, **Sound**, **Graphics**, **Record**, and **More**
+  **Sources**, **Scenes**, **Sound**, **Graphics**, **Record & stream** (it shows as **Record** on the rail), and **More**
   at the bottom (⌘1–⌘7, or Ctrl+1–7 on Windows; **Esc** goes back to Show
   when you're not typing). Clicking an area turns the top bar into its tabs;
   the ones used least sit under **More ▾** at the end of the row, and so do
@@ -97,7 +97,7 @@
   when you come back.
 - **Starting up:** the window opens straight away; while the cameras come up,
   the monitors show a clapperboard with a line from the studio floor.
-- **Check your hardware:** **More › App › Diagnostics → Test encoders**
+- **Check your hardware:** **More › App › Diagnostics → Check formats**
   (or `cutaway --probe-encoders`) shows the encoders (including whether
   ProRes is available), NDI and the GPU Cutaway will use; **List devices
   again** there (or `cutaway --list-devices`) lists the cameras, capture

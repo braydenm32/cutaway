@@ -34,7 +34,7 @@
 | Go live / end stream | **◉ Go live** at the top right, once there's somewhere to stream to (set that up in **Record & stream › Streaming**). It says **Going live…** until a destination is really on air, and the **LIVE** time counts from then, the same on the desk, the phone and OSC. It has no key unless you give it one in More › Control › Shortcuts, so a stray key can't start or end a broadcast (a key gets the same checks and "are you sure?" as the button) |
 | Put scenes in order | In **Edit layout**, drag a scene button along the bank (a bar shows where it goes). Only in Edit layout, so a slip during the show can't move one. Or ↑ ↓ in **Scenes › Scenes**, which also renames, duplicates, deletes (it asks first, and says what uses the scene) and starts new scenes. Changes there save as you make them (↶ Undo at the bottom, or ⌘Z); **Edit its layout ›** opens the picked scene in Edit layout (in preview; if the scene isn't on air and Preview is off, it goes in preview just for the edit and Preview turns off again when you leave Edit layout) |
 | New scene | **＋ New scene** in Edit layout (or Scenes › Scenes): **Blank**, or from a layout (a source full screen, side by side, picture in picture, grid). It goes at the end of the bank, so no other scene's number changes. With Preview on it goes in preview to edit; otherwise take it to edit it |
-| Edit layout | `E`, or the **Edit layout** tab beside **Switch** at the top of Show. With **Preview** on you edit the scene in preview (click a scene to pick it; the one on air goes there if preview is empty): the program, and so the recording and stream, stays exactly as it is until you **Take** or **Cut** it. With Preview off you edit the scene on air, and a red **ON AIR** label says so, with **Edit in preview** to turn Preview on; but while you're recording or live, opening Edit layout (`E` or the tab) turns Preview on for you and says so, so a stray `E` and a scroll can't change the picture on air. **↶ Undo** and **↷ Redo** sit at the top. **Picture** (in the selected frame): **Fit/Fill**, **Zoom**, **✥ Move picture** (drag inside a frame to move its picture; Option/Alt-drag does the same) and **Reset**. **Scene**: its name, **Add source**, **Audio** (inputs it turns on or off), **Also run…** (commands it runs when it's taken: a title, a pad, a mood), **＋ New scene**, **Duplicate**, **Delete…** (it asks first, says what uses the scene, and Undo brings it back). Under the bar, once you click a frame, **Frame**: **Remove**, **To front**, **Full frame**, then a line that says what the mouse does: drag frames, drag the corner to resize (Shift keeps shape), scroll to zoom, double-click to fit or fill. **Unsaved** shows until the scenes are written to disk: **Save scenes**, or a few seconds after **Done**. **Done** or Esc goes back to Switch |
+| Edit layout | `E`, or the **Edit layout** tab beside **Switch** at the top of Show. What it does is listed under the table |
 | Audio strip | Always at the bottom of the column, under a fixed AUDIO heading, with room kept for it. Fader beside each meter = level, −60 to +12 dB (double-click resets), **ON** = in the mixes (click to turn it off; while you're recording or live, hold it for a second instead, so a slip can't cut a mic mid-show; turning one back on is always a click), 🎧 = solo in the headphones. Beside them, **REC MIX** (the recording) and, once there's somewhere to stream to (Record & stream › Streaming), **STREAM**, each with its loudness |
 | Fold or move a panel on the right | Click the ▾ or the name in its heading to fold it down to one line, again to open it (the rest of the heading does nothing, so a click a little high of a button can't fold the panel away). Drag a heading by its ⠿ dots onto another panel's heading to move it above that one (not while you're recording or live, so the column can't rearrange itself mid-show), or use **⋯ › Arrange panels…** at the top of the column (↑ ↓, Open, and **Reset order, folds and width**). Hovering a heading shows **Set up ›** for that panel; ⋯ lists them all. When panels go on below what fits, a line at the bottom says which (click it to scroll). Each show remembers its own |
 | Widen the column on the right | Drag its left edge (the three dots), up to about 60% of the window. Each show remembers its width |
@@ -43,10 +43,21 @@
 | Switch show | The show's name at the top of the rail, under the logo |
 | Time left on the drive | Top right, beside the clock: **2 h 40 min left**, with **412 GB free** under it (hover for the drive and whether the time is from this recording's real write rate or estimated). It turns amber under 30 minutes, the same limit as the status light and the pre-show check |
 | Time of day | The clock at the top right. Choose 24-hour or 12-hour time under the status light, in **More › App › General** or in **Graphics › Clocks & timers** (clicking the clock does nothing, so a slip can't change it); each show remembers which, and clock graphics, the second screen and scheduled times follow it |
-| Areas | ⌘1–⌘7 (Ctrl+1–7 on Windows): Show, Sources, Scenes, Sound, Graphics, Record, More. **Esc** goes back to Show (not while typing) |
+| Areas | ⌘1–⌘7 (Ctrl+1–7 on Windows): Show, Sources, Scenes, Sound, Graphics, Record & stream (shown as Record on the rail), More. **Esc** goes back to Show (not while typing) |
 | Settings pages | ⌘, opens the area you last had open (Sources the first time) |
 | Search | ⌘K (Ctrl+K on Windows), or the magnifier in the top bar: settings, pages and desk buttons by name. ↑ ↓ and Enter to go, Esc to close |
 | Every key | **More › App › Help** lists them all as they're set now |
+
+### Edit layout
+
+- **Preview:** with **Preview** on you edit the scene in preview (click a scene to pick it; the one on air goes there if preview is empty). The program, and so the recording and stream, stays exactly as it is until you **Take** or **Cut** it.
+- **Preview off:** you edit the scene on air, and a red **ON AIR** label says so, with **Edit in preview** to turn Preview on.
+- **Recording or live:** opening Edit layout (`E` or the tab) turns Preview on for you and says so, so a stray `E` and a scroll can't change the picture on air.
+- **Undo and redo:** **↶ Undo** and **↷ Redo** sit at the top.
+- **Picture** (in the selected frame): **Fit/Fill**, **Zoom**, **✥ Move picture** (drag inside a frame to move its picture; Option/Alt-drag does the same) and **Reset**.
+- **Scene:** its name, **Add source**, **Audio** (inputs it turns on or off), **Also run…** (commands it runs when it's taken: a title, a pad, a mood), **＋ New scene**, **Duplicate**, and **Delete…** (it asks first, says what uses the scene, and Undo brings it back).
+- **Frames:** once you click a frame, **Frame** offers **Remove**, **To front** and **Full frame**. Drag frames, drag a corner to resize (Shift keeps the shape), scroll to zoom, and double-click to fit or fill. A line under the bar says what the mouse does.
+- **Saving:** **Unsaved** shows until the scenes are written to disk: press **Save scenes**, or wait a few seconds after **Done**. **Done** or Esc goes back to Switch.
 
 The keys above are the built-in ones. Any of them (except the numbered
 scene, graphic and pad keys) can be moved or turned off in **More › Control
@@ -68,10 +79,10 @@ TALK, Undo, the graphics) always show the key as it's set now.
    frame rate above the program's is sent at the program's (the Quality line
    shows what's really sent). Keep the total under about 70% of your measured
    upload speed.
-3. **Go live:** press **◉ GO LIVE**. With **Pre-show check** turned on in
+3. **Go live:** press **◉ Go live**. With **Pre-show check** turned on in
    More › App › General, the check runs first and only stops you if
    something looks wrong.
-   - The button pulses **GOING LIVE…** while it connects (the line beside
+   - The button pulses **Going live…** while it connects (the line beside
      it names where to), turns pink with a timer once you're live, and
      orange if any destination isn't live.
    - The **Stream** panel shows each destination's state and bitrate, and why
@@ -137,7 +148,7 @@ time.
   YouTube** deletes the event. Cutaway also points your YouTube destination's
   stream key at the event, so going live lands on that page.
 - **Go live by itself:** tick **At the start time** and Cutaway presses
-  GO LIVE for you when it's time, as long as it's open (up to 10 minutes
+  Go live for you when it's time, as long as it's open (up to 10 minutes
   late, if the computer was asleep). The top bar counts down the last hour.
   YouTube starts the event when your stream arrives, and ends it when you
   stop.
