@@ -161,7 +161,8 @@ Everything Cutaway can do, area by area. For the steps of a first show, see [Get
 - **No accidental quits:** closing the window (or Cmd+Q, Alt+F4) while
   recording or live, or while a recording is still saving, the podcast copy is
   being made or an upload is running, asks first. Quitting anyway finishes
-  and saves the recording and ends the broadcast. **Restart to update** waits
+  and saves the recording and ends the broadcast; a podcast copy being made
+  stops and isn't saved (Mix.wav is kept). **Restart to update** waits
   for all of these too.
 - **Desk changes are kept:** fader levels, inputs on or off, the
   transition, the right-hand column and your scene edits are saved a few

@@ -427,6 +427,9 @@ pub struct Engine {
     take: Mutex<Option<recorder::Take>>,
     /// Background jobs finishing files/streams; joined on shutdown.
     finalizers: Mutex<Vec<JoinHandle<()>>>,
+    /// Set when Cutaway quits: a podcast copy being made stops (quitting
+    /// doesn't wait for it).
+    podcast_stop: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     threads: Vec<JoinHandle<()>>,
     waker: Waker,
@@ -852,6 +855,7 @@ impl Engine {
             stream_started: Mutex::new(None),
             take: Mutex::new(None),
             finalizers: Mutex::new(Vec::new()),
+            podcast_stop: Arc::new(AtomicBool::new(false)),
             stop,
             threads,
             waker,
@@ -1872,6 +1876,12 @@ impl Engine {
     }
 
     // ---- recording (see take.rs) ---------------------------------------------------
+
+    /// Cutaway is quitting: a podcast copy being made stops rather than
+    /// keeping the window open (an engine restart still waits for it).
+    pub fn stop_podcast(&self) {
+        self.podcast_stop.store(true, Ordering::Relaxed);
+    }
 
     pub fn wait_finalized(&self) {
         let jobs: Vec<JoinHandle<()>> = std::mem::take(&mut *self.finalizers.lock_ok());

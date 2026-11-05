@@ -6362,13 +6362,20 @@ impl eframe::App for App {
         self.remote = None;
         self.midi = None;
         self.osc = None;
-        if let Some(mut e) = self.engine.take() {
-            e.shutdown();
-        }
-        crate::engine::guests::hub().shutdown();
+        // Saved first: a long shutdown that gets force-quit doesn't lose them.
         if self.cfg_dirty || self.scenes_dirty {
             self.save_config();
         }
+        if let Some(mut e) = self.engine.take() {
+            // As the quit question says: a podcast copy already under way
+            // (or about to start) stops. A take stopped by quitting itself
+            // still gets its copy, as before.
+            if !e.is_recording() {
+                e.stop_podcast();
+            }
+            e.shutdown();
+        }
+        crate::engine::guests::hub().shutdown();
         // An update that's ready and told to go in: the helper takes over
         // once Cutaway has closed.
         if let Some(e) = crate::net::self_update::on_exit() {
@@ -6392,7 +6399,7 @@ fn quit_text(recording: bool, live: bool, busy: Option<String>) -> (String, Stri
         (true, false, _) => ("Quit while recording?".into(), "Cutaway will finish and save this recording.".into()),
         (false, false, Some(b)) => (
             "Quit before Cutaway has finished?".to_string(),
-            format!("Cutaway is still {b}. Saving finishes before Cutaway closes; uploads stop part way and carry on when you next open Cutaway, but the podcast copy has to be made again."),
+            format!("Cutaway is still {b}. Saving finishes before Cutaway closes. Uploads stop part way and carry on when you next open Cutaway. The podcast copy stops and isn't saved (Mix.wav is kept)."),
         ),
         (false, false, None) => ("Quit?".into(), String::new()),
     };
@@ -6674,6 +6681,7 @@ mod small_tests {
         let busy = super::quit_text(false, false, Some("uploading 2 files".into()));
         assert_eq!(busy.0, "Quit before Cutaway has finished?");
         assert!(busy.1.contains("still uploading 2 files"));
+        assert!(busy.1.contains("podcast copy stops"), "says what happens to it: {}", busy.1);
     }
 
     #[test]

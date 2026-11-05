@@ -15,7 +15,7 @@ use anyhow::{bail, Context, Result};
 use crossbeam_channel::{bounded, unbounded};
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -587,6 +587,7 @@ impl Engine {
         // Everything up to t1 has been captured, mixed and composited by then.
         let settle = (VIDEO_LATENCY + 2 * NS_PER_SEC / fps as i64).max(self.audio_latency + audio::BLOCK_NS).max(300_000_000) + 100_000_000;
         let (status2, waker2, folder2) = (status.clone(), waker.clone(), folder.clone());
+        let podcast_stop = self.podcast_stop.clone();
         let handle = std::thread::spawn(move || {
             // A bug while saving mustn't leave Cutaway "saving" for good (no
             // new take could start). The files stay, and so does the journal,
@@ -673,7 +674,7 @@ impl Engine {
                 drop(st);
                 waker();
                 if pending {
-                    let made = make_podcast(&cfg, &folder, side.backup.as_deref(), &side.markers, wall, &status, &waker);
+                    let made = make_podcast(&cfg, &folder, side.backup.as_deref(), &side.markers, wall, &status, &waker, &podcast_stop);
                     // Now uploads can go, with the podcast.
                     if let Some(r) = status.lock_ok().last_take.as_mut().filter(|r| r.folder == folder) {
                         r.podcast_pending = false;
@@ -706,7 +707,7 @@ impl Engine {
 /// The podcast copy, made from the mix WAV after the take is saved.
 /// Returns the file, when made.
 #[allow(clippy::too_many_arguments)]
-fn make_podcast(cfg: &crate::config::Config, folder: &std::path::Path, backup: Option<&std::path::Path>, markers: &[Marker], recorded: chrono::DateTime<chrono::Local>, status: &Arc<Mutex<super::Status>>, waker: &super::Waker) -> Option<PathBuf> {
+fn make_podcast(cfg: &crate::config::Config, folder: &std::path::Path, backup: Option<&std::path::Path>, markers: &[Marker], recorded: chrono::DateTime<chrono::Local>, status: &Arc<Mutex<super::Status>>, waker: &super::Waker, stop: &AtomicBool) -> Option<PathBuf> {
     let wav = folder.join("Mix.wav");
     if !wav.exists() {
         return None;
@@ -736,7 +737,7 @@ fn make_podcast(cfg: &crate::config::Config, folder: &std::path::Path, backup: O
             status.lock_ok().background = Some(("Making the podcast".into(), f));
             waker();
         }
-    });
+    }, stop);
     let mut st = status.lock_ok();
     st.background = None;
     let made = match result {
@@ -746,6 +747,10 @@ fn make_podcast(cfg: &crate::config::Config, folder: &std::path::Path, backup: O
                 format!("Podcast saved: {file} ({}, {}; the mix was {:.1} LUFS, levelled {:+.1} dB)", human_size(r.size), fmt_duration(Duration::from_secs_f64(r.seconds)), r.measured_lufs, r.gain_db),
             );
             Some(folder.join(&file))
+        }
+        Err(_) if stop.load(Ordering::Relaxed) => {
+            st.push(LogLevel::Info, format!("The podcast copy of {take_name} wasn't finished: Cutaway quit (Mix.wav is kept)"));
+            None
         }
         Err(e) => {
             st.push(LogLevel::Warning, format!("The podcast copy couldn't be made: {e:#}"));
