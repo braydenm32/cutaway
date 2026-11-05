@@ -457,6 +457,10 @@ pub struct MixShared {
     lineup: Mutex<Option<MixLineup>>,
     lineup_done: AtomicU64,
     lineups: AtomicU64,
+    /// The stream mix's meter is on screen (there's somewhere to stream
+    /// to). Without that, and with nothing taking the stream mix, its
+    /// master section is skipped.
+    stream_shown: AtomicBool,
 }
 
 /// One input in a new line-up: one the mixer already has (by its old
@@ -495,6 +499,7 @@ impl MixShared {
             lineup: Mutex::new(None),
             lineup_done: AtomicU64::new(0),
             lineups: AtomicU64::new(0),
+            stream_shown: AtomicBool::new(true),
         });
         m.apply(cfg);
         m
@@ -521,6 +526,10 @@ impl MixShared {
         self.duck_threshold_db.store(cfg.duck_threshold_db.clamp(-70.0, -10.0).to_bits(), Ordering::Relaxed);
         self.duck_release_ms.store(cfg.duck_release_ms.clamp(50, 10_000), Ordering::Relaxed);
         self.talkback_dim_db.store(cfg.talkback_dim_db.clamp(-60.0, 0.0).to_bits(), Ordering::Relaxed);
+    }
+    /// Whether the stream mix's meter is shown (see `stream_shown`).
+    pub fn set_stream_shown(&self, on: bool) {
+        self.stream_shown.store(on, Ordering::Relaxed);
     }
     /// Which input is the talkback mic (never heard in the recording or stream).
     pub fn set_talkback_input(&self, input: Option<usize>) {
@@ -773,6 +782,8 @@ pub fn run_mixer(mut inputs: Vec<MixInput>, mut names: Vec<String>, taps: MixTap
     let mut t = (clock::now() / BLOCK_NS) * BLOCK_NS;
     let mut buf = vec![0.0f32; BLOCK * 2];
     let mut n = 0u64;
+    // (Kept between blocks rather than made each time.)
+    let mut fresh_scratch: Vec<AudioBlock> = Vec::new();
     while !stop.load(Ordering::Relaxed) {
         clock::sleep_until(t + BLOCK_NS + latency);
         let lineup = master.lineup.lock_ok().take();
@@ -783,7 +794,8 @@ pub fn run_mixer(mut inputs: Vec<MixInput>, mut names: Vec<String>, taps: MixTap
         }
         for (i, inp) in inputs.iter().enumerate() {
             let strip = &mut strips[i];
-            let mut fresh = Vec::new();
+            let fresh = &mut fresh_scratch;
+            fresh.clear();
             while let Ok(mut b) = inp.rx.try_recv() {
                 b.pts += inp.delay;
                 if strip.aligner.as_ref().is_none_or(|a| a.in_rate != b.rate) {
@@ -810,14 +822,14 @@ pub fn run_mixer(mut inputs: Vec<MixInput>, mut names: Vec<String>, taps: MixTap
                         strip.fed = Some(tap.id);
                     }
                     Some(tap) => {
-                        for b in &fresh {
+                        for b in fresh.iter() {
                             let _ = tap.tx.try_send(b.clone());
                         }
                     }
                     None => strip.fed = None,
                 }
             }
-            strip.history.extend(fresh);
+            strip.history.extend(fresh.drain(..));
             let keep = inp.delay + latency + NS_PER_SEC / 2;
             while strip.history.len() > 1 && strip.history.back().map(|b| b.pts).unwrap_or(0) - strip.history[1].pts > keep {
                 strip.history.pop_front();
@@ -1003,19 +1015,25 @@ pub fn run_mixer(mut inputs: Vec<MixInput>, mut names: Vec<String>, taps: MixTap
         }
         rec.finish(&mut rec_mix, &master);
         let levelling = master.levelling.load(Ordering::Relaxed);
-        if levelling {
-            leveller.process(&mut stream_mix, f32::from_bits(master.target_lufs.load(Ordering::Relaxed)) as f64);
+        // The stream's limiter, loudness meter and leveller, while anyone
+        // could hear or see them.
+        let stream_used = master.stream_shown.load(Ordering::Relaxed) || taps.lock_ok().iter().any(|(_, k, _)| matches!(k, MixKind::Stream | MixKind::Feed { stream: true, .. }));
+        if stream_used {
+            if levelling {
+                leveller.process(&mut stream_mix, f32::from_bits(master.target_lufs.load(Ordering::Relaxed)) as f64);
+            }
+            stream.finish(&mut stream_mix, &master);
         }
-        stream.finish(&mut stream_mix, &master);
         let dim = 10f32.powf(f32::from_bits(master.talkback_dim_db.load(Ordering::Relaxed)) / 20.0);
         let rec_block = AudioBlock { pts: t, rate: MIX_RATE, channels: 2, samples: rec_mix };
         let stream_block = AudioBlock { pts: t, rate: MIX_RATE, channels: 2, samples: stream_mix };
         // Fade to black: what's recorded and streamed fades too (feeds to
         // headphones and callers don't).
         let (g0, g1) = (master.program_gain_at(t), master.program_gain_at(t + BLOCK_NS));
-        let faded = |b: &AudioBlock| -> AudioBlock {
+        // (At full level, the blocks themselves: no copies.)
+        fn faded(b: &AudioBlock, g0: f32, g1: f32) -> std::borrow::Cow<'_, AudioBlock> {
             if g0 >= 1.0 && g1 >= 1.0 {
-                return b.clone();
+                return std::borrow::Cow::Borrowed(b);
             }
             let n = b.samples.len() / 2;
             let mut out = b.clone();
@@ -1024,16 +1042,16 @@ pub fn run_mixer(mut inputs: Vec<MixInput>, mut names: Vec<String>, taps: MixTap
                 f[0] *= g;
                 f[1] *= g;
             }
-            out
-        };
-        let (rec_out, stream_out) = (faded(&rec_block), faded(&stream_block));
+            std::borrow::Cow::Owned(out)
+        }
+        let (rec_out, stream_out) = (faded(&rec_block, g0, g1), faded(&stream_block, g0, g1));
         // Each mix-minus feed worked out (and limited) once a block, however
         // many guests share it.
         let mut feeds: std::collections::HashMap<(bool, u64), Vec<f32>> = std::collections::HashMap::new();
         for (_, kind, tap) in taps.lock_ok().iter() {
             let block = match kind {
-                MixKind::Recording => rec_out.clone(),
-                MixKind::Stream => stream_out.clone(),
+                MixKind::Recording => rec_out.clone().into_owned(),
+                MixKind::Stream => stream_out.clone().into_owned(),
                 MixKind::Input(i) => match solos.iter().find(|s| s.0 == *i) {
                     Some((_, s)) => AudioBlock { pts: t, rate: MIX_RATE, channels: 2, samples: s.clone() },
                     None => AudioBlock { pts: t, rate: MIX_RATE, channels: 2, samples: vec![0.0; BLOCK * 2] },

@@ -715,6 +715,7 @@ impl Engine {
         let audio_latency = audio::mix_latency(max_audio_delay);
         let mix_taps: MixTaps = Arc::new(Mutex::new(Vec::new()));
         let mix = MixShared::new(&cfg.mix);
+        mix.set_stream_shown(stream_meter_shown(&cfg));
         mix.set_talkback_input(talkback_index(cfg));
 
         let mut threads = Vec::new();
@@ -1304,6 +1305,7 @@ impl Engine {
             }
         }
         self.mix.apply(&new.mix);
+        self.mix.set_stream_shown(stream_meter_shown(new));
         self.mix.set_talkback_input(talkback_index(new));
         self.apply_monitor(&new.mix);
         self.apply_outputs(&new.mix);
@@ -1985,6 +1987,12 @@ impl Drop for Engine {
     fn drop(&mut self) {
         self.shutdown();
     }
+}
+
+/// The Sound column shows the stream mix's meter once there's somewhere to
+/// stream to (going live needs one).
+fn stream_meter_shown(cfg: &Config) -> bool {
+    cfg.streaming.destinations.iter().any(|d| d.enabled)
 }
 
 /// When a switch's sound change lands, and how long it fades.
