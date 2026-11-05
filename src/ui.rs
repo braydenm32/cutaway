@@ -2726,8 +2726,14 @@ impl App {
         }
         self.watch_dropped_sources();
         let Some(e) = &self.engine else { return };
-        // A sharper monitor picture while a second screen shows it.
-        let want = if self.cfg.display.output != DisplayOutput::Off { e.info.canvas.0.min(1920) } else { self.cfg.program.preview_width };
+        // A sharper monitor picture while a second screen shows it big (the
+        // multiview shows it half size; the prompter not at all).
+        let normal = self.cfg.program.preview_width;
+        let want = match self.cfg.display.output {
+            DisplayOutput::Program => e.info.canvas.0.min(1920).max(normal),
+            DisplayOutput::Multiview => e.info.canvas.0.min(1280).max(normal),
+            DisplayOutput::Off | DisplayOutput::Prompter => normal,
+        };
         e.preview_width.store(want, std::sync::atomic::Ordering::Relaxed);
     }
 

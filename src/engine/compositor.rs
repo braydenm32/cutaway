@@ -225,6 +225,8 @@ struct SourceGpu {
     slots: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
     thumb: Option<(Target, wgpu::Buffer, wgpu::BindGroup)>,
     serial: Option<u64>,
+    /// The picture its thumbnail was last made from.
+    thumb_serial: Option<u64>,
     /// Person mask (background removal): texture and size, and the
     /// capture time of the mask in it.
     mask: Option<(wgpu::Texture, (u32, u32))>,
@@ -275,6 +277,8 @@ pub struct Rendered {
     /// The preview bus (next scene), RGBA.
     pub preview_bus: Option<(u32, u32, Vec<u8>)>,
     pub thumbs: Vec<(usize, u32, u32, Vec<u8>)>,
+    /// Thumbnails asked for whose picture hasn't changed since the last.
+    pub thumbs_same: Vec<usize>,
     /// The vertical version, and its monitor picture (RGBA).
     pub tall: Option<VideoFrame>,
     pub tall_preview: Option<(u32, u32, Vec<u8>)>,
@@ -885,7 +889,7 @@ impl Compositor {
         let th = ((tw as u64 * height as u64 / width as u64) as u32).max(2) & !1;
         let thumb = Target::new(&self.device, "thumb", tw, th, wgpu::TextureFormat::Rgba8Unorm, 4);
         let (tbuf, tbind) = self.bind(Quad::full(1.0, 1.0, [0.0, 0.0]), &yv, &uvv);
-        SourceGpu { width, height, y, uv, slots, thumb: Some((thumb, tbuf, tbind)), serial: None, mask: None, mask_pts: None, lut, bg }
+        SourceGpu { width, height, y, uv, slots, thumb: Some((thumb, tbuf, tbind)), serial: None, thumb_serial: None, mask: None, mask_pts: None, lut, bg }
     }
 
     /// A person mask for source `index` (from a picture captured at `pts`):
@@ -1808,9 +1812,14 @@ impl Compositor {
             }
         }
         let mut thumb_ids = Vec::new();
+        let mut thumbs_same = Vec::new();
         for &i in &wants.thumbs {
             if let Some(s) = self.sources.get(i) {
-                if let (Some((t, _, bind)), Some(_)) = (&s.thumb, s.serial) {
+                if let (Some((t, _, bind)), Some(serial)) = (&s.thumb, s.serial) {
+                    if s.thumb_serial == Some(serial) {
+                        thumbs_same.push(i);
+                        continue;
+                    }
                     pass(&mut enc, t, &self.yuv_pipe, bind);
                     t.copy(&mut enc);
                     reads.push(t);
@@ -1875,10 +1884,15 @@ impl Compositor {
             out.preview = Some((t.width, t.height, tight(t, data)));
         }
         for i in thumb_ids {
-            let t = &self.sources[i].thumb.as_ref().unwrap().0;
+            let s = &self.sources[i];
+            let t = &s.thumb.as_ref().unwrap().0;
             let data = read(t);
             out.thumbs.push((i, t.width, t.height, tight(t, data)));
         }
+        for &(i, ..) in &out.thumbs {
+            self.sources[i].thumb_serial = self.sources[i].serial;
+        }
+        out.thumbs_same = thumbs_same;
         if tall_now {
             let t = self.tall.as_ref().unwrap();
             if wants.tall {

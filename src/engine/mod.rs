@@ -96,21 +96,59 @@ pub struct FrameSlot {
     generation: AtomicU64,
     last: Mutex<Option<Instant>>,
     born: Instant,
+    /// When someone last asked for the picture (ms after `born`, +1; 0:
+    /// never). The compositor only keeps a slot fresh while it's looked at.
+    read: AtomicU64,
 }
+
+/// A picture asked for within this long counts as being looked at. (The
+/// phone asks every 0.7 s.)
+const READ_WINDOW: Duration = Duration::from_millis(1500);
+/// Pictures nobody looks at still come this often: "no signal" and the
+/// pre-show check go by how old the picture is.
+const UNREAD_EVERY: Duration = Duration::from_secs(1);
 
 impl FrameSlot {
     pub fn new() -> Arc<Self> {
-        Arc::new(FrameSlot { frame: Mutex::new(None), generation: AtomicU64::new(0), last: Mutex::new(None), born: Instant::now() })
+        Arc::new(FrameSlot { frame: Mutex::new(None), generation: AtomicU64::new(0), last: Mutex::new(None), born: Instant::now(), read: AtomicU64::new(0) })
     }
     pub(crate) fn put(&self, f: Frame) {
         *self.frame.lock_ok() = Some(Arc::new(f));
         *self.last.lock_ok() = Some(Instant::now());
         self.generation.fetch_add(1, Ordering::Release);
     }
+    /// The picture hasn't changed but is still current (its source still
+    /// sends the same still picture).
+    pub(crate) fn touch(&self) {
+        let mut last = self.last.lock_ok();
+        if last.is_some() {
+            *last = Some(Instant::now());
+        }
+    }
     /// (generation, frame); generation changes whenever a new frame arrives.
+    /// Asking counts as looking at it (see `wanted`).
     pub fn latest(&self) -> Option<(u64, Arc<Frame>)> {
+        self.read.store(self.born.elapsed().as_millis() as u64 + 1, Ordering::Relaxed);
         let f = self.frame.lock_ok().clone()?;
         Some((self.generation.load(Ordering::Acquire), f))
+    }
+    /// Someone asked for the picture lately.
+    pub(crate) fn read_recently(&self) -> bool {
+        self.read_at(Instant::now())
+    }
+    fn read_at(&self, now: Instant) -> bool {
+        match self.read.load(Ordering::Relaxed) {
+            0 => false,
+            r => now.saturating_duration_since(self.born + Duration::from_millis(r - 1)) <= READ_WINDOW,
+        }
+    }
+    /// Worth making a new picture for: looked at lately, or due its
+    /// once-a-second picture.
+    pub(crate) fn wanted(&self) -> bool {
+        self.wanted_at(Instant::now())
+    }
+    fn wanted_at(&self, now: Instant) -> bool {
+        self.read_at(now) || self.last.lock_ok().is_none_or(|t| now.saturating_duration_since(t) >= UNREAD_EVERY)
     }
     /// Forget the picture.
     pub fn clear(&self) {
@@ -2133,24 +2171,27 @@ impl CompositorLoop {
             // captions kept off the recording: then it gets its own picture.)
             let stream_extra = self.captions.lock_ok().as_ref().is_some_and(|(_, c)| c.layer().is_some_and(|l| l.stream_only));
             let stream_is_program = !stream_extra && stream_now.as_ref().is_some_and(|(_, s)| *s == canvas);
+            // Monitor pictures only at full rate while something looks at
+            // them (the window, the second screen, the phone, key pictures);
+            // otherwise once a second.
             let thumbs: Vec<usize> = if k % thumb_every == 0 {
-                (0..self.slots.len()).filter(|&i| !self.slots[i].stale(1.0)).collect()
+                (0..self.slots.len()).filter(|&i| !self.slots[i].stale(1.0) && self.thumbs.get(i).is_some_and(|t| t.wanted())).collect()
             } else {
                 Vec::new()
             };
             let preview_now = k % preview_every == 0;
-            let bus = if preview_now { self.switcher.preview_states() } else { None };
+            let bus = if preview_now && self.preview_bus.wanted() { self.switcher.preview_states() } else { None };
             let wants = Wants {
                 program: program_tx.is_some() || stream_is_program || !listeners.is_empty(),
                 stream: stream_now.as_ref().filter(|_| !stream_is_program).map(|(_, s)| *s),
-                preview: preview_now,
+                preview: preview_now && self.preview.wanted(),
                 preview_bus: bus.is_some(),
                 thumbs,
                 tall: tall_tx.is_some() || tall_stream_now.is_some(),
-                tall_preview: preview_now && self.tall_on.is_some(),
+                tall_preview: preview_now && self.tall_on.is_some() && self.tall_preview.wanted(),
                 clean: clean_tx.is_some(),
             };
-            if wants.program || wants.stream.is_some() || wants.preview || !wants.thumbs.is_empty() || wants.tall || wants.clean {
+            if wants.program || wants.stream.is_some() || wants.preview || wants.preview_bus || !wants.thumbs.is_empty() || wants.tall || wants.tall_preview || wants.clean {
                 self.comp.set_black(self.switcher.black_level());
                 let layout = self.switcher.layout();
                 // The vertical version follows the same scenes.
@@ -2235,17 +2276,27 @@ impl CompositorLoop {
                                 self.status.lock_ok().push(LogLevel::Warning, "Stream: the encoder can't keep up, frames are being dropped. Lower the stream's size, frame rate or bitrate in Record & stream › Streaming.");
                             }
                         }
-                        let fresh = r.preview.is_some() || !r.thumbs.is_empty();
+                        // The window is woken only for a new picture
+                        // someone is looking at.
+                        let mut fresh = false;
                         if let Some((w, h, rgba)) = r.preview {
+                            fresh |= self.preview.read_recently();
                             self.preview.put(Frame { width: w as usize, height: h as usize, rgba });
                         }
                         if let Some((w, h, rgba)) = r.preview_bus {
+                            fresh |= self.preview_bus.read_recently();
                             self.preview_bus.put(Frame { width: w as usize, height: h as usize, rgba });
                         }
                         for (i, w, h, rgba) in r.thumbs {
+                            fresh |= self.thumbs[i].read_recently();
                             self.thumbs[i].put(Frame { width: w as usize, height: h as usize, rgba });
                         }
+                        // Same picture as last time: still current.
+                        for i in r.thumbs_same {
+                            self.thumbs[i].touch();
+                        }
                         if let Some((w, h, rgba)) = r.tall_preview {
+                            fresh |= self.tall_preview.read_recently();
                             self.tall_preview.put(Frame { width: w as usize, height: h as usize, rgba });
                         }
                         if let (Some(f), Some(tx)) = (r.clean, &clean_tx) {
@@ -2332,6 +2383,51 @@ pub fn fmt_duration(d: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tiny() -> Frame {
+        Frame { width: 1, height: 1, rgba: vec![0; 4] }
+    }
+
+    /// A monitor picture nobody looks at comes once a second; asking for it
+    /// (the window, the second screen, the phone, key pictures, the
+    /// pre-show check) brings it back to full rate.
+    #[test]
+    fn frame_slot_follows_readers() {
+        let slot = FrameSlot::new();
+        let t0 = Instant::now();
+        // Never had a picture: make one.
+        assert!(slot.wanted_at(t0));
+        assert!(!slot.read_at(t0));
+        slot.put(tiny());
+        let put = Instant::now();
+        assert!(!slot.wanted_at(put + Duration::from_millis(500)), "unread: not again within the second");
+        assert!(slot.wanted_at(put + Duration::from_millis(1000)), "unread: once a second");
+        // Read: every frame, for a while.
+        assert!(slot.latest().is_some());
+        let read = Instant::now();
+        assert!(slot.read_at(read) && slot.wanted_at(read + Duration::from_millis(10)));
+        assert!(slot.read_at(read + Duration::from_millis(1400)));
+        assert!(!slot.read_at(read + Duration::from_millis(1600)));
+        // Asking before any picture exists counts too.
+        let empty = FrameSlot::new();
+        assert!(empty.latest().is_none());
+        assert!(empty.read_recently());
+    }
+
+    /// The same picture kept: its age stays fresh (no "no signal"), its
+    /// generation doesn't change (nothing to upload).
+    #[test]
+    fn frame_slot_touch_keeps_it_current() {
+        let slot = FrameSlot::new();
+        slot.touch();
+        assert!(slot.since_last().is_none(), "nothing to keep current yet");
+        slot.put(tiny());
+        let g = slot.latest().unwrap().0;
+        std::thread::sleep(Duration::from_millis(30));
+        slot.touch();
+        assert!(slot.since_last().unwrap() < Duration::from_millis(25));
+        assert_eq!(slot.latest().unwrap().0, g);
+    }
 
     /// One "offline" (numbers audit #29).
     #[test]
