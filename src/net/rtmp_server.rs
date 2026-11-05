@@ -370,6 +370,21 @@ pub fn serve(port: u16, key: &str, stop: &AtomicBool, out: &mut dyn FnMut(Incomi
             if publishing.is_some() {
                 out(Incoming::Ended(None));
             }
+            if result.is_ok() {
+                // A sender says goodbye in a few messages (FCUnpublish, then
+                // deleteStream). Closing at the first one makes it fail its
+                // own close ("broken pipe"), so let it finish, briefly.
+                let until = Instant::now() + Duration::from_secs(1);
+                let mut sink = [0u8; 4096];
+                while Instant::now() < until && !stop.load(Ordering::Relaxed) {
+                    match s.conn.read(&mut sink) {
+                        Ok(0) => break,
+                        Ok(_) => {}
+                        Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
+                        Err(_) => break,
+                    }
+                }
+            }
             result
         })();
         if let Err(e) = r {
@@ -447,6 +462,22 @@ mod tests {
     use crate::util::LockExt;
     use std::sync::{Arc, Mutex};
 
+    /// Starts `serve` on a free port. A port picked as free can be taken
+    /// again before the server binds it (another test's connection gets it),
+    /// so a server that gives up at once is started again on another port.
+    fn start(stop: &Arc<AtomicBool>, out: impl FnMut(Incoming) + Send + Clone + 'static) -> (u16, std::thread::JoinHandle<Result<()>>) {
+        for _ in 0..20 {
+            let port = crate::util::free_tcp_port();
+            let (s2, mut o2) = (stop.clone(), out.clone());
+            let server = std::thread::spawn(move || serve(port, "secret", &s2, &mut o2));
+            std::thread::sleep(Duration::from_millis(300));
+            if !server.is_finished() {
+                return (port, server);
+            }
+        }
+        panic!("no port to listen on");
+    }
+
     #[test]
     fn receives_from_ffmpeg() {
         if std::process::Command::new("ffmpeg").arg("-version").output().is_err() {
@@ -454,10 +485,8 @@ mod tests {
         }
         let stop = Arc::new(AtomicBool::new(false));
         let got: Arc<Mutex<Vec<Incoming>>> = Arc::new(Mutex::new(Vec::new()));
-        let (s2, g2) = (stop.clone(), got.clone());
-        let port = crate::util::free_tcp_port();
-        let server = std::thread::spawn(move || serve(port, "secret", &s2, &mut |i| g2.lock_ok().push(i)));
-        std::thread::sleep(Duration::from_millis(300));
+        let g2 = got.clone();
+        let (port, server) = start(&stop, move |i| g2.lock_ok().push(i));
         let status = std::process::Command::new("ffmpeg")
             .args(["-v", "error", "-re", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:duration=2", "-f", "lavfi", "-i", "sine=duration=2"])
             .args(["-c:v", "libx264", "-g", "25", "-c:a", "aac", "-f", "flv"]).arg(format!("rtmp://127.0.0.1:{port}/live/secret"))
@@ -483,16 +512,12 @@ mod tests {
     fn a_silent_sender_lets_the_next_one_in() {
         let stop = Arc::new(AtomicBool::new(false));
         let ended: Arc<Mutex<Vec<Option<String>>>> = Arc::new(Mutex::new(Vec::new()));
-        let (s2, e2) = (stop.clone(), ended.clone());
-        let port = crate::util::free_tcp_port();
-        let server = std::thread::spawn(move || {
-            serve(port, "", &s2, &mut |i| {
-                if let Incoming::Ended(why) = i {
-                    e2.lock_ok().push(why);
-                }
-            })
+        let e2 = ended.clone();
+        let (port, server) = start(&stop, move |i| {
+            if let Incoming::Ended(why) = i {
+                e2.lock_ok().push(why);
+            }
         });
-        std::thread::sleep(Duration::from_millis(300));
         let handshake = |c: &mut TcpStream| -> std::io::Result<()> {
             c.set_read_timeout(Some(Duration::from_secs(3)))?;
             let mut c0c1 = vec![3u8];
