@@ -240,7 +240,7 @@ fn first_window_size(inner: egui::Vec2, screen: egui::Vec2) -> egui::Vec2 {
     inner.min(room).max(egui::Vec2::from(MIN_WINDOW))
 }
 
-pub fn run(cfg: Config, save_path: Option<PathBuf>, self_test: bool, made_pin: bool, first_run: bool) -> anyhow::Result<()> {
+pub fn run(cfg: Config, save_path: Option<PathBuf>, self_test: bool, made_pin: bool, first_run: bool, rescue: bool) -> anyhow::Result<()> {
     // The window's size and place, remembered per computer beside the
     // settings (eframe puts it back on a screen that's still there).
     let window_file = crate::config::default_config_path().parent().map(|d| d.join("Main window.ron"));
@@ -257,7 +257,7 @@ pub fn run(cfg: Config, save_path: Option<PathBuf>, self_test: bool, made_pin: b
         Box::new(move |cc| {
             // Uploads left unfinished last time are kept beside the settings.
             let queue = save_path.as_ref().and_then(|p| p.parent()).map(|d| d.join("uploads.json")).or_else(|| std::env::var_os("CUTAWAY_UI_TEST_UPLOADS").map(PathBuf::from));
-            let mut app = App::new(cc, cfg, save_path);
+            let mut app = App::new(cc, cfg, save_path, rescue);
             if let Some(q) = queue {
                 app.uploads.load(q);
             }
@@ -542,7 +542,7 @@ pub struct App {
 }
 
 impl App {
-    fn new(cc: &eframe::CreationContext<'_>, mut cfg: Config, save_path: Option<PathBuf>) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>, mut cfg: Config, save_path: Option<PathBuf>, rescue: bool) -> Self {
         // Every source and input gets its identity for this session.
         cfg.assign_uids();
         // The displays' names (macOS only gives them on this thread; screen
@@ -557,7 +557,7 @@ impl App {
         let remote_shared = remote::RemoteShared::new(requests_tx.clone(), waker.clone());
         let syrinscape = control::syrinscape::Syrinscape::new(&cfg.syrinscape, waker.clone());
         // A crash mid-take: put the files back together while the window opens.
-        let rescue = crate::recovery::start_rescue(&crate::recovery::folders(&cfg), waker.clone()).map(waiting::Rescue::new);
+        let rescue = if rescue { crate::recovery::start_rescue(&crate::recovery::folders(&cfg), waker.clone()).map(waiting::Rescue::new) } else { None };
         let mut app = App {
             rescue,
             syrinscape,

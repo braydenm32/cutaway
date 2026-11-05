@@ -260,6 +260,25 @@ fn run() -> Result<()> {
         return platform::win::vcam::install_elevated(args.vcam_uninstall).context("virtual camera");
     }
 
+    // One Cutaway at a time (held until it exits). Test pictures and
+    // scripted screenshots still run beside another copy, but leave its
+    // takes alone.
+    let trial = args.demo.is_some() || args.ui_test;
+    let instance = if args.init || args.probe_encoders { Instance::Unknown } else { lock_instance() };
+    if matches!(instance, Instance::Another) && !trial {
+        let text = "Cutaway is already open.";
+        eprintln!("{text}");
+        if !(args.headless || args.measure_sync) {
+            let where_ = if cfg!(target_os = "macos") { "Dock" } else { "taskbar" };
+            rfd::MessageDialog::new().set_level(rfd::MessageLevel::Info).set_title("Cutaway").set_description(format!("{text} Switch to it from the {where_}.")).set_buttons(rfd::MessageButtons::Ok).show();
+            return Ok(());
+        }
+        anyhow::bail!("{text}");
+    }
+    // Only the copy that holds the lock looks for takes to rescue: a take
+    // without its Take.txt may be one the other copy is recording.
+    let rescue = !matches!(instance, Instance::Another);
+
     let cfg_path = args.config.clone().unwrap_or_else(config::default_config_path);
     let first_run = args.demo.is_none() && !cfg_path.exists();
     let mut cfg = if let Some(n) = args.demo {
@@ -321,7 +340,7 @@ fn run() -> Result<()> {
 
     // Takes a crash left unfinished are repaired first: here for the
     // command line, in the background (with a progress card) in the window.
-    if args.measure_sync || args.headless {
+    if (args.measure_sync || args.headless) && rescue {
         for folder in recovery::folders(&cfg) {
             for take in recovery::recover_unfinished(&folder) {
                 eprintln!("Recovered an unfinished take: {}", take.display());
@@ -338,7 +357,35 @@ fn run() -> Result<()> {
 
     // With --demo, edits from the UI shouldn't overwrite the real settings.
     let save_path = if args.demo.is_some() { None } else { Some(cfg_path) };
-    ui::run(cfg, save_path, args.ui_test, made_pin && !first_run, first_run)
+    let r = ui::run(cfg, save_path, args.ui_test, made_pin && !first_run, first_run, rescue);
+    drop(instance);
+    r
+}
+
+/// Whether this is the only Cutaway running for this user.
+enum Instance {
+    /// It is: the lock is held as long as this file stays open. The OS lets
+    /// go of it when Cutaway ends, even in a crash.
+    Only(#[allow(dead_code)] std::fs::File),
+    /// Another copy holds the lock.
+    Another,
+    /// No lock could be made (a folder that can't be written, a file
+    /// system without locks): carry on as before.
+    Unknown,
+}
+
+fn lock_instance() -> Instance {
+    let Some(dir) = config::default_config_path().parent().map(|d| d.to_path_buf()) else { return Instance::Unknown };
+    let _ = std::fs::create_dir_all(&dir);
+    let Ok(file) = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(dir.join("cutaway.lock")) else { return Instance::Unknown };
+    match file.try_lock() {
+        Ok(()) => Instance::Only(file),
+        Err(std::fs::TryLockError::WouldBlock) => Instance::Another,
+        Err(e) => {
+            eprintln!("couldn't check for another Cutaway: {e}");
+            Instance::Unknown
+        }
+    }
 }
 
 /// Listen for a clap and print the delays that would line everything up.

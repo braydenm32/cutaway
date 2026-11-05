@@ -84,12 +84,26 @@ pub fn find_unfinished(output: &Path) -> Vec<Unfinished> {
             let name = p.file_name().unwrap_or_default().to_string_lossy();
             name.starts_with("Program.") || name.starts_with("ISO_") || name.starts_with("Audio_")
         }) || dir.join(crate::engine::journal::FILE).exists();
-        if ours && !files.is_empty() {
+        if ours && !files.is_empty() && !in_use(&dir, &files) {
             takes.push(Unfinished { dir, files });
         }
     }
     takes.sort_by(|a, b| a.dir.cmp(&b.dir));
     takes
+}
+
+/// A file of the take was written to this recently: it's still being
+/// recorded (by another copy of Cutaway), so it's left alone for now.
+const IN_USE: std::time::Duration = std::time::Duration::from_secs(10);
+
+fn in_use(dir: &Path, files: &[PathBuf]) -> bool {
+    let now = std::time::SystemTime::now();
+    let journal = dir.join(crate::engine::journal::FILE);
+    files.iter().chain(std::iter::once(&journal)).any(|p| {
+        let Ok(t) = fs::metadata(p).and_then(|m| m.modified()) else { return false };
+        // (Either way: a drive whose clock is a little ahead counts too.)
+        now.duration_since(t).unwrap_or_else(|e| e.duration()) < IN_USE
+    })
 }
 
 /// "Show_2026-11-01_20-04-12" (or "…_2") → when it was recorded.
@@ -272,6 +286,14 @@ mod tests {
     use super::*;
     use crate::media::wav::{SampleFormat, WavWriter};
 
+    /// As if the take's files were last written a minute ago.
+    fn age(dir: &Path) {
+        let then = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        for p in media_in(dir) {
+            fs::File::options().write(true).open(&p).unwrap().set_modified(then).unwrap();
+        }
+    }
+
     #[test]
     fn repairs_and_marks_take() {
         let root = std::env::temp_dir().join(format!("cutaway-recovery-{}", std::process::id()));
@@ -285,6 +307,9 @@ mod tests {
         std::mem::forget(w); // simulate a crash: no finish()
         // Something that isn't ours is left alone.
         fs::create_dir_all(root.join("Other")).unwrap();
+        // Written to just now: maybe another copy of Cutaway is recording it.
+        assert!(find_unfinished(&root).is_empty(), "a take being written is left alone");
+        age(&take);
         let done = recover_unfinished(&root);
         assert_eq!(done, vec![take.clone()]);
         let note = fs::read_to_string(take.join("Take.txt")).unwrap();
@@ -325,6 +350,7 @@ mod tests {
             w.write(&vec![0.1f32; 4800]).unwrap();
             std::mem::forget(w);
         }
+        age(&take);
         assert!(start_rescue(&[root.join("nothing here")], Arc::new(|| {})).is_none());
         let st = start_rescue(&[root.clone()], Arc::new(|| {})).expect("one recording to rescue");
         let t0 = std::time::Instant::now();
