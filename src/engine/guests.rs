@@ -277,11 +277,19 @@ struct Server {
     port: u16,
     public: bool,
     stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Drop for Server {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        // The listener waits in accept(): a connection of our own wakes it,
+        // and once it has gone the port is free again (for a new one on
+        // the same port). If that can't connect, it ends at the next visitor.
+        let woken = std::net::TcpStream::connect_timeout(&(std::net::Ipv4Addr::LOCALHOST, self.port).into(), Duration::from_secs(1)).is_ok();
+        if let Some(t) = self.thread.take().filter(|_| woken) {
+            let _ = t.join();
+        }
     }
 }
 
@@ -761,13 +769,13 @@ impl GuestHub {
     fn start_server(&self, port: u16, public: bool) -> Result<Server> {
         let addr = if public { format!("0.0.0.0:{port}") } else { format!("127.0.0.1:{port}") };
         let listener = TcpListener::bind(&addr).with_context(|| format!("port {port} is in use (change it in Sources › Guests)"))?;
-        listener.set_nonblocking(true)?;
         let stop = Arc::new(AtomicBool::new(false));
         let s2 = stop.clone();
         let hub = self.arc();
-        std::thread::Builder::new().name("guest page".into()).spawn(move || {
+        let thread = std::thread::Builder::new().name("guest page".into()).spawn(move || {
             while !s2.load(Ordering::Relaxed) {
                 match listener.accept() {
+                    Ok(_) if s2.load(Ordering::Relaxed) => break,
                     Ok((conn, _)) => {
                         let hub = hub.clone();
                         let _ = std::thread::Builder::new().name("guest request".into()).spawn(move || {
@@ -777,12 +785,11 @@ impl GuestHub {
                             }
                         });
                     }
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(100)),
                     Err(_) => std::thread::sleep(Duration::from_millis(500)),
                 }
             }
         })?;
-        Ok(Server { port, public, stop })
+        Ok(Server { port, public, stop, thread: Some(thread) })
     }
 
     fn ice_servers(&self) -> Vec<RTCIceServer> {
@@ -1613,6 +1620,19 @@ mod tests {
         cfg.guests = GuestsConfig { enabled: true, port, access: GuestAccess::Custom, public_url: format!("http://127.0.0.1:{port}"), return_video: false, backup, ..Default::default() };
         hub().apply(&cfg, Arc::new(|| {}));
         cfg
+    }
+
+    /// The guest page's listener sleeps in accept() and still lets go of
+    /// its port at once when closed (a new one can open on it).
+    #[test]
+    fn the_guest_page_lets_go_of_its_port() {
+        let port = crate::util::free_tcp_port();
+        let s = hub().start_server(port, false).unwrap();
+        assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_ok());
+        drop(s);
+        let s = hub().start_server(port, false).expect("the port is free again");
+        drop(s);
+        assert!(std::net::TcpListener::bind(("127.0.0.1", port)).is_ok());
     }
 
     #[test]

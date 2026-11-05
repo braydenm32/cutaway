@@ -294,6 +294,9 @@ fn mend(path: &std::path::Path) -> bool {
     matches!(crate::media::mp4::recover(path), Ok(crate::media::mp4::Recovery::Recovered { .. } | crate::media::mp4::Recovery::AlreadyComplete))
 }
 
+/// The longest an encoder or WAV writer sleeps with nothing due.
+const IDLE_WAKE: Ns = 250_000_000;
+
 /// Puts a source's frames onto a constant frame rate starting at T0:
 /// repeats a frame when the source skips, drops extras when it's fast.
 pub struct Retimer {
@@ -462,7 +465,10 @@ pub fn spawn_video(
             let mut result = Ok(());
             let mut open = true;
             while open || !held.is_empty() {
-                match rx.recv_timeout(Duration::from_millis(10)) {
+                // Asleep until the next frame comes or the held one is due
+                // (no polling: there can be ten of these threads in a take).
+                let wait = held.front().map_or(IDLE_WAKE, |(pts, _)| (t0 + pts - crate::media::clock::now()).clamp(0, IDLE_WAKE));
+                match rx.recv_timeout(Duration::from_nanos(wait as u64)) {
                     Ok(frame) => match retimer.as_mut() {
                         Some(r) => held.extend(r.push(frame)),
                         None => held.push_back((frame.pts - t0, frame)),
@@ -642,16 +648,18 @@ pub fn spawn_wav(
             let mut held: VecDeque<AudioBlock> = VecDeque::new();
             let mut open = true;
             let mut result = Ok(());
+            let due = |b: &AudioBlock| b.pts + b.frames() as i64 * NS_PER_SEC / b.rate.max(1) as i64;
             while open || !held.is_empty() {
-                match rx.recv_timeout(Duration::from_millis(20)) {
+                // Asleep until a block comes or the held one is due.
+                let wait = held.front().map_or(IDLE_WAKE, |b| (due(b) - crate::media::clock::now()).clamp(0, IDLE_WAKE));
+                match rx.recv_timeout(Duration::from_nanos(wait as u64)) {
                     Ok(b) => held.push_back(b),
                     Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => open = false,
                 }
                 let now = crate::media::clock::now();
                 while let Some(b) = held.front() {
-                    let end_of_block = b.pts + b.frames() as i64 * NS_PER_SEC / b.rate.max(1) as i64;
-                    if open && end_of_block > now {
+                    if open && due(b) > now {
                         break;
                     }
                     let b = held.pop_front().unwrap();
