@@ -13,7 +13,7 @@
     30 s**); the status light's panel has it too while recording. Pick a
     camera to see
     the moment from its angle, even one the program wasn't showing, or
-    **Every angle at once** for up to four cameras in a grid. **Shows** in
+    **Every angle** (2 to 4 cameras, in a grid). **Shows** in
     the replay settings sets what a plain click plays. It uses each camera's
     own file, so the camera needs **Record to its own file** on (and files
     that aren't ProRes, which are too big to keep in memory).
@@ -32,9 +32,9 @@
 - **Viewer comments:** **More › Show tools › Viewer comments:** your Twitch channel
   (no sign-in needed) and/or a YouTube live video with a YouTube API key.
   Comments appear in the main window's **Comments** panel; click one to put
-  it on screen (styled in those settings), or **Show next**. The page shows
-  under **Show** once you've added a stream destination (a show that only
-  records doesn't need it), and stays once it's set up.
+  it on screen (styled in those settings), or **Show next**. The Comments panel
+  appears on **Show** once you've set a Twitch channel or a YouTube stream
+  here. The page itself is always there, so you can set it up before going live.
 - **Teleprompter:** **More › Show tools › Teleprompter:** type or paste the script, or
   use the rundown's segment notes (it then jumps to each segment as the
   rundown moves on). Show it on the second screen (**Record & stream › Screens &
@@ -52,8 +52,8 @@
   pads** audio input for them, with its own fader, meter and WAV file (it
   waits for **Apply** on the bar, as a new input does). Tick
   **Duck under voices** on it to keep beds below the talking.
-- **Syrinscape:** **Sound › More ▾ › Syrinscape:** paste your auth token (from
-  syrinscape.com/account/auth-token), press **Test**, then **Load my
+- **Syrinscape:** **Sound › More ▾ › Syrinscape:** paste your Syrinscape key (the auth
+  token from syrinscape.com/account/auth-token), press **Test**, then **Load my
   soundsets** and **＋ Add** the moods and sounds you want as buttons (or
   paste a remote-control link). Keep the Syrinscape Online player open. To
   hear it in Cutaway, add an audio input set to **Sound from an app** → your
@@ -64,8 +64,8 @@
   mic. Add the presenters' headphones under **More outputs** (tick
   **Talkback**). Hold **TALK** or `B` to speak to them; guests hear it too
   unless you untick it.
-- **Mix-minus for callers:** **More outputs → ＋ Mix-minus for a caller:**
-  pick the output channels that go to the phone hybrid or call app, and tick
+- **Callers:** **More outputs → ＋ Caller's own mix** (a mix-minus, so they don't hear
+  themselves): pick the output channels that go to the phone hybrid or call app, and tick
   the caller's input under **Leave out**.
 
 ## Getting your DAW's audio in
@@ -101,8 +101,9 @@ Cutaway records from audio *inputs*, so route the DAW's output to one:
     → Keyboard, which downloads it.
   - Each recording gets `Transcript.txt`, `Captions.srt` and `Captions.vtt` (for
     YouTube and editors), timed to the recording.
-- **Input tracks:** **Record & stream › Quality and files › Audio tracks** puts every input
-  on its own track in the Program file, before or after the fader.
+- **Input tracks:** **Record & stream › Quality and files › Editing**: turn on **Each input
+  on its own track** to put every input on its own track in the Program file. **Input tracks**
+  picks whether that's before or after the fader.
 - **Podcast:** **Record & stream › Quality and files › Podcast** makes an M4A of the mix
   after each recording: measured, levelled to the target loudness (−16 LUFS for
   Apple Podcasts and Spotify), peaks limited to −1.5 dB, optionally mono,

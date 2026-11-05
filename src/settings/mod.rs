@@ -17,6 +17,7 @@ mod prompter;
 mod mixing;
 mod preview;
 mod outputs;
+mod picks;
 mod rotations;
 mod rundown;
 mod scenes;
@@ -31,7 +32,7 @@ mod vertical;
 
 use crate::util::LockExt;
 use crate::config::{AudioConfig, Codec, Config, Container, Service, SourceConfig, StreamDestination};
-use crate::devices::{self, DeviceInfo, Kind, Mode, TEST_PATTERN_NAMES};
+use crate::devices::{self, DeviceInfo, Mode, TEST_PATTERN_NAMES};
 use crate::engine::{LogLevel, LogLine};
 use crate::ui::theme::*;
 use eframe::egui::{self, vec2, Align, Color32, Layout, RichText};
@@ -358,6 +359,10 @@ pub struct SettingsUi {
     section: Section,
     video: Vec<DeviceInfo>,
     audio: Vec<DeviceInfo>,
+    /// Which refresh of the shared device catalog video/audio/outputs/encoders hold.
+    cat_gen: u64,
+    /// What this frame already worked out about the draft (live.rs).
+    memo: std::cell::RefCell<live::Memo>,
     sel_source: usize,
     sel_audio: usize,
     sel_dest: usize,
@@ -491,27 +496,26 @@ fn gain_slider(ui: &mut egui::Ui, gain_db: &mut f64) -> egui::Response {
 
 impl SettingsUi {
     pub fn new(cfg: Config) -> Self {
-        SettingsUi {
+        let mut ui = SettingsUi {
             draft: cfg.clone(),
             original: cfg,
             section: Section::Sources,
-            video: devices::list(Kind::Video),
-            audio: devices::list(Kind::Audio),
+            video: Vec::new(),
+            audio: Vec::new(),
+            cat_gen: 0,
+            memo: Default::default(),
             sel_source: 0,
             sel_audio: 0,
             sel_dest: 0,
             google: None,
             schedule_job: None,
             show_keys: HashSet::new(),
-            encoders: Arc::new(Mutex::new(Some({
-                let list = |c: Codec| crate::engine::encode::video_backends(c.video_codec()).into_iter().map(String::from).collect::<Vec<_>>();
-                (list(Codec::H264), list(Codec::H265))
-            }))),
+            encoders: Arc::new(Mutex::new(None)),
             confirm_discard: false,
             confirm_remove: None,
             message: None,
             failed: None,
-            outputs: crate::platform::list_output_devices(),
+            outputs: Vec::new(),
             sel_graphic: 0,
             graphic_picked: false,
             gview: GraphicsView::Titles,
@@ -556,6 +560,23 @@ impl SettingsUi {
             encoder_test: Arc::new(Mutex::new(None)),
             encoder_testing: false,
             tools_picked: false,
+        };
+        ui.sync_catalog(true);
+        picks::reset();
+        ui
+    }
+
+    /// Copy the shared device list when a newer one is ready (it is filled in the
+    /// background, so this never waits and a page never freezes on a camera).
+    fn sync_catalog(&mut self, opening: bool) {
+        // (Opening Settings may start a fresh look if the last is old; a page already open doesn't.)
+        let c = if opening { devices::catalog() } else { devices::catalog_now() };
+        if c.generation != self.cat_gen {
+            self.cat_gen = c.generation;
+            self.video = c.video.clone();
+            self.audio = c.audio.clone();
+            self.outputs = c.outputs.clone();
+            *self.encoders.lock_ok() = Some((c.h264.clone(), c.h265.clone()));
         }
     }
 
@@ -689,6 +710,7 @@ impl SettingsUi {
     /// A camera renamed elsewhere (People & names): what's being edited
     /// here that names it follows, so nothing points at the old name.
     pub fn follow_rename(&mut self, uid: u64, old: &str, new: &str) {
+        self.forget_derived();
         for s in &mut self.draft.sources {
             if s.uid == uid && uid != 0 {
                 s.name = new.to_string();
@@ -711,6 +733,7 @@ impl SettingsUi {
 
     /// Change the settings being edited, as the page would (for the UI self-test).
     pub fn edit_draft(&mut self, f: impl FnOnce(&mut Config)) {
+        self.forget_derived();
         f(&mut self.draft);
     }
 
@@ -728,6 +751,7 @@ impl SettingsUi {
     /// Called by the app after it tried to apply (`now`: the settings in
     /// effect).
     pub fn applied(&mut self, result: Result<(), String>, now: &Config) {
+        self.forget_derived();
         match result {
             Ok(()) => {
                 // New sources and inputs got their identities: keep them, so
@@ -778,6 +802,11 @@ impl SettingsUi {
     /// typing) asks to close, as ✕ did.
     pub fn show_page(&mut self, ui: &mut egui::Ui, info: &SettingsContext) -> SettingsAction {
         let ctx = ui.ctx().clone();
+        self.sync_catalog(false);
+        if devices::catalog_busy() {
+            // (Pick up the new list as soon as the background look is done.)
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        }
         let normal = ctx.global_style();
         let mut larger = (*normal).clone();
         for f in larger.text_styles.values_mut() {
@@ -794,6 +823,8 @@ impl SettingsUi {
             ui.set_min_height(body_h);
             egui::ScrollArea::vertical().id_salt(self.section).max_height(body_h).auto_shrink([false, false]).show(ui, |ui| self.page(ui, info));
         });
+        // (The page may have edited the draft.)
+        self.forget_derived();
         let top = ui.cursor().top();
         ui.separator();
         if let Some(a) = self.live_bar(ui, info) {
@@ -808,6 +839,7 @@ impl SettingsUi {
         if let Some(a) = self.after(&ctx, esc) {
             action = a;
         }
+        self.forget_derived();
         ctx.set_global_style(normal);
         action
     }
@@ -1177,7 +1209,7 @@ impl SettingsUi {
         );
         ui.horizontal(|ui| {
             if ui.button("Rescan devices").clicked() {
-                self.audio = devices::list(Kind::Audio);
+                devices::refresh_catalog();
             }
             hint(ui, &format!("{} audio input(s) found", self.audio.len()));
             ui.separator();
@@ -1219,8 +1251,13 @@ impl SettingsUi {
                     }
                 }
                 ui.add_space(6.0);
+                // (Until the first look for devices is done, a new input would just be "default".)
+                let loading = self.audio.is_empty() && devices::catalog_busy();
                 ui.horizontal_wrapped(|ui| {
-                    if let Some(edit) = list_buttons(ui, n, self.sel_audio, Some("＋ Add")) {
+                    if loading {
+                        hint(ui, "Looking for devices…");
+                    }
+                    if let Some(edit) = list_buttons(ui, n, self.sel_audio, Some("＋ Add")).filter(|e| !(loading && matches!(e, ListEdit::Add))) {
                         let audio = &self.audio;
                         apply_list_edit(
                             &mut self.draft.audio,
@@ -1385,10 +1422,11 @@ impl SettingsUi {
                 if ui.add(egui::TextEdit::singleline(&mut text).hint_text("none").desired_width(300.0)).changed() {
                     p.background_image = if text.trim().is_empty() { None } else { Some(PathBuf::from(text.trim())) };
                 }
+                if let Some(f) = picks::take_one("prompter-background") {
+                    p.background_image = Some(f);
+                }
                 if ui.button("Choose…").clicked() {
-                    if let Some(f) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg"]).pick_file() {
-                        p.background_image = Some(f);
-                    }
+                    picks::start(ui.ctx(), "prompter-background", picks::What::File, Some(("Images", &["png", "jpg", "jpeg"])));
                 }
                 if p.background_image.is_some() && ui.button("Clear").clicked() {
                     p.background_image = None;
@@ -1396,7 +1434,7 @@ impl SettingsUi {
             });
             ui.end_row();
             if let Some(img) = &p.background_image {
-                if !img.exists() {
+                if !crate::util::exists_recent(img) {
                     ui.label("");
                     ui.label(RichText::new("⚠ That file doesn't exist; the colour will be used.").color(AMBER));
                     ui.end_row();
@@ -1530,7 +1568,7 @@ impl SettingsUi {
                 label(ui, "Codec");
                 egui::ComboBox::from_id_salt("codec").selected_text(crate::engine::encode::codec_name(o.codec.video_codec())).width(260.0).show_ui(ui, |ui| {
                     ui.selectable_value(&mut o.codec, Codec::H264, "H.264 — opens everywhere");
-                    ui.selectable_value(&mut o.codec, Codec::H265, "H.265/HEVC — smaller 4K files");
+                    ui.selectable_value(&mut o.codec, Codec::H265, "H.265 — smaller files, slower to edit on older computers");
                     ui.separator();
                     let prores_ok = crate::engine::encode::codec_problem(Codec::Prores.video_codec()).is_none();
                     for (c, text) in [
@@ -1615,7 +1653,7 @@ impl SettingsUi {
                 ui.checkbox(&mut o.export_timelines, "Final Cut Pro, DaVinci Resolve and Premiere Pro");
                 ui.end_row();
                 label(ui, "Audio sessions");
-                ui.checkbox(&mut o.daw_sessions, "REAPER and DAWproject");
+                ui.checkbox(&mut o.daw_sessions, "REAPER and other music apps");
                 ui.end_row();
                 label(ui, "DaVinci Resolve");
                 ui.vertical(|ui| {
@@ -1768,7 +1806,7 @@ impl SettingsUi {
             ui.vertical(|ui| {
                 let sel = self.sel_dest;
                 let Some(d) = self.draft.streaming.destinations.get_mut(sel) else {
-                    hint(ui, "Add YouTube, Twitch, Facebook, Kick, any RTMP server, or an SRT receiver. Once there's one, Show → Viewer comments appears too, to put your stream's chat on screen.");
+                    hint(ui, "Add YouTube, Twitch, Facebook, Kick, any RTMP server, or an SRT receiver. To put the chat on screen, set Viewer comments under More › Show tools.");
                     return;
                 };
                 egui::Grid::new("dest_detail").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
@@ -1967,10 +2005,6 @@ impl SettingsUi {
         else {
             return;
         };
-        if self.video.is_empty() && self.audio.is_empty() {
-            self.video = devices::list(Kind::Video);
-            self.audio = devices::list(Kind::Audio);
-        }
         let devices: Vec<String> = self
             .video
             .iter()
@@ -2031,8 +2065,7 @@ impl SettingsUi {
         ui.horizontal(|ui| {
             subtitle(ui, "Devices");
             if ui.small_button("List devices again").on_hover_text("Look for cameras, capture cards and audio inputs plugged in since (as --list-devices does)").clicked() {
-                self.video = devices::list(Kind::Video);
-                self.audio = devices::list(Kind::Audio);
+                devices::refresh_catalog();
             }
             let all: Vec<String> = self.video.iter().map(|d| format!("Video: {} {}", d.name, d.summary)).chain(self.audio.iter().map(|d| format!("Audio: {} {}", d.name, d.summary))).collect();
             if ui.small_button("Copy").clicked() {
@@ -2055,9 +2088,9 @@ impl SettingsUi {
         }
         ui.add_space(12.0);
         ui.horizontal(|ui| {
-            subtitle(ui, "Encoders");
+            subtitle(ui, "Formats this computer can use");
             let testing = self.encoder_testing && self.encoder_test.lock_ok().is_none();
-            if ui.add_enabled(!testing, egui::Button::new(if testing { "Testing…" } else { "Test encoders" }).small()).on_hover_text("Which video and audio encoders this computer can use, NDI and the graphics card (as --probe-encoders does)").clicked() {
+            if ui.add_enabled(!testing, egui::Button::new(if testing { "Checking…" } else { "Check formats" }).small()).on_hover_text("Which video and audio encoders this computer can use, NDI and the graphics card (as --probe-encoders does)").clicked() {
                 *self.encoder_test.lock_ok() = None;
                 self.encoder_testing = true;
                 let out = self.encoder_test.clone();
@@ -2075,7 +2108,7 @@ impl SettingsUi {
                 }
             }
             None if self.encoder_testing => hint(ui, "Looking (it takes a few seconds)…"),
-            None => hint(ui, "Press Test encoders to see what recording and streaming can use on this computer."),
+            None => hint(ui, "Press Check formats to see what recording and streaming can use on this computer."),
         }
         ui.add_space(12.0);
         ui.horizontal(|ui| {
@@ -2232,8 +2265,8 @@ pub(super) fn short_device(device: &str) -> String {
         d if d.starts_with("source:") => format!("Sound from {}", d[7..].trim()),
         d if d.starts_with("app:") => format!("Sound from {}", d[4..].trim()),
         d if d.starts_with("ndi:") => format!("NDI {}", d[4..].trim()),
-        d if d.starts_with("frame:") => format!("Auto-framed from {}", d[6..].trim()),
-        d if d.starts_with("vptz:") => format!("Virtual PTZ in {}", d[5..].trim()),
+        d if d.starts_with("frame:") => format!("Close-up that follows people, from {}", d[6..].trim()),
+        d if d.starts_with("vptz:") => format!("Close-up you aim, from {}", d[5..].trim()),
         d if d.starts_with("guest:") => "Remote guest (link)".into(),
         d if d.starts_with("guest-screen:") => "Guest's screen".into(),
         d if d.starts_with("phone:") => "Phone camera".into(),
@@ -2677,7 +2710,7 @@ pub fn ndi_offer(ui: &mut egui::Ui) {
     ui.label(RichText::new("⚠ NDI isn't installed on this computer.").color(AMBER));
     match ndi_install::stage() {
         Stage::Idle if ndi_install::installer().is_none() => {
-            hint(ui, "Install the NDI SDK from ndi.video; Cutaway finds it as soon as it's there.");
+            hint(ui, "Install the NDI runtime from ndi.video; Cutaway finds it as soon as it's there.");
         }
         Stage::Idle => {
             if ui.button("Install NDI…").on_hover_text("Downloads NDI's free runtime from NDI and opens its installer").clicked() {

@@ -77,8 +77,8 @@ impl SourceKind {
             SourceKind::SrtCall => "SRT (pull from an address)",
             SourceKind::Rtmp => "RTMP (OBS, phones, encoders)",
             SourceKind::Ndi => "NDI (from another computer or device)",
-            SourceKind::Framed => "Auto-framed close-up (follows the people)",
-            SourceKind::VirtualPtz => "Virtual PTZ camera (you aim it)",
+            SourceKind::Framed => "Close-up that follows people (part of a camera)",
+            SourceKind::VirtualPtz => "Close-up you aim (part of a camera)",
             SourceKind::Phone => "Phone camera (scan a QR code)",
             SourceKind::Guest => "Remote guest (set up in Remote guests)",
         }
@@ -146,9 +146,10 @@ impl SettingsUi {
             SourcesView::Cameras => {
                 ui.horizontal(|ui| {
                     if ui.button("Rescan devices").clicked() {
-                        self.video = devices::list(Kind::Video);
+                        devices::refresh_catalog();
                     }
                     hint(ui, &match self.video.len() {
+                        0 if devices::catalog_busy() => "Looking for cameras…".to_string(),
                         0 => "No cameras or capture cards found on this computer".to_string(),
                         1 => "1 camera or capture card found on this computer".to_string(),
                         n => format!("{n} cameras or capture cards found on this computer"),
@@ -226,7 +227,12 @@ impl SettingsUi {
     fn camera_list_buttons(&mut self, ui: &mut egui::Ui) {
         let n = self.draft.sources.len();
         let mut add = None;
-        ui.menu_button("＋ Add", |ui| {
+        // (Until the first look for devices is done, a new camera would get an empty default.)
+        let loading = self.video.is_empty() && devices::catalog_busy();
+        if loading {
+            hint(ui, "Looking for devices…");
+        }
+        ui.add_enabled_ui(!loading, |ui| ui.menu_button("＋ Add", |ui| {
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
             let free = self.video.iter().any(|d| !self.draft.sources.iter().any(|s| s.device == d.name));
             let camera = ui.add_enabled(free, egui::Button::new("Camera or capture card"));
@@ -243,7 +249,7 @@ impl SettingsUi {
             if ui.button("Media player").on_hover_text("Play videos, pictures and music from a playlist").clicked() {
                 add = Some(SourceKind::Media);
             }
-        });
+        }));
         match add {
             Some(SourceKind::Device) => {
                 let used: Vec<&str> = self.draft.sources.iter().map(|s| s.device.as_str()).collect();
@@ -440,7 +446,14 @@ impl SettingsUi {
                     ui.label(RichText::new(*group).size(TEXT_BODY).color(TEXT_DIM));
                     for &k in kinds.iter() {
                         let (on, text) = if k.is_network_feed() { (kind.is_network_feed(), "Network feed (SRT or RTMP)") } else { (k == kind, k.label()) };
-                        if ui.selectable_label(on, text).clicked() && !on {
+                        let resp = ui.selectable_label(on, text);
+                        // The old names, for anyone who learned them (the technical term is in the hover).
+                        let resp = match k {
+                            SourceKind::VirtualPtz => resp.on_hover_text("Virtual PTZ camera: a shot cut from a wide camera that you aim with presets"),
+                            SourceKind::Framed => resp.on_hover_text("Auto-framed close-up: a shot cut from a wide camera that follows the people"),
+                            _ => resp,
+                        };
+                        if resp.clicked() && !on {
                             chosen = Some(k);
                         }
                     }
@@ -460,7 +473,7 @@ impl SettingsUi {
             }
             if matches!(kind, SourceKind::VirtualPtz | SourceKind::Framed) {
                 ui.label("");
-                hint(ui, "Two people on one camera? Use Virtual PTZ (you aim it) or Auto-framed (it follows them).");
+                hint(ui, "Two people on one camera? Use a close-up you aim, or one that follows them.");
                 ui.end_row();
             }
             if let Some(k) = chosen {
@@ -685,7 +698,7 @@ impl SettingsUi {
                     });
                     ui.add_space(4.0);
                 }
-                media_editor(ui, &mut src.media);
+                media_editor(ui, &mut src.media, src.uid);
                 hint(ui, &format!("To hear its sound, add an audio input set to \"Sound from {}\".", src.name));
             }
             SourceKind::SrtListen | SourceKind::Rtmp => {
@@ -767,7 +780,7 @@ impl SettingsUi {
         part(ui, ("ptz", self.sel_source), ptz_title, &ptz_state, src.has_ptz(), |ui| ptz_editor(ui, &mut src.ptz, is_virtual, is_ndi));
         let look = look_summary(&src.look);
         part(ui, ("look", self.sel_source), "Picture adjustments", &look, false, |ui| {
-            look_editor(ui, &mut src.look, &mut self.lut_check);
+            look_editor(ui, &mut src.look, src.uid, &mut self.lut_check);
         });
         if guests_on {
             self.draft.guests.enabled = true;
@@ -907,7 +920,7 @@ fn ptz_editor(ui: &mut egui::Ui, p: &mut crate::config::PtzConfig, is_virtual: b
         }
     });
     if !is_virtual && p.control == PtzControl::None {
-        hint(ui, "For network PTZ cameras: most speak VISCA (Sony, BirdDog, PTZOptics, Panasonic, Lumens…).");
+        hint(ui, "For network PTZ cameras: most use VISCA (see the camera's manual for its port and number).");
         return;
     }
     ui.add_space(6.0);
@@ -969,7 +982,7 @@ fn framing_editor(ui: &mut egui::Ui, f: &mut FramingConfig) {
     ui.end_row();
 }
 
-fn media_editor(ui: &mut egui::Ui, m: &mut MediaConfig) {
+fn media_editor(ui: &mut egui::Ui, m: &mut MediaConfig, uid: u64) {
     subtitle(ui, "Playlist");
     let mut remove = None;
     let mut swap = None;
@@ -983,7 +996,7 @@ fn media_editor(ui: &mut egui::Ui, m: &mut MediaConfig) {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(format!("{}.", i + 1)).color(TEXT_DIM));
                 let name = f.file_name().unwrap_or_default().to_string_lossy().to_string();
-                let missing = !f.exists();
+                let missing = !crate::util::exists_recent(f);
                 ui.label(RichText::new(&name).color(if missing { AMBER } else { Color32::WHITE })).on_hover_text(f.display().to_string());
                 if missing {
                     ui.label(RichText::new("missing").color(AMBER).size(TEXT_BODY));
@@ -1003,16 +1016,18 @@ fn media_editor(ui: &mut egui::Ui, m: &mut MediaConfig) {
     if let Some((a, b)) = swap {
         m.files.swap(a, b);
     }
+    if let Some(files) = super::picks::take(&format!("media-files-{uid}")) {
+        m.files.extend(files);
+    }
+    if let Some(dir) = super::picks::take_one(&format!("media-folder-{uid}")) {
+        m.files.extend(crate::engine::player::playable_in(&dir));
+    }
     ui.horizontal(|ui| {
         if ui.button("Add files…").clicked() {
-            if let Some(files) = rfd::FileDialog::new().add_filter("Videos and images", &["mp4", "mov", "m4v", "png", "jpg", "jpeg"]).pick_files() {
-                m.files.extend(files);
-            }
+            super::picks::start(ui.ctx(), &format!("media-files-{uid}"), super::picks::What::Files, Some(("Videos and images", &["mp4", "mov", "m4v", "png", "jpg", "jpeg"])));
         }
         if ui.button("Add a folder…").clicked() {
-            if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                m.files.extend(crate::engine::player::playable_in(&dir));
-            }
+            super::picks::start(ui.ctx(), &format!("media-folder-{uid}"), super::picks::What::Folder, None);
         }
     });
     ui.add_space(4.0);
@@ -1061,7 +1076,7 @@ fn look_summary(l: &SourceLook) -> String {
     if on.is_empty() { "none".into() } else { on.join(", ") }
 }
 
-fn look_editor(ui: &mut egui::Ui, l: &mut SourceLook, lut_check: &mut Option<(std::path::PathBuf, Result<String, String>)>) {
+fn look_editor(ui: &mut egui::Ui, l: &mut SourceLook, uid: u64, lut_check: &mut Option<(std::path::PathBuf, Result<String, String>)>) {
     egui::Grid::new("look").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
         label(ui, "Crop left / right");
         ui.horizontal(|ui| {
@@ -1087,13 +1102,13 @@ fn look_editor(ui: &mut egui::Ui, l: &mut SourceLook, lut_check: &mut Option<(st
         label(ui, "Saturation");
         ui.add(egui::Slider::new(&mut l.saturation, 0.0..=2.0).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
         ui.end_row();
-        label(ui, "Colour LUT");
+        label(ui, "Colour look file");
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
                 let shown = l.lut.as_ref().and_then(|p| p.file_name()).map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| "none".into());
                 ui.label(shown);
                 if ui.button("Choose…").on_hover_text("A .cube file, e.g. your camera's log-to-Rec.709 LUT").clicked() {
-                    if let Some(f) = rfd::FileDialog::new().add_filter("Colour LUT", &["cube", "CUBE"]).pick_file() {
+                    if let Some(f) = rfd::FileDialog::new().add_filter("Colour look file", &["cube", "CUBE"]).pick_file() {
                         l.lut = Some(f);
                         l.lut_strength = 1.0;
                     }
@@ -1147,14 +1162,15 @@ fn look_editor(ui: &mut egui::Ui, l: &mut SourceLook, lut_check: &mut Option<(st
                         ui.horizontal(|ui| {
                             let shown = l.background_image.as_ref().and_then(|p| p.file_name()).map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| "no picture yet (blurred meanwhile)".into());
                             ui.label(shown);
+                            if let Some(f) = super::picks::take_one(&format!("source-background-{uid}")) {
+                                l.background_image = Some(f);
+                            }
                             if ui.button("Choose…").clicked() {
-                                if let Some(f) = rfd::FileDialog::new().add_filter("Pictures", &["png", "jpg", "jpeg", "webp", "bmp"]).pick_file() {
-                                    l.background_image = Some(f);
-                                }
+                                super::picks::start(ui.ctx(), &format!("source-background-{uid}"), super::picks::What::File, Some(("Pictures", &["png", "jpg", "jpeg", "webp", "bmp"])));
                             }
                         });
                         if let Some(p) = &l.background_image {
-                            if !p.exists() {
+                            if !crate::util::exists_recent(p) {
                                 ui.label(RichText::new("⚠ That file isn't there any more; the background is blurred instead.").color(AMBER));
                             }
                         }

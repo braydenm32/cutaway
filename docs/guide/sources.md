@@ -49,7 +49,7 @@ window, which has a joystick (drag from the middle; let go to stop), zoom,
 **Home** and preset buttons. The Stream Deck, the remote, MIDI and OSC can
 recall presets and move it too.
 
-A **Virtual PTZ camera** (a video source type) is a camera operator inside
+A **close-up you aim** (a source type; it was called a virtual PTZ camera) is a camera operator inside
 another source: it pans, tilts and zooms around that picture (best from a 4K
 camera), with presets it glides to in the time you set. It records like any
 source, and starts on its first preset.
@@ -69,7 +69,7 @@ the camera stopping (a new close-up starts once you press Apply).
 close-up of the person on the left, cut from the same camera.*
 
 - **Auto-framing:** in **Sources › Cameras**, add a source of type
-  **Auto-framed close-up** and pick the wide camera to cut it from, who to
+  **Close-up that follows people** (it was called auto-framed) and pick the wide camera to cut it from, who to
   follow and the shot size (close-up, medium, wide). Add several for several
   people. Use **⋯** on its tile (or right-click it) during the show to change who it follows.
   - Best from a 4K camera: a 1080p close-up cut from 4K stays sharp. **Zoom

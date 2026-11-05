@@ -138,7 +138,7 @@ impl SettingsUi {
             label(ui, "Limiter");
             ui.horizontal(|ui| {
                 ui.checkbox(&mut m.limiter, "stop the mixes clipping, at");
-                ui.add_enabled(m.limiter, egui::DragValue::new(&mut m.limiter_ceiling_db).range(-12.0..=0.0).speed(0.1).suffix(" dBFS"));
+                ui.add_enabled(m.limiter, egui::DragValue::new(&mut m.limiter_ceiling_db).range(-12.0..=0.0).speed(0.1).suffix(" dB")).on_hover_text("The ceiling in dBFS (decibels full scale): 0 is the loudest digital audio can go");
             });
             ui.end_row();
             label(ui, "Stream loudness");
@@ -191,7 +191,7 @@ impl SettingsUi {
                     ui.add(egui::Slider::new(&mut m.duck_db, -40.0..=-3.0).suffix(" dB"));
                     ui.end_row();
                     label(ui, "When a voice is above");
-                    ui.add(egui::Slider::new(&mut m.duck_threshold_db, -60.0..=-10.0).suffix(" dBFS"));
+                    ui.add(egui::Slider::new(&mut m.duck_threshold_db, -60.0..=-10.0).suffix(" dB")).on_hover_text("The level in dBFS (decibels full scale) a voice has to be above to count");
                     ui.end_row();
                     label(ui, "Back up after");
                     ui.add(egui::DragValue::new(&mut m.duck_release_ms).range(100..=5000).speed(10).suffix(" ms of quiet"));
@@ -342,7 +342,7 @@ impl SettingsUi {
             _ => self.draft.mix.outputs.iter().map(|o| o.name.clone()).collect::<Vec<_>>().join(", "),
         };
         part(ui, "mix_outs", "More outputs", &state, n_out > 0, |ui| {
-            hint(ui, "Presenters' headphones, or a return feed for a caller, with their own voice left out (a mix-minus).");
+            hint(ui, "Presenters' headphones, or a return feed for a caller, with their own voice left out, so they don't hear themselves.");
             ui.add_space(4.0);
             let mut remove = None;
             for i in 0..n_out {
@@ -415,7 +415,7 @@ impl SettingsUi {
                     let name = unique(self.draft.mix.outputs.iter().map(|o| o.name.clone()).collect(), "Presenter headphones");
                     self.draft.mix.outputs.push(crate::config::AudioOutput { name, ..Default::default() });
                 }
-                if ui.button("＋ Mix-minus for a caller").clicked() {
+                if ui.button("＋ Caller's own mix").on_hover_text("A mix with the caller's own voice left out (a mix-minus), so they don't hear themselves").clicked() {
                     let name = unique(self.draft.mix.outputs.iter().map(|o| o.name.clone()).collect(), "Caller return");
                     self.draft.mix.outputs.push(crate::config::AudioOutput { name, talkback: false, ..Default::default() });
                 }

@@ -78,7 +78,7 @@ Everything Cutaway can do, area by area. For the steps of a first show, see [Get
   keeps the current shot as a preset, and **⌂ Home** sits on its own row,
   away from Zoom out: while that camera is on air it takes a one-second
   hold, and a virtual camera's **↶ Undo Home** glides back to the shot it had.
-- **Virtual PTZ:** a camera operator inside one wide (ideally 4K) camera:
+- **Close-ups you aim (virtual PTZ):** a camera operator inside one wide (ideally 4K) camera:
   pan, tilt and zoom around its picture, with presets it glides to. Frame
   the presets in Sources › Close-ups & PTZ by dragging boxes on the wide picture; it starts
   on preset 1.
@@ -195,7 +195,8 @@ Everything Cutaway can do, area by area. For the steps of a first show, see [Get
   a backup copy that didn't finish). Its buttons: **Open in Resolve** (see
   [Editing your recordings](after-the-show.md#editing-your-recordings)), **Show in Finder** (Explorer on
   Windows) and **Upload** (when uploads are set up). When all went well the
-  card goes by itself after 20 seconds (hovering over it keeps it), so it
+  card goes by itself after 20 seconds (hovering over it keeps it; after
+  **Open in Resolve** it stays 90 seconds, so the one step left in Resolve is still there), so it
   doesn't sit over the panels between takes; one with a ⚠ stays until you
   close it. ✕ hides it any time (the recording stays first in Record & stream › Recordings),
   and the next recording hides it too.
@@ -303,8 +304,8 @@ Recordings start with the **Take name** from Record & stream › Quality and fil
   button keeps it on for as long as you like, and says whose name it shows:
   amber while it's on screen, an amber edge while it's switched on but
   nobody with a name is on air. For two people on one camera,
-  make a close-up of each (an auto-framed close-up following the person on
-  the left or right, or a virtual PTZ) and name each close-up. When two or
+  make a close-up of each (a close-up that follows the person on
+  the left or right, or one you aim) and name each close-up. When two or
   three frames on air are the same size (the two close-ups side by side),
   the title names them all, left to right: **Maya Chen & Sam Lee**, with
   their roles the same way (or the one role they share). With more people
@@ -483,11 +484,11 @@ Recordings start with the **Take name** from Record & stream › Quality and fil
   **More › Control › Shortcuts**. A key you pick wins over a built-in
   one (the built-in's row then shows its key struck through, "taken by your
   own shortcut"), mistakes like a key given two jobs are flagged on the row
-  they belong to as you go, Control isn't taken as a shortcut key on a Mac
-  (⌘ is), and
+  they belong to as you go. On a Mac, Control isn't used for shortcuts (⌘, ⇧ and ⌥ are),
+  and a typed Ctrl+ key means ⌘;
   **Print a cheat sheet** opens a page of every key to keep by the keyboard.
 - **Undo and redo** (Cmd/Ctrl+Z, Cmd/Ctrl+Shift+Z, or the buttons in Edit
-  layout) for what you build: moving, resizing, filling and zooming frames,
+  layout; on Windows, Ctrl+Y redoes too) for what you build: moving, resizing, filling and zooming frames,
   adding, renaming, duplicating and deleting scenes, a title's text, and
   changes made on the settings pages or by switching shows. The show itself (taking
   scenes, recording, going live) is never undone. While recording or live,

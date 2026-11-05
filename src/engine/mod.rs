@@ -966,7 +966,7 @@ impl Engine {
             name => match self.audio.iter().position(|a| a.name.eq_ignore_ascii_case(name)) {
                 Some(i) => audio::MixKind::Track { input: i, post_fader: false },
                 None => {
-                    self.status.lock_ok().push(LogLevel::Warning, format!("Live captions: there's no audio input called \"{name}\"; listening to the recording mix"));
+                    self.status.lock_ok().push(LogLevel::Info, format!("Live captions: there's no audio input called \"{name}\"; listening to the recording mix"));
                     audio::MixKind::Recording
                 }
             },
@@ -1831,7 +1831,7 @@ impl Engine {
     pub fn set_auto_switch(&self, on: bool) {
         self.auto.enabled.store(on, Ordering::Relaxed);
         if on && self.config().auto_switch.rules.is_empty() {
-            self.status.lock_ok().push(LogLevel::Warning, "Auto switching has no rules yet: add them in Scenes › More › Auto-switching.");
+            self.status.lock_ok().push(LogLevel::Info, "Auto switching has no rules yet: add them in Scenes › More › Auto-switching.");
         }
         (self.waker)();
     }
