@@ -1153,7 +1153,7 @@ impl App {
             let stop = ui.add(egui::Button::new(RichText::new("⟲ Stop the replay").color(Color32::WHITE)).fill(ON_AIR_DIM)).clicked();
             return stop.then_some(control::ReplayCmd::Stop);
         }
-        let angles: Vec<String> = self.engine.as_ref().map(|e| e.sources.iter().filter(|s| s.record).map(|s| s.name.clone()).collect()).unwrap_or_default();
+        let angles: Vec<String> = self.engine.as_ref().map(|e| e.sources.iter().filter(|s| s.record || s.crop_of.is_some()).map(|s| s.name.clone()).collect()).unwrap_or_default();
         let mut play: Option<(Option<u32>, Option<control::ReplayAngle>)> = None;
         if ui.button("⟲ Replay").on_hover_text(format!("Play the last {:.0} seconds again, on air", self.cfg.replay.seconds)).clicked() {
             play = Some((None, None));

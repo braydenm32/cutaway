@@ -415,6 +415,26 @@ local function build_live_edit()
     local got = pool:AppendToTimeline({ info })
     return got and got[1]
   end
+  -- A close-up Cutaway saved as a crop of the wide camera: that camera's
+  -- clip, zoomed and moved (and trimmed) to frame the same shot.
+  local function frame(placed, c)
+    if not placed or not c.zoom or not placed.SetProperty then
+      return
+    end
+    pcall(function()
+      placed:SetProperty("ZoomGang", true)
+      placed:SetProperty("ZoomX", c.zoom)
+      placed:SetProperty("ZoomY", c.zoom)
+      placed:SetProperty("Pan", c.pan or 0)
+      placed:SetProperty("Tilt", c.tilt or 0)
+      if c.crop then
+        placed:SetProperty("CropLeft", c.crop.left)
+        placed:SetProperty("CropRight", c.crop.right)
+        placed:SetProperty("CropTop", c.crop.top)
+        placed:SetProperty("CropBottom", c.crop.bottom)
+      end
+    end)
+  end
   for i, c in ipairs(take.edit) do
     local item = item_for(c.file)
     local placed = place(item, c.from, c.to, c.at, 1, 1)
@@ -426,11 +446,13 @@ local function build_live_edit()
       if d and d == c.length - 1 then
         inclusive = false
         tl:DeleteClips({ placed })
-        if not place(item, c.from, c.to, c.at, 1, 1) then
+        placed = place(item, c.from, c.to, c.at, 1, 1)
+        if not placed then
           return fail("Resolve didn't take the first shot")
         end
       end
     end
+    frame(placed, c)
   end
   pcall(function()
     tl:SetTrackName("video", 1, "Live edit")
@@ -447,7 +469,11 @@ local function build_live_edit()
         end
       end
       if (tl:GetTrackCount("video") or 0) >= track then
-        local placed = place(item, 0, a.frames, a.at or 0, track, 1)
+        -- (A crop starts part way into its wide camera's file when its
+        -- close-up joined later.)
+        local from = a.from or 0
+        local placed = place(item, from, from + a.frames, a.at or 0, track, 1)
+        frame(placed, a)
         if placed then
           pcall(function()
             tl:SetTrackName("video", track, a.name)

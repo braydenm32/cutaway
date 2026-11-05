@@ -10,6 +10,13 @@
 //!
 //! Scenes that show a single source full frame cut to that source's file;
 //! composite scenes (side by side, picture in picture...) use the program.
+//!
+//! A close-up saved as a crop of its wide camera has no file of its own:
+//! its angle is the wide camera's file, zoomed and moved (and trimmed, when
+//! its shape isn't the timeline's) to frame the same shot (`framing`).
+//! Final Cut gets its moves as keyframes; Premiere and the Resolve script
+//! get one steady framing per stretch, a move cutting to where it ended
+//! (`crop_steps`).
 
 use super::switcher::SwitchEvent;
 use crate::media::{Ns, NS_PER_SEC};
@@ -42,6 +49,155 @@ pub struct ExportFile {
     /// own from then on.
     #[serde(default)]
     pub start: Ns,
+    /// A close-up saved as a crop of a wide camera: `path` (and the size,
+    /// rate and timecode) are the wide camera's file, and this says which
+    /// part of it the close-up showed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crop: Option<Crop>,
+}
+
+/// Which part of a wide camera's file a close-up showed.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Crop {
+    /// The wide camera (source identity).
+    pub of: usize,
+    /// The close-up's own picture size (the shot's shape).
+    pub size: (u32, u32),
+    /// Where the shot was: (time from the start of the take, x, y, width
+    /// and height as fractions of the wide picture), in time order, from
+    /// the start (see `ptz::ShotLog`).
+    #[serde(default)]
+    pub keys: Vec<(Ns, [f32; 4])>,
+}
+
+impl Crop {
+    /// The shot at `at` (from the start of the take).
+    pub fn rect_at(&self, at: Ns) -> [f32; 4] {
+        self.keys.iter().take_while(|k| k.0 <= at).last().or(self.keys.first()).map(|k| k.1).unwrap_or([0.0, 0.0, 1.0, 1.0])
+    }
+}
+
+/// Keys further apart than this are separate moves (`ptz::SHOT_LOG_GAP`
+/// apart while it moves, plus a frame).
+const MOVE_GAP: Ns = 300_000_000;
+
+/// The shot as steady framings (from when, which part) for editors that
+/// get no keyframes: each move becomes a cut, at its start, to where it
+/// came to rest.
+pub fn crop_steps(keys: &[(Ns, [f32; 4])]) -> Vec<(Ns, [f32; 4])> {
+    let mut out: Vec<(Ns, [f32; 4])> = Vec::new();
+    let mut i = 0;
+    while i < keys.len() {
+        let mut j = i;
+        while j + 1 < keys.len() && keys[j + 1].0 - keys[j].0 <= MOVE_GAP {
+            j += 1;
+        }
+        if out.last().is_none_or(|l| l.1 != keys[j].1) {
+            out.push((keys[i].0, keys[j].1));
+        }
+        i = j + 1;
+    }
+    out
+}
+
+/// How an editor frames part of a wide picture to show what the close-up
+/// showed, starting from the editor's own fit of the whole picture to the
+/// timeline (Final Cut's, Premiere's and Resolve's default for a file
+/// another size): `zoom` times bigger, its centre moved by `x`, `y`
+/// (timeline pixels, right and up), and, when the close-up's shape isn't
+/// the timeline's, `crop` pixels trimmed off its left, right, top and
+/// bottom first (in timeline pixels of the fitted picture), so it shows
+/// with bars as the close-up's own file would.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Framing {
+    pub zoom: f64,
+    pub x: f64,
+    pub y: f64,
+    pub crop: Option<[f64; 4]>,
+    /// The whole wide picture fitted to the timeline: its size there, and
+    /// its scale from its own pixels.
+    pub fitted: (f64, f64),
+    pub fit: f64,
+}
+
+/// The `Framing` of `rect` (fractions of a `wide`-sized picture, of the
+/// close-up's `shot` shape) on a `timeline`-sized timeline.
+pub fn framing(rect: [f32; 4], wide: (u32, u32), shot: (u32, u32), timeline: (u32, u32)) -> Framing {
+    let (w, h) = (wide.0.max(1) as f64, wide.1.max(1) as f64);
+    let (tw, th) = (timeline.0.max(1) as f64, timeline.1.max(1) as f64);
+    let (sw, sh) = (shot.0.max(1) as f64, shot.1.max(1) as f64);
+    let [rx, ry, rw, rh] = rect.map(|v| v as f64);
+    let fit = (tw / w).min(th / h);
+    // Where the close-up's own file would show: fitted, in the middle.
+    let shot_fit = (tw / sw).min(th / sh);
+    let (bw, bh) = (sw * shot_fit, sh * shot_fit);
+    // The part, in the fitted picture.
+    let (pw, ph) = ((rw * w * fit).max(1e-9), (rh * h * fit).max(1e-9));
+    let zoom = (bw / pw).min(bh / ph);
+    let cx = (rx + rw / 2.0 - 0.5) * w * fit;
+    let cy = (ry + rh / 2.0 - 0.5) * h * fit;
+    let fills = bw >= tw - 0.5 && bh >= th - 0.5;
+    let crop = (!fills).then(|| [rx * w * fit, (1.0 - rx - rw) * w * fit, ry * h * fit, (1.0 - ry - rh) * h * fit].map(|v| v.max(0.0)));
+    Framing { zoom, x: -zoom * cx, y: zoom * cy, crop, fitted: (w * fit, h * fit), fit }
+}
+
+/// A number for the XML: four decimals at most, no trailing zeros.
+pub(crate) fn num(v: f64) -> String {
+    let s = format!("{v:.4}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s == "-0" || s.is_empty() {
+        "0".into()
+    } else {
+        s.into()
+    }
+}
+
+impl Framing {
+    /// Final Cut's `adjust-transform`: position in percent of the
+    /// timeline's height from its centre (up is positive), scale on top of
+    /// its fit.
+    pub fn fcp_transform(&self, timeline_h: u32) -> String {
+        let th = timeline_h.max(1) as f64;
+        format!("position=\"{} {}\" scale=\"{z} {z}\"", num(self.x / th * 100.0), num(self.y / th * 100.0), z = num(self.zoom))
+    }
+
+    /// Final Cut's position keyframe value.
+    fn fcp_position(&self, timeline_h: u32) -> String {
+        let th = timeline_h.max(1) as f64;
+        format!("{} {}", num(self.x / th * 100.0), num(self.y / th * 100.0))
+    }
+
+    /// Final Cut's `trim-rect`: percent of the file's own picture height.
+    pub fn fcp_trim(&self) -> Option<String> {
+        let c = self.crop?;
+        let pct = |v: f64| num(v / self.fitted.1.max(1e-9) * 100.0);
+        Some(format!("left=\"{}\" top=\"{}\" right=\"{}\" bottom=\"{}\"", pct(c[0]), pct(c[2]), pct(c[1]), pct(c[3])))
+    }
+
+    /// Premiere's Basic Motion (scale in percent of the file's own pixels;
+    /// centre as a fraction of the frame from its middle, down positive)
+    /// and Crop (percent of the picture's width and height off each side).
+    pub fn premiere_filters(&self, timeline: (u32, u32)) -> String {
+        let (tw, th) = (timeline.0.max(1) as f64, timeline.1.max(1) as f64);
+        let param = |id: &str, name: &str, value: String| format!("<parameter><parameterid>{id}</parameterid><name>{name}</name>{value}</parameter>");
+        let mut x = format!(
+            "<filter><effect><name>Basic Motion</name><effectid>basic</effectid><effectcategory>motion</effectcategory><effecttype>motion</effecttype><mediatype>video</mediatype>{}{}</effect></filter>",
+            param("scale", "Scale", format!("<valuemin>0</valuemin><valuemax>1000</valuemax><value>{}</value>", num(self.zoom * self.fit * 100.0))),
+            param("center", "Center", format!("<value><horiz>{}</horiz><vert>{}</vert></value>", num(self.x / tw), num(-self.y / th)))
+        );
+        if let Some(c) = self.crop {
+            let (fw, fh) = (self.fitted.0.max(1e-9), self.fitted.1.max(1e-9));
+            let side = |id: &str, name: &str, v: f64| param(id, name, format!("<valuemin>0</valuemin><valuemax>100</valuemax><value>{}</value>", num(v * 100.0)));
+            x += &format!(
+                "<filter><effect><name>Crop</name><effectid>crop</effectid><effectcategory>motion</effectcategory><effecttype>motion</effecttype><mediatype>video</mediatype>{}{}{}{}</effect></filter>",
+                side("left", "left", c[0] / fw),
+                side("right", "right", c[1] / fw),
+                side("top", "top", c[2] / fh),
+                side("bottom", "bottom", c[3] / fh)
+            );
+        }
+        x
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -65,6 +221,8 @@ pub struct EditShot {
     pub src_in: i64,
     pub src_out: i64,
     pub scene: String,
+    /// A close-up saved as a crop: the part of the file it shows here.
+    pub rect: Option<[f32; 4]>,
 }
 
 #[derive(Clone, Debug)]
@@ -83,6 +241,11 @@ pub struct TakeExport {
 
 fn ns_to_frame(ns: Ns, fps: u32) -> i64 {
     ((ns as i128 * fps as i128 + NS_PER_SEC as i128 / 2).div_euclid(NS_PER_SEC as i128)) as i64
+}
+
+/// Program frame `frame`'s time from the start of the take.
+fn ns_to_frame_ns(frame: i64, fps: u32) -> Ns {
+    (frame as i128 * NS_PER_SEC as i128 / fps.max(1) as i128) as Ns
 }
 
 /// The live edit from the switch history. `t0` is the start of the files;
@@ -215,12 +378,33 @@ impl TakeExport {
         self.files.iter().find(|f| f.source == angle).or_else(|| self.program())
     }
 
+    /// The wide camera's file a close-up saved as a crop is cut from.
+    pub fn wide_of(&self, f: &ExportFile) -> Option<&ExportFile> {
+        f.crop.as_ref()?;
+        self.files.iter().find(|g| g.crop.is_none() && g.path == f.path)
+    }
+
+    /// The file that's really there: the wide camera's, for a crop.
+    pub fn media_of<'a>(&'a self, f: &'a ExportFile) -> &'a ExportFile {
+        self.wide_of(f).unwrap_or(f)
+    }
+
+    /// Where a file ends (from the start of the take), if before the take
+    /// did. A crop: when its close-up or its wide camera's file did.
+    fn length_of(&self, f: &ExportFile) -> Option<Ns> {
+        let wide = self.wide_of(f).and_then(|w| w.length);
+        match (f.length, wide) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
     /// Length of a file in its own frames (the take's length, unless its
     /// source left early or joined late).
     pub fn file_frames(&self, f: &ExportFile) -> i64 {
         let start = self.file_start(f);
         let full = ((self.frames - start).max(0) * f.fps as i64 + self.fps as i64 / 2) / self.fps as i64;
-        f.length.map_or(full, |ns| ns_to_frame(ns - f.start, f.fps).clamp(0, full))
+        self.length_of(f).map_or(full, |ns| ns_to_frame(ns - f.start, f.fps).clamp(0, full))
     }
 
     /// Where a file starts, in program frames.
@@ -230,7 +414,47 @@ impl TakeExport {
 
     /// Where a file ends, in program frames.
     fn file_end(&self, f: &ExportFile) -> i64 {
-        f.length.map_or(self.frames, |ns| ns_to_frame(ns, self.fps).clamp(0, self.frames))
+        self.length_of(f).map_or(self.frames, |ns| ns_to_frame(ns, self.fps).clamp(0, self.frames))
+    }
+
+    /// Program frame `seq_frame` in `f`'s own frames.
+    pub fn in_file(&self, f: &ExportFile, seq_frame: i64) -> i64 {
+        ((seq_frame - self.file_start(f)) * f.fps as i64 + self.fps as i64 / 2) / self.fps as i64
+    }
+
+    /// A crop's steady framings over program frames `a..b`: (from, to,
+    /// part). One piece, the whole way, for any other file.
+    pub fn pieces(&self, f: &ExportFile, a: i64, b: i64) -> Vec<(i64, i64, Option<[f32; 4]>)> {
+        let Some(c) = &f.crop else { return vec![(a, b, None)] };
+        let steps = crop_steps(&c.keys);
+        let mut out = Vec::new();
+        let mut at = a;
+        let mut rect = steps.first().map(|s| s.1).unwrap_or_else(|| c.rect_at(ns_to_frame_ns(a, self.fps)));
+        for &(t, r) in &steps {
+            let frame = ns_to_frame(t, self.fps);
+            if frame <= a {
+                rect = r;
+                continue;
+            }
+            if frame >= b {
+                break;
+            }
+            if r != rect {
+                out.push((at, frame, Some(rect)));
+                at = frame;
+                rect = r;
+            }
+        }
+        if b > at {
+            out.push((at, b, Some(rect)));
+        }
+        out
+    }
+
+    /// How `rect` of a crop's wide file frames the close-up's shot here.
+    pub fn framing_of(&self, f: &ExportFile, rect: [f32; 4]) -> Option<Framing> {
+        let c = f.crop.as_ref()?;
+        Some(framing(rect, (f.width, f.height), c.size, (self.width, self.height)))
     }
 
     /// Shots: (start frame, end frame, file).
@@ -253,7 +477,6 @@ impl TakeExport {
     /// file (it restarted during the take): each part of the shot comes
     /// from the file that has it.
     pub fn edit(&self) -> Vec<EditShot> {
-        let in_file = |f: &ExportFile, seq_frame: i64| ((seq_frame - self.file_start(f)) * f.fps as i64 + self.fps as i64 / 2) / self.fps as i64;
         let mut out = Vec::new();
         for (start, end, f, scene) in self.shots() {
             // The files of that angle (one, unless it restarted).
@@ -267,7 +490,11 @@ impl TakeExport {
                 if b <= a {
                     continue;
                 }
-                out.push(EditShot { start: a, end: b, file: i, src_in: in_file(g, a), src_out: in_file(g, b), scene: scene.to_string() });
+                // (A crop: a piece for each steady framing.)
+                for (a, b, rect) in self.pieces(g, a, b) {
+                    let m = self.media_of(g);
+                    out.push(EditShot { start: a, end: b, file: i, src_in: self.in_file(m, a), src_out: self.in_file(m, b), scene: scene.to_string(), rect });
+                }
             }
         }
         out
@@ -307,6 +534,12 @@ pub fn fcpxml(t: &TakeExport) -> String {
     let prog_tc = t.program().and_then(|p| p.tc_frame).unwrap_or(0) as i64;
     let mc_start = (prog_tc, fps);
     let asset_start = |f: &ExportFile| (f.tc_frame.unwrap_or(0) as i64, f.fps as i64);
+    // A crop's asset is its wide camera's file.
+    let asset_id = |i: usize| {
+        let f = &t.files[i];
+        let m = t.media_of(f);
+        format!("a{}", t.files.iter().position(|g| std::ptr::eq(g, m)).unwrap_or(i) + 1)
+    };
 
     let mut x = String::new();
     x += "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE fcpxml>\n<fcpxml version=\"1.9\">\n  <resources>\n";
@@ -314,6 +547,9 @@ pub fn fcpxml(t: &TakeExport) -> String {
         let _ = writeln!(x, "    <format id=\"{}\" frameDuration=\"{}\" width=\"{w}\" height=\"{h}\" colorSpace=\"1-1-1 (Rec. 709)\"/>", fmt_id(*w, *h, *r), rt(1, *r as i64));
     }
     for (i, f) in t.files.iter().enumerate() {
+        if f.crop.is_some() && t.wide_of(f).is_some() {
+            continue;
+        }
         let (sn, sd) = asset_start(f);
         let audio = if f.has_audio { " hasAudio=\"1\" audioSources=\"1\" audioChannels=\"2\" audioRate=\"48000\"" } else { "" };
         let _ = writeln!(
@@ -327,6 +563,73 @@ pub fn fcpxml(t: &TakeExport) -> String {
             esc(&file_url(&f.path, ""))
         );
     }
+    // File `i` full length from where it starts (`head` goes before its
+    // name: a lane; `tail` after its format). A crop's carries its framing:
+    // keyframed when it fills the frame, else a clip per steady framing
+    // (trimmed to the close-up's shape).
+    let full_clip = |i: usize, head: &str, tail: &str, indent: &str| -> String {
+        let f = &t.files[i];
+        let (sn, sd) = asset_start(f);
+        let el = |offset: i64, start: i64, dur: i64, inner: Option<String>| {
+            let open = format!(
+                "{indent}<asset-clip ref=\"{}\"{head} name=\"{}\" offset=\"{}\" start=\"{}\" duration=\"{}\" format=\"{}\" tcFormat=\"NDF\"{tail}",
+                asset_id(i),
+                esc(&f.name),
+                rt(prog_tc + offset, fps),
+                rt(sn + start, sd),
+                rt(dur, f.fps as i64),
+                fmt_id(f.width, f.height, f.fps)
+            );
+            match inner {
+                None => format!("{open}/>\n"),
+                Some(inner) => format!("{open}>\n{inner}{indent}</asset-clip>\n"),
+            }
+        };
+        let (from, to) = (t.file_start(f), t.file_end(f));
+        let Some(c) = f.crop.as_ref().filter(|_| t.wide_of(f).is_some()) else {
+            return el(from, 0, t.file_frames(f), None);
+        };
+        // (A close-up that joined later starts part way into the file.)
+        let m = t.media_of(f);
+        let skip = t.in_file(m, from);
+        let first = t.framing_of(f, c.rect_at(f.start)).unwrap_or_else(|| framing([0.0, 0.0, 1.0, 1.0], (1, 1), (1, 1), (1, 1)));
+        if first.crop.is_none() {
+            // The shot over the file: where it is at the start, then each move.
+            let end_ns = f.start + t.file_frames(f) * NS_PER_SEC / f.fps.max(1) as i64;
+            let mut keys = vec![(f.start, c.rect_at(f.start))];
+            keys.extend(c.keys.iter().filter(|k| k.0 > f.start && k.0 < end_ns).copied());
+            let mut inner = format!("{indent}  <adjust-transform {}", first.fcp_transform(t.height));
+            if keys.windows(2).any(|w| w[0].1 != w[1].1) {
+                let time = |at: Ns| rt(sn + ns_to_frame(at - m.start, f.fps), sd);
+                let frames: Vec<(String, Framing)> = keys.iter().filter_map(|k| Some((time(k.0), t.framing_of(f, k.1)?))).collect();
+                inner += ">\n";
+                let _ = writeln!(inner, "{indent}    <param name=\"position\">\n{indent}      <keyframeAnimation>");
+                for (at, fr) in &frames {
+                    let _ = writeln!(inner, "{indent}        <keyframe time=\"{at}\" value=\"{}\"/>", fr.fcp_position(t.height));
+                }
+                let _ = writeln!(inner, "{indent}      </keyframeAnimation>\n{indent}    </param>\n{indent}    <param name=\"scale\">\n{indent}      <keyframeAnimation>");
+                for (at, fr) in &frames {
+                    let _ = writeln!(inner, "{indent}        <keyframe time=\"{at}\" value=\"{z} {z}\"/>", z = num(fr.zoom));
+                }
+                let _ = writeln!(inner, "{indent}      </keyframeAnimation>\n{indent}    </param>\n{indent}  </adjust-transform>");
+            } else {
+                inner += "/>\n";
+            }
+            return el(from, skip, t.file_frames(f), Some(inner));
+        }
+        let mut out = String::new();
+        for (a, b, rect) in t.pieces(f, from, to) {
+            let Some(fr) = rect.and_then(|r| t.framing_of(f, r)) else { continue };
+            let mut inner = String::new();
+            if let Some(trim) = fr.fcp_trim() {
+                let _ = writeln!(inner, "{indent}  <adjust-crop mode=\"trim\">\n{indent}    <trim-rect {trim}/>\n{indent}  </adjust-crop>");
+            }
+            let _ = writeln!(inner, "{indent}  <adjust-transform {}/>", fr.fcp_transform(t.height));
+            let (sa, sb) = (t.in_file(m, a), t.in_file(m, b));
+            out += &el(a, sa, sb - sa, Some(inner));
+        }
+        out
+    };
     let _ = writeln!(x, "    <media id=\"m1\" name=\"{} Multicam\">", esc(&t.name));
     let _ = writeln!(x, "      <multicam format=\"{}\" tcStart=\"{}\" tcFormat=\"NDF\">", fmt_id(t.width, t.height, t.fps), rt(mc_start.0, mc_start.1));
     // One angle per source: a source that restarted has its files one
@@ -335,18 +638,7 @@ pub fn fcpxml(t: &TakeExport) -> String {
     for (k, files) in angles.iter().enumerate() {
         let _ = writeln!(x, "        <mc-angle name=\"{}\" angleID=\"angle{k}\">", esc(&t.files[files[0]].name));
         for &i in files {
-            let f = &t.files[i];
-            let (sn, sd) = asset_start(f);
-            let _ = writeln!(
-                x,
-                "          <asset-clip ref=\"a{}\" name=\"{}\" offset=\"{}\" start=\"{}\" duration=\"{}\" format=\"{}\" tcFormat=\"NDF\"/>",
-                i + 1,
-                esc(&f.name),
-                rt(mc_start.0 + t.file_start(f), mc_start.1),
-                rt(sn, sd),
-                rt(t.file_frames(f), f.fps as i64),
-                fmt_id(f.width, f.height, f.fps)
-            );
+            x += &full_clip(i, "", "", "          ");
         }
         x += "        </mc-angle>\n";
     }
@@ -386,18 +678,7 @@ pub fn fcpxml(t: &TakeExport) -> String {
         for (i, g) in t.files.iter().enumerate() {
             let at = t.file_start(g);
             if at == start || (at > start && at < end) {
-                let (sn, sd) = asset_start(g);
-                let _ = writeln!(
-                    x,
-                    "              <asset-clip ref=\"a{}\" lane=\"{}\" name=\"{}\" offset=\"{}\" start=\"{}\" duration=\"{}\" format=\"{}\" tcFormat=\"NDF\" enabled=\"0\" srcEnable=\"video\"/>",
-                    i + 1,
-                    i + 1,
-                    esc(&g.name),
-                    rt(prog_tc + at, fps),
-                    rt(sn, sd),
-                    rt(t.file_frames(g), g.fps as i64),
-                    fmt_id(g.width, g.height, g.fps)
-                );
+                x += &full_clip(i, &format!(" lane=\"{}\"", i + 1), " enabled=\"0\" srcEnable=\"video\"", "              ");
             }
         }
         for (m, title) in t.markers.iter().filter(|(m, _)| *m >= start && *m < end) {
@@ -434,7 +715,9 @@ pub fn premiere_xml(t: &TakeExport) -> String {
     );
     let mut described: HashSet<usize> = HashSet::new();
     let file_index = |f: &ExportFile| t.files.iter().position(|g| std::ptr::eq(g, f)).unwrap_or(0);
+    // (A crop's file is its wide camera's.)
     let file_el = |f: &ExportFile, described: &mut HashSet<usize>| -> String {
+        let f = t.media_of(f);
         let i = file_index(f);
         if !described.insert(i) {
             return format!("<file id=\"file-{}\"/>", i + 1);
@@ -462,36 +745,44 @@ pub fn premiere_xml(t: &TakeExport) -> String {
     let mut clip_id = 0;
     // V1: the live edit.
     x += "        <track>\n";
+    let filters = |f: &ExportFile, rect: Option<[f32; 4]>| rect.and_then(|r| t.framing_of(f, r)).map(|fr| fr.premiere_filters((t.width, t.height))).unwrap_or_default();
     for e in t.edit() {
         let f = &t.files[e.file];
         clip_id += 1;
         let _ = writeln!(
             x,
-            "          <clipitem id=\"clipitem-{clip_id}\"><name>{}</name><enabled>TRUE</enabled><duration>{}</duration>{}<start>{}</start><end>{}</end><in>{}</in><out>{}</out>{}</clipitem>",
+            "          <clipitem id=\"clipitem-{clip_id}\"><name>{}</name><enabled>TRUE</enabled><duration>{}</duration>{}<start>{}</start><end>{}</end><in>{}</in><out>{}</out>{}{}</clipitem>",
             esc(&format!("{} ({})", f.name, e.scene)),
-            t.file_frames(f),
+            t.file_frames(t.media_of(f)),
             xm_rate(f.fps),
             e.start,
             e.end,
             e.src_in,
             e.src_out,
-            file_el(f, &mut described)
+            file_el(f, &mut described),
+            filters(f, e.rect)
         );
     }
     x += "        </track>\n";
     // Every angle, full length, switched off: drag pieces down to change a shot.
+    // (A crop's track: the wide camera's file, framed as at the start.)
     for f in &t.files {
         clip_id += 1;
+        let (from, len) = match t.wide_of(f) {
+            Some(w) => (t.in_file(w, t.file_start(f)), t.file_frames(f)),
+            None => (0, t.file_frames(f)),
+        };
         let _ = writeln!(
             x,
-            "        <track><enabled>FALSE</enabled><clipitem id=\"clipitem-{clip_id}\"><name>{}</name><enabled>TRUE</enabled><duration>{}</duration>{}<start>{}</start><end>{}</end><in>0</in><out>{}</out>{}</clipitem></track>",
+            "        <track><enabled>FALSE</enabled><clipitem id=\"clipitem-{clip_id}\"><name>{}</name><enabled>TRUE</enabled><duration>{}</duration>{}<start>{}</start><end>{}</end><in>{from}</in><out>{}</out>{}{}</clipitem></track>",
             esc(&f.name),
-            t.file_frames(f),
+            t.file_frames(t.media_of(f)),
             xm_rate(f.fps),
             t.file_start(f),
             t.file_end(f),
-            t.file_frames(f),
-            file_el(f, &mut described)
+            from + len,
+            file_el(f, &mut described),
+            filters(f, f.crop.as_ref().map(|c| c.rect_at(f.start)))
         );
     }
     x += "      </video>\n      <audio>\n        <numOutputChannels>2</numOutputChannels>\n";
@@ -577,6 +868,7 @@ mod tests {
             length: None,
             clean: false,
             start: 0,
+            crop: None,
         };
         TakeExport {
             name: "Take & Co".into(),
@@ -727,6 +1019,180 @@ mod tests {
         assert_eq!(youtube_chapters(&m(&[(0.0, "A"), (5.0, "B"), (100.0, "C")]), 300.0), None);
         assert_eq!(youtube_chapters(&m(&[(0.0, "A"), (4000.0, "B"), (5000.0, "C")]), 6000.0).unwrap(), "0:00 A\n1:06:40 B\n1:23:20 C");
         assert_eq!(youtube_chapters(&[], 100.0), None);
+    }
+
+    /// A 4K wide camera split in two, in a 1080p take: its left close-up
+    /// saved as a crop. Cuts: the wide, the left close-up, the program.
+    fn with_crop(keys: Vec<(Ns, [f32; 4])>, shot: (u32, u32)) -> TakeExport {
+        let mut t = sample();
+        t.files.truncate(2);
+        t.files[1].width = 3840;
+        t.files[1].height = 2160;
+        let mut left = t.files[1].clone();
+        left.name = "Wide left".into();
+        left.source = Some(5);
+        left.has_audio = false;
+        left.crop = Some(Crop { of: 0, size: shot, keys });
+        t.files.push(left);
+        t.cuts = vec![
+            Cut { frame: 0, angle: Some(0), scene: "Wide".into() },
+            Cut { frame: 90, angle: Some(5), scene: "Wide left".into() },
+            Cut { frame: 180, angle: None, scene: "Side by side".into() },
+        ];
+        t
+    }
+
+    const LEFT: [f32; 4] = [0.0, 0.25, 0.5, 0.5];
+    const RIGHT: [f32; 4] = [0.5, 0.25, 0.5, 0.5];
+
+    fn close(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-6
+    }
+
+    /// The numbers: zoom over the editor's fit, centre moved in timeline
+    /// pixels (right, up), and Final Cut's percent of the frame's height.
+    #[test]
+    fn crop_framing_numbers() {
+        use crate::engine::ptz::{shot_fraction, Shot};
+        // 4K wide, halves, in a 1080p timeline: the 1920x1080 half fills it.
+        let f = framing(LEFT, (3840, 2160), (1920, 1080), (1920, 1080));
+        assert!(close(f.zoom, 2.0) && close(f.x, 960.0) && close(f.y, 0.0) && f.crop.is_none(), "{f:?}");
+        assert!(close(f.fit, 0.5) && f.fitted == (1920.0, 1080.0));
+        assert_eq!(f.fcp_transform(1080), "position=\"88.8889 0\" scale=\"2 2\"");
+        let r = framing(RIGHT, (3840, 2160), (1920, 1080), (1920, 1080));
+        assert!(close(r.x, -960.0) && close(r.zoom, 2.0));
+        // Thirds (Close-ups… at zoom 3): 1280x720 each.
+        let third = |x: f32| framing(shot_fraction(Shot { x, y: 0.5, zoom: 3.0 }, (3840, 2160), (1280, 720)), (3840, 2160), (1280, 720), (1920, 1080));
+        let (l, m, r) = (third(1.0 / 6.0), third(0.5), third(5.0 / 6.0));
+        assert!(close(l.zoom, 3.0) && (l.x - 1920.0).abs() < 0.01 && (m.x).abs() < 0.01 && (r.x + 1920.0).abs() < 0.01, "{l:?} {m:?} {r:?}");
+        assert_eq!(l.fcp_transform(1080), "position=\"177.7778 0\" scale=\"3 3\"");
+        // Lower down: the picture moves up.
+        let low = framing([0.25, 0.5, 0.5, 0.5], (3840, 2160), (1920, 1080), (1920, 1080));
+        assert!(close(low.x, 0.0) && close(low.y, 540.0), "{low:?}");
+        assert_eq!(low.fcp_transform(1080), "position=\"0 50\" scale=\"2 2\"");
+        // The same shot in a 4K timeline, or from a 1080p wide: the same in Final Cut's terms.
+        let k = framing(LEFT, (3840, 2160), (1920, 1080), (3840, 2160));
+        assert!(close(k.zoom, 2.0) && close(k.x, 1920.0) && close(k.fit, 1.0));
+        assert_eq!(k.fcp_transform(2160), f.fcp_transform(1080));
+        let hd = framing(LEFT, (1920, 1080), (960, 540), (1920, 1080));
+        assert_eq!(hd.fcp_transform(1080), f.fcp_transform(1080));
+        // Premiere: percent of the file's own pixels (4K at 100% fills
+        // 1080p at twice the fit), centre a fraction of the frame.
+        assert!(f.premiere_filters((1920, 1080)).contains("<value>100</value>") && f.premiere_filters((1920, 1080)).contains("<horiz>0.5</horiz><vert>0</vert>"));
+        assert!(hd.premiere_filters((1920, 1080)).contains("<value>200</value>"));
+        // A tall close-up (9:16) of a 1080p camera in a 1080p timeline: the
+        // middle slice, trimmed to its shape, with bars as its own file has.
+        let tall = framing(shot_fraction(Shot::default(), (1920, 1080), (1080, 1920)), (1920, 1080), (1080, 1920), (1920, 1080));
+        let c = tall.crop.expect("trimmed");
+        assert!(close(tall.zoom, 1.0) && close(tall.x, 0.0) && (c[0] - 656.25).abs() < 0.01 && (c[1] - 656.25).abs() < 0.01 && c[2] == 0.0 && c[3] == 0.0, "{tall:?}");
+        assert_eq!(tall.fcp_trim().unwrap(), "left=\"60.7639\" top=\"0\" right=\"60.7639\" bottom=\"0\"");
+        assert!(tall.premiere_filters((1920, 1080)).contains("<parameterid>left</parameterid><name>left</name><valuemin>0</valuemin><valuemax>100</valuemax><value>34.1797</value>"));
+        assert_eq!(f.fcp_trim(), None, "a shot the timeline's shape needs no trim");
+    }
+
+    #[test]
+    fn moves_become_steady_framings() {
+        let ms = |m: i64| m * 1_000_000;
+        // Rest on the left, a glide (5 a second) to the right, rest.
+        let mid = [0.25, 0.25, 0.5, 0.5];
+        let keys = vec![(0, LEFT), (ms(4000), LEFT), (ms(4033), [0.1, 0.25, 0.5, 0.5]), (ms(4233), mid), (ms(4433), [0.4, 0.25, 0.5, 0.5]), (ms(4600), RIGHT)];
+        assert_eq!(crop_steps(&keys), vec![(0, LEFT), (ms(4000), RIGHT)]);
+        assert_eq!(crop_steps(&keys[..1]), vec![(0, LEFT)]);
+        assert!(crop_steps(&[]).is_empty());
+        let c = Crop { of: 0, size: (1920, 1080), keys };
+        assert_eq!(c.rect_at(ms(4300)), mid);
+        assert_eq!(c.rect_at(-5), LEFT);
+    }
+
+    /// The crop's angle is the wide camera's file, framed: no file or asset
+    /// of its own, its shot in the multicam angle and its lane.
+    #[test]
+    fn fcpxml_frames_a_crop_from_the_wide_file() {
+        let t = with_crop(vec![(0, LEFT)], (1920, 1080));
+        let x = fcpxml(&t);
+        xml_balanced(&x);
+        assert_eq!(x.matches("<asset id=").count(), 2, "no asset of its own: {x}");
+        assert_eq!(x.matches("<mc-angle ").count(), 3, "{x}");
+        let angle = &x[x.find("<mc-angle name=\"Wide left\"").unwrap()..];
+        let angle = &angle[..angle.find("</mc-angle>").unwrap()];
+        assert!(angle.contains("<asset-clip ref=\"a2\" name=\"Wide left\" offset=\"37230s\" start=\"37230s\" duration=\"10s\""), "{angle}");
+        assert!(angle.contains("<adjust-transform position=\"88.8889 0\" scale=\"2 2\"/>"), "{angle}");
+        assert!(!angle.contains("adjust-crop") && !angle.contains("keyframe"), "{angle}");
+        assert!(x.contains("<asset-clip ref=\"a2\" lane=\"3\" name=\"Wide left\""), "{x}");
+        assert_eq!(x.matches("<adjust-transform ").count(), 2, "the angle and its lane: {x}");
+        // The edit cuts to it like any angle.
+        assert!(x.contains("<mc-source angleID=\"angle2\" srcEnable=\"video\"/>"), "{x}");
+        // The edit's other formats: the wide file, framed.
+        let e = t.edit();
+        assert_eq!(e[1].file, 2);
+        assert_eq!((e[1].start, e[1].end, e[1].rect), (90, 180, Some(LEFT)));
+        assert_eq!(e[0].rect, None);
+        let p = premiere_xml(&t);
+        xml_balanced(&p);
+        assert!(!p.contains("file-3") && p.matches("<file id=\"file-2\">").count() == 1, "the crop is the wide camera's file: {p}");
+        assert!(p.contains("<name>Wide left (Wide left)</name>") && p.contains("<horiz>0.5</horiz>"), "{p}");
+        assert_eq!(p.matches("Basic Motion").count(), 2, "its V1 shot and its track: {p}");
+        let r = crate::engine::sessions::ResolveEdit::from_export(&t, true);
+        assert_eq!(r.cuts[1].file, "Wide.mp4");
+        assert!(r.cuts[1].framing.is_some_and(|f| close(f.zoom, 2.0) && close(f.x, 960.0)));
+        assert!(r.cuts[0].framing.is_none() && r.angles[2].framing.is_some());
+    }
+
+    /// It moved during its shot: Final Cut gets keyframes on the angle;
+    /// the others cut to where it went.
+    #[test]
+    fn a_crop_that_moved() {
+        let ms = |m: i64| m * 1_000_000;
+        let keys = vec![(0, LEFT), (ms(4000), LEFT), (ms(4200), [0.25, 0.25, 0.5, 0.5]), (ms(4400), RIGHT)];
+        let t = with_crop(keys, (1920, 1080));
+        let x = fcpxml(&t);
+        xml_balanced(&x);
+        let angle = &x[x.find("<mc-angle name=\"Wide left\"").unwrap()..];
+        let angle = &angle[..angle.find("</mc-angle>").unwrap()];
+        // In the clip's own time: its timecode plus the time into the file.
+        assert!(angle.contains("<keyframe time=\"37230s\" value=\"88.8889 0\"/>"), "{angle}");
+        assert!(angle.contains("<keyframe time=\"37234s\" value=\"88.8889 0\"/>"), "{angle}");
+        assert!(angle.contains("<keyframe time=\"186171/5s\" value=\"0 0\"/>"), "{angle}");
+        assert!(angle.contains("<keyframe time=\"186172/5s\" value=\"-88.8889 0\"/>"), "{angle}");
+        assert_eq!(angle.matches("<keyframe ").count(), 8, "position and scale: {angle}");
+        // Its shot (frames 90..180, 3 to 6 s): left till 4 s, then right.
+        let e: Vec<_> = t.edit().into_iter().filter(|e| e.file == 2).map(|e| (e.start, e.end, e.rect)).collect();
+        assert_eq!(e, vec![(90, 120, Some(LEFT)), (120, 180, Some(RIGHT))]);
+        let p = premiere_xml(&t);
+        xml_balanced(&p);
+        assert!(p.contains("<start>90</start><end>120</end><in>90</in><out>120</out>") && p.contains("<start>120</start><end>180</end><in>120</in><out>180</out>"), "{p}");
+    }
+
+    /// A tall close-up: the trim goes with each steady framing.
+    #[test]
+    fn a_crop_of_another_shape_is_trimmed() {
+        let tall = crate::engine::ptz::shot_fraction(crate::engine::ptz::Shot::default(), (3840, 2160), (1080, 1920));
+        let t = with_crop(vec![(0, tall)], (1080, 1920));
+        let x = fcpxml(&t);
+        xml_balanced(&x);
+        assert!(x.contains("<adjust-crop mode=\"trim\">") && x.contains("<trim-rect left=\"60.7639\" top=\"0\" right=\"60.7639\" bottom=\"0\"/>"), "{x}");
+        // Trim before transform, as Final Cut's DTD orders them.
+        assert!(x.find("<adjust-crop").unwrap() < x.find("<adjust-transform").unwrap());
+        let p = premiere_xml(&t);
+        assert!(p.contains("<name>Crop</name>"), "{p}");
+    }
+
+    /// A close-up that joined later starts part way into the wide file;
+    /// one whose wide camera left ends with it.
+    #[test]
+    fn a_crop_follows_its_files() {
+        let mut t = with_crop(vec![(2 * NS_PER_SEC, LEFT)], (1920, 1080));
+        t.files[2].start = 2 * NS_PER_SEC;
+        t.files[1].length = Some(8 * NS_PER_SEC);
+        assert_eq!((t.file_start(&t.files[2]), t.file_frames(&t.files[2])), (60, 180));
+        let x = fcpxml(&t);
+        assert!(x.contains("<asset-clip ref=\"a2\" name=\"Wide left\" offset=\"37232s\" start=\"37232s\" duration=\"6s\""), "{x}");
+        let e: Vec<_> = t.edit().into_iter().filter(|e| e.file == 2).map(|e| (e.start, e.end, e.src_in, e.src_out)).collect();
+        assert_eq!(e, vec![(90, 180, 90, 180)], "in the wide file's own frames");
+        let r = crate::engine::sessions::ResolveEdit::from_export(&t, true);
+        assert_eq!((r.angles[2].at, r.angles[2].from, r.angles[2].frames), (60, 60, 180));
+        let p = premiere_xml(&t);
+        assert!(p.contains("<start>60</start><end>240</end><in>60</in><out>240</out>"), "{p}");
     }
 
     /// Minimal check that tags open and close in order.

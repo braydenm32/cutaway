@@ -65,6 +65,9 @@ pub enum Entry {
     Ends { source: usize, length: Ns },
     /// A file started during the take (path is a file name).
     File(ExportFile),
+    /// A close-up saved as a crop moved: its shot from `at` (from the
+    /// start of the take), as fractions of the wide picture.
+    Shot { source: usize, at: Ns, rect: [f32; 4] },
 }
 
 /// Writes the journal to the take folder (and its backup copy).
@@ -198,6 +201,11 @@ pub fn parse(text: &str) -> Option<Replay> {
                 }
             }
             Entry::File(f) => r.files.push(f),
+            Entry::Shot { source, at, rect } => {
+                for c in r.files.iter_mut().filter(|f| f.source == Some(source)).filter_map(|f| f.crop.as_mut()) {
+                    c.keys.push((at, rect));
+                }
+            }
         }
     }
     Some(r)
@@ -251,5 +259,39 @@ mod tests {
         assert!(!dir.join(FILE).exists() && !backup.join(FILE).exists());
         assert!(read(&dir).is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A close-up saved as a crop: its shots come back with its entry
+    /// (and one that joined later gets those from then on too).
+    #[test]
+    fn crop_shots_read_back() {
+        use crate::engine::export::Crop;
+        let crop = |start| ExportFile {
+            path: "ISO_01_Cam_1.mp4".into(),
+            name: "Cam 1 left".into(),
+            width: 3840,
+            height: 2160,
+            fps: 30,
+            has_audio: false,
+            source: Some(7),
+            tc_frame: None,
+            length: None,
+            clean: false,
+            start,
+            crop: Some(Crop { of: 3, size: (1920, 1080), keys: vec![(start, [0.0, 0.25, 0.5, 0.5])] }),
+        };
+        let mut s = start();
+        s.files = vec![crop(0)];
+        let mut text = line(&Entry::Start(Box::new(s))).unwrap();
+        text += &line(&Entry::Shot { source: 7, at: 2_000_000_000, rect: [0.5, 0.25, 0.5, 0.5] }).unwrap();
+        text += &line(&Entry::Shot { source: 9, at: 2_000_000_000, rect: [0.0, 0.0, 1.0, 1.0] }).unwrap();
+        let r = parse(&text).unwrap();
+        assert_eq!(r.files[0].crop.as_ref().unwrap().keys, vec![(0, [0.0, 0.25, 0.5, 0.5]), (2_000_000_000, [0.5, 0.25, 0.5, 0.5])]);
+        // An older Cutaway's journal (no crops) reads as before.
+        let mut plain = start();
+        plain.files = vec![ExportFile { crop: None, ..crop(0) }];
+        let j = line(&Entry::Start(Box::new(plain))).unwrap();
+        assert!(!j.contains("crop"));
+        assert!(parse(&j).unwrap().files[0].crop.is_none());
     }
 }

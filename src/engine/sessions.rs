@@ -212,19 +212,33 @@ impl Session {
             }
             s.push_str("  edit = {\n");
             for c in &edit.cuts {
-                let _ = writeln!(s, "    {{ file = {}, scene = {}, at = {}, length = {}, from = {}, to = {} }},", path(&c.file), lua(&c.scene), c.at, c.length, c.from, c.to);
+                let _ = writeln!(s, "    {{ file = {}, scene = {}, at = {}, length = {}, from = {}, to = {}{} }},", path(&c.file), lua(&c.scene), c.at, c.length, c.from, c.to, resolve_framing(c.framing));
             }
             s.push_str("  },\n");
             // Every angle full length, each on its own track above the edit.
             s.push_str("  angles = {\n");
             for a in &edit.angles {
-                let _ = writeln!(s, "    {{ file = {}, name = {}, frames = {}, at = {} }},", path(&a.file), lua(&a.name), a.frames, a.at);
+                let from = if a.from > 0 { format!(", from = {}", a.from) } else { String::new() };
+                let _ = writeln!(s, "    {{ file = {}, name = {}, frames = {}, at = {}{from}{} }},", path(&a.file), lua(&a.name), a.frames, a.at, resolve_framing(a.framing));
             }
             s.push_str("  },\n");
         }
         s.push_str("}\n");
         s
     }
+}
+
+/// A crop's framing for the Resolve script, as the Inspector's Zoom, Position
+/// (timeline pixels from the middle, up positive) and Cropping (timeline
+/// pixels of the fitted picture) take it; "" for a camera's own file.
+fn resolve_framing(f: Option<super::export::Framing>) -> String {
+    let Some(f) = f else { return String::new() };
+    let n = super::export::num;
+    let mut s = format!(", zoom = {}, pan = {}, tilt = {}", n(f.zoom), n(f.x), n(f.y));
+    if let Some(c) = f.crop {
+        let _ = write!(s, ", crop = {{ left = {}, right = {}, top = {}, bottom = {} }}", n(c[0]), n(c[1]), n(c[2]), n(c[3]));
+    }
+    s
 }
 
 /// One shot of the live edit for the Resolve script: from program frame
@@ -238,6 +252,8 @@ pub struct ResolveCut {
     pub length: i64,
     pub from: i64,
     pub to: i64,
+    /// A close-up saved as a crop: how the wide camera's file is framed.
+    pub framing: Option<super::export::Framing>,
 }
 
 /// One recorded angle (a camera, or the program), whole, in its own frames.
@@ -249,6 +265,10 @@ pub struct ResolveAngle {
     /// Where it starts in the edit, in program frames (0 unless the file
     /// started during the take).
     pub at: i64,
+    /// A close-up saved as a crop: framed as it started.
+    pub framing: Option<super::export::Framing>,
+    /// Where in its file it starts (a crop of a file that started earlier).
+    pub from: i64,
 }
 
 /// The live edit the Resolve script lays down (empty: it imports the .fcpxml).
@@ -270,9 +290,21 @@ impl ResolveEdit {
         let cuts = te
             .edit()
             .into_iter()
-            .map(|e| ResolveCut { file: name(&te.files[e.file].path), scene: e.scene, at: e.start, length: e.end - e.start, from: e.src_in, to: e.src_out })
+            .map(|e| {
+                let f = &te.files[e.file];
+                let framing = e.rect.and_then(|r| te.framing_of(f, r));
+                ResolveCut { file: name(&f.path), scene: e.scene, at: e.start, length: e.end - e.start, from: e.src_in, to: e.src_out, framing }
+            })
             .collect();
-        let angles = te.files.iter().map(|f| ResolveAngle { file: name(&f.path), name: f.name.clone(), frames: te.file_frames(f), at: te.file_start(f) }).collect();
+        let angles = te
+            .files
+            .iter()
+            .map(|f| {
+                let framing = f.crop.as_ref().and_then(|c| te.framing_of(f, c.rect_at(f.start)));
+                let from = te.wide_of(f).map(|w| te.in_file(w, te.file_start(f))).unwrap_or(0);
+                ResolveAngle { file: name(&f.path), name: f.name.clone(), frames: te.file_frames(f), at: te.file_start(f), framing, from }
+            })
+            .collect();
         let sound = if have_mix { None } else { te.sound().map(|f| name(&f.path)) };
         ResolveEdit { cuts, angles, sound, frames: te.frames }
     }
@@ -335,7 +367,8 @@ pub fn premiere_take(xml: &str) -> Option<PremiereTake> {
     let angles = tracks
         .filter_map(|t| {
             let item = t.split("<clipitem ").nth(1)?;
-            Some(ResolveAngle { file: file_of(item)?, name: xml_unescape(tag(item, "name")?), frames: num(item, "out")?, at: num(item, "start").unwrap_or(0) })
+            let from = num(item, "in").unwrap_or(0);
+            Some(ResolveAngle { file: file_of(item)?, name: xml_unescape(tag(item, "name")?), frames: num(item, "out")? - from, at: num(item, "start").unwrap_or(0), framing: None, from })
         })
         .collect();
     let mut cuts = Vec::new();
@@ -345,7 +378,7 @@ pub fn premiere_take(xml: &str) -> Option<PremiereTake> {
         // "Cam middle (Cam middle)": the angle, then the scene.
         let label = xml_unescape(tag(item, "name").unwrap_or(""));
         let scene = label.rsplit_once(" (").map(|(_, sc)| sc.trim_end_matches(')').to_string()).unwrap_or(label);
-        cuts.push(ResolveCut { file, scene, at: start, length: end - start, from, to });
+        cuts.push(ResolveCut { file, scene, at: start, length: end - start, from, to, framing: None });
     }
     let mut markers = Vec::new();
     let after = xml.rfind("</media>").map(|i| &xml[i..]).unwrap_or("");
@@ -670,6 +703,7 @@ mod tests {
             length: None,
             clean: false,
             start: 0,
+            crop: None,
         };
         TakeExport {
             name: folder.file_name().unwrap().to_string_lossy().into(),

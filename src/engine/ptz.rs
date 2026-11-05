@@ -303,12 +303,74 @@ struct VirtState {
 /// Live state of a virtual PTZ camera.
 pub struct VirtualPtz {
     st: Mutex<VirtState>,
+    /// While a take records it as a crop of the wide camera: where the
+    /// shot goes, for the editor timelines.
+    log: Mutex<Option<ShotLog>>,
+}
+
+/// Closest together two logged shots of a move are (5 a second: smooth
+/// enough for an editor to glide between, few enough to keep for hours).
+pub const SHOT_LOG_GAP: Ns = 200_000_000;
+
+/// Notes where a close-up's shot is over a take, as a few keyframes:
+/// nothing while it stays put; while it moves, its shot at most every
+/// `SHOT_LOG_GAP`, where it was just before it set off (so an editor holds
+/// it there till then) and where it came to rest. Times are on the take's
+/// files' clock; shots are `shot_fraction`s of the wide picture.
+pub struct ShotLog {
+    logged: (Ns, [f32; 4]),
+    prev: Option<(Ns, [f32; 4])>,
+    sink: Box<dyn FnMut(Ns, [f32; 4]) + Send>,
+}
+
+/// Far enough apart to count as a move (a tenth of a pixel of a 4K picture is 0.00003).
+fn moved(a: [f32; 4], b: [f32; 4]) -> bool {
+    a.iter().zip(b).any(|(x, y)| (x - y).abs() > 1e-4)
+}
+
+impl ShotLog {
+    /// Starts at `rect` at `at` (already noted by whoever made it).
+    pub fn new(at: Ns, rect: [f32; 4], sink: Box<dyn FnMut(Ns, [f32; 4]) + Send>) -> ShotLog {
+        ShotLog { logged: (at, rect), prev: None, sink }
+    }
+
+    /// The shot of the picture at `at`.
+    pub fn feed(&mut self, at: Ns, rect: [f32; 4]) {
+        for (t, r) in self.keys(at, rect) {
+            (self.sink)(t, r);
+        }
+    }
+
+    /// What to note for this picture.
+    fn keys(&mut self, at: Ns, rect: [f32; 4]) -> Vec<(Ns, [f32; 4])> {
+        let mut out = Vec::new();
+        let (last_at, last) = self.logged;
+        if moved(rect, last) && at > last_at {
+            match self.prev {
+                // It was still till the picture before: it holds there till then.
+                Some((p_at, p)) if !moved(p, last) && p_at > last_at => {
+                    out.push((p_at, last));
+                    out.push((at, rect));
+                }
+                // It came to rest on the picture before.
+                Some((p_at, p)) if !moved(p, rect) && p_at > last_at => out.push((p_at, rect)),
+                _ if at - last_at >= SHOT_LOG_GAP => out.push((at, rect)),
+                _ => {}
+            }
+        }
+        if let Some(&k) = out.last() {
+            self.logged = k;
+        }
+        self.prev = Some((at, rect));
+        out
+    }
 }
 
 impl VirtualPtz {
     pub fn new(cfg: &PtzConfig) -> Arc<VirtualPtz> {
         let v = Arc::new(VirtualPtz {
             st: Mutex::new(VirtState { pos: Shot::default(), drive: [0.0; 3], goal: None, vel: [0.0; 3], presets: Vec::new(), max_zoom: 3.0, glide: 1.5 }),
+            log: Mutex::new(None),
         });
         v.configure(cfg);
         // It starts on preset 1 (where it's meant to be), not the whole picture.
@@ -331,6 +393,22 @@ impl VirtualPtz {
 
     pub fn position(&self) -> Shot {
         self.st.lock_ok().pos
+    }
+
+    /// Note where the shot goes from now (a take records it as a crop).
+    pub fn start_log(&self, log: ShotLog) {
+        *self.log.lock_ok() = Some(log);
+    }
+
+    pub fn stop_log(&self) {
+        self.log.lock_ok().take();
+    }
+
+    /// The shot of the picture shown at `at` (on the files' clock).
+    fn note(&self, at: Ns, rect: [f32; 4]) {
+        if let Some(l) = self.log.lock_ok().as_mut() {
+            l.feed(at, rect);
+        }
     }
 
     /// Glide back to a shot it had (the desk's Undo after Home).
@@ -430,6 +508,14 @@ pub fn shot_rect(s: Shot, src: (u32, u32), out: (u32, u32)) -> [f32; 4] {
     [cx - w / 2.0, cy - h / 2.0, w, h]
 }
 
+/// `shot_rect` as fractions of the picture (x, y, width, height), the
+/// same whatever size the wide camera's frames arrive at.
+pub fn shot_fraction(s: Shot, src: (u32, u32), out: (u32, u32)) -> [f32; 4] {
+    let r = shot_rect(s, src, out);
+    let (sw, sh) = (src.0.max(2) as f32, src.1.max(2) as f32);
+    [r[0] / sw, r[1] / sh, r[2] / sw, r[3] / sh]
+}
+
 static WATCHER_IDS: AtomicU64 = AtomicU64::new(1 << 49);
 
 struct VirtualRunning {
@@ -471,7 +557,10 @@ pub fn start_virtual(cfg: &SourceConfig, parent_name: &str, parent: Arc<SourceSl
             let dt = last.map(|l| (frame.pts - l) as f32 / 1e9).unwrap_or(0.0);
             last = Some(frame.pts);
             let shot = virt.step(dt);
-            slot.push(frame.crop_scaled(shot_rect(shot, (frame.width, frame.height), (w, h)), w, h));
+            let rect = shot_rect(shot, (frame.width, frame.height), (w, h));
+            // (When the picture is in the files: as the retimer places it.)
+            virt.note(frame.pts + slot.delay, [rect[0] / frame.width.max(2) as f32, rect[1] / frame.height.max(2) as f32, rect[2] / frame.width.max(2) as f32, rect[3] / frame.height.max(2) as f32]);
+            slot.push(frame.crop_scaled(rect, w, h));
         }
     })?;
     Ok((Box::new(VirtualRunning { stop, parent, watcher, thread: Some(thread) }), format!("virtual PTZ in {parent_name}")))
@@ -591,6 +680,37 @@ mod tests {
         }
         let p = v.position();
         assert!((p.x - 0.5 / p.zoom).abs() < 1e-4 && (p.y - 0.5 / p.zoom).abs() < 1e-4, "{p:?}");
+    }
+
+    /// Still: nothing noted. A move: where it was just before, then at
+    /// most five a second, then where it came to rest.
+    #[test]
+    fn shot_log_keeps_a_few_keyframes() {
+        let ms = |m: i64| m * 1_000_000;
+        let a = [0.0, 0.25, 0.5, 0.5];
+        let mut log = ShotLog::new(0, a, Box::new(|_, _| {}));
+        let mut got = Vec::new();
+        // 30 fps: still for a second, then a move of 1 s, then still again.
+        for k in 0..90i64 {
+            let at = k * 1_000_000_000 / 30;
+            let x = if k < 30 { 0.0 } else if k < 60 { (k - 29) as f32 * 0.01 } else { 0.30 };
+            got.extend(log.keys(at, [x, 0.25, 0.5, 0.5]));
+        }
+        let times: Vec<i64> = got.iter().map(|k| k.0 / 1_000_000).collect();
+        // The hold at frame 29, the first step, ~5 a second, the rest at frame 59.
+        assert_eq!(got[0], (29 * 1_000_000_000 / 30, a), "{times:?}");
+        assert_eq!(got[1].0, ms(1000));
+        assert!(got.windows(2).skip(1).all(|w| w[1].0 - w[0].0 >= SHOT_LOG_GAP || w[1].1 == [0.30, 0.25, 0.5, 0.5]), "{times:?}");
+        assert_eq!(*got.last().unwrap(), (59 * 1_000_000_000 / 30, [0.30, 0.25, 0.5, 0.5]), "{times:?}");
+        assert!(got.len() <= 8, "{times:?}");
+        // Still afterwards: nothing more.
+        assert!(log.keys(ms(5000), [0.30, 0.25, 0.5, 0.5]).is_empty());
+    }
+
+    #[test]
+    fn shot_fractions() {
+        assert_eq!(shot_fraction(Shot { x: 0.25, y: 0.5, zoom: 2.0 }, (3840, 2160), (1920, 1080)), [0.0, 0.25, 0.5, 0.5]);
+        assert_eq!(shot_fraction(Shot { x: 0.25, y: 0.5, zoom: 2.0 }, (1920, 1080), (1920, 1080)), [0.0, 0.25, 0.5, 0.5]);
     }
 
     #[test]
