@@ -81,7 +81,6 @@ pub struct RemoteShared {
     /// go) and when its page last said it was still holding.
     holds: Mutex<HashMap<(String, String), Instant>>,
     holds_changed: Condvar,
-    stopping: AtomicBool,
 }
 
 /// Wrong PINs from one address before it has to wait.
@@ -148,7 +147,6 @@ impl RemoteShared {
             stamped: Condvar::new(),
             holds: Mutex::new(HashMap::new()),
             holds_changed: Condvar::new(),
-            stopping: AtomicBool::new(false),
             show: Mutex::new((0, ShowState::default(), Instant::now())),
             changed: Condvar::new(),
             keys: Mutex::new(KeySources::default()),
@@ -159,11 +157,14 @@ impl RemoteShared {
 
     /// New state from the app; wakes WebSocket clients if anything changed.
     pub fn publish(&self, s: &ShowState) {
-        {
-            let mut stamp = self.stamp.lock_ok();
-            *stamp = (stamp.0 + 1, Instant::now());
-            self.stamped.notify_all();
-        }
+        self.store(s);
+        // Only now: whoever this wakes finds the new state in place.
+        let mut stamp = self.stamp.lock_ok();
+        *stamp = (stamp.0 + 1, Instant::now());
+        self.stamped.notify_all();
+    }
+
+    fn store(&self, s: &ShowState) {
         let mut show = self.show.lock_ok();
         if show.1 == *s {
             return;
@@ -174,11 +175,11 @@ impl RemoteShared {
         if show.2.elapsed() < LEVELS_EVERY && same_but_levels(&show.1, s) {
             return;
         }
+        *self.state.lock_ok() = serde_json::to_string(s).unwrap_or_else(|_| "{}".into());
+        *self.tally.lock_ok() = s.sources.iter().map(|x| x.tally.clone()).collect();
         show.1 = s.clone();
         show.0 += 1;
         show.2 = Instant::now();
-        *self.state.lock_ok() = serde_json::to_string(s).unwrap_or_else(|_| "{}".into());
-        *self.tally.lock_ok() = s.sources.iter().map(|x| x.tally.clone()).collect();
         self.changed.notify_all();
     }
 
@@ -238,19 +239,23 @@ impl RemoteShared {
     }
 
     /// Page `who` is still holding.
-    fn hold_alive(&self, who: &str) {
+    /// False when it isn't held (any more): the lease ran out.
+    fn hold_alive(&self, who: &str) -> bool {
         let mut h = self.holds.lock_ok();
+        let mut any = false;
         for ((w, _), t) in h.iter_mut() {
             if w == who {
                 *t = Instant::now();
+                any = true;
             }
         }
+        any
     }
 
     /// Lets go of holds whose page has gone quiet. Runs on its own thread.
-    fn watch_holds(&self) {
+    fn watch_holds(&self, stop: &AtomicBool) {
         let mut h = self.holds.lock_ok();
-        while !self.stopping.load(Ordering::Relaxed) {
+        while !stop.load(Ordering::Relaxed) {
             let gone: Vec<(String, String)> = h.iter().filter(|(_, t)| t.elapsed() > HOLD_LEASE).map(|(k, _)| k.clone()).collect();
             for k in &gone {
                 h.remove(k);
@@ -382,16 +387,15 @@ pub struct RemoteServer {
 impl Drop for RemoteServer {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        self.shared.stopping.store(true, Ordering::Relaxed);
         self.shared.holds_changed.notify_all();
         // The accept below waits for a connection: make one.
         let _ = TcpStream::connect_timeout(&std::net::SocketAddr::from(([127, 0, 0, 1], self.port)), Duration::from_secs(1));
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
-        if let Some(t) = self.holds.take() {
-            let _ = t.join();
-        }
+        // (The holds thread isn't waited for: it may be waiting on the app,
+        // which may be waiting for this drop. It stops by itself.)
+        self.holds.take();
     }
 }
 
@@ -402,6 +406,7 @@ impl RemoteServer {
         let s2 = stop.clone();
         let sh_all = shared.clone();
         let for_holds = shared.clone();
+        let stop_holds = stop.clone();
         let thread = std::thread::Builder::new().name("remote".into()).spawn(move || {
             // Waits in accept (no waking when nobody is there); `Drop` makes
             // one last connection to get out.
@@ -426,7 +431,7 @@ impl RemoteServer {
                 }
             }
         })?;
-        let holds = std::thread::Builder::new().name("remote holds".into()).spawn(move || for_holds.watch_holds())?;
+        let holds = std::thread::Builder::new().name("remote holds".into()).spawn(move || for_holds.watch_holds(&stop_holds))?;
         Ok(RemoteServer { stop, thread: Some(thread), holds: Some(holds), shared: sh_all, port })
     }
 }
@@ -573,8 +578,12 @@ fn handle(mut conn: TcpStream, sh: &RemoteShared) -> std::io::Result<()> {
             respond(&mut conn, "200 OK", "text/plain", t.as_bytes(), "")
         }
         "/api/alive" => {
-            sh.hold_alive(&param("who").unwrap_or_default());
-            respond(&mut conn, "200 OK", "text/plain", b"ok", "")
+            // 410: Cutaway has let go already (the lease ran out).
+            if sh.hold_alive(&param("who").unwrap_or_default()) {
+                respond(&mut conn, "200 OK", "text/plain", b"ok", "")
+            } else {
+                respond(&mut conn, "410 Gone", "text/plain", b"not held", "")
+            }
         }
         "/api/action" => {
             let Some(cmd) = param("do").or_else(|| param("action")) else {
@@ -815,17 +824,48 @@ mod tests {
         // A pad held by a page that keeps saying so, and one that lets go itself.
         assert!(get(port, "/api/action?do=talkback%3Aon&who=b&pin=1357").0.contains("200"));
         assert!(get(port, "/api/action?do=talkback%3Aoff&who=b&pin=1357").0.contains("200"));
+        assert!(get(port, "/api/action?do=pad%3A%231%3Apress&who=c&pin=1357").0.contains("200"));
         for _ in 0..4 {
             std::thread::sleep(Duration::from_millis(900));
-            assert!(get(port, "/api/alive?who=b&pin=1357").0.contains("200"));
+            assert!(get(port, "/api/alive?who=c&pin=1357").0.contains("200"));
         }
         // "a" went quiet: after the lease Cutaway itself lets go. "b" let go
         // itself, and its keepalives did nothing more.
         std::thread::sleep(Duration::from_millis(900));
         let offs = seen.lock_ok().iter().filter(|a| **a == Action::Talkback(super::super::Toggle::Off)).count();
         assert_eq!(offs, 2, "{:?}", seen.lock_ok());
+        assert!(get(port, "/api/alive?who=a&pin=1357").0.contains("410"), "the lease ran out: not held any more");
+        assert!(get(port, "/api/alive?who=b&pin=1357").0.contains("410"), "b let go itself");
+        assert!(get(port, "/api/alive?who=c&pin=1357").0.contains("200"), "c kept saying so");
         drop(server);
         drop(worker);
+    }
+
+    #[test]
+    fn holds_are_still_watched_after_the_server_restarts() {
+        let (tx, rx) = crossbeam_channel::unbounded::<Request>();
+        let sh = RemoteShared::new(tx, Arc::new(|| {}));
+        *sh.pin.lock_ok() = "2222".into();
+        drop(RemoteServer::start(crate::util::free_tcp_port(), sh.clone()).unwrap());
+        let port = crate::util::free_tcp_port();
+        let server = RemoteServer::start(port, sh.clone()).unwrap();
+        let worker = std::thread::spawn(move || {
+            let mut asked = Vec::new();
+            while let Ok(r) = rx.recv_timeout(Duration::from_secs(6)) {
+                asked.push(r.action);
+                if let Some(reply) = r.reply {
+                    let _ = reply.send(Ok("ok".into()));
+                }
+                if asked.len() == 2 {
+                    break;
+                }
+            }
+            asked
+        });
+        assert!(get(port, "/api/action?do=talkback%3Aon&who=a&pin=2222").0.contains("200"));
+        let asked = worker.join().unwrap();
+        assert_eq!(asked.last(), Some(&Action::Talkback(super::super::Toggle::Off)), "{asked:?}");
+        drop(server);
     }
 
     fn get(port: u16, path: &str) -> (String, String) {

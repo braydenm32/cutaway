@@ -97,6 +97,10 @@ fetches the show and reconnects straight away.
   (the program picture), `/api/tally/<n>` (`program`, `preview` or `off`),
   `/api/key/scene/<n>.png` and `/api/key/source/<n>.png` (key pictures with
   tally, `?size=144`).
+  In `/api/state` and the WebSocket, the recording and live times, the
+  rundown's elapsed time and a media player's position are whole seconds, and
+  a pad's progress is in whole percents, so the state only changes when
+  something worth showing does.
 - **WebSocket:** `ws://<address>:8790/api/ws?pin=<PIN>` pushes the state
   (`{"type":"state","state":{…}}`) whenever it changes (and `{"type":"tick"}`
   after two quiet seconds, so a client can tell it's still connected), and takes commands

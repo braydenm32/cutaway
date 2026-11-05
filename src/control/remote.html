@@ -330,20 +330,29 @@ let lastBtn = null, lastBtnAt = 0;
 document.addEventListener('pointerdown', e => { const b = e.target.closest && e.target.closest('button'); lastBtn = b; lastBtnAt = Date.now(); }, true);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 // Sends a command; true if Cutaway ran it.
-async function act(cmd, again) {
+// The newest send in each family (talkback, one pad, one camera, ...): a
+// late retry or resend is dropped if the user has pressed again since.
+const sentSeq = {};
+let seqCounter = 0;
+function family(cmd) { const p = cmd.toLowerCase().split(':'); return /^(pad|ptz)$/.test(p[0]) ? p.slice(0, 2).join(':') : p[0]; }
+// `mine` is the number of an earlier send being tried again.
+async function act(cmd, mine) {
+  const again = mine !== undefined, fam = family(cmd);
+  if (!again) mine = sentSeq[fam] = ++seqCounter;
+  else if (sentSeq[fam] !== mine) return false;
   const btn = !again && lastBtn && Date.now() - lastBtnAt < 1500 ? lastBtn : null;
   const slow = btn ? setTimeout(() => { btn.dataset.sending = '1'; }, 250) : null;
   try {
     // (keepalive: a "let go" sent as the page goes away still arrives.)
     const r = await fetch(api('/api/action?do=' + encodeURIComponent(cmd) + '&who=' + me), { method: 'POST', keepalive: true, signal: within(8000) });
     const t = await r.text();
-    if (r.status === 409 && !again && REPEATABLE.test(cmd)) { await sleep(700); return act(cmd, true); }
+    if (r.status === 409 && !again && REPEATABLE.test(cmd)) { await sleep(700); return act(cmd, mine); }
     if (!r.ok) flash(t, true);
     else if (/pre-show check/i.test(t)) flash(t + '…');
     if (!wsLive) poll();
     return r.ok;
   } catch (e) {
-    if (!again && REPEATABLE.test(cmd)) { await sleep(700); return act(cmd, true); }
+    if (!again && REPEATABLE.test(cmd)) { await sleep(700); return act(cmd, mine); }
     flash('Cutaway isn\'t answering', true);
     return false;
   } finally {
@@ -687,18 +696,31 @@ function renderActions(s) {
 // try fails, when the connection comes back and when the page is shown, so
 // talkback or a camera move never stays on. While held the page also says
 // every second that it still is; Cutaway lets go by itself if that stops.
-let held = null, owed = new Set(), heldTimer = null;
+let held = null, owed = new Map(), heldTimer = null, holdAcked = false;
+// A release is tried again only if nothing has been pressed in its family since.
 function giveBack(up) {
-  owed.add(up);
   act(up).then(ok => { if (ok) owed.delete(up); });
+  owed.set(up, sentSeq[family(up)]);
 }
-function resendOwed() { owed.forEach(up => { act(up).then(ok => { if (ok) owed.delete(up); }); }); }
+function resendOwed() {
+  owed.forEach((seq, up) => {
+    if (sentSeq[family(up)] !== seq || held === up) { owed.delete(up); return; }
+    act(up, seq).then(ok => { if (ok) owed.delete(up); });
+  });
+}
 function hold(down, up) {
   if (held) giveBack(held);
-  held = up; owed.delete(up);
+  held = up; holdAcked = false; owed.delete(up);
+  const mine = up;
   clearInterval(heldTimer);
-  heldTimer = setInterval(() => { fetch(api('/api/alive?who=' + me), { method: 'POST', keepalive: true, signal: within(3000) }).catch(() => {}); }, 1000);
-  act(down);
+  heldTimer = setInterval(() => {
+    fetch(api('/api/alive?who=' + me), { method: 'POST', keepalive: true, signal: within(3000) }).then(r => {
+      // Cutaway let go by itself (the connection was lost for a few seconds):
+      // the button lets go too, and says so.
+      if (r.status === 410 && holdAcked && held === mine) { held = null; clearInterval(heldTimer); flash('Let go: the connection was lost for a moment', true); refresh(); }
+    }).catch(() => {});
+  }, 1000);
+  act(down).then(ok => { if (ok && held === mine) holdAcked = true; });
 }
 function letGo() { if (held) { const up = held; held = null; clearInterval(heldTimer); giveBack(up); } }
 ['pointerup', 'pointercancel'].forEach(ev => document.addEventListener(ev, letGo));
