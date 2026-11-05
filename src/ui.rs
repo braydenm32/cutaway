@@ -981,6 +981,17 @@ impl App {
         }
     }
 
+    /// Edit its layout ends, and the Preview it turned on just for the edit
+    /// goes back to the user's own. Called when Edit layout closes, when the
+    /// Show area is left, and before settings are saved, swapped or exported.
+    fn end_temp_preview(&mut self) {
+        if let Some(was) = self.edit_restore_preview.take() {
+            self.edit_mode = false;
+            self.edit_seen = false;
+            self.set_preview_mode(was);
+        }
+    }
+
     /// The settings as they go to disk: Preview as the user set it, not as
     /// Edit its layout has it just for the edit.
     fn cfg_for_disk(&self) -> Config {
@@ -1322,11 +1333,11 @@ impl App {
     /// Preview on or off, from the bank's Preview button or a controller.
     /// Turned off, nothing is left waiting in preview.
     fn set_preview_mode(&mut self, on: bool) {
-        // Chosen by hand: no longer just for the edit.
-        self.edit_restore_preview = None;
         if self.cfg.transition.preview_mode == on {
             return;
         }
+        // Changed by hand: no longer just for the edit.
+        self.edit_restore_preview = None;
         self.cfg.transition.preview_mode = on;
         self.cfg_dirty = true;
         if !on {
@@ -2886,6 +2897,7 @@ impl App {
             self.toast("Stop recording and streaming before switching shows".into(), true);
             return;
         }
+        self.end_temp_preview();
         // Keep the current show's latest changes first; a setup that isn't
         // a show yet is saved as one, so switching never loses it.
         let unnamed = self.unnamed_setup_name();
@@ -6035,6 +6047,7 @@ impl App {
             self.toast("Stop recording and streaming first: this changes every setting".into(), true);
             return;
         }
+        self.end_temp_preview();
         let before = self.snapshot(undo::Kind::Settings, label.to_string());
         // Its own scenes (settings without any make them from its sources).
         if cfg.scenes.is_empty() {
@@ -6272,6 +6285,11 @@ impl eframe::App for App {
     /// still hides by itself, the prompter still rolls, and the state they
     /// read keeps moving when nobody is looking at the desk.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Before anything is drawn or a controller's command is read, so no
+        // page or button sees the Preview that was on just for the edit.
+        if temp_preview_ends(self.edit_restore_preview.is_some(), self.edit_mode, self.shell.area) {
+            self.end_temp_preview();
+        }
         self.handle_requests();
         self.poll_status();
         // A comment's time on screen and the prompter's scrolling keep
@@ -6327,11 +6345,6 @@ impl eframe::App for App {
             self.edit_opened();
         }
         self.edit_seen = self.edit_mode;
-        if !self.edit_mode {
-            if let Some(was) = self.edit_restore_preview.take() {
-                self.set_preview_mode(was);
-            }
-        }
         if self.settle_at.is_some_and(|t| Instant::now() >= t) {
             self.settle_at = None;
             if let Ok(me) = crate::net::self_update::Install::here() {
@@ -6630,6 +6643,12 @@ fn edit_turns_preview_on(recording_or_live: bool, preview_on: bool) -> bool {
     recording_or_live && !preview_on
 }
 
+/// Whether the Preview turned on just for an edit goes back now: Edit
+/// layout has closed, or the Show area has been left (area 0 is Show).
+fn temp_preview_ends(temporary: bool, edit_mode: bool, area: usize) -> bool {
+    temporary && (!edit_mode || area != 0)
+}
+
 /// The time of day for the header: "15:05", or "3:05 PM".
 fn clock_text(t: chrono::NaiveTime, twelve: bool) -> String {
     t.format(crate::engine::timers::time_format(twelve, false)).to_string()
@@ -6824,6 +6843,15 @@ mod desk_tests {
         assert!(!put_on_air_ready(Duration::from_millis(250)));
         assert!(put_on_air_ready(Duration::from_millis(300)));
         assert!(put_on_air_ready(Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn temporary_preview_goes_back_when_the_edit_ends_or_show_is_left() {
+        use super::temp_preview_ends;
+        assert!(!temp_preview_ends(true, true, 0), "still editing");
+        assert!(temp_preview_ends(true, false, 0), "Edit layout closed");
+        assert!(temp_preview_ends(true, true, 3), "went to another area");
+        assert!(!temp_preview_ends(false, false, 3), "the user's own Preview is left alone");
     }
 
     #[test]
