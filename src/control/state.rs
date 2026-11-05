@@ -367,6 +367,23 @@ impl ShowState {
     }
 }
 
+/// Whole seconds (rounded down, as every clock shows them), so a running
+/// clock changes the state once a second, not on every publish.
+pub fn whole_seconds(seconds: f64) -> f64 {
+    seconds.max(0.0).floor()
+}
+
+/// A 0..1 progress in whole percents.
+pub fn percent_step(p: f32) -> f32 {
+    (p * 100.0).round() / 100.0
+}
+
+/// Seconds left in tenths, rounded up so the whole seconds a page shows
+/// (it rounds up too) don't change.
+pub fn tenths_up(s: f32) -> f32 {
+    (s * 10.0 - 0.001).ceil().max(0.0) / 10.0
+}
+
 /// "01:02:03".
 pub fn clock(seconds: f64) -> String {
     let s = seconds.max(0.0) as u64;
@@ -408,6 +425,16 @@ mod tests {
         assert_eq!((s.state.as_str(), s.live_count, s.total), ("live", 1, 1));
         st.stopping = true;
         assert_eq!(StreamState::from_status(&st, true).state, "ending");
+    }
+
+    #[test]
+    fn volatile_numbers_are_steady_between_publishes() {
+        assert_eq!(whole_seconds(12.9), 12.0);
+        assert_eq!(whole_seconds(-1.0), 0.0);
+        assert_eq!(percent_step(0.4949), 0.49);
+        for x in [2.0f32, 2.04, 2.1, 2.96, 3.0, 0.0, 0.01] {
+            assert_eq!(tenths_up(x).ceil(), x.ceil(), "{x}");
+        }
     }
 
     #[test]

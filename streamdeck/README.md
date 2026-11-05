@@ -47,7 +47,7 @@ dials and the Stream Deck app's virtual decks).
 | Rundown | next segment, previous, or stop | the next key shows this segment's time left (an amber edge when over) and what's next |
 | Command | any Cutaway command | e.g. `preview:2`, `graphic:Logo:on`, `gain:Mic:-6` |
 
-Live pictures refresh once a second by default (choose Smooth, Slow or Off
+Live pictures refresh once a second by default (choose Smooth (twice a second), Slow or Off
 in any key's settings).
 
 Colours mean what they mean on the desk: red is on air (and nothing else),

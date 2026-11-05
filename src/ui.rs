@@ -1908,7 +1908,7 @@ impl App {
         let preview_sources = preview.as_ref().map(|p| p.sources()).unwrap_or_default();
         let st = e.status.lock_ok();
         let rec_seconds = match &st.rec {
-            RecState::Recording { since, .. } => since.elapsed().as_secs_f64(),
+            RecState::Recording { since, .. } => control::state::whole_seconds(since.elapsed().as_secs_f64()),
             _ => 0.0,
         };
         let saving = match &st.rec {
@@ -1916,7 +1916,7 @@ impl App {
             _ => None,
         };
         // The same LIVE time as the desk's: from the first destination really live.
-        let live_seconds = st.stream.live_seconds();
+        let live_seconds = control::state::whole_seconds(st.stream.live_seconds());
         let mut problems = st.health.problems();
         // Still there until a new take starts (poll_status takes the flag itself).
         let rec_since = match &st.rec {
@@ -2004,14 +2004,14 @@ impl App {
                         source: i + 1,
                         playing: s.playing,
                         item: s.items.get(s.index).cloned().unwrap_or_default(),
-                        position: s.position as f64 / 1e9,
+                        position: control::state::whole_seconds(s.position as f64 / 1e9),
                         duration: s.duration as f64 / 1e9,
                     })
                 })
                 .collect(),
             disk,
             problems,
-            pads: e.pads.state().into_iter().map(|p| show::PadInfo { name: p.name, color: p.color, playing: p.playing, progress: p.progress, remaining: p.remaining }).collect(),
+            pads: e.pads.state().into_iter().map(|p| show::PadInfo { name: p.name, color: p.color, playing: p.playing, progress: control::state::percent_step(p.progress), remaining: control::state::tenths_up(p.remaining) }).collect(),
             syrinscape: if self.cfg.syrinscape.enabled {
                 self.cfg
                     .syrinscape
@@ -2101,11 +2101,11 @@ impl App {
                     count: st.count,
                     name: st.name.clone(),
                     next: st.next.clone(),
-                    elapsed: st.elapsed,
+                    elapsed: control::state::whole_seconds(st.elapsed),
                     planned: st.planned,
                     left,
                     over,
-                    drift: st.drift,
+                    drift: st.drift.round(),
                     drift_text: show::RundownState::drift_words(st.drift),
                 }
             }),
@@ -2117,13 +2117,15 @@ impl App {
         if self.last_publish.elapsed() < Duration::from_millis(150) {
             return;
         }
-        // Nobody to tell: the remote, OSC and MIDI are all off.
-        if self.remote.is_none() && self.osc.is_none() && self.midi.is_none() {
+        // Nobody to tell: the remote has no phone, deck or page asking (it
+        // is built on the spot when one does), and OSC and MIDI are off.
+        let remote_wanted = self.remote.is_some() && self.remote_shared.wanted();
+        if !remote_wanted && self.osc.is_none() && self.midi.is_none() {
             return;
         }
         self.last_publish = Instant::now();
         let Some(state) = self.show_state() else { return };
-        if self.remote.is_some() {
+        if remote_wanted {
             if let Some(e) = &self.engine {
                 let bg = crate::config::parse_color(&self.cfg.program.background_color).unwrap_or(0x10131a);
                 *self.remote_shared.keys.lock_ok() = control::keys::KeySources {
@@ -6315,7 +6317,7 @@ impl eframe::App for App {
         self.tick_comments(ctx);
         self.tick_prompter(ctx);
         self.publish_state();
-        if self.remote.is_some() || self.midi.is_some() || self.osc.is_some() {
+        if (self.remote.is_some() && self.remote_shared.wanted()) || self.midi.is_some() || self.osc.is_some() {
             ctx.request_repaint_after(Duration::from_millis(250));
         }
     }

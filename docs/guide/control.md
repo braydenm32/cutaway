@@ -70,12 +70,16 @@ whether it started.
 
 The remote keeps working while the Cutaway window is minimised or hidden, but a
 minimised window can take up to a tenth of a second longer to act on a tap. For the quickest
-response, keep Cutaway open behind other windows rather than minimised. It keeps the phone's screen on while it's open and showing; turn that off on
-the More tab (**Keep screen on**) to save battery. If nothing has come from
+response, keep Cutaway open behind other windows rather than minimised.
+The phone's screen is allowed to go dark as usual; to keep it on while the
+remote is open and showing, turn on **Keep screen on** on the More tab (it
+uses more battery). A tally light page always keeps its screen on. If nothing has come from
 Cutaway for five seconds (the phone left the Wi-Fi, the laptop went to
 sleep), a **Reconnecting to Cutaway…** strip shows at the top and the
 buttons dim, so a frozen screen never looks live; Cutaway sends a small sign
-of life every two seconds, so a quiet show isn't mistaken for a lost one.
+of life every two seconds, so a quiet show isn't mistaken for a lost one. If
+Cutaway itself stops updating the show (it is stuck, not the Wi-Fi), the
+strip says **Cutaway isn't updating**.
 Coming back to the page (unlocking the phone, switching back to the browser)
 fetches the show and reconnects straight away.
 
@@ -97,6 +101,10 @@ fetches the show and reconnects straight away.
   (the program picture), `/api/tally/<n>` (`program`, `preview` or `off`),
   `/api/key/scene/<n>.png` and `/api/key/source/<n>.png` (key pictures with
   tally, `?size=144`).
+  In `/api/state` and the WebSocket, the recording and live times, the
+  rundown's elapsed time and a media player's position are whole seconds, and
+  a pad's progress is in whole percents, so the state only changes when
+  something worth showing does.
 - **WebSocket:** `ws://<address>:8790/api/ws?pin=<PIN>` pushes the state
   (`{"type":"state","state":{…}}`) whenever it changes (and `{"type":"tick"}`
   after two quiet seconds, so a client can tell it's still connected), and takes commands

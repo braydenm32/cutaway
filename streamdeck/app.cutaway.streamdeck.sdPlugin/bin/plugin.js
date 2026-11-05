@@ -299,7 +299,15 @@ const cutaway = {
   nextId: 1,
   pending: new Map(),
   timer: null,
+  /** When anything (state, tick or reply) last came from Cutaway. */
+  heard: Date.now(),
+  /** Releases (pad, talkback, PTZ stop) not yet confirmed by Cutaway, and the ids of those in flight. */
+  owed: new Set(),
+  releasing: new Map(),
 };
+
+/** Cutaway sends something at least every 2 seconds (a tick when quiet). */
+const SILENCE_MS = 5000;
 
 function hostPort() {
   let a = String(cutaway.global.address || "").trim().replace(/^[a-z]+:\/\//i, "").replace(/\/.*$/, "");
@@ -337,10 +345,13 @@ function connect() {
   ws.on("open", () => {
     cutaway.connected = true;
     cutaway.problem = "";
+    cutaway.heard = Date.now();
     ws.send(JSON.stringify({ get: "state" }));
+    flushOwed();
     log(`connected to ${host}:${port}`);
   });
   ws.on("message", (text) => {
+    cutaway.heard = Date.now();
     let m;
     try {
       m = JSON.parse(text);
@@ -352,6 +363,12 @@ function connect() {
       cutaway.state = m.state;
       renderAll(first);
     } else if (m.type === "reply") {
+      const rel = cutaway.releasing.get(m.id);
+      if (rel) {
+        // Answered (whatever it said): no longer owed.
+        cutaway.releasing.delete(m.id);
+        cutaway.owed.delete(rel);
+      }
       const ctx = cutaway.pending.get(m.id);
       cutaway.pending.delete(m.id);
       if (!m.ok) {
@@ -370,12 +387,49 @@ function connect() {
     if (cutaway.connected) log("disconnected");
     cutaway.connected = false;
     cutaway.state = null;
+    cutaway.releasing.clear();
     if (!cutaway.problem) cutaway.problem = "disconnected";
     renderAll(true);
     // A PIN problem won't fix itself in two seconds: try less often (a new
     // PIN typed in the key's settings connects straight away).
     reconnectSoon(/PIN/.test(cutaway.problem) ? 15000 : 2000);
   });
+}
+
+/** Nothing has come for a while: the connection is dead even if the
+ *  system hasn't said so. Close it (the keys show "not connected" and a new
+ *  connection is tried). */
+setInterval(() => {
+  const ws = cutaway.ws;
+  if (ws && cutaway.connected && Date.now() - cutaway.heard > SILENCE_MS) {
+    log("no word from Cutaway for 5 seconds");
+    cutaway.problem = "no answer from Cutaway";
+    ws.close();
+  }
+  // A release not yet confirmed is sent again until it is.
+  if (cutaway.owed.size) flushOwed();
+}, 1000);
+
+/** Let go of something held (a pad, talkback, a camera move). It is kept
+ *  until Cutaway confirms, so a release during a reconnect is never lost. */
+function sendRelease(command) {
+  cutaway.owed.add(command);
+  flushOwed();
+}
+
+function flushOwed() {
+  if (!cutaway.connected || !cutaway.ws) return;
+  for (const command of cutaway.owed) {
+    const id = cutaway.nextId++;
+    cutaway.releasing.set(id, command);
+    cutaway.ws.send(JSON.stringify({ do: command, id }));
+  }
+}
+
+/** A key was pressed that holds something until it's let go. */
+function holdDown(k, release) {
+  k.down = release;
+  cutaway.owed.delete(release);
 }
 
 function reconnectSoon(ms) {
@@ -505,7 +559,7 @@ function press(ctx) {
     case "pad":
       // Sound starts on the press; "while held" pads stop on the release.
       run(ctx, `pad:${cmdTarget(s.pad)}:press`);
-      k.down = `pad:${cmdTarget(s.pad)}:release`;
+      holdDown(k, `pad:${cmdTarget(s.pad)}:release`);
       break;
     case "syrinscape":
       run(ctx, `syrinscape:${cmdTarget(s.button)}`);
@@ -513,7 +567,7 @@ function press(ctx) {
     case "talkback":
       if ((s.mode || "hold") === "hold") {
         run(ctx, "talkback:on");
-        k.down = "talkback:off";
+        holdDown(k, "talkback:off");
       } else {
         run(ctx, "talkback");
       }
@@ -565,7 +619,7 @@ function press(ctx) {
       else {
         // Moves while held.
         run(ctx, `ptz:#${cam.source}:${button}:${s.speed || "0.5"}`);
-        k.down = `ptz:#${cam.source}:stop`;
+        holdDown(k, `ptz:#${cam.source}:stop`);
       }
       break;
     }
@@ -621,7 +675,7 @@ function release(ctx) {
   const k = keys.get(ctx);
   if (!k) return;
   if (k.down) {
-    run(null, k.down);
+    sendRelease(k.down);
     k.down = null;
   }
   if (!k.hold) return;
@@ -788,7 +842,7 @@ function draw(k) {
       }
       if (st.recording) {
         // A dark key with a pulsing red dot, as the desk's REC pill.
-        const dot = Math.floor(Date.now() / 600) % 2 ? C.red : "#7a2a33";
+        const dot = Math.floor(Date.now() / 1000) % 2 ? C.red : "#7a2a33";
         return { image: svg(ICONS.record(dot) + label("REC", 108, 20) + label(clock(st.rec_seconds), 130, 16, C.text, 400) + holdBar(holding), { bg: C.recBg, border }) };
       }
       return { image: svg(ICONS.record(C.red) + label("REC", 112, 22, C.dim), { border }) };
@@ -1027,7 +1081,8 @@ function thumbsOn() {
 
 function thumbEvery() {
   const n = Number(cutaway.global.thumbnails);
-  return Number.isFinite(n) && n >= 100 ? n : 1000;
+  // (4 a second was too much for the deck's panel: 500 ms is the quickest.)
+  return Number.isFinite(n) && n >= 100 ? Math.max(500, n) : 1000;
 }
 
 function fetchPng(path) {
@@ -1057,8 +1112,12 @@ setInterval(() => {
     k.fetched = now;
     fetchPng(`/api/key/${k.kind}/${i + 1}.png?size=144`)
       .then((png) => {
-        k.png = `data:image/png;base64,${png.toString("base64")}`;
-        render(ctx);
+        // Same picture as before: nothing to send to the deck.
+        const url = `data:image/png;base64,${png.toString("base64")}`;
+        if (url !== k.png) {
+          k.png = url;
+          render(ctx);
+        }
       })
       .catch(() => {
         k.png = null;

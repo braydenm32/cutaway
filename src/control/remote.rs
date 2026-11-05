@@ -31,7 +31,9 @@ use crossbeam_channel::{bounded, Sender};
 use std::io::{Read, Write};
 use std::collections::HashMap;
 use std::net::{IpAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -51,9 +53,13 @@ pub struct RemoteShared {
     pub pin: Mutex<String>,
     pub requests: Sender<Request>,
     pub waker: Waker,
-    jpeg: Mutex<Option<(u64, Arc<Vec<u8>>)>>,
+    /// The program picture as JPEG: its frame generation, when it was
+    /// made, and the bytes.
+    jpeg: Mutex<Option<(u64, Instant, Arc<Vec<u8>>)>>,
+    /// Key pictures already drawn: what they were drawn from, and the PNG.
+    key_cache: Mutex<HashMap<(String, u32, bool), (u64, Arc<Vec<u8>>)>>,
     /// The state, and a counter that moves whenever it changes.
-    show: Mutex<(u64, ShowState)>,
+    show: Mutex<(u64, ShowState, Instant)>,
     changed: Condvar,
     /// What key pictures are drawn from.
     pub keys: Mutex<KeySources>,
@@ -62,6 +68,19 @@ pub struct RemoteShared {
     /// Wrong PINs by address: how many different ones in a row, when the
     /// last was, and what it was.
     wrong: Mutex<HashMap<IpAddr, (u32, Instant, String)>>,
+    /// WebSocket controllers connected now.
+    clients: AtomicUsize,
+    /// When something last asked for the state (a page, a key picture, a
+    /// tally light) over plain HTTP.
+    demand: Mutex<Option<Instant>>,
+    /// How many times the app has published, and when last (even when
+    /// nothing had changed): the app's pulse.
+    stamp: Mutex<(u64, Instant)>,
+    stamped: Condvar,
+    /// Held down from a phone over plain HTTP: (page, the command that lets
+    /// go) and when its page last said it was still holding.
+    holds: Mutex<HashMap<(String, String), Instant>>,
+    holds_changed: Condvar,
 }
 
 /// Wrong PINs from one address before it has to wait.
@@ -70,6 +89,20 @@ const TRIES: u32 = 5;
 const LOCKED_FOR: Duration = Duration::from_secs(60);
 /// A WebSocket that's had nothing for this long gets `{"type":"tick"}`.
 const TICK_EVERY: Duration = Duration::from_secs(2);
+/// A WebSocket that sends nothing for this long is gone: the server pings
+/// every 15 s and a live client answers.
+const READ_TIMEOUT: Duration = Duration::from_secs(40);
+/// A write that can't finish in this long means the peer stopped reading.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Something asked for the state this recently: keep it up to date.
+const DEMAND_FOR: Duration = Duration::from_secs(5);
+/// A phone holding talkback, a pad or a camera move says so every second;
+/// this long without hearing it, Cutaway lets go.
+const HOLD_LEASE: Duration = Duration::from_secs(3);
+/// Levels alone (no other change) go out at most this often.
+const LEVELS_EVERY: Duration = Duration::from_millis(500);
+/// The program picture is made again at most this often.
+const JPEG_EVERY: Duration = Duration::from_secs(1);
 
 impl RemoteShared {
     /// Whether `ip` is waiting after too many wrong PINs.
@@ -107,7 +140,14 @@ impl RemoteShared {
             requests,
             waker,
             jpeg: Mutex::new(None),
-            show: Mutex::new((0, ShowState::default())),
+            key_cache: Mutex::new(HashMap::new()),
+            clients: AtomicUsize::new(0),
+            demand: Mutex::new(None),
+            stamp: Mutex::new((0, Instant::now())),
+            stamped: Condvar::new(),
+            holds: Mutex::new(HashMap::new()),
+            holds_changed: Condvar::new(),
+            show: Mutex::new((0, ShowState::default(), Instant::now())),
             changed: Condvar::new(),
             keys: Mutex::new(KeySources::default()),
             prompter: Mutex::new("{}".into()),
@@ -117,19 +157,121 @@ impl RemoteShared {
 
     /// New state from the app; wakes WebSocket clients if anything changed.
     pub fn publish(&self, s: &ShowState) {
+        self.store(s);
+        // Only now: whoever this wakes finds the new state in place.
+        let mut stamp = self.stamp.lock_ok();
+        *stamp = (stamp.0 + 1, Instant::now());
+        self.stamped.notify_all();
+    }
+
+    fn store(&self, s: &ShowState) {
         let mut show = self.show.lock_ok();
         if show.1 == *s {
             return;
         }
-        show.1 = s.clone();
-        show.0 += 1;
+        // Only the meters moved: they go out a couple of times a second, not
+        // with every publish. (The old state stays until then, so the last
+        // movement is never lost.)
+        if show.2.elapsed() < LEVELS_EVERY && same_but_levels(&show.1, s) {
+            return;
+        }
         *self.state.lock_ok() = serde_json::to_string(s).unwrap_or_else(|_| "{}".into());
         *self.tally.lock_ok() = s.sources.iter().map(|x| x.tally.clone()).collect();
+        show.1 = s.clone();
+        show.0 += 1;
+        show.2 = Instant::now();
         self.changed.notify_all();
     }
 
     fn snapshot(&self) -> (u64, ShowState) {
-        self.show.lock_ok().clone()
+        let show = self.show.lock_ok();
+        (show.0, show.1.clone())
+    }
+
+    /// The state as JSON, with its counter (the text `publish` already made).
+    fn json(&self) -> (u64, String) {
+        let show = self.show.lock_ok();
+        // (Before the app has published anything: the empty show, whole.)
+        let json = if show.0 == 0 { serde_json::to_string(&show.1).unwrap_or_else(|_| "{}".into()) } else { self.state.lock_ok().clone() };
+        (show.0, json)
+    }
+
+    /// Whether the app should keep the state up to date: a controller is
+    /// connected, or something asked for it a moment ago.
+    pub fn wanted(&self) -> bool {
+        self.clients.load(Ordering::Relaxed) > 0 || self.demand.lock_ok().is_some_and(|t| t.elapsed() < DEMAND_FOR)
+    }
+
+    /// Called when something wants the state: if the app wasn't keeping it
+    /// up (nobody was asking), wake it and wait a moment for a fresh one.
+    fn ensure_fresh(&self) {
+        let was = self.wanted();
+        *self.demand.lock_ok() = Some(Instant::now());
+        if was {
+            return;
+        }
+        let stamp = self.stamp.lock_ok();
+        let seen = stamp.0;
+        drop(stamp);
+        (self.waker)();
+        let stamp = self.stamp.lock_ok();
+        let _ = self.stamped.wait_timeout_while(stamp, Duration::from_millis(700), |s| s.0 == seen);
+    }
+
+    /// How long since the app last published (its pulse), in milliseconds.
+    fn app_age_ms(&self) -> u64 {
+        self.stamp.lock_ok().1.elapsed().as_millis() as u64
+    }
+
+    /// A command that started something held was run for page `who`: note
+    /// how to let go, or forget it when the release itself comes.
+    fn note_hold(&self, who: &str, cmd: &str) {
+        if who.is_empty() {
+            return;
+        }
+        let c = cmd.trim().to_ascii_lowercase();
+        let mut h = self.holds.lock_ok();
+        h.remove(&(who.to_string(), c.clone()));
+        if let Some(up) = let_go_of(&c) {
+            h.insert((who.to_string(), up), Instant::now());
+            self.holds_changed.notify_all();
+        }
+    }
+
+    /// Page `who` is still holding.
+    /// False when it isn't held (any more): the lease ran out.
+    fn hold_alive(&self, who: &str) -> bool {
+        let mut h = self.holds.lock_ok();
+        let mut any = false;
+        for ((w, _), t) in h.iter_mut() {
+            if w == who {
+                *t = Instant::now();
+                any = true;
+            }
+        }
+        any
+    }
+
+    /// Lets go of holds whose page has gone quiet. Runs on its own thread.
+    fn watch_holds(&self, stop: &AtomicBool) {
+        let mut h = self.holds.lock_ok();
+        while !stop.load(Ordering::Relaxed) {
+            let gone: Vec<(String, String)> = h.iter().filter(|(_, t)| t.elapsed() > HOLD_LEASE).map(|(k, _)| k.clone()).collect();
+            for k in &gone {
+                h.remove(k);
+            }
+            if !gone.is_empty() {
+                drop(h);
+                for (_, up) in gone {
+                    let _ = self.run(&up);
+                }
+                h = self.holds.lock_ok();
+                continue;
+            }
+            // Nothing held: sleep until something is; held: look again soon.
+            let wait = if h.is_empty() { Duration::from_secs(3600) } else { Duration::from_millis(500) };
+            h = self.holds_changed.wait_timeout(h, wait).unwrap_or_else(|e| e.into_inner()).0;
+        }
     }
 
     /// Wait (up to `timeout`) for the state to move past `seen`.
@@ -139,10 +281,50 @@ impl RemoteShared {
         show.0
     }
 
-    fn key_png(&self, kind: KeyKind, size: u32, label: bool) -> Option<Vec<u8>> {
+    fn key_png(&self, kind: KeyKind, size: u32, label: bool) -> Option<Arc<Vec<u8>>> {
+        self.ensure_fresh();
         let src = self.keys.lock_ok().clone();
         let state = self.snapshot().1;
-        keys::png(&keys::render(&src, &state, kind, size, label)?)
+        // What the picture is drawn from, as one number: when it hasn't
+        // moved, the picture from last time is the answer.
+        let mut h = DefaultHasher::new();
+        let (what, n) = match kind {
+            KeyKind::Scene(i) => ("scene", i),
+            KeyKind::Source(i) => ("source", i),
+        };
+        let layers: Vec<usize> = match kind {
+            KeyKind::Scene(i) => {
+                let layers = src.scenes.get(i).map(|sc| sc.layers.as_slice()).unwrap_or(&[]);
+                format!("{layers:?}").hash(&mut h);
+                let sl = state.scenes.get(i)?;
+                (sl.name.as_str(), sl.program, sl.preview).hash(&mut h);
+                layers.iter().map(|l| l.source).collect()
+            }
+            KeyKind::Source(i) => {
+                let so = state.sources.get(i)?;
+                (so.name.as_str(), so.tally.as_str(), so.offline).hash(&mut h);
+                vec![i]
+            }
+        };
+        (src.canvas, src.background).hash(&mut h);
+        for l in layers {
+            // (the frame's counter moves whenever a new picture arrives)
+            src.previews.get(l).and_then(|p| p.latest()).map(|(g, _)| g).hash(&mut h);
+        }
+        let stamp = h.finish();
+        let key = (format!("{what}{n}"), size, label);
+        if let Some((s, png)) = self.key_cache.lock_ok().get(&key) {
+            if *s == stamp {
+                return Some(png.clone());
+            }
+        }
+        let png = Arc::new(keys::png(&keys::render(&src, &state, kind, size, label)?)?);
+        let mut cache = self.key_cache.lock_ok();
+        if cache.len() > 200 {
+            cache.clear();
+        }
+        cache.insert(key, (stamp, png.clone()));
+        Some(png)
     }
 
     /// Run a command for a controller and wait for the answer.
@@ -154,55 +336,86 @@ impl RemoteShared {
         rx.recv_timeout(Duration::from_secs(5)).unwrap_or_else(|_| Err("Cutaway didn't answer".into()))
     }
 
-    fn program_jpeg(&self) -> Option<Arc<Vec<u8>>> {
+    /// The program picture as JPEG, with the frame generation it was made
+    /// from. A picture made in the last second is reused, so a few phones
+    /// cost one encode a second.
+    fn program_jpeg(&self) -> Option<(u64, Arc<Vec<u8>>)> {
         let slot = self.program.lock_ok().clone()?;
         let (generation, frame) = slot.latest()?;
-        if let Some((g, j)) = &*self.jpeg.lock_ok() {
-            if *g == generation {
-                return Some(j.clone());
+        if let Some((g, at, j)) = &*self.jpeg.lock_ok() {
+            if *g == generation || at.elapsed() < JPEG_EVERY {
+                return Some((*g, j.clone()));
             }
         }
-        let img = image::RgbaImage::from_raw(frame.width as u32, frame.height as u32, frame.rgba.clone())?;
-        let img = if img.width() > 640 {
-            let h = (640 * img.height() / img.width()).max(2);
-            image::imageops::resize(&img, 640, h, image::imageops::FilterType::Triangle)
+        // A view over the frame: no copy of the whole picture.
+        let view = image::ImageBuffer::<image::Rgba<u8>, &[u8]>::from_raw(frame.width as u32, frame.height as u32, &frame.rgba[..])?;
+        let small = if view.width() > 640 {
+            let h = (640 * view.height() / view.width()).max(2);
+            image::imageops::resize(&view, 640, h, image::imageops::FilterType::Triangle)
         } else {
-            img
+            image::RgbaImage::from_raw(view.width(), view.height(), view.as_raw().to_vec())?
         };
-        let rgb = image::DynamicImage::ImageRgba8(img).to_rgb8();
+        let rgb = image::DynamicImage::ImageRgba8(small).to_rgb8();
         let mut out = Vec::new();
         image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 70).encode_image(&rgb).ok()?;
         let j = Arc::new(out);
-        *self.jpeg.lock_ok() = Some((generation, j.clone()));
-        Some(j)
+        *self.jpeg.lock_ok() = Some((generation, Instant::now(), j.clone()));
+        Some((generation, j))
     }
+}
+
+/// Whether two states differ only in the input meters.
+fn same_but_levels(old: &ShowState, new: &ShowState) -> bool {
+    if old.inputs.len() != new.inputs.len() {
+        return false;
+    }
+    let mut t = new.clone();
+    for (a, b) in t.inputs.iter_mut().zip(&old.inputs) {
+        a.level = b.level;
+    }
+    t == *old
 }
 
 pub struct RemoteServer {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    holds: Option<JoinHandle<()>>,
+    shared: Arc<RemoteShared>,
     pub port: u16,
 }
 
 impl Drop for RemoteServer {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        self.shared.holds_changed.notify_all();
+        // The accept below waits for a connection: make one.
+        let _ = TcpStream::connect_timeout(&std::net::SocketAddr::from(([127, 0, 0, 1], self.port)), Duration::from_secs(1));
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
+        // (The holds thread isn't waited for: it may be waiting on the app,
+        // which may be waiting for this drop. It stops by itself.)
+        self.holds.take();
     }
 }
 
 impl RemoteServer {
     pub fn start(port: u16, shared: Arc<RemoteShared>) -> Result<RemoteServer> {
         let listener = TcpListener::bind(("0.0.0.0", port)).with_context(|| format!("can't use port {port} for the remote (is something else using it?)"))?;
-        listener.set_nonblocking(true)?;
         let stop = Arc::new(AtomicBool::new(false));
         let s2 = stop.clone();
+        let sh_all = shared.clone();
+        let for_holds = shared.clone();
+        let stop_holds = stop.clone();
         let thread = std::thread::Builder::new().name("remote".into()).spawn(move || {
+            // Waits in accept (no waking when nobody is there); `Drop` makes
+            // one last connection to get out.
             while !s2.load(Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((conn, _)) => {
+                        if s2.load(Ordering::Relaxed) {
+                            break;
+                        }
                         // On macOS and Windows a connection inherits the
                         // listener's non-blocking mode; the client code
                         // expects blocking reads (with timeouts).
@@ -218,7 +431,8 @@ impl RemoteServer {
                 }
             }
         })?;
-        Ok(RemoteServer { stop, thread: Some(thread), port })
+        let holds = std::thread::Builder::new().name("remote holds".into()).spawn(move || for_holds.watch_holds(&stop_holds))?;
+        Ok(RemoteServer { stop, thread: Some(thread), holds: Some(holds), shared: sh_all, port })
     }
 }
 
@@ -268,6 +482,7 @@ fn handle(mut conn: TcpStream, sh: &RemoteShared) -> std::io::Result<()> {
     let mut cookie_pin = None;
     let mut header_pin = None;
     let mut ws_key = None;
+    let mut if_none_match = None;
     let mut upgrade = false;
     for l in lines {
         let lower = l.to_lowercase();
@@ -285,6 +500,8 @@ fn handle(mut conn: TcpStream, sh: &RemoteShared) -> std::io::Result<()> {
             }
         } else if lower.starts_with("x-cutaway-pin:") {
             header_pin = Some(l[14..].trim().to_string());
+        } else if lower.starts_with("if-none-match:") {
+            if_none_match = Some(l[14..].trim().to_string());
         }
     }
     if method == "OPTIONS" {
@@ -319,7 +536,7 @@ fn handle(mut conn: TcpStream, sh: &RemoteShared) -> std::io::Result<()> {
     }
     if path == "/api/ws" {
         return match (upgrade, ws_key) {
-            (true, Some(key)) => websocket(conn, &key, sh),
+            (true, Some(key)) => websocket(conn, &key, sh, param("mode").as_deref() == Some("tally")),
             _ => respond(&mut conn, "426 Upgrade Required", "text/plain", b"WebSocket only", ""),
         };
     }
@@ -340,6 +557,7 @@ fn handle(mut conn: TcpStream, sh: &RemoteShared) -> std::io::Result<()> {
     }
     match path {
         "/api/state" => {
+            sh.ensure_fresh();
             let s = sh.state.lock_ok().clone();
             respond(&mut conn, "200 OK", "application/json", s.as_bytes(), "")
         }
@@ -348,13 +566,24 @@ fn handle(mut conn: TcpStream, sh: &RemoteShared) -> std::io::Result<()> {
             respond(&mut conn, "200 OK", "application/json", s.as_bytes(), "")
         }
         "/api/program.jpg" => match sh.program_jpeg() {
-            Some(j) => respond(&mut conn, "200 OK", "image/jpeg", &j, ""),
+            // The same picture as the caller has: nothing to send again.
+            Some((g, _)) if if_none_match.as_deref() == Some(&format!("\"{g}\"")) => respond(&mut conn, "304 Not Modified", "image/jpeg", b"", &format!("ETag: \"{g}\"\r\n")),
+            Some((g, j)) => respond(&mut conn, "200 OK", "image/jpeg", &j, &format!("ETag: \"{g}\"\r\nAccess-Control-Expose-Headers: ETag\r\n")),
             None => respond(&mut conn, "503 Service Unavailable", "text/plain", b"no picture yet", ""),
         },
         p if p.starts_with("/api/tally/") => {
             let n: usize = p[11..].parse().unwrap_or(0);
+            sh.ensure_fresh();
             let t = sh.tally.lock_ok().get(n.wrapping_sub(1)).cloned().unwrap_or_else(|| "off".into());
             respond(&mut conn, "200 OK", "text/plain", t.as_bytes(), "")
+        }
+        "/api/alive" => {
+            // 410: Cutaway has let go already (the lease ran out).
+            if sh.hold_alive(&param("who").unwrap_or_default()) {
+                respond(&mut conn, "200 OK", "text/plain", b"ok", "")
+            } else {
+                respond(&mut conn, "410 Gone", "text/plain", b"not held", "")
+            }
         }
         "/api/action" => {
             let Some(cmd) = param("do").or_else(|| param("action")) else {
@@ -363,7 +592,13 @@ fn handle(mut conn: TcpStream, sh: &RemoteShared) -> std::io::Result<()> {
             if let Err(e) = Action::parse(&cmd) {
                 return respond(&mut conn, "400 Bad Request", "text/plain", e.as_bytes(), "");
             }
-            match sh.run(&cmd) {
+            let result = sh.run(&cmd);
+            if result.is_ok() {
+                // (A page that says who it is gets its holds let go if it
+                // stops saying it's still holding.)
+                sh.note_hold(&param("who").unwrap_or_default(), &cmd);
+            }
+            match result {
                 Ok(msg) => respond(&mut conn, "200 OK", "text/plain", msg.as_bytes(), ""),
                 Err(e) => respond(&mut conn, "409 Conflict", "text/plain", e.as_bytes(), ""),
             }
@@ -372,15 +607,42 @@ fn handle(mut conn: TcpStream, sh: &RemoteShared) -> std::io::Result<()> {
     }
 }
 
-/// A WebSocket client: state pushed as it changes, commands answered.
-fn websocket(conn: TcpStream, key: &str, sh: &RemoteShared) -> std::io::Result<()> {
+/// Counts a connected controller for as long as it lives.
+struct Client<'a>(&'a AtomicUsize);
+impl<'a> Client<'a> {
+    fn new(n: &'a AtomicUsize) -> Self {
+        n.fetch_add(1, Ordering::Relaxed);
+        Client(n)
+    }
+}
+impl Drop for Client<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// What a tally-only page needs: each source's name and tally.
+fn tally_message(s: &ShowState) -> String {
+    let sources: Vec<_> = s.sources.iter().map(|x| serde_json::json!({ "name": x.name, "tally": x.tally })).collect();
+    serde_json::json!({ "type": "tally", "sources": sources }).to_string()
+}
+
+/// A WebSocket client: state pushed as it changes, commands answered. A
+/// `tally` client (a tally light page) gets only the tally, not the show.
+fn websocket(conn: TcpStream, key: &str, sh: &RemoteShared, tally_only: bool) -> std::io::Result<()> {
     let mut w = conn.try_clone()?;
     write!(w, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\n\r\n", ws::accept_key(key))?;
-    conn.set_read_timeout(None)?;
+    // The server pings every 15 s and a live client answers, so 40 s of
+    // nothing means it's gone; a write stuck for 10 s means it stopped
+    // reading. Either ends the connection (and lets go of what it held).
+    conn.set_read_timeout(Some(READ_TIMEOUT))?;
+    conn.set_write_timeout(Some(WRITE_TIMEOUT))?;
+    sh.ensure_fresh();
+    let _client = Client::new(&sh.clients);
     let writer = Arc::new(Mutex::new(w));
     let closed = Arc::new(AtomicBool::new(false));
-    let send_state = |writer: &Mutex<TcpStream>, s: &ShowState| -> std::io::Result<()> {
-        let msg = serde_json::json!({ "type": "state", "state": s }).to_string();
+    let send_json = |writer: &Mutex<TcpStream>, json: &str| -> std::io::Result<()> {
+        let msg = format!(r#"{{"type":"state","state":{json}}}"#);
         ws::write_text(&mut *writer.lock_ok(), &msg)
     };
     std::thread::scope(|scope| {
@@ -398,7 +660,7 @@ fn websocket(conn: TcpStream, key: &str, sh: &RemoteShared) -> std::io::Result<(
                         let (cmd, id) = match serde_json::from_str::<serde_json::Value>(&t) {
                             Ok(v) if v.is_object() => {
                                 if v.get("get").and_then(|g| g.as_str()) == Some("state") {
-                                    let _ = send_state(&w2, &sh.snapshot().1);
+                                    let _ = if tally_only { ws::write_text(&mut *w2.lock_ok(), &tally_message(&sh.snapshot().1)) } else { send_json(&w2, &sh.json().1) };
                                     continue;
                                 }
                                 (v.get("do").and_then(|d| d.as_str()).unwrap_or("").to_string(), v.get("id").cloned())
@@ -431,30 +693,46 @@ fn websocket(conn: TcpStream, key: &str, sh: &RemoteShared) -> std::io::Result<(
                     Ok(_) => {}
                 }
             }
+            c2.store(true, Ordering::Relaxed);
+            // Let go first: the connection may be a dead one.
             for up in held {
                 let _ = sh.run(&up);
             }
-            c2.store(true, Ordering::Relaxed);
             let _ = ws::write_frame(&mut *w2.lock_ok(), 0x8, &[]);
             let _ = w2.lock_ok().shutdown(std::net::Shutdown::Both);
         });
         // Writer: the state whenever it changes (at most 10 times a second),
         // and a small tick when nothing has gone for two seconds, so a page
-        // can tell a quiet show from a lost connection.
+        // can tell a quiet show from a lost connection. The tick says how
+        // long ago the app last published, so a page can tell a frozen app.
         let mut seen = u64::MAX;
+        let mut last_tally = String::new();
         let mut last_ping = Instant::now();
         let mut last_sent = Instant::now();
         while !closed.load(Ordering::Relaxed) {
-            let (generation, state) = sh.snapshot();
+            let generation = sh.wait_change(seen, Duration::from_millis(500));
             if generation != seen {
                 seen = generation;
-                if send_state(&writer, &state).is_err() {
+                let sent = if tally_only {
+                    // Only when a tally actually changed.
+                    let msg = tally_message(&sh.snapshot().1);
+                    if msg == last_tally {
+                        Ok(())
+                    } else {
+                        last_tally = msg;
+                        ws::write_text(&mut *writer.lock_ok(), &last_tally)
+                    }
+                } else {
+                    send_json(&writer, &sh.json().1)
+                };
+                if sent.is_err() {
                     break;
                 }
                 last_sent = Instant::now();
                 std::thread::sleep(Duration::from_millis(100));
             } else if last_sent.elapsed() >= TICK_EVERY {
-                if ws::write_text(&mut *writer.lock_ok(), r#"{"type":"tick"}"#).is_err() {
+                let tick = format!(r#"{{"type":"tick","age_ms":{}}}"#, sh.app_age_ms());
+                if ws::write_text(&mut *writer.lock_ok(), &tick).is_err() {
                     break;
                 }
                 last_sent = Instant::now();
@@ -465,7 +743,6 @@ fn websocket(conn: TcpStream, key: &str, sh: &RemoteShared) -> std::io::Result<(
                     break;
                 }
             }
-            sh.wait_change(seen, Duration::from_millis(500));
         }
         closed.store(true, Ordering::Relaxed);
         let _ = writer.lock_ok().shutdown(std::net::Shutdown::Both);
@@ -498,6 +775,98 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn meters_alone_do_not_push_the_state_more_than_twice_a_second() {
+        use super::super::state::InputState;
+        let (tx, _rx) = crossbeam_channel::unbounded::<Request>();
+        let sh = RemoteShared::new(tx, Arc::new(|| {}));
+        let mut s = ShowState { inputs: vec![InputState { name: "Mic".into(), level: -30.0, ..Default::default() }], ..Default::default() };
+        sh.publish(&s);
+        let first = sh.snapshot().0;
+        s.inputs[0].level = -20.0;
+        sh.publish(&s);
+        assert_eq!(sh.snapshot().0, first, "too soon for meters alone");
+        // Something else changing sends everything, meters included.
+        s.recording = true;
+        sh.publish(&s);
+        assert_eq!(sh.snapshot().0, first + 1);
+        assert_eq!(sh.snapshot().1.inputs[0].level, -20.0);
+        // A meter move left waiting goes out once its time comes.
+        s.inputs[0].level = -10.0;
+        sh.publish(&s);
+        assert_eq!(sh.snapshot().0, first + 1);
+        std::thread::sleep(LEVELS_EVERY + Duration::from_millis(50));
+        sh.publish(&s);
+        assert_eq!(sh.snapshot().0, first + 2);
+        assert_eq!(sh.snapshot().1.inputs[0].level, -10.0);
+    }
+
+    #[test]
+    fn a_phone_that_stops_saying_it_holds_is_let_go() {
+        let (tx, rx) = crossbeam_channel::unbounded::<Request>();
+        let sh = RemoteShared::new(tx, Arc::new(|| {}));
+        *sh.pin.lock_ok() = "1357".into();
+        let port = crate::util::free_tcp_port();
+        let server = RemoteServer::start(port, sh.clone()).unwrap();
+        let seen = Arc::new(Mutex::new(Vec::<Action>::new()));
+        let seen2 = seen.clone();
+        // The app's side: answer everything, remember what it was asked.
+        let worker = std::thread::spawn(move || {
+            while let Ok(r) = rx.recv_timeout(Duration::from_secs(8)) {
+                seen2.lock_ok().push(r.action);
+                if let Some(reply) = r.reply {
+                    let _ = reply.send(Ok("ok".into()));
+                }
+            }
+        });
+        assert!(get(port, "/api/action?do=talkback%3Aon&who=a&pin=1357").0.contains("200"));
+        // A pad held by a page that keeps saying so, and one that lets go itself.
+        assert!(get(port, "/api/action?do=talkback%3Aon&who=b&pin=1357").0.contains("200"));
+        assert!(get(port, "/api/action?do=talkback%3Aoff&who=b&pin=1357").0.contains("200"));
+        assert!(get(port, "/api/action?do=pad%3A%231%3Apress&who=c&pin=1357").0.contains("200"));
+        for _ in 0..4 {
+            std::thread::sleep(Duration::from_millis(900));
+            assert!(get(port, "/api/alive?who=c&pin=1357").0.contains("200"));
+        }
+        // "a" went quiet: after the lease Cutaway itself lets go. "b" let go
+        // itself, and its keepalives did nothing more.
+        std::thread::sleep(Duration::from_millis(900));
+        let offs = seen.lock_ok().iter().filter(|a| **a == Action::Talkback(super::super::Toggle::Off)).count();
+        assert_eq!(offs, 2, "{:?}", seen.lock_ok());
+        assert!(get(port, "/api/alive?who=a&pin=1357").0.contains("410"), "the lease ran out: not held any more");
+        assert!(get(port, "/api/alive?who=b&pin=1357").0.contains("410"), "b let go itself");
+        assert!(get(port, "/api/alive?who=c&pin=1357").0.contains("200"), "c kept saying so");
+        drop(server);
+        drop(worker);
+    }
+
+    #[test]
+    fn holds_are_still_watched_after_the_server_restarts() {
+        let (tx, rx) = crossbeam_channel::unbounded::<Request>();
+        let sh = RemoteShared::new(tx, Arc::new(|| {}));
+        *sh.pin.lock_ok() = "2222".into();
+        drop(RemoteServer::start(crate::util::free_tcp_port(), sh.clone()).unwrap());
+        let port = crate::util::free_tcp_port();
+        let server = RemoteServer::start(port, sh.clone()).unwrap();
+        let worker = std::thread::spawn(move || {
+            let mut asked = Vec::new();
+            while let Ok(r) = rx.recv_timeout(Duration::from_secs(6)) {
+                asked.push(r.action);
+                if let Some(reply) = r.reply {
+                    let _ = reply.send(Ok("ok".into()));
+                }
+                if asked.len() == 2 {
+                    break;
+                }
+            }
+            asked
+        });
+        assert!(get(port, "/api/action?do=talkback%3Aon&who=a&pin=2222").0.contains("200"));
+        let asked = worker.join().unwrap();
+        assert_eq!(asked.last(), Some(&Action::Talkback(super::super::Toggle::Off)), "{asked:?}");
+        drop(server);
+    }
 
     fn get(port: u16, path: &str) -> (String, String) {
         let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
