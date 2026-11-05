@@ -9,7 +9,7 @@ use super::{LogLevel, Status, Waker};
 use crate::config::{AutoSwitchConfig, Config};
 use crate::scene::Scene;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 /// What the UI shows about automatic switching.
@@ -26,11 +26,31 @@ pub struct AutoStatus {
 pub struct AutoShared {
     pub enabled: AtomicBool,
     last_manual: Mutex<Option<Instant>>,
+    /// Wakes the thread while auto switching is off (it's turned on, or
+    /// the engine stops).
+    woken: Mutex<bool>,
+    wake: Condvar,
 }
 
 impl AutoShared {
     pub fn new(enabled: bool) -> Arc<Self> {
-        Arc::new(AutoShared { enabled: AtomicBool::new(enabled), last_manual: Mutex::new(None) })
+        Arc::new(AutoShared { enabled: AtomicBool::new(enabled), last_manual: Mutex::new(None), woken: Mutex::new(false), wake: Condvar::new() })
+    }
+
+    /// Turned on (or stopping): the thread looks again now.
+    pub fn wake(&self) {
+        *self.woken.lock_ok() = true;
+        self.wake.notify_all();
+    }
+
+    /// While off, nothing needs watching (the "talking" chip only shows
+    /// while it's on): wait to be woken.
+    fn sleep_while_off(&self, stop: &AtomicBool) {
+        let mut w = self.woken.lock_ok();
+        while !*w && !self.enabled.load(Ordering::Relaxed) && !stop.load(Ordering::Relaxed) {
+            w = self.wake.wait_timeout(w, Duration::from_secs(1)).unwrap_or_else(|e| e.into_inner()).0;
+        }
+        *w = false;
     }
 
     /// The operator switched: hold off for a while.
@@ -184,7 +204,17 @@ impl AutoSwitcher {
         let mut director = Director::new(Instant::now());
         let mut last_status = AutoStatus::default();
         let mut warned_missing = String::new();
+        // Off, and its status says so: nothing to do until it's turned on.
+        let mut posted_off = false;
         while !self.stop.load(Ordering::Relaxed) {
+            if posted_off && !self.shared.enabled.load(Ordering::Relaxed) {
+                self.shared.sleep_while_off(&self.stop);
+                // Fresh, as if it had been listening all along with no one
+                // talking (it starts holding for the shortest shot).
+                director = Director::new(Instant::now());
+                posted_off = false;
+                continue;
+            }
             std::thread::sleep(Duration::from_millis(50));
             let now = Instant::now();
             // Only its own settings (this runs twenty times a second).
@@ -219,6 +249,7 @@ impl AutoSwitcher {
                 }
                 last_status = st;
             }
+            posted_off = !enabled;
         }
     }
 }

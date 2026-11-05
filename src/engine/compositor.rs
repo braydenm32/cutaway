@@ -17,7 +17,7 @@ use crate::media::{Ns, Pixels, VideoFrame};
 use crate::scene::PadState;
 use anyhow::{anyhow, bail, Context, Result};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use wgpu::util::DeviceExt;
 
 /// Uniforms for one draw (see `U` in compositor.wgsl).
@@ -225,6 +225,8 @@ struct SourceGpu {
     slots: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
     thumb: Option<(Target, wgpu::Buffer, wgpu::BindGroup)>,
     serial: Option<u64>,
+    /// The picture its thumbnail was last made from.
+    thumb_serial: Option<u64>,
     /// Person mask (background removal): texture and size, and the
     /// capture time of the mask in it.
     mask: Option<(wgpu::Texture, (u32, u32))>,
@@ -275,6 +277,8 @@ pub struct Rendered {
     /// The preview bus (next scene), RGBA.
     pub preview_bus: Option<(u32, u32, Vec<u8>)>,
     pub thumbs: Vec<(usize, u32, u32, Vec<u8>)>,
+    /// Thumbnails asked for whose picture hasn't changed since the last.
+    pub thumbs_same: Vec<usize>,
     /// The vertical version, and its monitor picture (RGBA).
     pub tall: Option<VideoFrame>,
     pub tall_preview: Option<(u32, u32, Vec<u8>)>,
@@ -363,15 +367,56 @@ pub(crate) fn test_gpu_turn() -> std::sync::MutexGuard<'static, ()> {
     TURN.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// The GPU interfaces to start: just the system's own (Metal on macOS,
+/// DirectX 12 on Windows) when it has a real GPU there, otherwise all of
+/// them, so an unusual Windows PC still starts. (Starting every interface
+/// loads and probes Vulkan and OpenGL too.) `WGPU_BACKEND` still decides
+/// when it's set.
+pub fn gpu_backends() -> wgpu::Backends {
+    static CHOSEN: OnceLock<wgpu::Backends> = OnceLock::new();
+    *CHOSEN.get_or_init(|| {
+        if let Some(b) = wgpu::Backends::from_env() {
+            return b;
+        }
+        let native = if cfg!(target_os = "macos") {
+            wgpu::Backends::METAL
+        } else if cfg!(windows) {
+            wgpu::Backends::DX12
+        } else {
+            return wgpu::Backends::all();
+        };
+        let mut d = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+        d.backends = native;
+        let instance = wgpu::Instance::new(d);
+        let adapters = pollster::block_on(instance.enumerate_adapters(native));
+        if adapters.iter().any(|a| a.get_info().device_type != wgpu::DeviceType::Cpu) {
+            native
+        } else {
+            wgpu::Backends::all()
+        }
+    })
+}
+
 /// Create a GPU device for compositing.
 pub fn create_device() -> Result<(wgpu::Device, wgpu::Queue, String)> {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        force_fallback_adapter: false,
-        compatible_surface: None,
-        ..Default::default()
-    }))
+    let request = |backends: wgpu::Backends| {
+        let mut d = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+        d.backends = backends;
+        let instance = wgpu::Instance::new(d);
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+            ..Default::default()
+        }))
+    };
+    let backends = gpu_backends();
+    let adapter = match request(backends) {
+        Ok(a) => Ok(a),
+        // (Anything else there is, rather than not starting.)
+        Err(_) if backends != wgpu::Backends::all() && wgpu::Backends::from_env().is_none() => request(wgpu::Backends::all()),
+        Err(e) => Err(e),
+    }
     .map_err(|e| anyhow!("no usable GPU: {e}"))?;
     let info = adapter.get_info();
     let name = format!("{} ({:?})", info.name, info.backend);
@@ -885,7 +930,7 @@ impl Compositor {
         let th = ((tw as u64 * height as u64 / width as u64) as u32).max(2) & !1;
         let thumb = Target::new(&self.device, "thumb", tw, th, wgpu::TextureFormat::Rgba8Unorm, 4);
         let (tbuf, tbind) = self.bind(Quad::full(1.0, 1.0, [0.0, 0.0]), &yv, &uvv);
-        SourceGpu { width, height, y, uv, slots, thumb: Some((thumb, tbuf, tbind)), serial: None, mask: None, mask_pts: None, lut, bg }
+        SourceGpu { width, height, y, uv, slots, thumb: Some((thumb, tbuf, tbind)), serial: None, thumb_serial: None, mask: None, mask_pts: None, lut, bg }
     }
 
     /// A person mask for source `index` (from a picture captured at `pts`):
@@ -1220,6 +1265,13 @@ impl Compositor {
         self.graphics.retain(|_, g| g.used);
     }
 
+    /// Make every thumbnail again next time, changed or not.
+    pub fn forget_thumbs(&mut self) {
+        for s in &mut self.sources {
+            s.thumb_serial = None;
+        }
+    }
+
     /// Upload a source's newest frame (skipped if it's already there).
     pub fn upload(&mut self, index: usize, frame: &VideoFrame) {
         let Some(s) = self.sources.get(index) else { return };
@@ -1382,6 +1434,7 @@ impl Compositor {
 
     /// Draw the program (and the preview bus) and produce what's wanted.
     pub fn render(&mut self, layout: &Layout, preview_bus: Option<&[PadState]>, graphics: &[GraphicLayer], pts: Ns, serial: u64, wants: &Wants) -> Result<Rendered> {
+        crate::media::trim_readback_buffers();
         let canvas = (self.canvas.width, self.canvas.height);
         if let Some((w, h)) = wants.stream {
             let fits = self.stream_out.as_ref().is_some_and(|o| o.y.width == w && o.y.height == h);
@@ -1808,9 +1861,14 @@ impl Compositor {
             }
         }
         let mut thumb_ids = Vec::new();
+        let mut thumbs_same = Vec::new();
         for &i in &wants.thumbs {
             if let Some(s) = self.sources.get(i) {
-                if let (Some((t, _, bind)), Some(_)) = (&s.thumb, s.serial) {
+                if let (Some((t, _, bind)), Some(serial)) = (&s.thumb, s.serial) {
+                    if s.thumb_serial == Some(serial) {
+                        thumbs_same.push(i);
+                        continue;
+                    }
                     pass(&mut enc, t, &self.yuv_pipe, bind);
                     t.copy(&mut enc);
                     reads.push(t);
@@ -1841,14 +1899,20 @@ impl Compositor {
             }
             out
         };
+        // Frame buffers come from (and go back to) the readback pool.
+        let read_pooled = |t: &Target| -> Vec<u8> {
+            let data = t.buf.slice(..).get_mapped_range().map(|v| crate::media::readback_buffer(&v)).unwrap_or_default();
+            t.buf.unmap();
+            data
+        };
         let nv12 = |o: &NvOut| -> VideoFrame {
-            let y = read(&o.y);
-            let uv = read(&o.uv);
+            let y = read_pooled(&o.y);
+            let uv = read_pooled(&o.uv);
             VideoFrame {
                 width: o.y.width,
                 height: o.y.height,
                 pts,
-                pixels: Arc::new(Pixels::Nv12 { y, y_stride: o.y.stride as usize, uv, uv_stride: o.uv.stride as usize }),
+                pixels: Arc::new(Pixels::Nv12 { y, y_stride: o.y.stride as usize, uv, uv_stride: o.uv.stride as usize, recycle: true }),
                 serial,
             }
         };
@@ -1875,10 +1939,15 @@ impl Compositor {
             out.preview = Some((t.width, t.height, tight(t, data)));
         }
         for i in thumb_ids {
-            let t = &self.sources[i].thumb.as_ref().unwrap().0;
+            let s = &self.sources[i];
+            let t = &s.thumb.as_ref().unwrap().0;
             let data = read(t);
             out.thumbs.push((i, t.width, t.height, tight(t, data)));
         }
+        for &(i, ..) in &out.thumbs {
+            self.sources[i].thumb_serial = self.sources[i].serial;
+        }
+        out.thumbs_same = thumbs_same;
         if tall_now {
             let t = self.tall.as_ref().unwrap();
             if wants.tall {
@@ -1959,6 +2028,20 @@ mod tests {
         assert!(prev[0] > 240 && prev[1] < 15, "preview top-left should be red");
         assert_eq!(r.thumbs.len(), 1);
         assert!(r.thumbs[0].3[0] > 240);
+        // The same picture again: no new thumbnail, just "still the same".
+        let thumbs = || Wants { thumbs: vec![0], ..Default::default() };
+        c.upload(a, &solid(64, 36, (1.0, 0.0, 0.0), 1));
+        let r = c.render(&Layout::One(states.to_vec()), None, &[], 0, 1, &thumbs()).unwrap();
+        assert!(r.thumbs.is_empty());
+        assert_eq!(r.thumbs_same, vec![0]);
+        // A new picture, or new tiles: made again.
+        c.upload(a, &solid(64, 36, (0.0, 1.0, 0.0), 2));
+        let r = c.render(&Layout::One(states.to_vec()), None, &[], 0, 2, &thumbs()).unwrap();
+        assert_eq!(r.thumbs.len(), 1);
+        assert!(r.thumbs[0].3[1] > 240, "green now");
+        c.forget_thumbs();
+        let r = c.render(&Layout::One(states.to_vec()), None, &[], 0, 3, &thumbs()).unwrap();
+        assert_eq!((r.thumbs.len(), r.thumbs_same.len()), (1, 0));
     }
 
     /// Sources moved, removed and added while it runs keep their pictures.

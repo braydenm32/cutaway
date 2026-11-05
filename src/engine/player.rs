@@ -126,6 +126,8 @@ struct Player {
     stop: Arc<AtomicBool>,
     playing: bool,
     last: Option<VideoFrame>,
+    /// `last` is what the source showed last (holding it is a repeat).
+    held: bool,
 }
 
 impl Player {
@@ -142,7 +144,11 @@ impl Player {
         let mut f = f.detached();
         f.pts = clock::now();
         self.last = Some(f.clone());
-        self.slot.push(f);
+        if std::mem::replace(&mut self.held, true) {
+            self.slot.push_repeat(f);
+        } else {
+            self.slot.push(f);
+        }
     }
 
     /// Wait up to `d` for a command; handles play/pause itself.
@@ -268,6 +274,7 @@ impl Player {
     fn play_image(&mut self, path: &Path) -> Result<Outcome> {
         let img = image::open(path).with_context(|| format!("{}", path.display()))?.to_rgba8();
         self.last = Some(image_frame(&img, self.size, clock::now()));
+        self.held = false;
         let len = (self.cfg.image_seconds.max(0.5) * 1e9) as Ns;
         // A single image with nothing else to show stays up.
         let forever = self.cfg.files.len() == 1;
@@ -446,6 +453,7 @@ impl Player {
                     }
                     self.set_state(|s| s.position = media_t);
                     self.last = Some(f.clone());
+                    self.held = true;
                     self.slot.push(f);
                 }
             } else {
@@ -471,7 +479,7 @@ pub fn start(name: &str, cfg: &MediaConfig, size: (u32, u32), slot: Arc<SourceSl
     let (tx, rx) = unbounded();
     let control = Arc::new(PlayerControl { tx, state: Mutex::new(PlayerState::default()) });
     let stop = Arc::new(AtomicBool::new(false));
-    let p = Player { name: name.to_string(), slot, hub, size, cfg: cfg.clone(), rx, control: control.clone(), stop: stop.clone(), playing: cfg.autoplay, last: None };
+    let p = Player { name: name.to_string(), slot, hub, size, cfg: cfg.clone(), rx, control: control.clone(), stop: stop.clone(), playing: cfg.autoplay, last: None, held: false };
     let thread = std::thread::Builder::new().name(format!("player {name}")).spawn(move || p.run())?;
     let n = cfg.files.len();
     Ok((Box::new(PlayerRunning { stop, thread: Some(thread) }), control, format!("media player ({n} item{})", if n == 1 { "" } else { "s" })))

@@ -303,6 +303,7 @@ pub fn open_screen(target: &ScreenTarget, w: u32, h: u32, fps: u32, sink: FrameS
                     let last = shared.last.lock_ok().clone();
                     if let Some(mut f) = last {
                         f.pts = now;
+                        f.serial = VideoFrame::REPEAT;
                         shared.last_at.store(now, Ordering::Relaxed);
                         (shared.sink)(f);
                     }
