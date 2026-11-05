@@ -297,6 +297,11 @@ fn mend(path: &std::path::Path) -> bool {
 /// The longest an encoder or WAV writer sleeps with nothing due.
 const IDLE_WAKE: Ns = 250_000_000;
 
+/// How far behind real time a quiet source's file is kept filled (more
+/// than any source's own lag, so its next frame never lands in a slot
+/// already filled).
+const GAP_MARGIN: Ns = NS_PER_SEC;
+
 /// Puts a source's frames onto a constant frame rate starting at T0:
 /// repeats a frame when the source skips, drops extras when it's fast.
 pub struct Retimer {
@@ -351,6 +356,18 @@ impl Retimer {
     /// Where the frames so far end (relative to T0).
     pub fn end(&self) -> Ns {
         self.slot_time(self.next)
+    }
+
+    /// The source has sent nothing for a while: repeat the last picture up
+    /// to a second behind `now` (relative to T0), counted as repeated.
+    pub fn fill_gap(&mut self, now: Ns) -> Vec<(Ns, VideoFrame)> {
+        let to = now + self.delay - GAP_MARGIN;
+        if self.last.is_none() || to <= self.end() {
+            return Vec::new();
+        }
+        let out = self.finish(to);
+        self.repeated += out.len() as u64;
+        out
     }
 
     /// Repeat the last frame up to `end` (relative to T0).
@@ -477,6 +494,12 @@ pub fn spawn_video(
                     Err(RecvTimeoutError::Disconnected) => open = false,
                 }
                 let now = crate::media::clock::now();
+                // A source that went quiet (unplugged, no signal): its file
+                // repeats the last picture as the time passes, not all at
+                // once when it comes back.
+                if let (true, Some(r)) = (open, retimer.as_mut()) {
+                    held.extend(r.fill_gap(now - t0));
+                }
                 let end = t1.load(Ordering::Relaxed);
                 while let Some((pts, _)) = held.front() {
                     if open && t0 + pts > now {
@@ -997,6 +1020,41 @@ mod tests {
         // Finish up to 200 ms: slots 4, 5 repeat (133, 166 ms).
         let out = r.finish(200_000_000);
         assert_eq!(out.iter().map(|o| o.0).collect::<Vec<_>>(), vec![133_333_333, 166_666_666]);
+    }
+
+    #[test]
+    fn retimer_fills_a_long_gap_as_it_happens() {
+        let t0 = 1_000_000_000;
+        for delay in [0, 400_000_000] {
+            let mut r = Retimer::new(t0, 30, delay);
+            let slot = |pts: Ns| ((pts + delay - t0) as i128 * 30 / NS_PER_SEC as i128) as Ns * NS_PER_SEC / 30;
+            assert!(r.fill_gap(5 * NS_PER_SEC).is_empty(), "no picture yet: nothing to repeat");
+            assert_eq!(r.push(frame(t0 + 10_000_000)).len(), 1 + (delay * 30 / NS_PER_SEC) as usize);
+            // Running normally: nothing is filled.
+            assert!(r.fill_gap(30_000_000).is_empty());
+            // The camera goes quiet for five minutes: checked every 250 ms,
+            // each check fills only the time that passed.
+            let mut filled = 0;
+            let mut most = 0;
+            let mut now = 250_000_000;
+            while now < 300 * NS_PER_SEC {
+                let out = r.fill_gap(now);
+                most = most.max(out.len());
+                filled += out.len();
+                assert!(out.iter().all(|o| o.0 < now + delay), "nothing filled ahead of its time");
+                now += 250_000_000;
+            }
+            assert!(most <= 9, "at the pace of the clock: {most} at once");
+            assert!(filled > 298 * 30 - 15, "{filled}");
+            assert_eq!(r.repeated as usize, filled + (delay * 30 / NS_PER_SEC) as usize);
+            // It comes back: about a second of repeats, not five minutes',
+            // and the frame lands in its own slot (in step with the others).
+            let back = t0 + 300 * NS_PER_SEC + 5_000_000;
+            let out = r.push(frame(back));
+            assert!(out.len() <= 40, "{}", out.len());
+            assert_eq!(out.last().map(|o| (o.0, o.1.pts)), Some((slot(back), back)));
+            assert_eq!(r.dropped, 0);
+        }
     }
 
     #[test]
