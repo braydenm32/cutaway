@@ -89,7 +89,9 @@ Everything Cutaway can do, area by area. For the steps of a first show, see [Get
   it, or **Split…** under the list in Sources › Cameras do the same.) Each
   person gets a virtual PTZ camera of their own ("Cam 1 left", "Cam 1
   right"…), with a box on the wide picture to drag onto them and a name
-  title to fill in. Each records to its own file, ready for the edit. Each
+  title to fill in. Each records to its own file, ready for the edit, or,
+  lighter, as a crop of the wide camera's file in the editor timelines
+  (its **Record** row: as a crop of Cam 1), to reframe there. Each
   close-up is sized to the part of the picture it shows (half a 4K camera
   is 1080p), so it stays sharp and is cheap to cut out. Applying also adds
   a scene "Cam 1: both" (or "all three") with the close-ups side by side,

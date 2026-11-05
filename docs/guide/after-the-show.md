@@ -79,6 +79,13 @@ Cutaway only sees the Drive files it made.
   edit is on V1, with every angle on its own track above, ready to swap in.
 - **Composite scenes** (side by side, picture-in-picture) cut to the
   `Program` file; single-camera scenes cut to that camera's file.
+- **Close-ups saved as a crop** (their **Record** row in Sources › Cameras:
+  **as a crop of Cam 1**) have no file of their own: their angle and shots are the wide
+  camera's file, zoomed and moved to the same shot (Final Cut: Transform,
+  and Trim when the close-up isn't the timeline's shape; Resolve: the
+  Inspector's Zoom, Position and Cropping; Premiere: Motion and Crop). Reframe
+  them there. Final Cut gets their moves as keyframes; Resolve and Premiere
+  get one framing per stretch, a move cutting to where it ended.
 - **Proxies:** the `Proxies` folder has matching small files with the same
   names, timecode and length, for Final Cut's, Resolve's and Premiere's proxy
   workflows.

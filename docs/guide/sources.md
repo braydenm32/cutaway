@@ -54,6 +54,22 @@ another source: it pans, tilts and zooms around that picture (best from a 4K
 camera), with presets it glides to in the time you set. It records like any
 source, and starts on its first preset.
 
+Its **Record** row says how it's saved:
+
+- **as its own video file** (the usual): a file of what it showed, like any
+  camera's.
+- **as a crop of Cam 1** (the camera it's cut from): no file of its own, so
+  one encoder fewer and less disk. One 4K camera split in two is then
+  recorded once, not three times. The editor timelines use Cam 1's file for
+  its angle, zoomed in and moved to the same shot, so you can still reframe
+  it there. If it moved during the recording, Final Cut gets the moves as
+  keyframes; in DaVinci Resolve and Premiere a move cuts to where it ended
+  (add keyframes there for a glide). Instant replays from it still show its
+  shot, cut from Cam 1's recording, framed as it is when you press Replay.
+  This needs Cam 1 itself recorded (otherwise it gets its own file), and
+  takes effect from the next recording. Close-ups that follow people always
+  get their own file: their shot never stops moving.
+
 Its presets are framed in **Sources › Close-ups & PTZ**: the wide camera's
 picture shows each preset as a numbered box, the shot it's on now in red.
 Drag a box to move that preset and scroll over the picture to zoom it; the
