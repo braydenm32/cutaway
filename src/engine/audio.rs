@@ -775,6 +775,7 @@ pub fn run_mixer(mut inputs: Vec<MixInput>, mut names: Vec<String>, taps: MixTap
     let mut strips: Vec<Strip> = inputs.iter().map(|inp| Strip::new(&inp.shared)).collect();
     let mut rec = Master::new();
     let mut stream = Master::new();
+    let mut stream_was_used = true;
     let mut leveller = Leveller::default();
     let mut feed_limiters: std::collections::HashMap<(bool, u64), Limiter> = std::collections::HashMap::new();
     let mut duck_until: Ns = 0;
@@ -1015,15 +1016,21 @@ pub fn run_mixer(mut inputs: Vec<MixInput>, mut names: Vec<String>, taps: MixTap
         }
         rec.finish(&mut rec_mix, &master);
         let levelling = master.levelling.load(Ordering::Relaxed);
-        // The stream's limiter, loudness meter and leveller, while anyone
-        // could hear or see them.
+        // (The leveller always runs, so a new stream starts at a settled
+        // level.)
+        if levelling {
+            leveller.process(&mut stream_mix, f32::from_bits(master.target_lufs.load(Ordering::Relaxed)) as f64);
+        }
+        // The stream's limiter and loudness meter, while anyone could hear
+        // or see them; fresh when they come back into use.
         let stream_used = master.stream_shown.load(Ordering::Relaxed) || taps.lock_ok().iter().any(|(_, k, _)| matches!(k, MixKind::Stream | MixKind::Feed { stream: true, .. }));
         if stream_used {
-            if levelling {
-                leveller.process(&mut stream_mix, f32::from_bits(master.target_lufs.load(Ordering::Relaxed)) as f64);
+            if !stream_was_used {
+                stream = Master::new();
             }
             stream.finish(&mut stream_mix, &master);
         }
+        stream_was_used = stream_used;
         let dim = 10f32.powf(f32::from_bits(master.talkback_dim_db.load(Ordering::Relaxed)) / 20.0);
         let rec_block = AudioBlock { pts: t, rate: MIX_RATE, channels: 2, samples: rec_mix };
         let stream_block = AudioBlock { pts: t, rate: MIX_RATE, channels: 2, samples: stream_mix };

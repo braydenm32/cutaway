@@ -1974,6 +1974,8 @@ impl Engine {
         for t in self.threads.drain(..) {
             let _ = t.join();
         }
+        // The compositor's spare frame buffers (up to ~150 MB at 4K).
+        crate::media::free_readback_buffers();
         for s in &self.sources {
             s.input.close();
         }

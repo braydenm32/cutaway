@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 /// Pictures smaller than this (output pixels) are done on the caller's
 /// thread: splitting them costs more than it saves.
-pub const SPLIT_ABOVE: usize = 1_000_000;
+pub const SPLIT_ABOVE: usize = 640 * 360;
 
 struct Job {
     /// Borrowed from the caller of `run`, which waits until every part has
@@ -38,7 +38,7 @@ impl Done {
 fn workers() -> Option<&'static Sender<Job>> {
     static POOL: OnceLock<Option<Sender<Job>>> = OnceLock::new();
     POOL.get_or_init(|| {
-        let n = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).saturating_sub(1).min(3);
+        let n = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).saturating_sub(1).clamp(1, 7);
         if n == 0 {
             return None;
         }
@@ -156,6 +156,11 @@ pub fn trim() {
     drop(spare());
 }
 
+/// Free every spare (the engine stopped).
+pub fn free_spares() {
+    spare().clear();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,7 +175,7 @@ mod tests {
             });
             assert!(hits.iter().all(|h| h.load(Ordering::Relaxed) == 1));
         }
-        assert_eq!(parts_for(640 * 360), 1);
+        assert_eq!(parts_for(320 * 180), 1);
     }
 
     #[test]

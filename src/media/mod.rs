@@ -162,6 +162,11 @@ pub fn trim_readback_buffers() {
     pool::trim();
 }
 
+/// Free all spare readback buffers (nothing is rendering any more).
+pub fn free_readback_buffers() {
+    pool::free_spares();
+}
+
 impl Pixels {
     /// Run `f` with access to the planes (locks/unlocks platform buffers).
     pub fn with_planes<R>(&self, f: impl FnOnce(Planes<'_>) -> R) -> R {
