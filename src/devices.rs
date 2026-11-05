@@ -76,6 +76,9 @@ struct CatalogState {
     loaded: bool,
     running: bool,
     again: bool,
+    /// The engine has finished opening its sources: only then may a look
+    /// at the devices begin (it opens cameras, which must not overlap).
+    released: bool,
     last: Option<std::time::Instant>,
 }
 
@@ -84,7 +87,7 @@ const CATALOG_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(30);
 
 fn catalog_state() -> &'static std::sync::Mutex<CatalogState> {
     static S: std::sync::OnceLock<std::sync::Mutex<CatalogState>> = std::sync::OnceLock::new();
-    S.get_or_init(|| std::sync::Mutex::new(CatalogState { current: Default::default(), loaded: false, running: false, again: false, last: None }))
+    S.get_or_init(|| std::sync::Mutex::new(CatalogState { current: Default::default(), loaded: false, running: false, again: false, released: false, last: None }))
 }
 
 fn build_catalog(generation: u64) -> Catalog {
@@ -106,7 +109,8 @@ fn build_catalog(generation: u64) -> Catalog {
 /// makes it go round once more, so a camera plugged in meanwhile shows up.
 pub fn refresh_catalog() {
     let Ok(mut s) = catalog_state().lock() else { return };
-    if s.running {
+    if s.running || !s.released {
+        // (Not yet released: it goes ahead when the engine is up.)
         s.again = true;
         return;
     }
@@ -130,6 +134,23 @@ pub fn refresh_catalog() {
         if let Ok(mut s) = catalog_state().lock() {
             s.running = false;
         }
+    }
+}
+
+/// The engine is up (or could not start): looking at the devices may begin,
+/// and does so now if it was asked for or has never run.
+pub fn release_catalog() {
+    let go = match catalog_state().lock() {
+        Ok(mut s) if !s.released => {
+            s.released = true;
+            let go = s.again || !s.loaded;
+            s.again = false;
+            go
+        }
+        _ => false,
+    };
+    if go {
+        refresh_catalog();
     }
 }
 

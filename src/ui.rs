@@ -6336,6 +6336,10 @@ impl eframe::App for App {
             self.toast(format!("Cutaway couldn't use the {place}, so your stream keys and passwords are saved in the settings file on this computer. Allow Cutaway to use the {place} to keep them there instead."), true);
         }
         self.tick_starting(&ctx);
+        if !self.is_starting() {
+            // (The first look at the devices waits for the engine to finish opening its cameras.)
+            crate::devices::release_catalog();
+        }
         self.autosave();
         if let Some(w) = self.fat_warning.as_ref().and_then(|rx| rx.try_recv().ok()) {
             self.fat_warning = None;
