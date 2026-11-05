@@ -2,19 +2,22 @@
 //! (without the yellow capture border on Windows 11), and the list of them,
 //! with pictures, for Settings.
 //!
-//! The capture comes as BGRA textures; each is copied to the CPU and
-//! converted to NV12 at the source's size, its shape kept (black around a
-//! window that's another shape). Windows only sends a new picture when the
-//! screen changes, so the last one is repeated in between (a still screen
-//! is still a live source). When a captured window closes, the source goes
+//! The capture comes as BGRA textures; the graphics card's video processor
+//! scales each to the source's size and converts it to NV12, its shape kept
+//! (black around a window that's another shape), and only that comes back to
+//! the CPU. If the card can't (or CUTAWAY_CPU_SCREEN_CONVERT=1), the BGRA
+//! picture is copied back and converted on the CPU instead, the same way.
+//! Windows only sends a new picture when the screen changes, so the last
+//! one is repeated in between (a still screen is still a live source). When a captured window closes, the source goes
 //! without a picture and is opened again, finding the window if it's back.
 
 use super::com;
 use crate::engine::sources::Running;
-use crate::media::{bgra_to_nv12, clock, VideoFrame, NS_PER_SEC};
+use crate::media::{bgra_to_nv12, clock, readback_nv12, Ns, VideoFrame, NS_PER_SEC};
 use crate::platform::FrameSink;
 use anyhow::{anyhow, Context, Result};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::mem::ManuallyDrop;
 use std::sync::{mpsc, Arc};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -32,6 +35,7 @@ use windows::Win32::System::Threading::{GetCurrentProcessId, OpenProcess, QueryF
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::*;
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709, DXGI_FORMAT, DXGI_FORMAT_NV12, DXGI_RATIONAL, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::Win32::System::WinRT::Direct3D11::{CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess};
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
@@ -55,6 +59,149 @@ struct Staging {
     tex: ID3D11Texture2D,
     size: (u32, u32),
 }
+
+/// The graphics card's video processor, scaling a BGRA capture and
+/// converting it to NV12 (BT.709, video range, like `bgra_to_nv12`) at the
+/// output size. Made for one input texture size and format.
+struct Gpu {
+    key: ((u32, u32), DXGI_FORMAT),
+    vctx: ID3D11VideoContext,
+    vp: ID3D11VideoProcessor,
+    /// Our copy of the capture (the pool's textures come and go).
+    input: ID3D11Texture2D,
+    input_view: ID3D11VideoProcessorInputView,
+    output: ID3D11Texture2D,
+    output_view: ID3D11VideoProcessorOutputView,
+    /// CPU-readable copy of `output`: 1.5 bytes a pixel.
+    readback: ID3D11Texture2D,
+}
+
+/// A plain 2D texture description.
+fn tex_desc(size: (u32, u32), format: DXGI_FORMAT, usage: D3D11_USAGE, bind: D3D11_BIND_FLAG, cpu: u32) -> D3D11_TEXTURE2D_DESC {
+    D3D11_TEXTURE2D_DESC {
+        Width: size.0,
+        Height: size.1,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: format,
+        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        Usage: usage,
+        BindFlags: bind.0 as u32,
+        CPUAccessFlags: cpu,
+        MiscFlags: 0,
+    }
+}
+
+fn texture(device: &ID3D11Device, d: &D3D11_TEXTURE2D_DESC) -> Result<ID3D11Texture2D> {
+    let mut t = None;
+    // SAFETY: plain call with a valid description.
+    unsafe { device.CreateTexture2D(d, None, Some(&mut t))? };
+    t.ok_or_else(|| anyhow!("no texture"))
+}
+
+impl Gpu {
+    /// A processor for `in_size` textures of `format`, to `frame` NV12.
+    fn new(device: &ID3D11Device, context: &ID3D11DeviceContext, in_size: (u32, u32), format: DXGI_FORMAT, frame: (u32, u32), fps: u32) -> Result<Gpu> {
+        // SAFETY: Direct3D calls on valid objects with valid descriptions.
+        unsafe {
+            let vdev: ID3D11VideoDevice = device.cast().context("no video device")?;
+            let vctx: ID3D11VideoContext = context.cast().context("no video context")?;
+            let rate = DXGI_RATIONAL { Numerator: fps.max(1), Denominator: 1 };
+            let content = D3D11_VIDEO_PROCESSOR_CONTENT_DESC {
+                InputFrameFormat: D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
+                InputFrameRate: rate,
+                InputWidth: in_size.0,
+                InputHeight: in_size.1,
+                OutputFrameRate: rate,
+                OutputWidth: frame.0,
+                OutputHeight: frame.1,
+                Usage: D3D11_VIDEO_USAGE_PLAYBACK_NORMAL,
+            };
+            let en = vdev.CreateVideoProcessorEnumerator(&content).context("video processor")?;
+            let can = |f: DXGI_FORMAT, what: D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT| en.CheckVideoProcessorFormat(f).is_ok_and(|s| s & what.0 as u32 != 0);
+            if !can(format, D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_INPUT) || !can(DXGI_FORMAT_NV12, D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_OUTPUT) {
+                return Err(anyhow!("the video processor can't convert this format to NV12"));
+            }
+            let vp = vdev.CreateVideoProcessor(&en, 0).context("video processor")?;
+            let input = texture(device, &tex_desc(in_size, format, D3D11_USAGE_DEFAULT, D3D11_BIND_FLAG(D3D11_BIND_SHADER_RESOURCE.0 | D3D11_BIND_RENDER_TARGET.0), 0))?;
+            let output = texture(device, &tex_desc(frame, DXGI_FORMAT_NV12, D3D11_USAGE_DEFAULT, D3D11_BIND_RENDER_TARGET, 0))?;
+            let readback = texture(device, &tex_desc(frame, DXGI_FORMAT_NV12, D3D11_USAGE_STAGING, D3D11_BIND_FLAG(0), D3D11_CPU_ACCESS_READ.0 as u32))?;
+            let ivd = D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC {
+                FourCC: 0,
+                ViewDimension: D3D11_VPIV_DIMENSION_TEXTURE2D,
+                Anonymous: D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0 { Texture2D: D3D11_TEX2D_VPIV { MipSlice: 0, ArraySlice: 0 } },
+            };
+            let mut input_view = None;
+            vdev.CreateVideoProcessorInputView(&input, &en, &ivd, Some(&mut input_view)).context("video processor input")?;
+            let ovd = D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC {
+                ViewDimension: D3D11_VPOV_DIMENSION_TEXTURE2D,
+                Anonymous: D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0 { Texture2D: D3D11_TEX2D_VPOV { MipSlice: 0 } },
+            };
+            let mut output_view = None;
+            vdev.CreateVideoProcessorOutputView(&output, &en, &ovd, Some(&mut output_view)).context("video processor output")?;
+            // Colours as bgra_to_nv12: full-range RGB in, BT.709 video range out.
+            if let Ok(vctx1) = vctx.cast::<ID3D11VideoContext1>() {
+                vctx1.VideoProcessorSetStreamColorSpace1(&vp, 0, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+                vctx1.VideoProcessorSetOutputColorSpace1(&vp, DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709);
+            } else {
+                let cs = D3D11_VIDEO_PROCESSOR_COLOR_SPACE { _bitfield: capture::VP_COLOR_SPACE_709_VIDEO };
+                vctx.VideoProcessorSetStreamColorSpace(&vp, 0, &cs);
+                vctx.VideoProcessorSetOutputColorSpace(&vp, &cs);
+            }
+            vctx.VideoProcessorSetStreamFrameFormat(&vp, 0, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE);
+            // No driver "enhancements": the picture as it is.
+            vctx.VideoProcessorSetStreamAutoProcessingMode(&vp, 0, false);
+            // Black around a picture of another shape (converted to 16/128/128).
+            let black = D3D11_VIDEO_COLOR { Anonymous: D3D11_VIDEO_COLOR_0 { RGBA: D3D11_VIDEO_COLOR_RGBA { R: 0.0, G: 0.0, B: 0.0, A: 1.0 } } };
+            vctx.VideoProcessorSetOutputBackgroundColor(&vp, false, &black);
+            let full = RECT { left: 0, top: 0, right: frame.0 as i32, bottom: frame.1 as i32 };
+            vctx.VideoProcessorSetOutputTargetRect(&vp, true, Some(&full));
+            Ok(Gpu {
+                key: (in_size, format),
+                vctx,
+                vp,
+                input,
+                input_view: input_view.ok_or_else(|| anyhow!("no video processor input"))?,
+                output,
+                output_view: output_view.ok_or_else(|| anyhow!("no video processor output"))?,
+                readback,
+            })
+        }
+    }
+
+    /// `tex` (the capture) scaled and converted into an NV12 frame, placed
+    /// as `layout` says.
+    fn convert(&self, context: &ID3D11DeviceContext, tex: &ID3D11Texture2D, layout: &capture::ScreenLayout, pts: Ns) -> Result<VideoFrame> {
+        let (sw, sh) = layout.src;
+        let (x, y, pw, ph) = layout.place;
+        let (fw, fh) = layout.frame;
+        // SAFETY: Direct3D calls on valid objects; the stream's view is a
+        // counted reference released after the call; the readback copy is
+        // mapped only while read.
+        unsafe {
+            context.CopyResource(&self.input, tex);
+            let src = RECT { left: 0, top: 0, right: sw as i32, bottom: sh as i32 };
+            let dst = RECT { left: x as i32, top: y as i32, right: (x + pw) as i32, bottom: (y + ph) as i32 };
+            self.vctx.VideoProcessorSetStreamSourceRect(&self.vp, 0, true, Some(&src));
+            self.vctx.VideoProcessorSetStreamDestRect(&self.vp, 0, true, Some(&dst));
+            let mut stream = D3D11_VIDEO_PROCESSOR_STREAM { Enable: true.into(), pInputSurface: ManuallyDrop::new(Some(self.input_view.clone())), ..Default::default() };
+            let blt = self.vctx.VideoProcessorBlt(&self.vp, &self.output_view, 0, std::slice::from_ref(&stream));
+            ManuallyDrop::drop(&mut stream.pInputSurface);
+            blt.context("video processor")?;
+            context.CopyResource(&self.readback, &self.output);
+            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+            context.Map(&self.readback, 0, D3D11_MAP_READ, 0, Some(&mut mapped))?;
+            let pitch = mapped.RowPitch as usize;
+            let len = pitch * (fh as usize * 3 / 2);
+            let frame = readback_nv12(std::slice::from_raw_parts(mapped.pData as *const u8, len), pitch, fw as usize, fh as usize, pts);
+            context.Unmap(&self.readback, 0);
+            frame.ok_or_else(|| anyhow!("the converted picture came back short"))
+        }
+    }
+}
+
+/// Said once a run: the graphics card can't convert screen pictures.
+static GPU_FAILED_SAID: AtomicBool = AtomicBool::new(false);
 
 /// What a target captures: a display (HMONITOR) or a window.
 #[derive(Clone, Copy)]
@@ -93,6 +240,7 @@ fn find_item(target: &ScreenTarget) -> Result<Item> {
 
 pub fn open_screen(target: &ScreenTarget, w: u32, h: u32, fps: u32, sink: FrameSink) -> Result<Box<dyn Running>> {
     let item = find_item(target)?;
+    let want_gpu = !capture::cpu_screen_convert_forced(std::env::var_os("CUTAWAY_CPU_SCREEN_CONVERT").as_deref());
     let stop = Arc::new(AtomicBool::new(false));
     let (tx, rx) = mpsc::channel::<Result<()>>();
     let s2 = stop.clone();
@@ -102,8 +250,13 @@ pub fn open_screen(target: &ScreenTarget, w: u32, h: u32, fps: u32, sink: FrameS
         let setup = (|| -> Result<_> {
             unsafe {
                 let (mut device, mut context) = (None, None);
-                D3D11CreateDevice(None, D3D_DRIVER_TYPE_HARDWARE, HMODULE::default(), D3D11_CREATE_DEVICE_BGRA_SUPPORT, None, D3D11_SDK_VERSION, Some(&mut device), None, Some(&mut context))
-                    .context("Direct3D")?;
+                let create = |flags, device: &mut _, context: &mut _| D3D11CreateDevice(None, D3D_DRIVER_TYPE_HARDWARE, HMODULE::default(), flags, None, D3D11_SDK_VERSION, Some(device), None, Some(context));
+                // Video support for the GPU conversion; without it if the
+                // card won't (the CPU conversion is used then).
+                let video = if want_gpu { create(D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT, &mut device, &mut context).is_ok() } else { false };
+                if !video {
+                    create(D3D11_CREATE_DEVICE_BGRA_SUPPORT, &mut device, &mut context).context("Direct3D")?;
+                }
                 let (device, context) = (device.ok_or_else(|| anyhow!("no Direct3D device"))?, context.ok_or_else(|| anyhow!("no Direct3D context"))?);
                 let winrt: IDirect3DDevice = CreateDirect3D11DeviceFromDXGIDevice(&device.cast::<IDXGIDevice>()?)?.cast()?;
                 let interop = windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()?;
@@ -130,6 +283,10 @@ pub fn open_screen(target: &ScreenTarget, w: u32, h: u32, fps: u32, sink: FrameS
         };
         let _ = tx.send(Ok(()));
         let mut staging: Option<Staging> = None;
+        // The GPU conversion, made for the capture's size when first needed;
+        // `gpu_ok` turns false for good if any step of it fails.
+        let mut gpu: Option<Gpu> = None;
+        let mut gpu_ok = want_gpu;
         let mut last: Option<VideoFrame> = None;
         let period = NS_PER_SEC / fps.max(1) as i64;
         let mut next = clock::now();
@@ -174,36 +331,43 @@ pub fn open_screen(target: &ScreenTarget, w: u32, h: u32, fps: u32, sink: FrameS
                         let tex: ID3D11Texture2D = surface.cast::<IDirect3DDxgiInterfaceAccess>()?.GetInterface()?;
                         let mut desc = D3D11_TEXTURE2D_DESC::default();
                         tex.GetDesc(&mut desc);
+                        // The picture's shape kept: a window (or a display
+                        // of another shape) sits on black.
+                        let layout = capture::screen_layout((size.Width.max(0) as u32, size.Height.max(0) as u32), (desc.Width, desc.Height), (w, h));
+                        if gpu_ok {
+                            let key = ((desc.Width, desc.Height), desc.Format);
+                            let converted = (|| {
+                                if gpu.as_ref().map(|g| g.key) != Some(key) {
+                                    gpu = None;
+                                    gpu = Some(Gpu::new(&device, &context, key.0, key.1, layout.frame, fps)?);
+                                }
+                                gpu.as_ref().unwrap().convert(&context, &tex, &layout, pts)
+                            })();
+                            match converted {
+                                Ok(f) => return Ok(f),
+                                // From now on on the CPU (this picture too).
+                                Err(e) => {
+                                    (gpu_ok, gpu) = (false, None);
+                                    if !GPU_FAILED_SAID.swap(true, Ordering::Relaxed) {
+                                        eprintln!("screen capture: the graphics card can't convert the picture ({e:#}); converting on the CPU");
+                                    }
+                                }
+                            }
+                        }
                         if staging.as_ref().map(|s| s.size) != Some((desc.Width, desc.Height)) {
-                            let sd = D3D11_TEXTURE2D_DESC {
-                                Width: desc.Width,
-                                Height: desc.Height,
-                                MipLevels: 1,
-                                ArraySize: 1,
-                                Format: desc.Format,
-                                SampleDesc: windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
-                                Usage: D3D11_USAGE_STAGING,
-                                BindFlags: 0,
-                                CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
-                                MiscFlags: 0,
-                            };
-                            let mut t = None;
-                            device.CreateTexture2D(&sd, None, Some(&mut t))?;
-                            staging = Some(Staging { tex: t.ok_or_else(|| anyhow!("no staging texture"))?, size: (desc.Width, desc.Height) });
+                            let sd = tex_desc((desc.Width, desc.Height), desc.Format, D3D11_USAGE_STAGING, D3D11_BIND_FLAG(0), D3D11_CPU_ACCESS_READ.0 as u32);
+                            staging = Some(Staging { tex: texture(&device, &sd)?, size: (desc.Width, desc.Height) });
                         }
                         let st = staging.as_ref().unwrap();
                         context.CopyResource(&st.tex, &tex);
                         let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
                         context.Map(&st.tex, 0, D3D11_MAP_READ, 0, Some(&mut mapped))?;
-                        let (sw, sh, pitch) = (desc.Width as usize, desc.Height as usize, mapped.RowPitch as usize);
+                        let (sh, pitch) = (desc.Height as usize, mapped.RowPitch as usize);
                         let bytes = std::slice::from_raw_parts(mapped.pData as *const u8, pitch * sh);
-                        // The picture's shape kept: a window (or a display
-                        // of another shape) sits on black.
-                        let (cw, ch) = (size.Width.max(1) as usize, size.Height.max(1) as usize);
-                        let (cw, ch) = (cw.min(sw), ch.min(sh));
-                        let (fw, fh) = (w as usize & !1, h as usize & !1);
-                        let (x, yo, pw, ph) = capture::fit_inside(cw as u32, ch as u32, fw as u32, fh as u32);
-                        let (y, uv) = if (pw as usize, ph as usize) == (fw, fh) {
+                        let (cw, ch) = (layout.src.0 as usize, layout.src.1 as usize);
+                        let (fw, fh) = (layout.frame.0 as usize, layout.frame.1 as usize);
+                        let (x, yo, pw, ph) = layout.place;
+                        let (y, uv) = if layout.fills() {
                             bgra_to_nv12(bytes, pitch, cw, ch, fw, fh)
                         } else {
                             let (py, puv) = bgra_to_nv12(bytes, pitch, cw, ch, pw as usize, ph as usize);
