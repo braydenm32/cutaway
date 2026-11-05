@@ -441,6 +441,21 @@ impl GuestHub {
         inner.cfg = g;
     }
 
+    /// Cutaway is quitting: close the tunnel (its program would otherwise
+    /// outlive Cutaway, the hub being kept for the life of the app), the
+    /// guest page and every guest's call.
+    pub fn shutdown(&self) {
+        let mut inner = self.inner.lock_ok();
+        let tunnel = inner.tunnel.take();
+        let server = inner.server.take();
+        let conns: Vec<Conn> = inner.conns.drain().map(|(_, c)| c).collect();
+        drop(inner);
+        drop((tunnel, server));
+        for c in conns {
+            self.close_conn(c);
+        }
+    }
+
     /// The guest page's public address, once there is one.
     pub fn base_url(&self) -> Option<String> {
         let inner = self.inner.lock_ok();

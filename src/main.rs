@@ -524,6 +524,7 @@ fn headless(cfg: &Config, seconds: f64, switch_every: Option<f64>, stream: bool,
         engine.stop_recording();
     }
     engine.wait_finalized();
+    engine::guests::hub().shutdown();
     // Stream shutdown runs in the background too; give it a moment.
     let deadline = Instant::now() + Duration::from_secs(8);
     while engine.is_streaming() || engine.status.lock_ok().stream.stopping {

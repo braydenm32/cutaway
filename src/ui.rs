@@ -6365,6 +6365,7 @@ impl eframe::App for App {
         if let Some(mut e) = self.engine.take() {
             e.shutdown();
         }
+        crate::engine::guests::hub().shutdown();
         if self.cfg_dirty || self.scenes_dirty {
             self.save_config();
         }

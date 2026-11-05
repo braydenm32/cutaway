@@ -188,6 +188,9 @@ fn run_once(port: u16, child_slot: &Arc<Mutex<Option<Child>>>, stop: &std::sync:
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
     let mut child = cmd.spawn().with_context(|| format!("couldn't start {}", exe.display()))?;
+    // Ends with Cutaway even if Cutaway crashes or is ended from Task Manager.
+    #[cfg(windows)]
+    crate::platform::win::kill_with_us(&child);
     let stderr = child.stderr.take().ok_or_else(|| anyhow!("no output from cloudflared"))?;
     *child_slot.lock_ok() = Some(child);
     if stop.load(std::sync::atomic::Ordering::Relaxed) {
@@ -287,6 +290,9 @@ fn run_funnel(port: u16, child_slot: &Arc<Mutex<Option<Child>>>, stop: &std::syn
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
     let mut child = cmd.spawn().with_context(|| format!("couldn't start {}", exe.display()))?;
+    // Ends with Cutaway even if Cutaway crashes or is ended from Task Manager.
+    #[cfg(windows)]
+    crate::platform::win::kill_with_us(&child);
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     for out in [child.stdout.take().map(|o| Box::new(o) as Box<dyn std::io::Read + Send>), child.stderr.take().map(|e| Box::new(e) as Box<dyn std::io::Read + Send>)].into_iter().flatten() {
         let tx = tx.clone();
