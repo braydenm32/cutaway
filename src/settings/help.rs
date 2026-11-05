@@ -400,7 +400,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         // ---- Scenes
         (Scenes, "Name") => "What the scene's button says. Renamed when you leave the box; what goes by its name (the rundown, \"if it drops, cut to\", automatic switching, scene:Name commands) follows the new name.",
         (Scenes, "Number key") => "The key that takes it: 1–9 for the first nine scenes, in order, and 0 for the tenth. Use ↑ and ↓ (or drag the scene buttons in Show › Edit layout) to put the ones you use most first. Stream Deck keys, the remote and scene:3 from MIDI or OSC also go by place.",
-        (Scenes, "Shows") => "Its frames and which source is in each. Move and resize them in Show › Edit layout (E): \"Edit its layout\" opens it there, in preview with Preview on, so the program stays as it is until you Take.",
+        (Scenes, "Shows") => "Its frames and which source is in each. Move and resize them in Show › Edit layout (E): \"Edit its layout\" opens it there, in preview, so the program stays as it is until you Take. If the scene isn't on air and Preview is off, it goes in preview just for the edit, and Preview turns off again when you leave Edit layout.",
         (Scenes, "Sound and cues") => "Inputs it turns on or off and commands it runs when it's taken: set them in Show › Edit layout (Audio, Also run…). While you're recording or live, Edit layout edits in preview (it turns Preview on), so the picture on air never changes as you work.",
 
         // ---- Macros

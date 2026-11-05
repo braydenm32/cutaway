@@ -410,6 +410,8 @@ pub struct App {
     /// It's folded down to a small button on the rail, out of the
     /// way of the page one of its steps went to.
     guide_folded: bool,
+    /// Every counted step of the guide is done (it won't reopen by itself).
+    guide_complete: bool,
     /// ⌘K search (ui/search.rs).
     search: search::Search,
     /// No remembered window yet: fit the first one to the screen.
@@ -517,6 +519,9 @@ pub struct App {
     rec_rect: Option<Rect>,
     /// Edit layout was open last frame (to see it open).
     edit_seen: bool,
+    /// The user's own Preview setting, while Edit its layout has turned
+    /// Preview on just for the edit (put back when Edit layout closes).
+    edit_restore_preview: Option<bool>,
     /// A marker's name being changed in the list under ◆ Marker ▾.
     marker_edit: Option<(crate::media::Ns, String)>,
     display_fullscreen: bool,
@@ -663,6 +668,7 @@ impl App {
             quit_ok: false,
             guide_open: false,
             guide_folded: false,
+            guide_complete: false,
             search: search::Search::default(),
             fit_window: false,
             guide_recorded: false,
@@ -689,6 +695,7 @@ impl App {
             marker_name: None,
             rec_rect: None,
             edit_seen: false,
+            edit_restore_preview: None,
             marker_edit: None,
             self_test: None,
             guest_link: (None, None, false),
@@ -995,6 +1002,27 @@ impl App {
         }
     }
 
+    /// Edit its layout ends, and the Preview it turned on just for the edit
+    /// goes back to the user's own. Called when Edit layout closes, when the
+    /// Show area is left, and before settings are saved, swapped or exported.
+    fn end_temp_preview(&mut self) {
+        if let Some(was) = self.edit_restore_preview.take() {
+            self.edit_mode = false;
+            self.edit_seen = false;
+            self.set_preview_mode(was);
+        }
+    }
+
+    /// The settings as they go to disk: Preview as the user set it, not as
+    /// Edit its layout has it just for the edit.
+    fn cfg_for_disk(&self) -> Config {
+        let mut c = self.cfg.clone();
+        if let Some(was) = self.edit_restore_preview {
+            c.transition.preview_mode = was;
+        }
+        c
+    }
+
     fn save_config(&mut self) {
         if self.scenes_dirty {
             self.cfg.scenes = self.scenes.clone();
@@ -1007,11 +1035,12 @@ impl App {
         // (An autosave still being written must not land after this one.)
         self.saver.wait();
         if let Some(p) = &self.save_path {
-            match self.cfg.save(p) {
+            let disk = self.cfg_for_disk();
+            match disk.save(p) {
                 Ok(()) => {
                     // Keep the current show's profile in step.
                     if !self.cfg.ui.profile.trim().is_empty() {
-                        let _ = profiles::save(&crate::config::profiles_dir(p), &self.cfg.ui.profile, &self.cfg);
+                        let _ = profiles::save(&crate::config::profiles_dir(p), &self.cfg.ui.profile, &disk);
                     }
                     crate::secrets::tidy(p);
                     if !self.quiet_save {
@@ -1031,8 +1060,9 @@ impl App {
         }
         self.saver.wait();
         if let Some(p) = &self.save_path {
-            if self.cfg.save(p).is_ok() && !self.cfg.ui.profile.trim().is_empty() {
-                let _ = profiles::save(&crate::config::profiles_dir(p), &self.cfg.ui.profile, &self.cfg);
+            let disk = self.cfg_for_disk();
+            if disk.save(p).is_ok() && !self.cfg.ui.profile.trim().is_empty() {
+                let _ = profiles::save(&crate::config::profiles_dir(p), &self.cfg.ui.profile, &disk);
             }
         }
     }
@@ -1065,9 +1095,10 @@ impl App {
         self.cfg_dirty = false;
         // The text is made here; writing it (and the fsync) happens on the saver's thread.
         if let Some(p) = self.save_path.clone() {
-            match self.cfg.save_text() {
+            let disk = self.cfg_for_disk();
+            match disk.save_text() {
                 Ok(text) => {
-                    let profile = (!self.cfg.ui.profile.trim().is_empty()).then(|| (crate::config::profiles_dir(&p), &self.cfg));
+                    let profile = (!self.cfg.ui.profile.trim().is_empty()).then(|| (crate::config::profiles_dir(&p), &disk));
                     self.saver.queue(&p, text, profile);
                 }
                 Err(e) => self.log(LogLevel::Warning, format!("Couldn't save settings: {e:#}")),
@@ -1344,6 +1375,8 @@ impl App {
         if self.cfg.transition.preview_mode == on {
             return;
         }
+        // Changed by hand: no longer just for the edit.
+        self.edit_restore_preview = None;
         self.cfg.transition.preview_mode = on;
         self.cfg_dirty = true;
         if !on {
@@ -2920,6 +2953,7 @@ impl App {
             self.toast("Stop recording and streaming before switching shows".into(), true);
             return;
         }
+        self.end_temp_preview();
         // Keep the current show's latest changes first; a setup that isn't
         // a show yet is saved as one, so switching never loses it.
         let unnamed = self.unnamed_setup_name();
@@ -4489,8 +4523,12 @@ impl App {
             s.retain_sources(e.sources.len());
             e.switcher.set_preview(Some(s));
         } else if e.switcher.live().name != name {
-            self.toast(format!("{name} isn't on air: turn on Preview to edit it first"), false);
-            return;
+            // Preview just for this edit; Edit layout closing puts it back.
+            s.retain_sources(e.sources.len());
+            e.switcher.set_preview(Some(s));
+            self.edit_restore_preview = Some(false);
+            self.cfg.transition.preview_mode = true;
+            self.mv_selected = None;
         }
         self.selected_layer = None;
         self.go("show/edit/canvas");
@@ -6072,6 +6110,7 @@ impl App {
             self.toast("Stop recording and streaming first: this changes every setting".into(), true);
             return;
         }
+        self.end_temp_preview();
         let before = self.snapshot(undo::Kind::Settings, label.to_string());
         // Its own scenes (settings without any make them from its sources).
         if cfg.scenes.is_empty() {
@@ -6309,6 +6348,11 @@ impl eframe::App for App {
     /// still hides by itself, the prompter still rolls, and the state they
     /// read keeps moving when nobody is looking at the desk.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Before anything is drawn or a controller's command is read, so no
+        // page or button sees the Preview that was on just for the edit.
+        if temp_preview_ends(self.edit_restore_preview.is_some(), self.edit_mode, !self.on_show()) {
+            self.end_temp_preview();
+        }
         self.handle_requests();
         self.poll_status();
         // A comment's time on screen and the prompter's scrolling keep
@@ -6689,6 +6733,12 @@ fn edit_turns_preview_on(recording_or_live: bool, preview_on: bool) -> bool {
     recording_or_live && !preview_on
 }
 
+/// Whether the Preview turned on just for an edit goes back now: Edit
+/// layout has closed, or the Show area has been left .
+fn temp_preview_ends(temporary: bool, edit_mode: bool, away_from_show: bool) -> bool {
+    temporary && (!edit_mode || away_from_show)
+}
+
 /// The time of day for the header: "15:05", or "3:05 PM".
 fn clock_text(t: chrono::NaiveTime, twelve: bool) -> String {
     t.format(crate::engine::timers::time_format(twelve, false)).to_string()
@@ -6884,6 +6934,15 @@ mod desk_tests {
         assert!(!put_on_air_ready(Duration::from_millis(250)));
         assert!(put_on_air_ready(Duration::from_millis(300)));
         assert!(put_on_air_ready(Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn temporary_preview_goes_back_when_the_edit_ends_or_show_is_left() {
+        use super::temp_preview_ends;
+        assert!(!temp_preview_ends(true, true, false), "still editing");
+        assert!(temp_preview_ends(true, false, false), "Edit layout closed");
+        assert!(temp_preview_ends(true, true, true), "went to another area");
+        assert!(!temp_preview_ends(false, false, true), "the user's own Preview is left alone");
     }
 
     #[test]

@@ -33,6 +33,10 @@ struct Saved {
     checked: bool,
     scenes: bool,
     recorded: bool,
+    /// Every counted step was done when it was last open: it doesn't
+    /// reopen by itself next time.
+    #[serde(default)]
+    complete: bool,
 }
 
 const SAVE_KEY: &str = "first_show_guide";
@@ -45,11 +49,12 @@ impl App {
         self.guide_checked = saved.checked;
         self.guide_scenes = saved.scenes;
         self.guide_recorded = saved.recorded;
-        saved.open
+        self.guide_complete = saved.complete;
+        saved.open && !saved.complete
     }
 
     pub(super) fn save_guide(&self, storage: &mut dyn eframe::Storage) {
-        let saved = Saved { open: self.guide_open, heard: self.guide_heard, checked: self.guide_checked, scenes: self.guide_scenes, recorded: self.guide_recorded };
+        let saved = Saved { open: self.guide_open && !self.guide_complete, complete: self.guide_complete, heard: self.guide_heard, checked: self.guide_checked, scenes: self.guide_scenes, recorded: self.guide_recorded };
         eframe::set_value(storage, SAVE_KEY, &saved);
     }
 
@@ -128,9 +133,14 @@ impl App {
         let check_state = if self.guide_checked { Step::Done } else { Step::Todo };
         let rec_state = if recorded { Step::Done } else { Step::Todo };
         let edit_state = if timelines { Step::Done } else { Step::Skip };
-        let states = [Some(cam_state), people_state, Some(mic_state), Some(scenes_state), Some(folder_state), Some(live_state), Some(check_state), Some(rec_state), Some(edit_state)];
+        // Optional like Going live: set up once the remote is on.
+        let remote_state = if self.cfg.remote.enabled { Step::Done } else { Step::Skip };
+        let states = [Some(cam_state), people_state, Some(mic_state), Some(scenes_state), Some(folder_state), Some(live_state), Some(check_state), Some(rec_state), Some(edit_state), Some(remote_state)];
         let counted = states.iter().flatten().filter(|s| **s != Step::Skip).count();
         let done_n = states.iter().flatten().filter(|s| **s == Step::Done).count();
+        // Skipped steps are optional: they neither count nor hold this back.
+        let all_set = all_set(&states);
+        self.guide_complete = all_set;
 
         if self.guide_folded {
             // Folded: a small button on the rail, just above More, where it
@@ -166,6 +176,7 @@ impl App {
         let mut check = false;
         let mut record = false;
         let mut done = false;
+        let mut remote_on = false;
         egui::Window::new("Your first show")
             .open(&mut open)
             .collapsible(false)
@@ -319,6 +330,16 @@ impl App {
                 if step(ui, edit_state, "Editing afterwards", edit_text.into(), Some("For editing…"), None) {
                     go_part = Some((Section::Recording, "rec_editing"));
                 }
+
+                let remote_text = if self.cfg.remote.enabled {
+                    "Remote control is on. Scan the QR code in More › Control › Phone remote with a phone on the same Wi-Fi, or add the Stream Deck plugin there.".to_string()
+                } else {
+                    "Optional: skip this if you switch from the computer. To run the show from a phone or tablet, or a Stream Deck, turn on Remote control: this does it and shows the QR code to scan.".to_string()
+                };
+                let remote_button = if self.cfg.remote.enabled { "Phone remote…" } else { "Turn on and show the QR code" };
+                if step(ui, remote_state, "Switch from a phone or Stream Deck", remote_text, Some(remote_button), None) {
+                    remote_on = true;
+                }
                 });
 
                 ui.separator();
@@ -326,9 +347,27 @@ impl App {
                     if ui.button("Done").clicked() {
                         done = true;
                     }
-                    ui.label(RichText::new("Open this again from More › App › Help, or the status light at the top right.").color(TEXT_DIM));
+                    let again = "Open this again from More › App › Help, or the status light at the top right.";
+                    if all_set {
+                        ui.label(RichText::new(format!("All set: this closes itself next time. {again}")).color(GREEN));
+                    } else {
+                        ui.label(RichText::new(again).color(TEXT_DIM));
+                    }
                 });
             });
+        if remote_on {
+            if !self.cfg.remote.enabled {
+                let mut cfg = self.cfg.clone();
+                cfg.scenes = self.scenes.clone();
+                cfg.remote.enabled = true;
+                match self.apply_settings(cfg, ctx) {
+                    Ok(()) => go_place = Some("more/control/remote"),
+                    Err(e) => self.toast(format!("Couldn't turn on the remote: {e}"), true),
+                }
+            } else {
+                go_place = Some("more/control/remote");
+            }
+        }
         if let Some(section) = go {
             self.open_page(section, None);
         }
@@ -336,7 +375,10 @@ impl App {
             self.go(place);
         }
         if make_title {
-            self.make_name_title(ctx);
+            // With nobody named it goes on to People & names: out of the way.
+            if self.make_name_title(ctx).is_some() && named == 0 {
+                self.guide_folded = true;
+            }
         }
         if let Some((section, part)) = go_part {
             self.open_page(section, Some(part));
@@ -362,6 +404,12 @@ impl App {
     }
 }
 
+/// Every step that counts is done; a skipped (optional) one doesn't hold
+/// the guide back.
+fn all_set(states: &[Option<Step>]) -> bool {
+    states.iter().flatten().all(|s| *s != Step::Todo)
+}
+
 /// The input the guide's mic step checks: the first that isn't the sound
 /// pads, an app's sound or a source's sound (forensics guide #2).
 fn guide_mic(audio: &[crate::config::AudioConfig]) -> Option<usize> {
@@ -382,5 +430,23 @@ mod mic_tests {
         assert_eq!(guide_mic(&[a("Sound pads", "pads"), a("Music", "app:Spotify"), a("Yeti", "Yeti Stereo Microphone")]), Some(2));
         assert_eq!(guide_mic(&[a("Sound pads", "pads")]), None);
         assert_eq!(guide_mic(&[]), None);
+    }
+}
+
+#[cfg(test)]
+mod finish_tests {
+    use super::{all_set, Saved, Step};
+
+    #[test]
+    fn skipped_steps_do_not_hold_the_guide_open() {
+        assert!(all_set(&[Some(Step::Done), None, Some(Step::Skip), Some(Step::Done)]));
+        assert!(!all_set(&[Some(Step::Done), Some(Step::Todo), Some(Step::Skip)]));
+    }
+
+    #[test]
+    fn a_saved_guide_from_before_still_loads() {
+        let old = r#"{"open":true,"heard":0,"checked":false,"scenes":false,"recorded":false}"#;
+        let s: Saved = serde_json::from_str(old).unwrap();
+        assert!(s.open && !s.complete);
     }
 }
