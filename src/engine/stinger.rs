@@ -323,7 +323,8 @@ fn worker(shared: Arc<Shared>, canvas: (u32, u32)) {
         let Some(clip) = clip else {
             let st = shared.state.lock_ok();
             if st.wanted_gen == loaded_gen && !st.stop {
-                let _ = shared.cond.wait_timeout(st, Duration::from_millis(500));
+                // (New settings and stopping both notify.)
+                drop(shared.cond.wait(st));
             }
             continue;
         };

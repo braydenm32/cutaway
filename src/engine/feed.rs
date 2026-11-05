@@ -64,9 +64,16 @@ pub struct Pacer {
     thread: Option<JoinHandle<()>>,
 }
 
+/// Pictures the pacer may hold: the latency's worth at up to 60 fps, with
+/// room for bursts (a 4K picture is 12 MB, so not a fixed 120).
+fn pacer_room(latency: Ns) -> usize {
+    let ms = (latency / 1_000_000).max(0) as usize;
+    (ms * 60 / 1000 * 5 / 4 + 8).clamp(16, 120)
+}
+
 impl Pacer {
-    pub fn new(slot: Arc<SourceSlot>, stop: Arc<AtomicBool>) -> Pacer {
-        let (tx, rx): (Sender<VideoFrame>, Receiver<VideoFrame>) = bounded(120);
+    pub fn new(slot: Arc<SourceSlot>, stop: Arc<AtomicBool>, latency: Ns) -> Pacer {
+        let (tx, rx): (Sender<VideoFrame>, Receiver<VideoFrame>) = bounded(pacer_room(latency));
         let thread = std::thread::Builder::new()
             .name("pacer".into())
             .spawn(move || {
@@ -128,7 +135,7 @@ impl Feeder {
             hub,
             out_size,
             latency: latency_ms.clamp(20, 5000) as i64 * 1_000_000,
-            pacer: Pacer::new(slot, stop),
+            pacer: Pacer::new(slot, stop, latency_ms.clamp(20, 5000) as i64 * 1_000_000),
             video: None,
             pending_params: None,
             reorder: Reorder::new(0),
@@ -302,5 +309,19 @@ impl Feeder {
     /// The video codec this stream announced.
     pub fn codec(&self) -> Option<VideoCodec> {
         self.pending_params.as_ref().map(|p| p.0).or_else(|| self.video.as_ref().map(|v| v.0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pacer_room_follows_latency() {
+        // The latency's worth at 60 fps, plus room; never tiny or huge.
+        assert_eq!(pacer_room(20_000_000), 16);
+        assert_eq!(pacer_room(500_000_000), 45);
+        assert!(pacer_room(1_000_000_000) >= 60 + 8);
+        assert_eq!(pacer_room(5_000_000_000), 120);
     }
 }

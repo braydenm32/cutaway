@@ -9,12 +9,14 @@ pub mod flv;
 pub mod h264;
 pub mod mirror;
 pub mod mp4;
+mod pool;
 pub mod testsrc;
 pub mod ts;
 pub mod tsdemux;
 pub mod wav;
 
-use std::sync::Arc;
+use crate::util::LockExt;
+use std::sync::{Arc, Mutex};
 
 /// Nanoseconds on the host clock (see [`clock::now`]).
 pub type Ns = i64;
@@ -85,11 +87,13 @@ pub fn bgra_to_nv12(src: &[u8], pitch: usize, sw: usize, sh: usize, w: usize, h:
             *o = (((16 << 22) + yr * r + yg * g + yb * b + (1 << 21)) >> 22) as u8;
         }
     };
-    let rows_per = 2 * (h / 2).div_ceil(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, 4)).max(1);
-    std::thread::scope(|s| {
-        for (part, (ys, cs)) in y.chunks_mut(rows_per * w).zip(uv.chunks_mut(rows_per / 2 * w)).enumerate() {
-            let (sample_row, luma_row) = (&sample_row, &luma_row);
-            s.spawn(move || {
+    let rows_per = 2 * (h / 2).div_ceil(pool::parts_for(w * h)).max(1);
+    let chunks: Vec<Mutex<Option<(&mut [u8], &mut [u8])>>> = y.chunks_mut(rows_per * w).zip(uv.chunks_mut(rows_per / 2 * w)).map(|c| Mutex::new(Some(c))).collect();
+    {
+        let (sample_row, luma_row) = (&sample_row, &luma_row);
+        pool::run(chunks.len(), &|part| {
+            let Some((ys, cs)) = chunks[part].lock_ok().take() else { return };
+            {
                 let first = part * rows_per;
                 let row = || [vec![0i32; w], vec![0i32; w], vec![0i32; w]];
                 let (mut top, mut bot) = (row(), row());
@@ -110,9 +114,10 @@ pub fn bgra_to_nv12(src: &[u8], pitch: usize, sw: usize, sh: usize, w: usize, h:
                         out[1] = chroma(vr, vg, vb);
                     }
                 }
-            });
-        }
-    });
+            }
+        });
+    }
+    drop(chunks);
     (y, uv)
 }
 
@@ -126,18 +131,47 @@ pub struct Planes<'a> {
 
 /// Pixel storage of a video frame. Everything is NV12, video range, BT.709.
 pub enum Pixels {
-    /// Ordinary memory.
-    Nv12 { y: Vec<u8>, y_stride: usize, uv: Vec<u8>, uv_stride: usize },
+    /// Ordinary memory. (`recycle`: the memory goes back to the readback
+    /// pool when the frame is done with, see [`readback_buffer`].)
+    Nv12 { y: Vec<u8>, y_stride: usize, uv: Vec<u8>, uv_stride: usize, recycle: bool },
     /// A CoreVideo pixel buffer straight from the camera (no copy).
     #[cfg(target_os = "macos")]
     PixelBuffer(crate::platform::macos::pixel_buffer::PixelBuffer),
+}
+
+impl Drop for Pixels {
+    fn drop(&mut self) {
+        if let Pixels::Nv12 { y, uv, recycle: true, .. } = self {
+            pool::give_back(std::mem::take(y));
+            pool::give_back(std::mem::take(uv));
+        }
+    }
+}
+
+/// A buffer holding a copy of `data`, from the readback pool when one of
+/// the right size is free (rendered frames come back every frame; fresh
+/// big allocations each time cost page faults).
+pub fn readback_buffer(data: &[u8]) -> Vec<u8> {
+    let mut v = pool::take(data.len());
+    v.extend_from_slice(data);
+    v
+}
+
+/// Free readback buffers that haven't been needed for a while.
+pub fn trim_readback_buffers() {
+    pool::trim();
+}
+
+/// Free all spare readback buffers (nothing is rendering any more).
+pub fn free_readback_buffers() {
+    pool::free_spares();
 }
 
 impl Pixels {
     /// Run `f` with access to the planes (locks/unlocks platform buffers).
     pub fn with_planes<R>(&self, f: impl FnOnce(Planes<'_>) -> R) -> R {
         match self {
-            Pixels::Nv12 { y, y_stride, uv, uv_stride } => {
+            Pixels::Nv12 { y, y_stride, uv, uv_stride, .. } => {
                 f(Planes { y, y_stride: *y_stride, uv, uv_stride: *uv_stride })
             }
             #[cfg(target_os = "macos")]
@@ -159,12 +193,16 @@ pub struct VideoFrame {
 }
 
 impl VideoFrame {
+    /// A capture sets this serial on a frame that repeats its last one (a
+    /// still screen), so the source keeps that frame's serial.
+    pub const REPEAT: u64 = u64::MAX;
+
     pub fn new_nv12(width: u32, height: u32, pts: Ns, y: Vec<u8>, uv: Vec<u8>, serial: u64) -> Self {
         VideoFrame {
             width,
             height,
             pts,
-            pixels: Arc::new(Pixels::Nv12 { y, y_stride: width as usize, uv, uv_stride: width as usize }),
+            pixels: Arc::new(Pixels::Nv12 { y, y_stride: width as usize, uv, uv_stride: width as usize, recycle: false }),
             serial,
         }
     }
@@ -232,7 +270,7 @@ impl VideoFrame {
         }
         let (yx, yy) = (taps(rect[0], rect[2], ow, w), taps(rect[1], rect[3], oh, h));
         let (cx, cy) = (taps(rect[0] / 2.0, rect[2] / 2.0, ow / 2, w / 2), taps(rect[1] / 2.0, rect[3] / 2.0, oh / 2, h / 2));
-        let threads = if ow * oh >= 640 * 360 { std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, 4) } else { 1 };
+        let threads = pool::parts_for(ow * oh);
         let chroma_rows = (oh / 2).div_ceil(threads).max(1);
         self.pixels.with_planes(|p| {
             let p = &p;
@@ -245,9 +283,10 @@ impl VideoFrame {
             if threads == 1 {
                 work(0, &mut y, &mut uv);
             } else {
-                std::thread::scope(|s| {
-                    for (part, (ys, cs)) in y.chunks_mut(chroma_rows * 2 * ow).zip(uv.chunks_mut(chroma_rows * ow)).enumerate() {
-                        s.spawn(move || work(part, ys, cs));
+                let chunks: Vec<Mutex<Option<(&mut [u8], &mut [u8])>>> = y.chunks_mut(chroma_rows * 2 * ow).zip(uv.chunks_mut(chroma_rows * ow)).map(|c| Mutex::new(Some(c))).collect();
+                pool::run(chunks.len(), &|part| {
+                    if let Some((ys, cs)) = chunks[part].lock_ok().take() {
+                        work(part, ys, cs);
                     }
                 });
             }

@@ -224,6 +224,7 @@ pub fn open_screen(target: &ScreenTarget, w: u32, h: u32, fps: u32, sink: FrameS
                 // Still screen: the same picture again, now.
                 let mut again = f.clone();
                 again.pts = clock::now();
+                again.serial = VideoFrame::REPEAT;
                 sink(again);
             }
         }

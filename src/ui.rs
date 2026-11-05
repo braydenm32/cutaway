@@ -245,12 +245,21 @@ pub fn run(cfg: Config, save_path: Option<PathBuf>, self_test: bool, made_pin: b
     // settings (eframe puts it back on a screen that's still there).
     let window_file = crate::config::default_config_path().parent().map(|d| d.join("Main window.ron"));
     let remembered = window_file.as_ref().is_some_and(|f| f.exists());
-    let options = eframe::NativeOptions {
+    let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_title("Cutaway").with_icon(app_icon()).with_inner_size([1480.0, 920.0]).with_min_inner_size(MIN_WINDOW),
         persist_window: true,
         persistence_path: window_file,
         ..Default::default()
     };
+    // The window draws with the system's own GPU interface when it has one
+    // (as the compositor does), rather than starting them all.
+    // (Otherwise eframe's own choice, as before.)
+    let backends = crate::engine::compositor::gpu_backends();
+    if cfg!(any(target_os = "macos", windows)) && eframe::wgpu::Backends::from_env().is_none() && backends != eframe::wgpu::Backends::all() {
+        if let eframe::egui_wgpu::WgpuSetup::CreateNew(new) = &mut options.wgpu_options.wgpu_setup {
+            new.instance_descriptor.backends = backends;
+        }
+    }
     eframe::run_native(
         "Cutaway",
         options,
@@ -2765,8 +2774,14 @@ impl App {
         }
         self.watch_dropped_sources();
         let Some(e) = &self.engine else { return };
-        // A sharper monitor picture while a second screen shows it.
-        let want = if self.cfg.display.output != DisplayOutput::Off { e.info.canvas.0.min(1920) } else { self.cfg.program.preview_width };
+        // A sharper monitor picture while a second screen shows it big (the
+        // multiview shows it half size; the prompter not at all).
+        let normal = self.cfg.program.preview_width;
+        let want = match self.cfg.display.output {
+            DisplayOutput::Program => e.info.canvas.0.min(1920).max(normal),
+            DisplayOutput::Multiview => e.info.canvas.0.min(1280).max(normal),
+            DisplayOutput::Off | DisplayOutput::Prompter => normal,
+        };
         e.preview_width.store(want, std::sync::atomic::Ordering::Relaxed);
     }
 
