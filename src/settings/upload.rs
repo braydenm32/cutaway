@@ -51,7 +51,7 @@ impl SettingsUi {
         let mut sign_in = false;
         let mut cancel = false;
         egui::Grid::new("upload").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
-            label(ui, "Client ID");
+            label(ui, "Google app ID");
             ui.add(egui::TextEdit::singleline(&mut u.client_id).desired_width(420.0).hint_text("….apps.googleusercontent.com"));
             ui.end_row();
             label(ui, "Client secret");

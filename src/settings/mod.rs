@@ -1530,7 +1530,7 @@ impl SettingsUi {
                 label(ui, "Codec");
                 egui::ComboBox::from_id_salt("codec").selected_text(crate::engine::encode::codec_name(o.codec.video_codec())).width(260.0).show_ui(ui, |ui| {
                     ui.selectable_value(&mut o.codec, Codec::H264, "H.264 — opens everywhere");
-                    ui.selectable_value(&mut o.codec, Codec::H265, "H.265/HEVC — smaller 4K files");
+                    ui.selectable_value(&mut o.codec, Codec::H265, "H.265 — smaller files, slower to edit on older computers");
                     ui.separator();
                     let prores_ok = crate::engine::encode::codec_problem(Codec::Prores.video_codec()).is_none();
                     for (c, text) in [
@@ -1615,7 +1615,7 @@ impl SettingsUi {
                 ui.checkbox(&mut o.export_timelines, "Final Cut Pro, DaVinci Resolve and Premiere Pro");
                 ui.end_row();
                 label(ui, "Audio sessions");
-                ui.checkbox(&mut o.daw_sessions, "REAPER and DAWproject");
+                ui.checkbox(&mut o.daw_sessions, "REAPER and other music apps");
                 ui.end_row();
                 label(ui, "DaVinci Resolve");
                 ui.vertical(|ui| {
@@ -1768,7 +1768,7 @@ impl SettingsUi {
             ui.vertical(|ui| {
                 let sel = self.sel_dest;
                 let Some(d) = self.draft.streaming.destinations.get_mut(sel) else {
-                    hint(ui, "Add YouTube, Twitch, Facebook, Kick, any RTMP server, or an SRT receiver. Once there's one, Show → Viewer comments appears too, to put your stream's chat on screen.");
+                    hint(ui, "Add YouTube, Twitch, Facebook, Kick, any RTMP server, or an SRT receiver. To put the chat on screen, set Viewer comments under More › Show tools.");
                     return;
                 };
                 egui::Grid::new("dest_detail").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
@@ -2055,9 +2055,9 @@ impl SettingsUi {
         }
         ui.add_space(12.0);
         ui.horizontal(|ui| {
-            subtitle(ui, "Encoders");
+            subtitle(ui, "Formats this computer can use");
             let testing = self.encoder_testing && self.encoder_test.lock_ok().is_none();
-            if ui.add_enabled(!testing, egui::Button::new(if testing { "Testing…" } else { "Test encoders" }).small()).on_hover_text("Which video and audio encoders this computer can use, NDI and the graphics card (as --probe-encoders does)").clicked() {
+            if ui.add_enabled(!testing, egui::Button::new(if testing { "Checking…" } else { "Check formats" }).small()).on_hover_text("Which video and audio encoders this computer can use, NDI and the graphics card (as --probe-encoders does)").clicked() {
                 *self.encoder_test.lock_ok() = None;
                 self.encoder_testing = true;
                 let out = self.encoder_test.clone();
@@ -2075,7 +2075,7 @@ impl SettingsUi {
                 }
             }
             None if self.encoder_testing => hint(ui, "Looking (it takes a few seconds)…"),
-            None => hint(ui, "Press Test encoders to see what recording and streaming can use on this computer."),
+            None => hint(ui, "Press Check formats to see what recording and streaming can use on this computer."),
         }
         ui.add_space(12.0);
         ui.horizontal(|ui| {
@@ -2232,8 +2232,8 @@ pub(super) fn short_device(device: &str) -> String {
         d if d.starts_with("source:") => format!("Sound from {}", d[7..].trim()),
         d if d.starts_with("app:") => format!("Sound from {}", d[4..].trim()),
         d if d.starts_with("ndi:") => format!("NDI {}", d[4..].trim()),
-        d if d.starts_with("frame:") => format!("Auto-framed from {}", d[6..].trim()),
-        d if d.starts_with("vptz:") => format!("Virtual PTZ in {}", d[5..].trim()),
+        d if d.starts_with("frame:") => format!("Close-up that follows people, from {}", d[6..].trim()),
+        d if d.starts_with("vptz:") => format!("Close-up you aim, from {}", d[5..].trim()),
         d if d.starts_with("guest:") => "Remote guest (link)".into(),
         d if d.starts_with("guest-screen:") => "Guest's screen".into(),
         d if d.starts_with("phone:") => "Phone camera".into(),
@@ -2677,7 +2677,7 @@ pub fn ndi_offer(ui: &mut egui::Ui) {
     ui.label(RichText::new("⚠ NDI isn't installed on this computer.").color(AMBER));
     match ndi_install::stage() {
         Stage::Idle if ndi_install::installer().is_none() => {
-            hint(ui, "Install the NDI SDK from ndi.video; Cutaway finds it as soon as it's there.");
+            hint(ui, "Install the NDI runtime from ndi.video; Cutaway finds it as soon as it's there.");
         }
         Stage::Idle => {
             if ui.button("Install NDI…").on_hover_text("Downloads NDI's free runtime from NDI and opens its installer").clicked() {

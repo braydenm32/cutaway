@@ -108,7 +108,7 @@ impl SettingsUi {
             label(ui, "Control Syrinscape");
             ui.checkbox(&mut s.enabled, "on");
             ui.end_row();
-            label(ui, "Auth token");
+            label(ui, "Your Syrinscape key");
             ui.horizontal(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut s.token).password(true).desired_width(300.0).hint_text("paste your token"));
                 ui.hyperlink_to("Get yours", "https://syrinscape.com/account/auth-token/");
