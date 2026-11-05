@@ -1386,6 +1386,7 @@ impl Compositor {
 
     /// Draw the program (and the preview bus) and produce what's wanted.
     pub fn render(&mut self, layout: &Layout, preview_bus: Option<&[PadState]>, graphics: &[GraphicLayer], pts: Ns, serial: u64, wants: &Wants) -> Result<Rendered> {
+        crate::media::trim_readback_buffers();
         let canvas = (self.canvas.width, self.canvas.height);
         if let Some((w, h)) = wants.stream {
             let fits = self.stream_out.as_ref().is_some_and(|o| o.y.width == w && o.y.height == h);
@@ -1850,14 +1851,20 @@ impl Compositor {
             }
             out
         };
+        // Frame buffers come from (and go back to) the readback pool.
+        let read_pooled = |t: &Target| -> Vec<u8> {
+            let data = t.buf.slice(..).get_mapped_range().map(|v| crate::media::readback_buffer(&v)).unwrap_or_default();
+            t.buf.unmap();
+            data
+        };
         let nv12 = |o: &NvOut| -> VideoFrame {
-            let y = read(&o.y);
-            let uv = read(&o.uv);
+            let y = read_pooled(&o.y);
+            let uv = read_pooled(&o.uv);
             VideoFrame {
                 width: o.y.width,
                 height: o.y.height,
                 pts,
-                pixels: Arc::new(Pixels::Nv12 { y, y_stride: o.y.stride as usize, uv, uv_stride: o.uv.stride as usize }),
+                pixels: Arc::new(Pixels::Nv12 { y, y_stride: o.y.stride as usize, uv, uv_stride: o.uv.stride as usize, recycle: true }),
                 serial,
             }
         };

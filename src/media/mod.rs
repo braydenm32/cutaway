@@ -131,18 +131,42 @@ pub struct Planes<'a> {
 
 /// Pixel storage of a video frame. Everything is NV12, video range, BT.709.
 pub enum Pixels {
-    /// Ordinary memory.
-    Nv12 { y: Vec<u8>, y_stride: usize, uv: Vec<u8>, uv_stride: usize },
+    /// Ordinary memory. (`recycle`: the memory goes back to the readback
+    /// pool when the frame is done with, see [`readback_buffer`].)
+    Nv12 { y: Vec<u8>, y_stride: usize, uv: Vec<u8>, uv_stride: usize, recycle: bool },
     /// A CoreVideo pixel buffer straight from the camera (no copy).
     #[cfg(target_os = "macos")]
     PixelBuffer(crate::platform::macos::pixel_buffer::PixelBuffer),
+}
+
+impl Drop for Pixels {
+    fn drop(&mut self) {
+        if let Pixels::Nv12 { y, uv, recycle: true, .. } = self {
+            pool::give_back(std::mem::take(y));
+            pool::give_back(std::mem::take(uv));
+        }
+    }
+}
+
+/// A buffer holding a copy of `data`, from the readback pool when one of
+/// the right size is free (rendered frames come back every frame; fresh
+/// big allocations each time cost page faults).
+pub fn readback_buffer(data: &[u8]) -> Vec<u8> {
+    let mut v = pool::take(data.len());
+    v.extend_from_slice(data);
+    v
+}
+
+/// Free readback buffers that haven't been needed for a while.
+pub fn trim_readback_buffers() {
+    pool::trim();
 }
 
 impl Pixels {
     /// Run `f` with access to the planes (locks/unlocks platform buffers).
     pub fn with_planes<R>(&self, f: impl FnOnce(Planes<'_>) -> R) -> R {
         match self {
-            Pixels::Nv12 { y, y_stride, uv, uv_stride } => {
+            Pixels::Nv12 { y, y_stride, uv, uv_stride, .. } => {
                 f(Planes { y, y_stride: *y_stride, uv, uv_stride: *uv_stride })
             }
             #[cfg(target_os = "macos")]
@@ -173,7 +197,7 @@ impl VideoFrame {
             width,
             height,
             pts,
-            pixels: Arc::new(Pixels::Nv12 { y, y_stride: width as usize, uv, uv_stride: width as usize }),
+            pixels: Arc::new(Pixels::Nv12 { y, y_stride: width as usize, uv, uv_stride: width as usize, recycle: false }),
             serial,
         }
     }

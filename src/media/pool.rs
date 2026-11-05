@@ -5,6 +5,7 @@
 use crossbeam_channel::{unbounded, Sender};
 use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 /// Pictures smaller than this (output pixels) are done on the caller's
 /// thread: splitting them costs more than it saves.
@@ -112,6 +113,49 @@ pub fn run(parts: usize, f: &(dyn Fn(usize) + Sync)) {
     }
 }
 
+/// Spare frame buffers, for GPU readbacks (a few frames' worth), and when
+/// each came back.
+static SPARE: Mutex<Vec<(Instant, Vec<u8>)>> = Mutex::new(Vec::new());
+const SPARE_MAX: usize = 12;
+/// A spare not taken again within this long is freed (recording stopped,
+/// or the size changed).
+const SPARE_KEEP: Duration = Duration::from_secs(2);
+
+fn spare() -> std::sync::MutexGuard<'static, Vec<(Instant, Vec<u8>)>> {
+    let mut g = SPARE.lock().unwrap_or_else(|e| e.into_inner());
+    g.retain(|(at, _)| at.elapsed() < SPARE_KEEP);
+    g
+}
+
+/// An empty buffer that can hold `len` bytes without growing.
+pub fn take(len: usize) -> Vec<u8> {
+    let mut spare = spare();
+    // A close fit only, so a small picture doesn't keep a big buffer.
+    match spare.iter().position(|(_, v)| v.capacity() >= len && v.capacity() - len <= len / 8) {
+        Some(i) => spare.swap_remove(i).1,
+        None => Vec::with_capacity(len),
+    }
+}
+
+/// A buffer finished with, for `take` to hand out again.
+pub fn give_back(mut v: Vec<u8>) {
+    if v.capacity() == 0 {
+        return;
+    }
+    v.clear();
+    let mut spare = spare();
+    if spare.len() >= SPARE_MAX {
+        // Full: the oldest goes.
+        spare.remove(0);
+    }
+    spare.push((Instant::now(), v));
+}
+
+/// Free spares nobody has taken for a while.
+pub fn trim() {
+    drop(spare());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,5 +188,23 @@ mod tests {
                 });
             }
         });
+    }
+
+    #[test]
+    fn buffers_come_back() {
+        // (A size no other test reads back.)
+        let len = 1_234_567;
+        let a = take(len);
+        assert!(a.capacity() >= len);
+        let ptr = a.as_ptr();
+        give_back(a);
+        let b = take(len);
+        assert_eq!(b.as_ptr(), ptr);
+        assert!(b.is_empty());
+        // Nothing much bigger than asked for.
+        give_back(b);
+        assert!(take(1000).capacity() < 2000);
+        let c = take(len);
+        assert_eq!(c.as_ptr(), ptr);
     }
 }
