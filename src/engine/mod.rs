@@ -1864,6 +1864,7 @@ impl Engine {
 
     pub fn set_auto_switch(&self, on: bool) {
         self.auto.enabled.store(on, Ordering::Relaxed);
+        self.auto.wake();
         if on && self.config().auto_switch.rules.is_empty() {
             self.status.lock_ok().push(LogLevel::Warning, "Auto switching has no rules yet: add them in Scenes › More › Auto-switching.");
         }
@@ -1967,6 +1968,7 @@ impl Engine {
             drop(r);
         }
         self.stop.store(true, Ordering::Relaxed);
+        self.auto.wake();
         for t in self.threads.drain(..) {
             let _ = t.join();
         }

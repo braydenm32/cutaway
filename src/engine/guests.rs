@@ -304,7 +304,8 @@ struct Inner {
 }
 
 pub struct GuestHub {
-    rt: tokio::runtime::Runtime,
+    /// Made the first time something needs it (most shows have no guests).
+    rt: OnceLock<tokio::runtime::Runtime>,
     inner: Mutex<Inner>,
     waker: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     gens: AtomicU64,
@@ -313,13 +314,18 @@ pub struct GuestHub {
     me: Mutex<Weak<GuestHub>>,
 }
 
+impl GuestHub {
+    fn rt(&self) -> &tokio::runtime::Runtime {
+        self.rt.get_or_init(|| tokio::runtime::Builder::new_multi_thread().worker_threads(2).thread_name("guests").enable_all().build().expect("tokio runtime"))
+    }
+}
+
 /// The app's guest hub.
 pub fn hub() -> Arc<GuestHub> {
     static HUB: OnceLock<Arc<GuestHub>> = OnceLock::new();
     HUB.get_or_init(|| {
-        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).thread_name("guests").enable_all().build().expect("tokio runtime");
         let h = Arc::new(GuestHub {
-            rt,
+            rt: OnceLock::new(),
             inner: Mutex::new(Inner::default()),
             waker: Mutex::new(None),
             gens: AtomicU64::new(1),
@@ -711,7 +717,7 @@ impl GuestHub {
     fn close_conn(&self, c: Conn) {
         c.stop.store(true, Ordering::Relaxed);
         let pc = c.pc.clone();
-        self.rt.spawn(async move {
+        self.rt().spawn(async move {
             let _ = pc.close().await;
         });
     }
@@ -895,14 +901,14 @@ impl GuestHub {
         let stop = Arc::new(AtomicBool::new(false));
         if let Some((audio, audio_sender)) = audio {
             let (atx, arx) = tokio::sync::mpsc::channel::<bytes::Bytes>(100);
-            self.rt.spawn(write_samples(audio, audio_sender, arx, Duration::from_millis(20)));
+            self.rt().spawn(write_samples(audio, audio_sender, arx, Duration::from_millis(20)));
             let hub = self.clone();
             let (id, stop) = (id.clone(), stop.clone());
             std::thread::Builder::new().name("guest return".into()).spawn(move || return_audio(hub, id, atx, stop))?;
         }
         let video_out = video.map(|(track, sender)| {
             let (vtx, vrx) = tokio::sync::mpsc::channel::<bytes::Bytes>(30);
-            self.rt.spawn(write_samples(track, sender, vrx, Duration::from_nanos((NS_PER_SEC / RETURN_FPS as i64) as u64)));
+            self.rt().spawn(write_samples(track, sender, vrx, Duration::from_nanos((NS_PER_SEC / RETURN_FPS as i64) as u64)));
             vtx
         });
         let name = guest_name.trim().chars().take(40).collect::<String>();
@@ -1185,10 +1191,10 @@ impl PeerConnectionEventHandler for Handler {
         let id = self.id.clone();
         match track.kind().await {
             RtpCodecKind::Video => {
-                hub.rt.spawn(receive_video(hub.clone(), id, track));
+                hub.rt().spawn(receive_video(hub.clone(), id, track));
             }
             _ => {
-                hub.rt.spawn(receive_audio(hub.clone(), id, track));
+                hub.rt().spawn(receive_audio(hub.clone(), id, track));
             }
         }
     }
@@ -1423,7 +1429,7 @@ fn handle(mut conn: TcpStream, hub: &Arc<GuestHub>) -> std::io::Result<()> {
                 return respond(&mut conn, "400 Bad Request", "application/json", br#"{"error":"no offer"}"#);
             }
             let h = hub.clone();
-            let r = hub.rt.block_on(async move { tokio::time::timeout(Duration::from_secs(15), h.negotiate(id, sdp, name)).await });
+            let r = hub.rt().block_on(async move { tokio::time::timeout(Duration::from_secs(15), h.negotiate(id, sdp, name)).await });
             match r {
                 Ok(Ok(answer)) => respond(&mut conn, "200 OK", "application/json", serde_json::json!({ "sdp": answer }).to_string().as_bytes()),
                 Ok(Err(e)) => respond(&mut conn, "409 Conflict", "application/json", serde_json::json!({ "error": format!("{e:#}") }).to_string().as_bytes()),

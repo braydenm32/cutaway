@@ -243,7 +243,8 @@ fn worker(shared: Arc<Shared>) {
                 if let Some(j) = st.job.clone().filter(|_| st.gen != done_gen) {
                     break (j, st.gen);
                 }
-                st = shared.cond.wait_timeout(st, Duration::from_millis(200)).unwrap_or_else(|e| e.into_inner()).0;
+                // (A new job and stopping both notify.)
+                st = shared.cond.wait(st).unwrap_or_else(|e| e.into_inner());
             }
         };
         done_gen = gen;
