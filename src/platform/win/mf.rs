@@ -150,14 +150,38 @@ fn variant_bool(v: bool) -> VARIANT {
 
 /// A sample holding `data`, at `time` (100 ns) for `duration`.
 fn sample_with(data: &[u8], time: i64, duration: i64) -> Result<IMFSample> {
-    // SAFETY: the buffer is locked while written and sized to the data.
+    sample_filled(data.len(), time, duration, |rows| rows.put(0, data))
+}
+
+/// Writes into a locked media buffer, checking every write fits.
+struct BufWriter {
+    p: *mut u8,
+    len: usize,
+}
+
+impl BufWriter {
+    fn put(&mut self, at: usize, bytes: &[u8]) {
+        assert!(at + bytes.len() <= self.len, "media buffer overrun");
+        // SAFETY: in bounds (checked above) of a buffer locked for writing.
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), self.p.add(at), bytes.len()) };
+    }
+}
+
+/// A sample of `len` bytes written by `fill` straight into its buffer (no
+/// copy in between), at `time` (100 ns) for `duration`.
+fn sample_filled(len: usize, time: i64, duration: i64, fill: impl FnOnce(&mut BufWriter)) -> Result<IMFSample> {
+    // SAFETY: the buffer is locked while written, and `BufWriter` keeps
+    // every write inside its `len` bytes.
     unsafe {
-        let buf = MFCreateMemoryBuffer(data.len().max(1) as u32)?;
+        let buf = MFCreateMemoryBuffer(len.max(1) as u32)?;
         let mut p = std::ptr::null_mut();
         buf.Lock(&mut p, None, None)?;
-        std::ptr::copy_nonoverlapping(data.as_ptr(), p, data.len());
+        let filled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fill(&mut BufWriter { p, len })));
         buf.Unlock()?;
-        buf.SetCurrentLength(data.len() as u32)?;
+        if let Err(e) = filled {
+            std::panic::resume_unwind(e);
+        }
+        buf.SetCurrentLength(len as u32)?;
         let s = MFCreateSample()?;
         s.AddBuffer(&buf)?;
         s.SetSampleTime(time)?;
@@ -459,17 +483,18 @@ impl MfVideoEncoder {
         } else {
             frame
         };
-        let mut data = vec![0u8; w * h * 3 / 2];
-        frame.pixels.with_planes(|p| {
-            for r in 0..h {
-                data[r * w..r * w + w].copy_from_slice(&p.y[r * p.y_stride..r * p.y_stride + w]);
-            }
-            let base = w * h;
-            for r in 0..h / 2 {
-                data[base + r * w..base + r * w + w].copy_from_slice(&p.uv[r * p.uv_stride..r * p.uv_stride + w]);
-            }
-        });
-        sample_with(&data, pts / 100, self.frame_100ns)
+        // Rows copied straight into the encoder's buffer.
+        sample_filled(w * h * 3 / 2, pts / 100, self.frame_100ns, |out| {
+            frame.pixels.with_planes(|p| {
+                for r in 0..h {
+                    out.put(r * w, &p.y[r * p.y_stride..r * p.y_stride + w]);
+                }
+                let base = w * h;
+                for r in 0..h / 2 {
+                    out.put(base + r * w, &p.uv[r * p.uv_stride..r * p.uv_stride + w]);
+                }
+            });
+        })
     }
 }
 
