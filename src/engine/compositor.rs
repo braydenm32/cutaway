@@ -17,7 +17,7 @@ use crate::media::{Ns, Pixels, VideoFrame};
 use crate::scene::PadState;
 use anyhow::{anyhow, bail, Context, Result};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use wgpu::util::DeviceExt;
 
 /// Uniforms for one draw (see `U` in compositor.wgsl).
@@ -367,15 +367,56 @@ pub(crate) fn test_gpu_turn() -> std::sync::MutexGuard<'static, ()> {
     TURN.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// The GPU interfaces to start: just the system's own (Metal on macOS,
+/// DirectX 12 on Windows) when it has a real GPU there, otherwise all of
+/// them, so an unusual Windows PC still starts. (Starting every interface
+/// loads and probes Vulkan and OpenGL too.) `WGPU_BACKEND` still decides
+/// when it's set.
+pub fn gpu_backends() -> wgpu::Backends {
+    static CHOSEN: OnceLock<wgpu::Backends> = OnceLock::new();
+    *CHOSEN.get_or_init(|| {
+        if let Some(b) = wgpu::Backends::from_env() {
+            return b;
+        }
+        let native = if cfg!(target_os = "macos") {
+            wgpu::Backends::METAL
+        } else if cfg!(windows) {
+            wgpu::Backends::DX12
+        } else {
+            return wgpu::Backends::all();
+        };
+        let mut d = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+        d.backends = native;
+        let instance = wgpu::Instance::new(d);
+        let adapters = pollster::block_on(instance.enumerate_adapters(native));
+        if adapters.iter().any(|a| a.get_info().device_type != wgpu::DeviceType::Cpu) {
+            native
+        } else {
+            wgpu::Backends::all()
+        }
+    })
+}
+
 /// Create a GPU device for compositing.
 pub fn create_device() -> Result<(wgpu::Device, wgpu::Queue, String)> {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        force_fallback_adapter: false,
-        compatible_surface: None,
-        ..Default::default()
-    }))
+    let request = |backends: wgpu::Backends| {
+        let mut d = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+        d.backends = backends;
+        let instance = wgpu::Instance::new(d);
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+            ..Default::default()
+        }))
+    };
+    let backends = gpu_backends();
+    let adapter = match request(backends) {
+        Ok(a) => Ok(a),
+        // (Anything else there is, rather than not starting.)
+        Err(_) if backends != wgpu::Backends::all() && wgpu::Backends::from_env().is_none() => request(wgpu::Backends::all()),
+        Err(e) => Err(e),
+    }
     .map_err(|e| anyhow!("no usable GPU: {e}"))?;
     let info = adapter.get_info();
     let name = format!("{} ({:?})", info.name, info.backend);
