@@ -2,17 +2,32 @@
 
 use ab_glyph::{Font, FontArc, PxScale, ScaleFont};
 use image::RgbaImage;
-use std::path::Path;
-use std::sync::OnceLock;
+use crate::util::LockExt;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 /// Fonts for titles: the one chosen, else a system font, else built in.
+/// Each file is read once (a clock redraws every second).
 pub fn fonts(custom: &Path) -> (FontArc, FontArc) {
+    static CHOSEN: OnceLock<Mutex<HashMap<PathBuf, FontArc>>> = OnceLock::new();
+    static SYSTEM: OnceLock<(FontArc, FontArc)> = OnceLock::new();
     let load = |p: &Path| std::fs::read(p).ok().and_then(|b| FontArc::try_from_vec(b).ok());
     if !custom.as_os_str().is_empty() {
+        let cache = CHOSEN.get_or_init(Default::default);
+        if let Some(f) = cache.lock_ok().get(custom) {
+            return (f.clone(), f.clone());
+        }
+        // (A file that isn't there yet is tried again next time.)
         if let Some(f) = load(custom) {
+            cache.lock_ok().insert(custom.to_path_buf(), f.clone());
             return (f.clone(), f);
         }
     }
+    SYSTEM.get_or_init(|| title_system_fonts(&load)).clone()
+}
+
+fn title_system_fonts(load: &dyn Fn(&Path) -> Option<FontArc>) -> (FontArc, FontArc) {
     let bold = [
         "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
         "/Library/Fonts/Arial Bold.ttf",
