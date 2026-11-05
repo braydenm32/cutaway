@@ -1012,6 +1012,10 @@ impl App {
             .width(500.0)
             .show(|ui| {
                 ui.set_width(500.0);
+                // Looking at the popup counts as having seen what's new in the log.
+                if let Some(e) = &self.engine {
+                    self.log_seen = e.status.lock_ok().logged;
+                }
                 ui.horizontal(|ui| {
                     let now = if problems.is_empty() { "Now".to_string() } else { format!("Now ({})", problems.len()) };
                     if ui.add(egui::Button::selectable(self.shell.status_tab == StatusTab::Now, now)).clicked() {

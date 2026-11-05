@@ -80,6 +80,7 @@ impl SettingsUi {
 
     /// Rename the scene whose new name is being typed, if it can be.
     pub(super) fn commit_scene_rename(&mut self) {
+        self.forget_derived();
         if let Some((i, t)) = self.scene_rename.take() {
             let _ = rename_scene(&mut self.draft, i, &t);
         }

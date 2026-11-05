@@ -146,9 +146,10 @@ impl SettingsUi {
             SourcesView::Cameras => {
                 ui.horizontal(|ui| {
                     if ui.button("Rescan devices").clicked() {
-                        self.video = devices::list(Kind::Video);
+                        devices::refresh_catalog();
                     }
                     hint(ui, &match self.video.len() {
+                        0 if devices::catalog_busy() => "Looking for cameras…".to_string(),
                         0 => "No cameras or capture cards found on this computer".to_string(),
                         1 => "1 camera or capture card found on this computer".to_string(),
                         n => format!("{n} cameras or capture cards found on this computer"),
@@ -983,7 +984,7 @@ fn media_editor(ui: &mut egui::Ui, m: &mut MediaConfig) {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(format!("{}.", i + 1)).color(TEXT_DIM));
                 let name = f.file_name().unwrap_or_default().to_string_lossy().to_string();
-                let missing = !f.exists();
+                let missing = !crate::util::exists_recent(f);
                 ui.label(RichText::new(&name).color(if missing { AMBER } else { Color32::WHITE })).on_hover_text(f.display().to_string());
                 if missing {
                     ui.label(RichText::new("missing").color(AMBER).size(TEXT_BODY));
@@ -1003,16 +1004,18 @@ fn media_editor(ui: &mut egui::Ui, m: &mut MediaConfig) {
     if let Some((a, b)) = swap {
         m.files.swap(a, b);
     }
+    if let Some(files) = super::picks::take("media-files") {
+        m.files.extend(files);
+    }
+    if let Some(dir) = super::picks::take_one("media-folder") {
+        m.files.extend(crate::engine::player::playable_in(&dir));
+    }
     ui.horizontal(|ui| {
         if ui.button("Add files…").clicked() {
-            if let Some(files) = rfd::FileDialog::new().add_filter("Videos and images", &["mp4", "mov", "m4v", "png", "jpg", "jpeg"]).pick_files() {
-                m.files.extend(files);
-            }
+            super::picks::start(ui.ctx(), "media-files", super::picks::What::Files, Some(("Videos and images", &["mp4", "mov", "m4v", "png", "jpg", "jpeg"])));
         }
         if ui.button("Add a folder…").clicked() {
-            if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                m.files.extend(crate::engine::player::playable_in(&dir));
-            }
+            super::picks::start(ui.ctx(), "media-folder", super::picks::What::Folder, None);
         }
     });
     ui.add_space(4.0);
@@ -1147,14 +1150,15 @@ fn look_editor(ui: &mut egui::Ui, l: &mut SourceLook, lut_check: &mut Option<(st
                         ui.horizontal(|ui| {
                             let shown = l.background_image.as_ref().and_then(|p| p.file_name()).map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| "no picture yet (blurred meanwhile)".into());
                             ui.label(shown);
+                            if let Some(f) = super::picks::take_one("source-background") {
+                                l.background_image = Some(f);
+                            }
                             if ui.button("Choose…").clicked() {
-                                if let Some(f) = rfd::FileDialog::new().add_filter("Pictures", &["png", "jpg", "jpeg", "webp", "bmp"]).pick_file() {
-                                    l.background_image = Some(f);
-                                }
+                                super::picks::start(ui.ctx(), "source-background", super::picks::What::File, Some(("Pictures", &["png", "jpg", "jpeg", "webp", "bmp"])));
                             }
                         });
                         if let Some(p) = &l.background_image {
-                            if !p.exists() {
+                            if !crate::util::exists_recent(p) {
                                 ui.label(RichText::new("⚠ That file isn't there any more; the background is blurred instead.").color(AMBER));
                             }
                         }
