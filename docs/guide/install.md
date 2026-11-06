@@ -139,7 +139,7 @@ Settings are in `%APPDATA%\Cutaway\config.toml`, recordings go to
 | | Mac | Windows |
 |---|---|---|
 | Cameras, capture cards | AVFoundation | Media Foundation (webcams, USB/PCIe capture cards) |
-| Screen | ScreenCaptureKit | Windows Graphics Capture |
+| Screen | ScreenCaptureKit | Windows Graphics Capture, scaled and converted on the graphics card, or on the processor if the card can't (set `CUTAWAY_CPU_SCREEN_CONVERT=1` to always use the processor) |
 | Encoding | VideoToolbox: H.264, HEVC, ProRes | The graphics card's H.264/HEVC encoder (NVIDIA, AMD, Intel), or Microsoft's software H.264. No ProRes |
 | Decoding (players, network sources, replays, MJPEG webcams) | VideoToolbox | Media Foundation on the graphics card, or in software if the card can't (set `CUTAWAY_SOFTWARE_DECODE=1` to always use software) |
 | Audio | CoreAudio | Windows audio (WASAPI) and **ASIO** (interfaces show as "ASIO: …", every channel) |
