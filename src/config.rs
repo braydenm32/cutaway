@@ -653,6 +653,11 @@ pub struct SourceConfig {
     pub fps: u32,
     /// Record this source to its own file.
     pub record: bool,
+    /// A close-up you aim (virtual PTZ): recorded as a crop of the wide
+    /// camera's own file in the editor timelines, with no file of its own
+    /// (one encoder fewer). Only when the wide camera records its own file.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub save_as_crop: bool,
     /// Delay this video, in milliseconds, to line it up with slower sources.
     pub delay_ms: u32,
     /// If it drops (no signal) while it's on air, cut to this scene (by
@@ -801,6 +806,23 @@ impl SourceConfig {
     /// (it shares that camera's timing: delay and rate).
     pub fn cut_from(&self) -> Option<&str> {
         self.framed_from().or_else(|| self.virtual_ptz_of())
+    }
+
+    /// The wide camera this close-up is recorded as a crop of, in place of
+    /// a file of its own: a close-up you aim with "save as a crop" on, cut
+    /// from a camera that records its own file. (Auto-framed close-ups
+    /// drift all the time, so they always get their own file.)
+    pub fn recorded_as_crop_of<'a>(&self, sources: &'a [SourceConfig]) -> Option<&'a SourceConfig> {
+        if !(self.record && self.save_as_crop) {
+            return None;
+        }
+        let from = self.virtual_ptz_of()?;
+        sources.iter().find(|s| s.name.trim().eq_ignore_ascii_case(from) && s.record && s.cut_from().is_none())
+    }
+
+    /// Recorded to a file of its own (not off, and not kept as a crop).
+    pub fn records_own_file(&self, sources: &[SourceConfig]) -> bool {
+        self.record && self.recorded_as_crop_of(sources).is_none()
     }
 
     /// A close-up (virtual PTZ camera) set far bigger than the picture it
@@ -1114,6 +1136,7 @@ impl Default for SourceConfig {
             height: 1080,
             fps: 30,
             record: true,
+            save_as_crop: false,
             delay_ms: 0,
             on_drop_scene: String::new(),
             look: SourceLook::default(),
@@ -3622,5 +3645,28 @@ mod closeup_size_tests {
         let near = close(1280, 720, 2.0);
         assert_eq!(near.oversized(&all(&near)), None);
         assert_eq!(wide.oversized(&[wide.clone()]), None, "not a close-up");
+    }
+
+    /// "Save as a crop" counts only for a close-up you aim, cut from a
+    /// camera that records its own file; otherwise it gets a file as before.
+    #[test]
+    fn close_ups_saved_as_crops() {
+        let wide = SourceConfig { name: "Cam 1".into(), width: 3840, height: 2160, ..Default::default() };
+        let close = SourceConfig { name: "Cam 1 left".into(), device: "vptz:cam 1".into(), width: 1920, height: 1080, save_as_crop: true, ..Default::default() };
+        let all = vec![wide.clone(), close.clone()];
+        assert_eq!(close.recorded_as_crop_of(&all).map(|w| w.name.as_str()), Some("Cam 1"));
+        assert!(!close.records_own_file(&all) && wide.records_own_file(&all));
+        // Off by default, and saved only when on.
+        assert!(!SourceConfig::default().save_as_crop);
+        assert!(!toml::to_string(&wide).unwrap().contains("save_as_crop"));
+        assert!(toml::to_string(&close).unwrap().contains("save_as_crop = true"));
+        // The wide camera isn't recorded: the close-up gets its own file.
+        let unrecorded = vec![SourceConfig { record: false, ..wide.clone() }, close.clone()];
+        assert!(close.recorded_as_crop_of(&unrecorded).is_none() && close.records_own_file(&unrecorded));
+        // Not recorded at all; and an auto-framed close-up never is a crop.
+        let off = SourceConfig { record: false, ..close.clone() };
+        assert!(off.recorded_as_crop_of(&all).is_none() && !off.records_own_file(&all));
+        let framed = SourceConfig { device: "frame:Cam 1".into(), ..close.clone() };
+        assert!(framed.recorded_as_crop_of(&[wide.clone(), framed.clone()]).is_none());
     }
 }

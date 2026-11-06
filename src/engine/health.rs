@@ -208,7 +208,8 @@ pub fn estimate_rate(cfg: &Config, wav_channels: &[(u32, bool)]) -> f64 {
         kbps += proxy_kbps;
         files_with_audio += 1.0;
     }
-    for s in cfg.sources.iter().filter(|s| s.record) {
+    // (A close-up saved as a crop has no file.)
+    for s in cfg.sources.iter().filter(|s| s.records_own_file(&cfg.sources)) {
         kbps += encode::record_bitrate_kbps(codec, out.iso_bitrate_kbps, s.width, s.height, s.fps) as f64;
         if out.iso_audio {
             files_with_audio += if out.proxies { 2.0 } else { 1.0 };

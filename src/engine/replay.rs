@@ -23,6 +23,9 @@ struct Lane {
     packets: Vec<VideoPacket>,
     setup: DecoderSetup,
     reorder: bool,
+    /// A close-up saved as a crop: its shot, cut from the wide camera's
+    /// pictures (decoded whole), at this size.
+    crop: Option<(super::ptz::Shot, (u32, u32))>,
 }
 
 struct Job {
@@ -90,8 +93,16 @@ impl ReplayPlayer {
 
     /// The same for one angle or several (up to four, shown as a grid),
     /// all from the same moment.
+    #[cfg(test)]
     pub fn start_lanes(&self, angles: Vec<Vec<VideoPacket>>, speed: f32) -> Result<Duration> {
-        let angles: Vec<Vec<VideoPacket>> = angles.into_iter().filter(|a| !a.is_empty()).take(4).collect();
+        self.start_framed(angles.into_iter().map(|a| (a, None)).collect(), speed)
+    }
+
+    /// One angle or several (up to four, shown as a grid), all from the
+    /// same moment; an angle with a shot is a close-up cut from those
+    /// pictures (one saved as a crop of its wide camera).
+    pub fn start_framed(&self, angles: Vec<(Vec<VideoPacket>, Option<super::ptz::Shot>)>, speed: f32) -> Result<Duration> {
+        let angles: Vec<(Vec<VideoPacket>, Option<super::ptz::Shot>)> = angles.into_iter().filter(|a| !a.0.is_empty()).take(4).collect();
         if angles.is_empty() {
             return Err(anyhow!("nothing to replay"));
         }
@@ -100,7 +111,7 @@ impl ReplayPlayer {
         // Every angle starts at its keyframe; the replay starts once they all have.
         let mut t0 = Ns::MIN;
         let mut end = Ns::MAX;
-        for packets in angles {
+        for (packets, shot) in angles {
             let first = &packets[0];
             let cfg = first.config.clone();
             let start = packets.iter().map(|p| p.pts).min().unwrap_or(first.pts);
@@ -109,7 +120,9 @@ impl ReplayPlayer {
             t0 = t0.max(start);
             end = end.min(last + frame);
             let reorder = packets.iter().any(|p| p.pts != p.dts);
-            lanes.push(Lane { setup: DecoderSetup { codec: cfg.codec, parameter_sets: cfg.parameter_sets.clone(), width: cfg.width, height: cfg.height, output }, packets, reorder });
+            // A crop: decoded whole, then cut.
+            let decoded = if shot.is_some() { (cfg.width, cfg.height) } else { output };
+            lanes.push(Lane { setup: DecoderSetup { codec: cfg.codec, parameter_sets: cfg.parameter_sets.clone(), width: cfg.width, height: cfg.height, output: decoded }, packets, reorder, crop: shot.map(|s| (s, output)) });
         }
         let span = (end - t0).max(33_000_000);
         let speed = speed.clamp(0.1, 1.0);
@@ -310,6 +323,11 @@ fn decode_lane(shared: &Shared, gen: u64, k: usize, lane: &Lane, t0: Ns) {
                 ready.push(f);
             }
         }
+        if let Some((shot, (w, h))) = lane.crop {
+            for f in ready.iter_mut() {
+                *f = f.crop_scaled(super::ptz::shot_rect(shot, (f.width, f.height), (w, h)), w, h);
+            }
+        }
         for f in ready.iter_mut() {
             serial += 1;
             f.serial = serial;
@@ -414,5 +432,27 @@ mod tests {
         // Both angles show (top left and top right); the empty corners are black.
         assert!(luma(80, 45) > 40 && luma(240, 45) > 40, "{} {}", luma(80, 45), luma(240, 45));
         assert!(luma(80, 135) <= 17 && luma(240, 135) <= 17, "{} {}", luma(80, 135), luma(240, 135));
+    }
+
+    /// A close-up saved as a crop replays as its shot of the wide
+    /// camera's pictures, full size.
+    #[test]
+    fn replays_a_crop_as_its_shot() {
+        let Some(a) = packets(30, 30) else {
+            eprintln!("no encoder here; skipping");
+            return;
+        };
+        let r = ReplayPlayer::new((320, 180));
+        r.start_framed(vec![(a, Some(crate::engine::ptz::Shot { x: 0.25, y: 0.5, zoom: 2.0 }))], 1.0).unwrap();
+        let mut got = None;
+        for _ in 0..100 {
+            std::thread::sleep(Duration::from_millis(10));
+            if let Some(f) = r.frame() {
+                got = Some(f);
+                break;
+            }
+        }
+        let f = got.expect("a picture").frame;
+        assert_eq!((f.width, f.height), (320, 180));
     }
 }

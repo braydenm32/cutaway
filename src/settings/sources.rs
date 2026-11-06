@@ -384,6 +384,8 @@ impl SettingsUi {
             .filter(|(i, s)| *i != self.sel_source && s.framed_from().is_none() && s.virtual_ptz_of().is_none())
             .map(|(_, s)| (s.name.clone(), s.fps))
             .collect();
+        // Which of them record their own file (a close-up can be saved as a crop of those).
+        let recorded_wides: Vec<String> = self.draft.sources.iter().filter(|s| s.record && s.cut_from().is_none()).map(|s| s.name.clone()).collect();
         let scene_names: Vec<String> = self.draft.effective_scenes().iter().map(|s| s.name.clone()).collect();
         let Some(src) = self.draft.sources.get_mut(self.sel_source) else {
             hint(ui, "No sources yet. Add your cameras, capture cards, the screen, a media player or a network input.");
@@ -658,9 +660,32 @@ impl SettingsUi {
                 ui.add(egui::DragValue::new(&mut src.network_latency_ms).range(40..=3000).speed(10).suffix(" ms"));
                 ui.end_row();
             }
-            label(ui, "Record to its own file");
-            ui.checkbox(&mut src.record, "");
-            ui.end_row();
+            if kind == SourceKind::VirtualPtz {
+                // Its own file, or a crop of the wide camera's in the editor timelines.
+                label(ui, "Record");
+                let wide = src.virtual_ptz_of().unwrap_or("").to_string();
+                let wide_recorded = recorded_wides.iter().any(|w| w.trim().eq_ignore_ascii_case(wide.trim()));
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut src.record, "");
+                    if src.record && !wide.is_empty() {
+                        let own = "as its own video file".to_string();
+                        let crop = format!("as a crop of {wide}");
+                        egui::ComboBox::from_id_salt("vptz_save_as").selected_text(if src.save_as_crop { &crop } else { &own }).width(220.0).show_ui(ui, |ui| {
+                            ui.selectable_value(&mut src.save_as_crop, false, own.as_str()).on_hover_text("A file of its own: what it showed, ready to use");
+                            ui.selectable_value(&mut src.save_as_crop, true, crop.as_str())
+                                .on_hover_text(format!("Lighter: no file of its own. The editor timelines use {wide}'s file, zoomed in to the same shot, so you can reframe it there"));
+                        });
+                        if src.save_as_crop && !wide_recorded {
+                            ui.label(RichText::new("⚠").color(AMBER)).on_hover_text(format!("{wide} isn't recorded, so this gets its own file"));
+                        }
+                    }
+                });
+                ui.end_row();
+            } else {
+                label(ui, "Record to its own file");
+                ui.checkbox(&mut src.record, "");
+                ui.end_row();
+            }
             if !matches!(kind, SourceKind::Framed | SourceKind::VirtualPtz) {
                 label(ui, "Delay");
                 ui.add(egui::DragValue::new(&mut src.delay_ms).range(0..=2000).suffix(" ms"));

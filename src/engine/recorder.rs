@@ -967,7 +967,14 @@ pub struct Take {
     /// Each recorded source's file number (by identity), so a source that
     /// restarts keeps its number; new ones take the next.
     pub iso_numbers: Vec<(u64, usize)>,
+    /// Close-ups saved as crops: each one's identity, its controls (whose
+    /// shot is noted as it moves) and the shots so far (from the start of
+    /// the take).
+    pub crops: Vec<CropLog>,
 }
+
+/// See `Take::crops`.
+pub type CropLog = (u64, Arc<super::ptz::VirtualPtz>, Arc<std::sync::Mutex<Vec<(Ns, [f32; 4])>>>);
 
 /// What a file started during the take needs: the take's settings.
 #[derive(Clone)]

@@ -78,7 +78,7 @@ impl Engine {
             std::thread::spawn(move || crate::recovery::remember_folders(&dir, &crate::recovery::folders_of(&output)));
         }
         // A close-up recorded far bigger than the picture it holds: say so.
-        for s in cfg.sources.iter().filter(|s| s.record) {
+        for s in cfg.sources.iter().filter(|s| s.records_own_file(&cfg.sources)) {
             if let Some((size, detail)) = s.oversized(&cfg.sources) {
                 self.status.lock_ok().push(LogLevel::Warning, crate::config::oversized_note(&s.name, size, detail));
             }
@@ -217,7 +217,7 @@ impl Engine {
             let keep = out.clip_seconds.max(cfg.replay.seconds.ceil() as u32).clamp(5, 600);
             self.clips.start(folder.clone(), fps, brand, audio_cfg.clone(), keep);
             let (path, vtx, muxes) = add_video("Program".into(), format!("Program.{ext}"), fps, (cw, ch), true, rate, None, (fps as usize / 2).max(8), track_cfgs.clone(), Some(self.clips.clone()));
-            export_files.push(ExportFile { path, name: "Program".into(), width: cw, height: ch, fps, has_audio: audio_cfg.is_some(), source: None, tc_frame: tc_for(fps), length: None, clean: false, start: 0 });
+            export_files.push(ExportFile { path, name: "Program".into(), width: cw, height: ch, fps, has_audio: audio_cfg.is_some(), source: None, tc_frame: tc_for(fps), length: None, clean: false, start: 0, crop: None });
             self.video_taps.lock_ok().program = Some(ProgramTap { tx: vtx, from: t0 });
             program_muxes = muxes;
         }
@@ -227,7 +227,7 @@ impl Engine {
             let (cw, ch) = self.info.canvas;
             let rate = encode::record_bitrate_kbps(codec, out.program_bitrate_kbps, cw, ch, fps);
             let (path, vtx, _) = add_video("Program (clean)".into(), format!("Program_Clean.{ext}"), fps, (cw, ch), true, rate, None, (fps as usize / 2).max(8), Vec::new(), None);
-            export_files.push(ExportFile { path, name: "Program (clean)".into(), width: cw, height: ch, fps, has_audio: audio_cfg.is_some(), source: None, tc_frame: tc_for(fps), length: None, clean: true, start: 0 });
+            export_files.push(ExportFile { path, name: "Program (clean)".into(), width: cw, height: ch, fps, has_audio: audio_cfg.is_some(), source: None, tc_frame: tc_for(fps), length: None, clean: true, start: 0, crop: None });
             self.video_taps.lock_ok().clean = Some(ProgramTap { tx: vtx, from: t0 });
         }
 
@@ -263,13 +263,27 @@ impl Engine {
             let angle = keep_angles.then(|| {
                 let b = super::clips::ClipBuffer::new();
                 b.start(folder.clone(), s.fps, brand, None, cfg.replay.seconds.ceil() as u32);
-                angles.push((s.name.clone(), b.clone()));
+                angles.push((s.name.clone(), b.clone(), None));
                 b
             });
             let (path, vtx, _) = add_video(label, file, s.fps, s.size, with_audio, rate, retimer, 8, Vec::new(), angle);
             // (By identity: the switch log's angles stay right if sources move.)
-            export_files.push(ExportFile { path, name: s.name.clone(), width: s.size.0, height: s.size.1, fps: s.fps, has_audio: with_audio, source: Some(s.uid as usize), tc_frame: tc_for(s.fps), length: None, clean: false, start: 0 });
+            export_files.push(ExportFile { path, name: s.name.clone(), width: s.size.0, height: s.size.1, fps: s.fps, has_audio: with_audio, source: Some(s.uid as usize), tc_frame: tc_for(s.fps), length: None, clean: false, start: 0, crop: None });
             s.slot.start_iso_tap(vtx, t0);
+        }
+        // Close-ups saved as crops: no encoder, file or replay buffer of
+        // their own. The timelines frame their shot from the wide camera's
+        // file, and replays cut it from the wide camera's buffer.
+        let mut crops = Vec::new();
+        for s in self.sources.iter() {
+            let Some((ef, virt)) = crop_file(s, &export_files, 0) else { continue };
+            let wide = self.sources.iter().find(|w| Some(w.uid) == s.crop_of).map(|w| w.name.clone()).unwrap_or_default();
+            if let Some(b) = angles.iter().find(|a| a.0 == wide).map(|a| a.1.clone()) {
+                angles.push((s.name.clone(), b, Some(virt.clone())));
+            }
+            let first = ef.crop.as_ref().and_then(|c| c.keys.first()).map(|k| k.1).unwrap_or([0.0, 0.0, 1.0, 1.0]);
+            export_files.push(ef);
+            crops.push((s.uid, virt, Arc::new(Mutex::new(vec![(0, first)]))));
         }
 
         // Recording mix, encoded once for every file.
@@ -331,6 +345,10 @@ impl Engine {
             super::journal::Journal::create(&dirs, start).map(Arc::new)
         };
         self.switcher.set_journal(journal.clone());
+        for (uid, virt, keys) in &crops {
+            let first = keys.lock_ok()[0].1;
+            virt.start_log(shot_log(*uid, t0, t0, first, keys.clone(), journal.clone()));
+        }
         let take = recorder::Take {
             folder: folder.clone(),
             t0,
@@ -366,6 +384,7 @@ impl Engine {
                 tc_seconds: out.timecode.then_some(tc_secs),
             },
             iso_numbers,
+            crops,
         };
         *self.take_monitor.lock_ok() = Some(TakeMonitor::new(folder.clone(), backup_folder.clone(), stats));
         {
@@ -392,6 +411,15 @@ impl Engine {
     /// program and Mix.wav.) Returns the file's name.
     pub(crate) fn start_late_iso(&self, i: usize) -> Option<String> {
         let s = self.sources.get(i)?;
+        if s.crop_of.is_some() {
+            // A close-up saved as a crop: no file, it carries on (or starts)
+            // as a crop of its wide camera's file from here.
+            let mut guard = self.take.lock_ok();
+            let take = guard.as_mut()?;
+            let from = next_boundary(self.info.fps) - take.t0;
+            self.add_late_crop(take, s, from);
+            return None;
+        }
         if !s.record {
             return None;
         }
@@ -443,6 +471,7 @@ impl Engine {
             length: None,
             clean: false,
             start: offset,
+            crop: None,
         };
         if let Some(j) = &take.journal {
             j.add(&super::journal::Entry::File(journal_file(&ef)));
@@ -453,7 +482,42 @@ impl Engine {
         if let Some(m) = self.take_monitor.lock_ok().as_mut() {
             m.add_file(label, st);
         }
+        // Its close-ups saved as crops follow it into its new file.
+        for c in self.sources.iter().filter(|c| c.crop_of == Some(s.uid)) {
+            self.add_late_crop(take, c, offset);
+        }
         Some(file)
+    }
+
+    /// Close-up `s`, saved as a crop, from `from` (from the start of the
+    /// take): in the wide camera's newest file, its shot noted from now.
+    fn add_late_crop(&self, take: &mut recorder::Take, s: &super::SourceHandle, from: Ns) {
+        let Some((ef, virt)) = crop_file(s, &take.export_files, from) else { return };
+        // Once for each file (the close-up and its wide camera may both
+        // have restarted).
+        if take.export_files.iter().any(|f| f.crop.is_some() && f.source == ef.source && f.path == ef.path) {
+            return;
+        }
+        let first = ef.crop.as_ref().and_then(|c| c.keys.first()).map(|k| k.1).unwrap_or([0.0, 0.0, 1.0, 1.0]);
+        if let Some(j) = &take.journal {
+            j.add(&super::journal::Entry::File(journal_file(&ef)));
+        }
+        take.export_files.push(ef);
+        let keys = match take.crops.iter_mut().find(|c| c.0 == s.uid) {
+            Some(c) => {
+                // (Remade: its controls are new.)
+                c.1.stop_log();
+                c.1 = virt.clone();
+                c.2.clone()
+            }
+            None => {
+                let keys = Arc::new(Mutex::new(Vec::new()));
+                take.crops.push((s.uid, virt.clone(), keys.clone()));
+                keys
+            }
+        };
+        keys.lock_ok().push((from, first));
+        virt.start_log(shot_log(s.uid, take.t0, take.t0 + from, first, keys, take.journal.clone()));
     }
 
     /// Drop a marker at what the program shows now. Returns its name.
@@ -561,11 +625,14 @@ impl Engine {
         let mut guard = self.take.lock_ok();
         let Some(take) = guard.take() else { return };
         self.switcher.set_journal(None);
+        for (_, virt, _) in &take.crops {
+            virt.stop_log();
+        }
         let folder = take.folder.clone();
         self.status.lock_ok().rec = RecState::Finalizing { folder: folder.clone(), step: "Catching the last frames".into(), done: 0.0 };
         drop(guard);
         self.clips.stop();
-        for (_, a) in self.angles.lock_ok().drain(..) {
+        for (_, a, _) in self.angles.lock_ok().drain(..) {
             a.stop();
         }
         let fps = self.info.fps;
@@ -621,7 +688,7 @@ impl Engine {
                     first_scene: take.first_scene.clone(),
                     first_angle: take.first_angle,
                     markers: take.markers.lock_ok().clone(),
-                    export_files: take.export_files.clone(),
+                    export_files: with_shots(&take.export_files, &take.crops),
                     tc_seconds: take.tc_seconds,
                     on_air: graphics.on_air(take.t0, t1),
                     rescued: None,
@@ -935,6 +1002,57 @@ impl SideFiles {
     }
 }
 
+/// The entry for close-up `s`, saved as a crop, in the timelines: the
+/// wide camera's file (the newest, still going) from `start` (from the
+/// start of the take), with the shot it has now. None when it isn't a
+/// crop, or there's no such file.
+fn crop_file(s: &super::SourceHandle, files: &[ExportFile], start: Ns) -> Option<(ExportFile, Arc<super::ptz::VirtualPtz>)> {
+    let wide = s.crop_of?;
+    let virt = s.input.ptz().and_then(|p| p.virt.clone())?;
+    let file = files.iter().rev().find(|f| f.source == Some(wide as usize) && f.crop.is_none() && f.length.is_none())?;
+    let first = super::ptz::shot_fraction(virt.position(), (file.width, file.height), s.size);
+    let crop = export::Crop { of: wide as usize, size: s.size, keys: vec![(start, first)] };
+    Some((ExportFile { name: s.name.clone(), has_audio: false, source: Some(s.uid as usize), length: None, clean: false, start: start.max(file.start), crop: Some(crop), ..file.clone() }, virt))
+}
+
+/// Notes a crop's shot as it moves: in the take (for Stop) and its journal
+/// (for a rescue).
+/// `since`: when (host time) `first` was noted.
+fn shot_log(uid: u64, t0: Ns, since: Ns, first: [f32; 4], keys: Arc<Mutex<Vec<(Ns, [f32; 4])>>>, journal: Option<Arc<super::journal::Journal>>) -> super::ptz::ShotLog {
+    super::ptz::ShotLog::new(
+        since,
+        first,
+        Box::new(move |at, rect| {
+            let at = (at - t0).max(0);
+            keys.lock_ok().push((at, rect));
+            if let Some(j) = &journal {
+                j.add(&super::journal::Entry::Shot { source: uid as usize, at, rect });
+            }
+        }),
+    )
+}
+
+/// The take's entries with every crop's shots filled in.
+fn with_shots(files: &[ExportFile], crops: &[recorder::CropLog]) -> Vec<ExportFile> {
+    let mut files = files.to_vec();
+    for f in &mut files {
+        let Some(c) = f.crop.as_mut() else { continue };
+        if let Some((_, _, keys)) = crops.iter().find(|k| Some(k.0 as usize) == f.source) {
+            let mut all = keys.lock_ok().clone();
+            all.sort_by_key(|k| k.0);
+            // Its first shot where its file starts, then every move after.
+            let first = c.keys.first().copied();
+            c.keys = all;
+            if let Some(first) = first {
+                if c.keys.first().is_none_or(|k| k.0 > first.0) {
+                    c.keys.insert(0, first);
+                }
+            }
+        }
+    }
+    files
+}
+
 /// A file as the journal keeps it: by its name in the take folder (the
 /// take may be rescued from its backup copy, or after it's moved).
 pub(crate) fn journal_file(f: &ExportFile) -> ExportFile {
@@ -1149,7 +1267,7 @@ mod tests {
         let length = Duration::from_secs(120);
         let t1 = t0 + 120 * NS_PER_SEC;
         let wall = chrono::DateTime::parse_from_rfc3339("2026-11-01T20:04:12+01:00").unwrap().with_timezone(&chrono::Local);
-        let file = |dir: &std::path::Path, f: &str, source| ExportFile { path: dir.join(f), name: f.trim_end_matches(".mp4").into(), width: 1920, height: 1080, fps: 30, has_audio: true, source, tc_frame: Some(72_252 * 30), length: None, clean: false, start: 0 };
+        let file = |dir: &std::path::Path, f: &str, source| ExportFile { path: dir.join(f), name: f.trim_end_matches(".mp4").into(), width: 1920, height: 1080, fps: 30, has_audio: true, source, tc_frame: Some(72_252 * 30), length: None, clean: false, start: 0, crop: None };
         let files_of = |dir: &std::path::Path| vec![file(dir, "Program.mp4", None), file(dir, "ISO_01_Wide.mp4", Some(7)), file(dir, "ISO_02_Host.mp4", Some(9))];
         let sw = |s: i64, scene: &str, angle| switcher::SwitchEvent { at: t0 + VIDEO_LATENCY + s * NS_PER_SEC, scene: scene.into(), mode: TransitionMode::Cut, duration_ms: 0, angle };
         let events = vec![sw(20, "Host", Some(9)), sw(45, "Both", None), sw(80, "Wide", Some(7))];

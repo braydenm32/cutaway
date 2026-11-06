@@ -281,6 +281,9 @@ impl Status {
     }
 }
 
+/// A source's recent pictures for replays (see `Engine::angles`).
+pub(crate) type Angle = (String, Arc<clips::ClipBuffer>, Option<Arc<ptz::VirtualPtz>>);
+
 pub struct SourceHandle {
     /// Identity (`SourceConfig::uid`).
     pub uid: u64,
@@ -289,7 +292,11 @@ pub struct SourceHandle {
     pub preview: Arc<FrameSlot>,
     pub size: (u32, u32),
     pub fps: u32,
+    /// Recorded to a file of its own.
     pub record: bool,
+    /// A close-up saved as a crop of this wide camera's file instead
+    /// (its identity).
+    pub crop_of: Option<u64>,
     pub slot: Arc<SourceSlot>,
     pub input: Arc<inputs::VideoInput>,
 }
@@ -484,8 +491,10 @@ pub struct Engine {
     /// The last stretch of the recording, for instant clips.
     clips: Arc<clips::ClipBuffer>,
     /// The last stretch of each source's own file, for replays from any
-    /// camera: (source name, its buffer). Empty when not recording.
-    angles: Mutex<Vec<(String, Arc<clips::ClipBuffer>)>>,
+    /// camera: (source name, its buffer). Empty when not recording. A
+    /// close-up saved as a crop has its wide camera's buffer and its own
+    /// shot, cut from it when replayed.
+    angles: Mutex<Vec<Angle>>,
     /// The stinger transition's video.
     pub stinger: Arc<stinger::StingerPlayer>,
     /// Instant replays.
@@ -681,7 +690,8 @@ impl Engine {
                 preview: FrameSlot::new(),
                 size: (sc.width, sc.height),
                 fps: sc.fps,
-                record: sc.record,
+                record: sc.records_own_file(&cfg.sources),
+                crop_of: sc.recorded_as_crop_of(&cfg.sources).map(|w| w.uid),
                 slot,
                 input,
             });
@@ -1434,7 +1444,8 @@ impl Engine {
         for (i, sc) in new.sources.iter().enumerate() {
             match keep[i].and_then(|j| old_handles[j].take().map(|h| (j, h))) {
                 Some((j, mut h)) => {
-                    h.record = sc.record;
+                    h.record = sc.records_own_file(&new.sources);
+                    h.crop_of = sc.recorded_as_crop_of(&new.sources).map(|w| w.uid);
                     sources.push(h);
                     masks.push(old_masks[j].take().unwrap_or_else(cutout::MaskSlot::new));
                     cutouts.push(old_cutouts[j].take().unwrap_or_default());
@@ -1443,7 +1454,17 @@ impl Engine {
                     keep[i] = None;
                     let input = inputs::VideoInput::new(i, sc.clone(), slots[i].clone(), self.hub.clone(), peers.clone());
                     to_open.push(input.clone());
-                    sources.push(SourceHandle { uid: sc.uid, name: sc.name.clone(), preview: FrameSlot::new(), size: (sc.width, sc.height), fps: sc.fps, record: sc.record, slot: slots[i].clone(), input });
+                    sources.push(SourceHandle {
+                        uid: sc.uid,
+                        name: sc.name.clone(),
+                        preview: FrameSlot::new(),
+                        size: (sc.width, sc.height),
+                        fps: sc.fps,
+                        record: sc.records_own_file(&new.sources),
+                        crop_of: sc.recorded_as_crop_of(&new.sources).map(|w| w.uid),
+                        slot: slots[i].clone(),
+                        input,
+                    });
                     masks.push(cutout::MaskSlot::new());
                     cutouts.push(CutoutState::Off);
                 }
@@ -1821,7 +1842,7 @@ impl Engine {
         let secs = seconds.unwrap_or(cfg.replay.seconds).clamp(1.0, 60.0);
         // The newest pictures are still on their way to the recording.
         let lanes = match angle {
-            ReplayAngle::Program => vec![self.clips.recent(secs)?],
+            ReplayAngle::Program => vec![(self.clips.recent(secs)?, None)],
             ReplayAngle::Source(t) => {
                 let angles = self.angles.lock_ok();
                 let names: Vec<String> = angles.iter().map(|a| a.0.clone()).collect();
@@ -1834,12 +1855,12 @@ impl Engine {
                     self.clips.recent(secs)?; // (says "start recording first" when it isn't)
                     bail!("{t} isn't being recorded on its own, so it can't be replayed (its \"Record to its own file\" is off, or the files are ProRes)");
                 };
-                vec![angles[i].1.recent(secs)?]
+                vec![(angles[i].1.recent(secs)?, angles[i].2.as_ref().map(|v| v.position()))]
             }
             ReplayAngle::Quad => {
                 self.clips.recent(secs)?;
                 let angles = self.angles.lock_ok();
-                let lanes: Vec<_> = angles.iter().take(4).filter_map(|a| a.1.recent(secs).ok()).collect();
+                let lanes: Vec<_> = angles.iter().take(4).filter_map(|a| Some((a.1.recent(secs).ok()?, a.2.as_ref().map(|v| v.position())))).collect();
                 if lanes.len() < 2 {
                     bail!("a replay from every angle needs at least two sources recording their own files");
                 }
@@ -1847,7 +1868,7 @@ impl Engine {
             }
         };
         let speed = if slow { cfg.replay.slow_speed.clamp(0.1, 1.0) } else { 1.0 };
-        let d = self.replay.start_lanes(lanes, speed)?;
+        let d = self.replay.start_framed(lanes, speed)?;
         (self.waker)();
         Ok(d)
     }
@@ -1940,16 +1961,13 @@ impl Engine {
         }
         s += "\nSources:\n";
         for (i, src) in self.sources.iter().enumerate() {
-            s += &format!(
-                "  {}. {} - {} ({}x{} @ {}){}\n",
-                i + 1,
-                src.name,
-                src.description(),
-                src.size.0,
-                src.size.1,
-                src.fps,
-                if src.record { "" } else { " [not recorded]" }
-            );
+            let wide = src.crop_of.and_then(|w| self.sources.iter().find(|s| s.uid == w));
+            let recorded = match wide {
+                Some(w) => format!(" [saved as a crop of {}]", w.name),
+                None if src.record => String::new(),
+                None => " [not recorded]".into(),
+            };
+            s += &format!("  {}. {} - {} ({}x{} @ {}){recorded}\n", i + 1, src.name, src.description(), src.size.0, src.size.1, src.fps);
         }
         if !self.audio.is_empty() {
             s += "\nAudio inputs:\n";
@@ -2555,6 +2573,72 @@ mod tests {
         assert!(dark > 0.6 && dark < bars - 1.5, "Dark {dark:.2} s, Bars {bars:.2} s");
         let flat = seconds(&flat_file);
         assert!(flat > 1.0 && flat < bars - 0.5, "Flat {flat:.2} s, Bars {bars:.2} s");
+        e.shutdown();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A close-up saved as a crop gets no encoder or file of its own: the
+    /// take's timelines frame it from the wide camera's file, and replays
+    /// from it still work. One saved as its own file still gets one.
+    #[test]
+    fn close_ups_saved_as_crops() {
+        use crate::config::{PtzConfig, PtzPreset, SourceConfig};
+        use crate::control::{ReplayAngle, Target};
+        let _turn = guests::test_turn();
+        let _gpu = compositor::test_gpu_turn();
+        let dir = std::env::temp_dir().join(format!("cutaway-crops-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut cfg = Config::default();
+        (cfg.program.width, cfg.program.height, cfg.program.fps) = (320, 180, 15);
+        cfg.output.folder = dir.clone();
+        cfg.output.resolve_project = true;
+        let at = |x: f32| PtzConfig { presets: vec![PtzPreset { name: "p".into(), x, y: 0.5, zoom: 2.0 }], ..Default::default() };
+        let wide = SourceConfig { name: "Wide".into(), device: "test:smpte".into(), width: 640, height: 360, fps: 15, ..Default::default() };
+        let close = |name: &str, x: f32, crop: bool| SourceConfig { name: name.into(), device: "vptz:Wide".into(), width: 320, height: 180, fps: 15, ptz: at(x), save_as_crop: crop, ..Default::default() };
+        cfg.sources = vec![wide, close("Wide left", 0.25, true), close("Wide right", 0.75, false)];
+        cfg.assign_uids();
+        let mut e = match Engine::start(&cfg, Arc::new(|| {})) {
+            Ok(e) => e,
+            Err(err) => {
+                eprintln!("skipping: the engine can't start here ({err:#})");
+                return;
+            }
+        };
+        assert_eq!((e.sources[1].record, e.sources[1].crop_of), (false, Some(e.sources[0].uid)));
+        assert_eq!((e.sources[2].record, e.sources[2].crop_of), (true, None));
+        assert!(e.describe_setup().contains("Wide left - ") && e.describe_setup().contains("[saved as a crop of Wide]"));
+        let left = cfg.effective_scenes().into_iter().find(|s| s.name == "Wide left").expect("a scene of the close-up");
+        if let Err(err) = e.start_recording() {
+            eprintln!("skipping: {err:#}");
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(1200));
+        e.take_scene(&left, TransitionMode::Cut, 0);
+        std::thread::sleep(Duration::from_millis(2000));
+        // Two encoders for the cameras: the wide one and the right close-up.
+        {
+            let take = e.take.lock_ok();
+            let take = take.as_ref().unwrap();
+            assert_eq!(take.iso_slots.iter().map(|s| s.0.as_str()).collect::<Vec<_>>(), vec!["Wide", "Wide right"]);
+            assert_eq!(take.crops.len(), 1);
+        }
+        // Its replay: its shot, cut from the wide camera's recording.
+        e.start_replay(Some(1.0), false, &ReplayAngle::Source(Target::Name("Wide left".into()))).expect("a replay of the crop");
+        e.replay.stop();
+        e.stop_recording();
+        e.wait_finalized();
+        let report = e.status.lock_ok().last_take.clone().expect("a recording");
+        let names: Vec<String> = report.files.iter().map(|f| f.0.file_name().unwrap().to_string_lossy().to_string()).collect();
+        assert!(names.iter().any(|n| n.starts_with("ISO_01_Wide.")) && names.iter().any(|n| n.starts_with("ISO_02_Wide_right")), "{names:?}");
+        assert!(!names.iter().any(|n| n.contains("left")), "no file of its own: {names:?}");
+        let take = report.folder.file_name().unwrap().to_string_lossy().to_string();
+        let x = std::fs::read_to_string(report.folder.join(format!("{take}.fcpxml"))).expect("the timeline");
+        // 320x180 from a 640x360 wide, on a 320x180 timeline: twice the fit, moved right.
+        let angle = &x[x.find("<mc-angle name=\"Wide left\"").expect("its angle")..];
+        assert!(angle[..angle.find("</mc-angle>").unwrap()].contains("<adjust-transform position=\"88.8889 0\" scale=\"2 2\""), "{x}");
+        let lua = std::fs::read_to_string(report.folder.join(format!("{take} (Resolve).lua"))).expect("the Resolve take file");
+        assert!(lua.contains("zoom = 2, pan = 160, tilt = 0"), "{lua}");
+        assert!(!lua.split("cameras = {").nth(1).unwrap().split('}').next().unwrap().contains("left"));
         e.shutdown();
         let _ = std::fs::remove_dir_all(&dir);
     }
