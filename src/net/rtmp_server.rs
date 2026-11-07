@@ -71,10 +71,22 @@ struct Session {
     /// until this one ends its reconnection isn't answered.
     last_data: Instant,
     idle: Duration,
+    /// Until the sender has started publishing (with the right key): when it
+    /// has to have, and the largest message it may send. A connection that
+    /// dribbles bytes can't hold the input (there's one at a time) for long,
+    /// or make Cutaway gather big messages before the key is checked.
+    publish_by: Option<Instant>,
+    max_message: usize,
 }
 
 /// Silence that ends a session, before and after publishing starts
 /// (shorter in tests).
+/// The time a sender has from connecting to publishing.
+const PUBLISH_WITHIN: Duration = Duration::from_secs(if cfg!(test) { 8 } else { 30 });
+/// Messages before publishing are small commands.
+const MAX_MESSAGE_BEFORE_PUBLISH: usize = 64 * 1024;
+/// Chunk streams in use at once (real senders use a handful).
+const MAX_CHUNK_STREAMS: usize = 64;
 const IDLE_BEFORE_PUBLISH: Duration = Duration::from_millis(if cfg!(test) { 6000 } else { 15_000 });
 const IDLE_PUBLISHING: Duration = Duration::from_millis(if cfg!(test) { 5000 } else { 10_000 });
 
@@ -102,9 +114,27 @@ impl Session {
         self.send(3, MSG_COMMAND, stream, &body)
     }
 
+    /// `read_exact`, but all of it by `publish_by` (a read timeout alone
+    /// starts again with every byte).
+    fn read_all(&mut self, buf: &mut [u8]) -> Result<()> {
+        let mut got = 0;
+        while got < buf.len() {
+            if self.publish_by.is_some_and(|t| Instant::now() > t) {
+                bail!("the sender took too long to start");
+            }
+            match self.conn.read(&mut buf[got..]) {
+                Ok(0) => bail!("the sender went away"),
+                Ok(n) => got += n,
+                Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut || e.kind() == ErrorKind::Interrupted => {}
+                Err(e) => bail!("connection lost: {e}"),
+            }
+        }
+        Ok(())
+    }
+
     fn handshake(&mut self) -> Result<()> {
         let mut c0c1 = vec![0u8; 1537];
-        self.conn.read_exact(&mut c0c1).context("no RTMP handshake")?;
+        self.read_all(&mut c0c1).context("no RTMP handshake")?;
         if c0c1[0] != 3 {
             bail!("not an RTMP client (version {})", c0c1[0]);
         }
@@ -121,7 +151,7 @@ impl Session {
         s.extend_from_slice(&c0c1[1..]); // S2 echoes C1
         self.conn.write_all(&s)?;
         let mut c2 = vec![0u8; 1536];
-        self.conn.read_exact(&mut c2)?;
+        self.read_all(&mut c2)?;
         Ok(())
     }
 
@@ -132,6 +162,9 @@ impl Session {
             }
             if stop.load(Ordering::Relaxed) {
                 return Ok(None);
+            }
+            if self.publish_by.is_some_and(|t| Instant::now() > t) {
+                bail!("the sender didn't start publishing");
             }
             let mut buf = [0u8; 65536];
             match self.conn.read(&mut buf) {
@@ -182,7 +215,13 @@ impl Session {
             if b.len() < i + hlen {
                 return Ok(None);
             }
-            let mut h = self.in_headers.get(&cs).cloned().unwrap_or_default();
+            // (Taken out and put back, not copied: a big message arrives in
+            // many chunks, and copying what's come so far for each one adds
+            // up to the square of its size.)
+            if !self.in_headers.contains_key(&cs) && self.in_headers.len() >= MAX_CHUNK_STREAMS {
+                bail!("the sender used too many chunk streams");
+            }
+            let mut h = self.in_headers.remove(&cs).unwrap_or_default();
             let fresh = h.payload.is_empty();
             let mut ts_field = None;
             if fmt <= 2 {
@@ -195,6 +234,9 @@ impl Session {
             if fmt == 0 {
                 h.stream = u32::from_le_bytes([b[i + 7], b[i + 8], b[i + 9], b[i + 10]]);
             }
+            if h.length > self.max_message {
+                bail!("the sender sent a {} KB message before publishing", h.length / 1024);
+            }
             i += hlen;
             let mut ts_val = ts_field;
             if fmt <= 2 {
@@ -202,6 +244,7 @@ impl Session {
             }
             if h.ext {
                 if b.len() < i + 4 {
+                    self.in_headers.insert(cs, h);
                     return Ok(None);
                 }
                 // On a type-3 chunk it only repeats the last one.
@@ -213,6 +256,7 @@ impl Session {
             let remaining = h.length.saturating_sub(h.payload.len());
             let take = remaining.min(self.in_chunk);
             if b.len() < i + take {
+                self.in_headers.insert(cs, h);
                 return Ok(None);
             }
             if fresh {
@@ -281,6 +325,8 @@ pub fn serve(port: u16, key: &str, stop: &AtomicBool, out: &mut dyn FnMut(Incomi
             video_codec: VideoCodec::H264,
             last_data: Instant::now(),
             idle: IDLE_BEFORE_PUBLISH,
+            publish_by: Some(Instant::now() + PUBLISH_WITHIN),
+            max_message: MAX_MESSAGE_BEFORE_PUBLISH,
         };
         let r = (|| -> Result<()> {
             s.conn.set_read_timeout(Some(Duration::from_secs(5)))?;
@@ -351,6 +397,8 @@ pub fn serve(port: u16, key: &str, stop: &AtomicBool, out: &mut dyn FnMut(Incomi
                                 out(Incoming::Started(stream.clone()));
                                 publishing = Some(stream);
                                 s.idle = IDLE_PUBLISHING;
+                                s.publish_by = None;
+                                s.max_message = usize::MAX;
                             }
                             "FCUnpublish" | "deleteStream" | "closeStream" => break Ok(()),
                             _ => {}
@@ -541,5 +589,28 @@ mod tests {
         drop(next);
         server.join().unwrap().unwrap();
         assert!(ended.lock_ok().iter().any(|e| e.as_deref().is_some_and(|e| e.contains("stopped sending"))), "{:?}", ended.lock_ok());
+    }
+
+    /// A connection that sends a byte every second never goes quiet, but it
+    /// still can't hold the input for longer than the time to publish.
+    #[test]
+    fn a_dribbling_sender_lets_the_next_one_in() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let (port, server) = start(&stop, |_| {});
+        let mut slow = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        slow.write_all(&[3]).unwrap();
+        let t = Instant::now();
+        let mut gone = false;
+        while t.elapsed() < Duration::from_secs(14) {
+            std::thread::sleep(Duration::from_millis(500));
+            if slow.write_all(&[0]).is_err() {
+                gone = true;
+                break;
+            }
+        }
+        assert!(gone, "cut off after the time to publish");
+        assert!(t.elapsed() >= PUBLISH_WITHIN - Duration::from_secs(1), "{:?}", t.elapsed());
+        stop.store(true, Ordering::Relaxed);
+        server.join().unwrap().unwrap();
     }
 }

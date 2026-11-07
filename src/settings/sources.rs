@@ -102,9 +102,10 @@ impl SourceKind {
     }
 }
 
+/// A stream key for an RTMP input: random (from the system), long enough
+/// that nobody else on the network can guess it.
 fn random_key() -> String {
-    let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos() ^ (d.as_secs() as u32).wrapping_mul(2654435761)).unwrap_or(1);
-    format!("cam{:05}", n % 100_000)
+    format!("cam-{}", crate::engine::guests::new_id())
 }
 
 /// The Sources area's tabs that show sources: Cameras lists every source;

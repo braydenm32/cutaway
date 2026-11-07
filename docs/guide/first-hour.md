@@ -91,12 +91,21 @@ Nothing about you or your shows, unless you ask it to.
   services, and YouTube and Google Drive with your own Google sign-in.
 - **Remote guests:** the first time you invite one, Cutaway downloads
   Cloudflare's small tunnel program so guests can reach you without router
-  setup (or uses Tailscale, if you pick it). Guests' pictures and sound come
-  straight to your computer.
+  setup (or uses Tailscale, if you pick it). The guest page, the guest's
+  name and their backup recording (if you turn that on) pass through
+  Cloudflare's (or Tailscale's) tunnel; their live picture and sound come
+  straight to your computer where the network allows. To find a way
+  through each other's routers, both ends ask a public address server
+  (Cloudflare's and Google's) what their internet address is.
 - **Live captions** are worked out on your computer. On Windows the speech
   model downloads once, when you turn captions on.
 - **Problem reports** are saved as a file for you to send. Cutaway never
   sends one itself.
+
+Everything else stays on your computer: recordings, captions, markers and
+the log. The log is kept for a month at most. Cutaway doesn't encrypt
+recordings itself, so if the computer could be lost or shared, turn on
+FileVault (Mac) or BitLocker (Windows).
 
 ## The first hour's common problems
 
@@ -136,8 +145,10 @@ Nothing about you or your shows, unless you ask it to.
 
 **More › App › Diagnostics → Save a problem report…** saves one .zip with
 the log, the last recording's note, your settings and the devices found.
-Stream keys, passwords and tokens are taken out, even where they appear in
-the log. Send it along with what you were doing when it went wrong.
+Stream keys, passwords, tokens and the remote's PIN are taken out, even
+where they appear in the log, and so are your Google account and your user
+folder's name in file paths. Guests' names can still be in the log: look
+through it before you send it if that matters. Send it along with what you were doing when it went wrong.
 
 ## Licences
 

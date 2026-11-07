@@ -259,6 +259,10 @@ impl WavReader {
             let size = u32::from_le_bytes(ch[4..8].try_into().unwrap()) as u64;
             match &ch[..4] {
                 b"fmt " => {
+                    // (16 to 40 bytes in real files: anything else is damage.)
+                    if !(16..=4096).contains(&size) {
+                        bail!("{} has a damaged format", path.display());
+                    }
                     let mut b = vec![0u8; size as usize];
                     f.read_exact(&mut b)?;
                     tag = u16::from_le_bytes([b[0], b[1]]);
@@ -273,18 +277,24 @@ impl WavReader {
                     }
                 }
                 b"ds64" => {
+                    if size > 1 << 16 {
+                        bail!("{} has a damaged size table", path.display());
+                    }
                     let mut b = vec![0u8; size as usize];
                     f.read_exact(&mut b)?;
                     ds64_data = b.get(8..16).map(|v| u64::from_le_bytes(v.try_into().unwrap()));
                 }
                 b"data" => {
                     let pos = f.stream_position()?;
-                    let len = if size == u32::MAX as u64 { ds64_data.unwrap_or(file_len - pos) } else { size };
-                    let len = len.min(file_len - pos);
+                    let len = if size == u32::MAX as u64 { ds64_data.unwrap_or(file_len.saturating_sub(pos)) } else { size };
+                    let len = len.min(file_len.saturating_sub(pos));
                     if channels == 0 || bits == 0 {
                         bail!("the WAV file has no format");
                     }
                     let bytes = (bits / 8) as usize;
+                    if bytes == 0 || bytes > 8 {
+                        bail!("{} has {bits}-bit samples, which Cutaway doesn't read", path.display());
+                    }
                     let frames = len / (bytes as u64 * channels as u64);
                     return Ok(WavReader { file: f, channels, rate, bytes, float: tag == 3, left: len, frames });
                 }
@@ -358,6 +368,32 @@ mod tests {
         let d = std::env::temp_dir().join(format!("cutaway-wav-{}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
         d.join(name)
+    }
+
+    #[test]
+    fn damaged_wavs_are_refused_not_crashed_on() {
+        let wav = |fmt_size: u32, bits: u16| {
+            let mut b = b"RIFF\0\0\0\0WAVEfmt ".to_vec();
+            b.extend_from_slice(&fmt_size.to_le_bytes());
+            let mut fmt = vec![0u8; fmt_size.min(64) as usize];
+            if fmt.len() >= 16 {
+                fmt[0] = 1;
+                fmt[2] = 2;
+                fmt[4..8].copy_from_slice(&48000u32.to_le_bytes());
+                fmt[14..16].copy_from_slice(&bits.to_le_bytes());
+            }
+            b.extend_from_slice(&fmt);
+            b.extend_from_slice(b"data\x08\0\0\0\0\0\0\0\0\0\0\0");
+            b
+        };
+        for (name, bytes) in [("short-fmt.wav", wav(4, 16)), ("huge-fmt.wav", wav(u32::MAX, 16)), ("4-bit.wav", wav(16, 4))] {
+            let p = tmp(name);
+            std::fs::write(&p, bytes).unwrap();
+            assert!(WavReader::open(&p).is_err(), "{name}");
+        }
+        let p = tmp("fine.wav");
+        std::fs::write(&p, wav(16, 16)).unwrap();
+        assert_eq!(WavReader::open(&p).unwrap().frames, 2);
     }
 
     #[test]

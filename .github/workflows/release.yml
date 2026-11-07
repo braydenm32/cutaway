@@ -14,8 +14,10 @@ on:
         description: "Version tag, e.g. v0.6.0 (made from this branch if it doesn't exist yet)"
         required: true
 
+# Read-only by default: only the publish step (which builds nothing) can
+# write to the repository, so a build step can't change a release.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   check:
@@ -43,8 +45,12 @@ jobs:
   publish:
     needs: [macos, windows]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - uses: actions/download-artifact@v7
         with:
@@ -59,10 +65,17 @@ jobs:
           version="${TAG#v}"
           cp streamdeck/Cutaway.streamDeckPlugin dist/
           # Fingerprints of the downloads: Cutaway's own updater checks them.
-          (cd dist && sha256sum *.zip > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          # The Stream Deck plugin is in the list too, so the signature covers it.
+          (cd dist && sha256sum *.zip *.streamDeckPlugin > SHA256SUMS.txt && cat SHA256SUMS.txt)
           ls -la dist
           if gh release view "$TAG" > /dev/null 2>&1; then
-            # Already there (a re-run): replace the files.
+            # Already there (a re-run): replace the files, but only while it's
+            # still a draft. A published release's files are the ones that
+            # were signed; new builds would no longer match the signature.
+            if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" != "true" ]; then
+              echo "::error::$TAG is already published; make a new version instead of replacing its files."
+              exit 1
+            fi
             gh release upload "$TAG" dist/* --clobber
           else
             notes=(--generate-notes)

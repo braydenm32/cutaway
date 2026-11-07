@@ -15,7 +15,10 @@
    links on the day. For links you can send days ahead, use Tailscale Funnel
    (below).
 3. **The guest** opens the link in Chrome, Edge, Safari or Firefox, checks
-   their camera and mic, types their name and presses **Join**. Their spot
+   their camera and mic, types their name and presses **Join**. Above the
+   button the page tells them that the show gets their picture, voice and
+   name and may be recorded, streamed or published, so they know before
+   they join (in many places you need their agreement to record them). Their spot
    turns green with their name, and a message on the desk says so ("Maya
    joined as Guest 1"); another says when they leave, and if their spot was
    on air at the time, it's a warning on the status light too. They hear the show without their own voice,

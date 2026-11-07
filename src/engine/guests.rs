@@ -60,6 +60,8 @@ use webrtc::rtp_transceiver::RtpSender;
 
 const PAGE: &str = include_str!("guest.html");
 const PHONE_PAGE: &str = include_str!("phone.html");
+/// Requests the guest page handles at once (each guest uses a few).
+const MAX_REQUESTS: usize = 128;
 /// The largest backup piece taken in one request.
 const MAX_PIECE: usize = 32 * 1024 * 1024;
 const STUN: [&str; 2] = ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"];
@@ -632,6 +634,23 @@ impl GuestHub {
     /// A piece of a guest's backup recording. `at_ms`: when (after the
     /// take began) their recording started, with the first piece.
     #[allow(clippy::too_many_arguments)]
+    /// Whether a backup piece for `take` from link `id` would be taken, checked
+    /// before any of it is read (so the public address can't be used to make
+    /// Cutaway hold lots of data for links that don't exist).
+    fn backup_wanted(&self, id: &str, take: &str) -> std::result::Result<(), (&'static str, String)> {
+        let inner = self.inner.lock_ok();
+        if !inner.cfg.enabled || !inner.cfg.backup {
+            return Err(("403 Forbidden", "backup recordings are off".into()));
+        }
+        if !inner.slots.get(id).is_some_and(|s| !s.camera) {
+            return Err(("404 Not Found", "this link isn't active".into()));
+        }
+        if !inner.takes.iter().any(|t| t.0 == take) {
+            return Err(("404 Not Found", "that recording has gone".into()));
+        }
+        Ok(())
+    }
+
     fn backup_piece(&self, id: &str, take: &str, part: &str, seq: u64, ext: &str, at_ms: Option<f64>, last: bool, data: &[u8]) -> std::result::Result<(), (&'static str, String)> {
         let ok_id = |s: &str| !s.is_empty() && s.len() <= 32 && s.chars().all(|c| c.is_ascii_alphanumeric());
         if !ok_id(take) || !ok_id(part) || !matches!(ext, "webm" | "mp4") {
@@ -785,18 +804,31 @@ impl GuestHub {
         let stop = Arc::new(AtomicBool::new(false));
         let s2 = stop.clone();
         let hub = self.arc();
+        let busy = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let thread = std::thread::Builder::new().name("guest page".into()).spawn(move || {
             while !s2.load(Ordering::Relaxed) {
                 match listener.accept() {
                     Ok(_) if s2.load(Ordering::Relaxed) => break,
                     Ok((conn, _)) => {
+                        // (The page can be on the internet: at most this many
+                        // requests at once, so nobody can tie up every thread.)
+                        if busy.load(Ordering::Relaxed) >= MAX_REQUESTS {
+                            drop(conn);
+                            continue;
+                        }
+                        busy.fetch_add(1, Ordering::Relaxed);
                         let hub = hub.clone();
-                        let _ = std::thread::Builder::new().name("guest request".into()).spawn(move || {
+                        let count = busy.clone();
+                        let spawned = std::thread::Builder::new().name("guest request".into()).spawn(move || {
                             let _ = conn.set_nonblocking(false);
                             if let Err(e) = handle(conn, &hub) {
                                 eprintln!("guest page: {e}");
                             }
+                            count.fetch_sub(1, Ordering::Relaxed);
                         });
+                        if spawned.is_err() {
+                            busy.fetch_sub(1, Ordering::Relaxed);
+                        }
                     }
                     Err(_) => std::thread::sleep(Duration::from_millis(500)),
                 }
@@ -1394,7 +1426,7 @@ fn handle(mut conn: TcpStream, hub: &Arc<GuestHub>) -> std::io::Result<()> {
     let target = first.next().unwrap_or("/").to_string();
     let path = target.split('?').next().unwrap_or("/");
     let query: HashMap<&str, &str> = target.split_once('?').map(|(_, q)| q.split('&').filter_map(|kv| kv.split_once('=')).collect()).unwrap_or_default();
-    let length: usize = lines.find_map(|l| l.to_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse().unwrap_or(0))).unwrap_or(0);
+    let length: usize = lines.find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse().unwrap_or(0))).unwrap_or(0);
     let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
     if parts.first() != Some(&"g") || parts.len() < 2 || !parts[1].chars().all(|c| c.is_ascii_alphanumeric()) {
         return respond(&mut conn, "404 Not Found", "text/plain", b"not found");
@@ -1412,6 +1444,9 @@ fn handle(mut conn: TcpStream, hub: &Arc<GuestHub>) -> std::io::Result<()> {
         ("POST", Some("backup")) => {
             if length > MAX_PIECE {
                 return respond(&mut conn, "413 Too Large", "text/plain", b"too large");
+            }
+            if let Err((status, msg)) = hub.backup_wanted(&id, query.get("take").copied().unwrap_or("")) {
+                return respond(&mut conn, status, "text/plain", msg.as_bytes());
             }
             conn.set_read_timeout(Some(Duration::from_secs(60)))?;
             let mut body = buf[head_end..].to_vec();

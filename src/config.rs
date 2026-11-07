@@ -2220,14 +2220,25 @@ impl RemoteConfig {
     }
 }
 
-/// A random four-digit PIN.
+/// A random six-digit PIN (a million to guess from: with the wait after five
+/// wrong ones, far too many to try on a show's network).
 pub fn new_pin() -> String {
     let mut b = [0u8; 4];
     if getrandom::fill(&mut b).is_err() {
         // (No system randomness: the clock is the next best thing.)
         b = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(4321).to_le_bytes();
     }
-    format!("{:04}", u32::from_le_bytes(b) % 10_000)
+    // (2^32 isn't a multiple of a million; the few values past the last
+    // whole million are thrown away so every PIN is as likely.)
+    loop {
+        let n = u32::from_le_bytes(b);
+        if n < 4_294_000_000 {
+            return format!("{:06}", n % 1_000_000);
+        }
+        if getrandom::fill(&mut b).is_err() {
+            return format!("{:06}", n % 1_000_000);
+        }
+    }
 }
 
 impl Default for RemoteConfig {
@@ -2406,6 +2417,9 @@ impl Config {
             v.clear();
         }
         c.held_secrets.clear();
+        // The phone remote's PIN isn't in the keychain, but it's still a
+        // password: a shared or exported copy gets a fresh one on load.
+        c.remote.pin.clear();
         c
     }
 
@@ -2933,7 +2947,7 @@ mod tests {
     fn the_remote_always_has_a_pin() {
         let mut r = RemoteConfig { enabled: true, ..Default::default() };
         assert!(r.ensure_pin());
-        assert_eq!(r.pin.len(), 4);
+        assert_eq!(r.pin.len(), 6);
         assert!(r.pin.chars().all(|c| c.is_ascii_digit()));
         assert!(!r.ensure_pin(), "kept once made");
         let mut off = RemoteConfig::default();

@@ -9,6 +9,10 @@ on:
   # The release workflow builds with this too.
   workflow_call:
 
+# Builds only read the repository.
+permissions:
+  contents: read
+
 # A newer push replaces a run still going on the same branch.
 concurrency:
   group: macos-${{ github.ref }}
@@ -23,6 +27,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@stable
         with:
