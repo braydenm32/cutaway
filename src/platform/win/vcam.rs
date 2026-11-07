@@ -30,6 +30,12 @@ use windows::Win32::System::SystemInformation::GetTickCount64;
 
 const DLL: &str = "cutaway_vcam.dll";
 
+/// The camera source's SHA-256, put in by windows/build.ps1 (which builds
+/// it first). The administrator copy installs only that exact file, so
+/// another program can't swap in its own DLL beside Cutaway to be
+/// registered with administrator rights. (Not set in a plain `cargo build`.)
+const DLL_SHA256: Option<&str> = option_env!("CUTAWAY_VCAM_SHA256");
+
 /// Where the camera source is installed for the camera service.
 fn installed_dll() -> PathBuf {
     let pf = std::env::var_os("ProgramW6432").or_else(|| std::env::var_os("ProgramFiles")).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("C:\\Program Files"));
@@ -118,6 +124,16 @@ pub fn install_elevated(remove: bool) -> Result<()> {
     }
     std::fs::create_dir_all(target.parent().unwrap()).context("creating the Program Files folder")?;
     std::fs::copy(source_dll()?, &target).context("copying the camera to Program Files")?;
+    // Checked once it's in Program Files (only administrators can change it
+    // there), before it's loaded.
+    match DLL_SHA256 {
+        Some(want) if crate::net::self_update::sha256(&target).ok().as_deref() != Some(want) => {
+            let _ = std::fs::remove_file(&target);
+            bail!("{DLL} isn't the one that came with this Cutaway, so it wasn't installed");
+        }
+        Some(_) => {}
+        None => eprintln!("vcam: no fingerprint built in (a development build), so the camera isn't checked"),
+    }
     // SAFETY: our own DLL's registration entry point.
     unsafe {
         let lib = libloading::Library::new(&target).context("loading the camera")?;

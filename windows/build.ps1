@@ -128,6 +128,13 @@ $dml = Get-NuGet "Microsoft.AI.DirectML" "1.15.4" "4e7cb7ddce8cf837a7a75dc029209
 
 # ---- build --------------------------------------------------------------------------------
 
+# The virtual camera first: Cutaway carries its fingerprint, and installs
+# (as administrator) only that exact file.
+Say "Building the virtual camera"
+& cargo build --locked --release --manifest-path windows\vcam\Cargo.toml
+if ($LASTEXITCODE -ne 0) { throw "The virtual camera's build failed." }
+$env:CUTAWAY_VCAM_SHA256 = (Get-FileHash -Algorithm SHA256 -LiteralPath windows\vcam\target\release\cutaway_vcam.dll).Hash.ToLower()
+
 $cargoArgs = @("build", "--locked", "--profile", "dist")
 # The default features are whisper and a macOS-only one, so this drops just whisper here.
 if ($NoWhisper) { $cargoArgs += @("--no-default-features") }
@@ -135,10 +142,6 @@ if ($features.Count -gt 0) { $cargoArgs += @("--features", ($features -join ",")
 Say "cargo $($cargoArgs -join ' ')"
 & cargo @cargoArgs
 if ($LASTEXITCODE -ne 0) { throw "The build failed." }
-
-Say "Building the virtual camera"
-& cargo build --locked --release --manifest-path windows\vcam\Cargo.toml
-if ($LASTEXITCODE -ne 0) { throw "The virtual camera's build failed." }
 
 # ---- package ------------------------------------------------------------------------------
 
