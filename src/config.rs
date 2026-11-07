@@ -2545,11 +2545,13 @@ impl Config {
         }
         let p = &self.program;
         ensure(p.width >= 160 && p.height >= 90, ProblemAt::Program, || "program size is too small".into())?;
+        ensure(p.width <= MAX_SIZE && p.height <= MAX_SIZE, ProblemAt::Program, || format!("program size is too big (up to {MAX_SIZE}×{MAX_SIZE})"))?;
         ensure(p.width.is_multiple_of(2) && p.height.is_multiple_of(2), ProblemAt::Program, || "program width and height must be even".into())?;
         ensure((1..=120).contains(&p.fps), ProblemAt::Program, || "program fps must be between 1 and 120".into())?;
         for (i, s) in self.sources.iter().enumerate() {
             let at = ProblemAt::Source(i);
             ensure(s.width >= 16 && s.height >= 16, at, || format!("source '{}': width and height must be at least 16", s.name))?;
+            ensure(s.width <= MAX_SIZE && s.height <= MAX_SIZE, at, || format!("source '{}': width and height can be at most {MAX_SIZE}", s.name))?;
             ensure(s.width % 2 == 0 && s.height % 2 == 0, at, || format!("source '{}': width and height must be even", s.name))?;
             ensure((1..=120).contains(&s.fps), at, || format!("source '{}': fps must be between 1 and 120", s.name))?;
         }
@@ -2570,6 +2572,7 @@ impl Config {
         ensure(matches!(self.output.wav_bit_depth, 16 | 24 | 32), ProblemAt::Recording, || "wav_bit_depth must be 16, 24 or 32".into())?;
         let st = &self.streaming;
         ensure(st.width.is_multiple_of(2) && st.height.is_multiple_of(2) && st.width >= 160, ProblemAt::Streaming, || "stream width and height must be even".into())?;
+        ensure(st.width <= MAX_SIZE && st.height <= MAX_SIZE, ProblemAt::Streaming, || format!("stream size is too big (up to {MAX_SIZE}×{MAX_SIZE})"))?;
         ensure((1..=120).contains(&st.fps), ProblemAt::Streaming, || "stream fps must be between 1 and 120".into())?;
         ensure((200..=100_000).contains(&st.video_bitrate_kbps), ProblemAt::Streaming, || "stream video bitrate must be 200-100000 kbps".into())?;
         let mut names = std::collections::HashSet::new();
@@ -2622,6 +2625,11 @@ pub fn default_output_folder() -> PathBuf {
 pub fn profiles_dir(config_path: &Path) -> PathBuf {
     config_path.parent().map(|p| p.join("profiles")).unwrap_or_else(|| PathBuf::from("profiles"))
 }
+
+/// The largest picture size taken anywhere (8K is 7680×4320): a typo or a
+/// damaged settings file can't make Cutaway try to allocate a picture that
+/// can never fit in memory.
+pub const MAX_SIZE: u32 = 8192;
 
 pub fn default_config_path() -> PathBuf {
     if cfg!(target_os = "macos") {
