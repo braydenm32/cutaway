@@ -224,10 +224,11 @@ pub fn slots(sources: &[crate::config::SourceConfig]) -> Slots {
     Slots { cameras, screen }
 }
 
-/// The default layouts are drawn on a 1920 × 1080 picture, with a thin gap.
+/// The default layouts are drawn on a 1920 × 1080 picture, with a gap of
+/// 20 pixels between frames.
 const PW: f32 = 1920.0;
 const PH: f32 = 1080.0;
-const GAP: f32 = 12.0;
+const GAP: f32 = 20.0;
 
 /// A frame given in pixels of the 1920 × 1080 picture, filled (cropped to
 /// its shape, centred).
@@ -661,7 +662,7 @@ mod tests {
         assert!(l[3].x > l[0].x && l[4].x == l[3].x && l[4].y > l[3].y);
         // Three across: as tall as the picture, the same width.
         let t = preset_layers(Preset::Three, &Slots { cameras: vec![0, 1, 2], screen: None }, None).unwrap();
-        assert!(t.iter().all(|f| f.h > 0.97 && (f.w - t[0].w).abs() < 1e-6));
+        assert!(t.iter().all(|f| f.h > 0.95 && (f.w - t[0].w).abs() < 1e-6));
         assert!(t[0].x < t[1].x && t[1].x < t[2].x);
     }
 
@@ -671,7 +672,7 @@ mod tests {
         let l = preset_layers(Preset::Screen, &sl, None).unwrap();
         assert_eq!(l[0].source, 5);
         assert!(!l[0].fill, "the whole screen shows");
-        assert!(l[0].w > 0.7 && (l[0].x + l[0].w / 2.0 - 0.5).abs() < 1e-4);
+        assert!(l[0].w > 0.65 && (l[0].x + l[0].w / 2.0 - 0.5).abs() < 1e-4);
         let row = &l[1..];
         assert_eq!(row.iter().map(|f| f.source).collect::<Vec<_>>(), vec![0, 1, 2, 3, 4]);
         assert!(row.iter().all(|f| f.y > l[0].y + l[0].h && (f.y - row[0].y).abs() < 1e-6));

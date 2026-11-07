@@ -323,7 +323,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Program, "Background image") => "A picture behind everything instead of the colour (PNG or JPEG), filling the frame.",
         (Program, "Program monitor quality") => "How sharp the program monitor is in this window. Recordings aren't affected; lower it on a slower computer.",
         (Program, "Multiview quality") => "How sharp each source's monitor is in this window. Recordings aren't affected; lower it with many sources or a slower computer.",
-        (Program, "Rounded corners") => "Rounds the corners of frames that don't fill the screen (picture in picture, side by side, grids). Full-screen shots stay clean.",
+        (Program, "Rounded corners") => "Rounds the corners of frames that don't fill the screen (picture in picture, side by side, grids), in pixels of the program picture. A new show starts at 16. Full-screen shots stay clean.",
         (Program, "Border") => "A line around those frames, and its colour.",
         (Program, "Drop shadow") => "A soft shadow under those frames, so they lift off the background.",
 

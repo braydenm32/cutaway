@@ -270,7 +270,9 @@ Recordings start with the **Take name** from Record & stream › Quality and fil
   The cameras go in in the order of your sources. A wide camera that you cut
   close-ups from is left out, because its close-ups take its place. Screen
   captures go in the screen's place. Pictures are cropped to fill their
-  tiles, with a thin gap between them. Change any tile in Edit layout.
+  tiles, with a 20-pixel gap between them and gently rounded corners (a new
+  show starts at 16 px: **Scenes › Program picture › Rounded corners**).
+  Change any tile in Edit layout.
   A scene made from a default layout remembers it: **Reset to default** (in
   Show › Edit layout, or under the scene in Scenes › Scenes) puts its frames
   back, keeping its name, sound and cues. **Add default scenes** in

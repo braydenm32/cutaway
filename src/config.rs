@@ -1629,7 +1629,7 @@ pub struct FrameStyle {
 
 impl Default for FrameStyle {
     fn default() -> Self {
-        FrameStyle { corner_radius: 0.0, border_width: 0.0, border_color: "#ffffff".into(), shadow: 0.0 }
+        FrameStyle { corner_radius: 16.0, border_width: 0.0, border_color: "#ffffff".into(), shadow: 0.0 }
     }
 }
 
