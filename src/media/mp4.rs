@@ -1006,7 +1006,7 @@ pub fn duration_secs(path: &Path) -> Option<f64> {
             size = u64::from_be_bytes(head[8..16].try_into().unwrap());
             hdr = 16;
         }
-        if size < hdr || pos + size > len {
+        if size < hdr || size > len.saturating_sub(pos) {
             break;
         }
         if &head[4..8] == b"moov" {
@@ -1060,7 +1060,7 @@ pub fn recover_with(path: &Path, chapters: &[(Ns, String)]) -> Result<Recovery> 
             size = u64::from_be_bytes(head[8..16].try_into().unwrap());
             hdr = 16;
         }
-        if size < hdr || pos + size > len {
+        if size < hdr || size > len.saturating_sub(pos) {
             break; // truncated box: the end of what survived
         }
         let body_len = size - hdr;

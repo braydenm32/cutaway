@@ -71,7 +71,8 @@ pub fn parse(json: &str, current: &str) -> Result<Option<Release>> {
         .unwrap_or_default();
     Ok(Some(Release {
         version: tag.trim_start_matches(['v', 'V']).to_string(),
-        url: v["html_url"].as_str().map(str::to_string).unwrap_or_else(|| format!("https://github.com/{REPO}/releases/latest")),
+        // Only ever a page of Cutaway's own releases (the button opens it).
+        url: v["html_url"].as_str().filter(|u| u.starts_with(&format!("https://github.com/{REPO}/releases/"))).map(str::to_string).unwrap_or_else(|| format!("https://github.com/{REPO}/releases/latest")),
         notes,
         assets,
     }))

@@ -171,6 +171,27 @@ local function take_from_folder(folder)
   return t
 end
 
+-- The take file is only a table of names and numbers, so it's read with
+-- nothing else to reach: a take folder someone sends can't run anything on
+-- this computer through it (no files, no programs, no Resolve).
+local function read_take(file)
+  local h = io.open(file, "rb")
+  if not h then return nil end
+  local text = h:read("*a")
+  h:close()
+  if text:sub(1, 1) == "\27" then return nil end -- compiled Lua, not text
+  local env = {}
+  local chunk
+  if setfenv then
+    chunk = loadstring(text, "=take")
+    if chunk then setfenv(chunk, env) end
+  else
+    chunk = load(text, "=take", "t", env)
+  end
+  if not chunk then return nil end
+  return chunk()
+end
+
 local folder = take_to_build()
 if not folder then
   folder = fusion:RequestDir(latest_take() or "")
@@ -183,7 +204,7 @@ folder = folder:gsub("[/\\]+$", "")
 local take
 local file = take_file(folder)
 if file then
-  local ok, t = pcall(dofile, file)
+  local ok, t = pcall(read_take, file)
   if not ok or type(t) ~= "table" then
     say("couldn't read " .. file, true)
     return

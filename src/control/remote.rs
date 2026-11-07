@@ -105,30 +105,52 @@ const LEVELS_EVERY: Duration = Duration::from_millis(500);
 const JPEG_EVERY: Duration = Duration::from_secs(1);
 
 impl RemoteShared {
-    /// Whether `ip` is waiting after too many wrong PINs.
-    fn locked_out(&self, ip: IpAddr) -> bool {
+    /// Checks a PIN and counts it, in one go: requests sent all at once
+    /// can't slip extra guesses in between the check and the count.
+    /// (Locked out, right PIN.)
+    fn check_pin(&self, ip: IpAddr, given: &str, pin: &str) -> (bool, bool) {
+        let key = who(ip);
         let mut w = self.wrong.lock_ok();
         w.retain(|_, (_, at, _)| at.elapsed() < LOCKED_FOR);
-        w.get(&ip).is_some_and(|(n, _, _)| *n >= TRIES)
-    }
-
-    /// A PIN tried. The same wrong PIN again (a phone or Stream Deck still
-    /// using the old one after a change, asking every second) counts once:
-    /// only guessing different ones locks an address out.
-    fn note_pin(&self, ip: IpAddr, given: &str, right: bool) {
-        let mut w = self.wrong.lock_ok();
-        if right {
-            w.remove(&ip);
-        } else {
-            let e = w.entry(ip).or_insert((0, Instant::now(), String::new()));
-            if e.0 == 0 || e.2 != given {
-                e.0 += 1;
-                e.2 = given.to_string();
-            }
-            e.1 = Instant::now();
+        if w.get(&key).is_some_and(|(n, _, _)| *n >= TRIES) {
+            return (true, false);
         }
+        let right = !pin.is_empty() && same(given, pin);
+        if !given.is_empty() {
+            if right {
+                w.remove(&key);
+            } else {
+                let e = w.entry(key).or_insert((0, Instant::now(), String::new()));
+                if e.0 == 0 || e.2 != given {
+                    e.0 += 1;
+                    e.2 = given.to_string();
+                }
+                e.1 = Instant::now();
+            }
+        }
+        (false, right)
     }
 }
+
+/// The address wrong PINs are counted against. An IPv6 device can make up a
+/// new address of its own whenever it likes, so those count by their network
+/// (the first half of the address) instead.
+fn who(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => {
+                let s = v6.segments();
+                IpAddr::from([s[0], s[1], s[2], s[3], 0, 0, 0, 0])
+            }
+        },
+        v4 => v4,
+    }
+}
+
+/// At most this many connections at once (a phone uses two or three; this
+/// keeps something on the network from opening thousands).
+const MAX_CLIENTS: usize = 64;
 
 impl RemoteShared {
     pub fn new(requests: Sender<Request>, waker: Waker) -> Arc<Self> {
@@ -407,6 +429,7 @@ impl RemoteServer {
         let sh_all = shared.clone();
         let for_holds = shared.clone();
         let stop_holds = stop.clone();
+        let clients = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let thread = std::thread::Builder::new().name("remote".into()).spawn(move || {
             // Waits in accept (no waking when nobody is there); `Drop` makes
             // one last connection to get out.
@@ -422,10 +445,20 @@ impl RemoteServer {
                         if conn.set_nonblocking(false).is_err() {
                             continue;
                         }
+                        if clients.load(Ordering::Relaxed) >= MAX_CLIENTS {
+                            drop(conn);
+                            continue;
+                        }
+                        clients.fetch_add(1, Ordering::Relaxed);
                         let sh = shared.clone();
-                        let _ = std::thread::Builder::new().name("remote client".into()).spawn(move || {
+                        let count = clients.clone();
+                        let spawned = std::thread::Builder::new().name("remote client".into()).spawn(move || {
                             let _ = handle(conn, &sh);
+                            count.fetch_sub(1, Ordering::Relaxed);
                         });
+                        if spawned.is_err() {
+                            clients.fetch_sub(1, Ordering::Relaxed);
+                        }
                     }
                     Err(_) => std::thread::sleep(Duration::from_millis(50)),
                 }
@@ -449,9 +482,47 @@ fn same(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |d, (x, y)| d | (x ^ y)) == 0
 }
 
+/// Whether a request came from the remote's own page, or from an app that
+/// isn't a browser. Browsers say where a request comes from (`Origin`,
+/// `Sec-Fetch-Site`); apps and scripts don't send either.
+fn from_here(origin: Option<&str>, fetch_site: Option<&str>, host: Option<&str>) -> bool {
+    if matches!(fetch_site, Some("cross-site" | "same-site")) {
+        return false;
+    }
+    if let Some(o) = origin {
+        // "null" is a page with no address of its own (a file, a sandbox).
+        let from = o.split_once("://").map(|(_, rest)| rest).unwrap_or(o);
+        if host.is_none_or(|h| h != from) {
+            return false;
+        }
+    }
+    // A browser reaching the remote by a made-up web address that points at
+    // this computer (DNS rebinding) counts as that site's own page, so a
+    // browser must use the address itself or a local name.
+    if origin.is_some() || fetch_site.is_some() {
+        return host.is_some_and(local_host);
+    }
+    true
+}
+
+/// An address on this network: an IP address, `localhost`, a name with no
+/// dots, or a `.local`, `.lan`, `.home.arpa` or Tailscale `.ts.net` name.
+fn local_host(host: &str) -> bool {
+    let name = if let Some(rest) = host.strip_prefix('[') {
+        return rest.split(']').next().is_some_and(|ip| ip.parse::<std::net::Ipv6Addr>().is_ok());
+    } else {
+        host.rsplit_once(':').filter(|(_, p)| p.chars().all(|c| c.is_ascii_digit())).map(|(h, _)| h).unwrap_or(host)
+    };
+    let name = name.trim_end_matches('.');
+    name.parse::<std::net::Ipv4Addr>().is_ok()
+        || name == "localhost"
+        || !name.contains('.')
+        || [".local", ".lan", ".home.arpa", ".ts.net", ".localhost", ".internal"].iter().any(|s| name.ends_with(s))
+}
+
 fn respond(conn: &mut TcpStream, status: &str, ctype: &str, body: &[u8], extra: &str) -> std::io::Result<()> {
     let head = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n{extra}\r\n",
+        "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n{extra}\r\n",
         body.len()
     );
     conn.write_all(head.as_bytes())?;
@@ -484,8 +555,14 @@ fn handle(mut conn: TcpStream, sh: &RemoteShared) -> std::io::Result<()> {
     let mut ws_key = None;
     let mut if_none_match = None;
     let mut upgrade = false;
+    let mut origin = None;
+    let mut fetch_site = None;
+    let mut host = None;
     for l in lines {
-        let lower = l.to_lowercase();
+        // (ASCII only, so `lower` and `l` stay the same length and a slice of
+        // one is a slice of the other: a full lowercase turns some characters,
+        // like the Kelvin sign, into shorter ones.)
+        let lower = l.to_ascii_lowercase();
         if lower.starts_with("upgrade:") && lower.contains("websocket") {
             upgrade = true;
         } else if lower.starts_with("sec-websocket-key:") {
@@ -502,10 +579,23 @@ fn handle(mut conn: TcpStream, sh: &RemoteShared) -> std::io::Result<()> {
             header_pin = Some(l[14..].trim().to_string());
         } else if lower.starts_with("if-none-match:") {
             if_none_match = Some(l[14..].trim().to_string());
+        } else if lower.starts_with("origin:") {
+            origin = Some(lower[7..].trim().to_string());
+        } else if lower.starts_with("sec-fetch-site:") {
+            fetch_site = Some(lower[15..].trim().to_string());
+        } else if lower.starts_with("host:") {
+            host = Some(lower[5..].trim().to_string());
         }
     }
+    // Only the remote's own pages (and apps like Companion or the Stream Deck,
+    // which aren't browsers) may use the API. A web page from anywhere else,
+    // open in a browser on the same network, gets nothing: it can't use a
+    // PIN the browser remembers, guess PINs, or lock the real remote out.
+    if path.starts_with("/api/") && !from_here(origin.as_deref(), fetch_site.as_deref(), host.as_deref()) {
+        return respond(&mut conn, "403 Forbidden", "text/plain", b"Only Cutaway's own remote page can do that", "");
+    }
     if method == "OPTIONS" {
-        return respond(&mut conn, "204 No Content", "text/plain", b"", "Access-Control-Allow-Headers: X-Cutaway-Pin\r\n");
+        return respond(&mut conn, "204 No Content", "text/plain", b"", "");
     }
     // The page itself is public (it asks for the PIN); everything else
     // needs it. There's always a PIN (with none set, nothing is let in), and
@@ -513,11 +603,7 @@ fn handle(mut conn: TcpStream, sh: &RemoteShared) -> std::io::Result<()> {
     let pin = sh.pin.lock_ok().clone();
     let given = param("pin").or(header_pin).or(cookie_pin).unwrap_or_default();
     let ip = conn.peer_addr().map(|a| a.ip()).unwrap_or(IpAddr::from([0, 0, 0, 0]));
-    let locked = sh.locked_out(ip);
-    let authed = !locked && !pin.is_empty() && same(&given, &pin);
-    if !locked && !given.is_empty() {
-        sh.note_pin(ip, &given, authed);
-    }
+    let (locked, authed) = sh.check_pin(ip, &given, &pin);
     if path == "/icon.png" || path == "/apple-touch-icon.png" {
         return respond(&mut conn, "200 OK", "image/png", ICON_PNG, "Cache-Control: max-age=86400\r\n");
     }
@@ -525,7 +611,7 @@ fn handle(mut conn: TcpStream, sh: &RemoteShared) -> std::io::Result<()> {
         return respond(&mut conn, "200 OK", "text/html; charset=utf-8", PROMPTER_PAGE.as_bytes(), "");
     }
     if path == "/" || path == "/index.html" {
-        let cookie = if authed && !pin.is_empty() { format!("Set-Cookie: cutaway_pin={pin}; Path=/; Max-Age=31536000\r\n") } else { String::new() };
+        let cookie = if authed && !pin.is_empty() { format!("Set-Cookie: cutaway_pin={pin}; Path=/; Max-Age=31536000; SameSite=Strict\r\n") } else { String::new() };
         return respond(&mut conn, "200 OK", "text/html; charset=utf-8", PAGE.as_bytes(), &cookie);
     }
     if locked {
@@ -568,7 +654,7 @@ fn handle(mut conn: TcpStream, sh: &RemoteShared) -> std::io::Result<()> {
         "/api/program.jpg" => match sh.program_jpeg() {
             // The same picture as the caller has: nothing to send again.
             Some((g, _)) if if_none_match.as_deref() == Some(&format!("\"{g}\"")) => respond(&mut conn, "304 Not Modified", "image/jpeg", b"", &format!("ETag: \"{g}\"\r\n")),
-            Some((g, j)) => respond(&mut conn, "200 OK", "image/jpeg", &j, &format!("ETag: \"{g}\"\r\nAccess-Control-Expose-Headers: ETag\r\n")),
+            Some((g, j)) => respond(&mut conn, "200 OK", "image/jpeg", &j, &format!("ETag: \"{g}\"\r\n")),
             None => respond(&mut conn, "503 Service Unavailable", "text/plain", b"no picture yet", ""),
         },
         p if p.starts_with("/api/tally/") => {
@@ -918,6 +1004,71 @@ mod tests {
         }
         assert!(get(port, "/api/state?pin=4321").0.contains("429"));
         drop(server);
+    }
+
+    #[test]
+    fn only_its_own_page_and_apps_use_the_api() {
+        // Apps and scripts (no browser headers).
+        assert!(from_here(None, None, Some("192.168.1.20:8790")));
+        assert!(from_here(None, None, None));
+        // The remote's own page.
+        assert!(from_here(Some("http://192.168.1.20:8790"), Some("same-origin"), Some("192.168.1.20:8790")));
+        assert!(from_here(None, Some("same-origin"), Some("studio-mac.local:8790")));
+        assert!(from_here(Some("http://[fe80::1]:8790"), Some("same-origin"), Some("[fe80::1]:8790")));
+        assert!(from_here(None, Some("none"), Some("localhost:8790")), "typed into the address bar");
+        // Another web site open in a browser on the network.
+        assert!(!from_here(Some("https://evil.example"), Some("cross-site"), Some("192.168.1.20:8790")));
+        assert!(!from_here(None, Some("cross-site"), Some("192.168.1.20:8790")), "an <img> from another site");
+        assert!(!from_here(Some("https://evil.example"), None, Some("192.168.1.20:8790")), "an older browser's WebSocket");
+        assert!(!from_here(Some("null"), None, Some("127.0.0.1:8790")));
+        // A made-up name pointed at this computer (DNS rebinding).
+        assert!(!from_here(Some("http://rebind.evil.example:8790"), Some("same-origin"), Some("rebind.evil.example:8790")));
+    }
+
+    #[test]
+    fn odd_characters_in_a_header_dont_crash_it() {
+        let (tx, _rx) = crossbeam_channel::unbounded::<Request>();
+        let sh = RemoteShared::new(tx, Arc::new(|| {}));
+        *sh.pin.lock_ok() = "246810".into();
+        let port = crate::util::free_tcp_port();
+        let srv = RemoteServer::start(port, sh.clone()).unwrap();
+        let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        // The Kelvin sign is three bytes, its lowercase "k" one.
+        write!(c, "GET /api/state?pin=246810 HTTP/1.1\r\nHost: x\r\n\u{212A}\u{212A}\u{212A}\u{212A}\u{212A}\u{212A}: x\r\nx-cutaway-pin\u{212A}: y\r\n\r\n").unwrap();
+        let mut out = String::new();
+        let _ = c.read_to_string(&mut out);
+        assert!(out.starts_with("HTTP/1.1 200"), "{out}");
+        drop(srv);
+    }
+
+    #[test]
+    fn wrong_pins_from_ipv6_count_by_network() {
+        let a: IpAddr = "2001:db8:1:2:aaaa::1".parse().unwrap();
+        let b: IpAddr = "2001:db8:1:2:bbbb::2".parse().unwrap();
+        assert_eq!(who(a), who(b));
+        let mapped: IpAddr = "::ffff:192.168.1.5".parse().unwrap();
+        assert_eq!(who(mapped), "192.168.1.5".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn a_page_from_another_site_cant_guess_or_lock_out() {
+        let (tx, _rx) = crossbeam_channel::unbounded::<Request>();
+        let sh = RemoteShared::new(tx, Arc::new(|| {}));
+        *sh.pin.lock_ok() = "135790".into();
+        let port = crate::util::free_tcp_port();
+        let srv = RemoteServer::start(port, sh.clone()).unwrap();
+        let cross = |q: &str| {
+            let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            write!(c, "GET {q} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: https://evil.example\r\nSec-Fetch-Site: cross-site\r\n\r\n").unwrap();
+            let mut out = String::new();
+            let _ = c.read_to_string(&mut out);
+            out
+        };
+        for g in ["000000", "111111", "222222", "333333", "444444", "555555", "135790"] {
+            assert!(cross(&format!("/api/state?pin={g}")).contains("403"));
+        }
+        assert!(get(port, "/api/state?pin=135790").0.contains("200"), "not locked out by the other site");
+        drop(srv);
     }
 
     #[test]

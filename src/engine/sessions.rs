@@ -79,7 +79,7 @@ impl Session {
 
     /// A REAPER project (.rpp).
     pub fn reaper(&self) -> String {
-        let q = |s: &str| s.replace('"', "'");
+        let q = |s: &str| crate::util::one_line(s).replace('"', "'");
         let mut s = String::from("<REAPER_PROJECT 0.1 \"7.0\" 0\n");
         let rate = self.tracks.first().map(|t| t.rate).unwrap_or(48_000);
         let _ = writeln!(s, "  SAMPLERATE {rate} 0 0");
@@ -166,7 +166,7 @@ impl Session {
     /// What the Resolve script reads: the take as a Lua table. (The paths
     /// are where the take is now; the script finds them again if it's moved.)
     pub fn resolve_lua(&self, folder: &Path, cameras: &[String], timeline: Option<&str>, canvas: (u32, u32), edit: &ResolveEdit) -> String {
-        let lua = |s: &str| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', " "));
+        let lua = |s: &str| format!("\"{}\"", crate::util::one_line(s).replace('\\', "\\\\").replace('"', "\\\""));
         let path = |f: &str| lua(&folder.join(f).to_string_lossy());
         let mut s = String::from("-- Written by Cutaway: read by the \"Cutaway - Build project from a take\" script in DaVinci Resolve.\nreturn {\n");
         let _ = writeln!(s, "  name = {},", lua(&self.name));
@@ -412,7 +412,7 @@ fn natural_key(s: &str) -> Vec<(String, u64)> {
 }
 
 fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    crate::util::one_line(s).replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
 /// The DaVinci Resolve script (Workspace → Scripts → Utility).
@@ -845,6 +845,20 @@ mod tests {
         write_build_note(&config, &folder).unwrap();
         let all = run_script(&config, "-", "inclusive").unwrap().join("\n");
         assert!(all.contains("rescued after Cutaway stopped while recording") && !all.contains("Editor timelines"), "{all}");
+
+        // A take file from someone else that tries to do more than list the
+        // take: nothing runs, and the script says it couldn't read it.
+        let marker = folder.join("ran.txt");
+        let hostile = format!("local f = io.open({:?}, \"w\") f:write(\"x\") f:close() os.execute(\"echo\")\nreturn {{ name = \"x\",\n  edit = {{\n }} }}\n", marker.to_string_lossy());
+        std::fs::write(folder.join(format!("{} (Resolve).lua", s.name)), hostile).unwrap();
+        write_build_note(&config, &folder).unwrap();
+        let all = run_script(&config, "-", "inclusive").unwrap().join("\n");
+        assert!(!marker.exists(), "the take file's code didn't run: {all}");
+        assert!(all.contains("couldn't read"), "{all}");
+        std::fs::write(folder.join(format!("{} (Resolve).lua", s.name)), b"\x1bLJ\x02compiled").unwrap();
+        write_build_note(&config, &folder).unwrap();
+        let all = run_script(&config, "-", "inclusive").unwrap().join("\n");
+        assert!(all.contains("couldn't read"), "{all}");
         let _ = std::fs::remove_dir_all(folder.parent().unwrap());
     }
 
