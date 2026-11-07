@@ -30,14 +30,23 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Only GitHub's own actions (actions/*) are used: Rust comes from
+      # rustup, already on the runners, so no one else's action runs here.
+      - name: Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
         with:
-          cache-on-failure: true
-          workspaces: |
-            .
-            windows/vcam
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+            windows/vcam/target
+          key: rust-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'windows/vcam/Cargo.lock') }}
+          restore-keys: rust-${{ runner.os }}-
 
       - name: Media Foundation (an optional feature on Windows Server)
         shell: pwsh

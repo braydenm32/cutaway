@@ -7,6 +7,23 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+/// The download at `path` is exactly the file expected (its SHA-256, as
+/// published by whoever makes it); otherwise it's deleted.
+pub fn check_sha256(path: &Path, want: &str, what: &str) -> Result<()> {
+    let got = crate::net::self_update::sha256(path)?;
+    if !got.eq_ignore_ascii_case(want) {
+        let _ = std::fs::remove_file(path);
+        bail!("the download wasn't the expected {what} (its fingerprint didn't match); try again later");
+    }
+    Ok(())
+}
+
+/// The SHA-256 of some bytes, as hex.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// Fetch `url` (following redirects) into `to`, reporting progress. The file
 /// must start with `magic`. `site` and `what` name things in errors ("NDI's
 /// website", "its installer"). Setting `cancel` stops it.
