@@ -135,8 +135,12 @@ name (one of your quick marker names).
 
 ### OSC
 
-Turn on **OSC** in More › Control › OSC and MIDI (UDP port 8791). Addresses
-follow the commands (the `/cutaway` prefix is optional):
+Turn on **OSC** in More › Control › OSC and MIDI (UDP port 8791). At first
+only programs on the same computer can send it commands; for QLab,
+Companion, TouchOSC or a lighting desk on another device, tick **From other
+devices**. OSC has no PIN, so with that on anything on the same network can
+run the show: use it on a network you trust (your own, not venue Wi-Fi).
+Addresses follow the commands (the `/cutaway` prefix is optional):
 
 | Address | Does |
 |---|---|

@@ -2275,11 +2275,24 @@ pub struct OscConfig {
     /// Where to send state ("" = nowhere): a host name or address.
     pub feedback_host: String,
     pub feedback_port: u16,
+    /// Take commands from other devices on the network, not only programs
+    /// on this computer. OSC has no PIN, so anything on the network could
+    /// send them. Left out of older settings files: those that already had
+    /// OSC on keep taking them from the network, as they did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_network: Option<bool>,
+}
+
+impl OscConfig {
+    /// Whether OSC listens to the network (or only to this computer).
+    pub fn from_other_devices(&self) -> bool {
+        self.from_network.unwrap_or(self.enabled)
+    }
 }
 
 impl Default for OscConfig {
     fn default() -> Self {
-        OscConfig { enabled: false, port: 8791, feedback_host: String::new(), feedback_port: 9001 }
+        OscConfig { enabled: false, port: 8791, feedback_host: String::new(), feedback_port: 9001, from_network: Some(false) }
     }
 }
 
@@ -2941,6 +2954,17 @@ mod tests {
         named.sources[0].person = "Alex".into();
         assert!(!cfg.lineup_changed(&named));
         assert!(cfg.lineup_changed(&{ let mut r = cfg.clone(); r.rename_source(2, "Else").unwrap(); r }));
+    }
+
+    #[test]
+    fn osc_from_other_devices_only_when_allowed() {
+        assert!(!OscConfig::default().from_other_devices(), "new settings: this computer only");
+        let old: OscConfig = toml::from_str("enabled = true\nport = 8791").unwrap();
+        assert!(old.from_other_devices(), "older settings with OSC on keep working as before");
+        let old_off: OscConfig = toml::from_str("enabled = false").unwrap();
+        assert!(!old_off.from_other_devices());
+        let chosen: OscConfig = toml::from_str("enabled = true\nfrom_network = false").unwrap();
+        assert!(!chosen.from_other_devices());
     }
 
     #[test]

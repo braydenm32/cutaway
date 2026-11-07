@@ -153,7 +153,7 @@ pub(super) fn search(query: &str, max: usize) -> Vec<Hit> {
 /// below reads the pages' source, so it can't fall out of step.
 const PARTS: &[(Section, &str, &[&str])] = &[
     (Section::Control, "remote", &["Remote control", "Port", "PIN", "Quick marker names"]),
-    (Section::Control, "osc", &["OSC", "Listen on UDP port", "Send state to"]),
+    (Section::Control, "osc", &["OSC", "Listen on UDP port", "From other devices", "Send state to"]),
     (Section::Control, "midi", &["MIDI control", "Controller", "Light up pads"]),
     (Section::Guests, "turn", &["TURN server", "Username", "Password"]),
     (Section::Mixing, "mix_automix", &["Automatic mixing", "Mics"]),
@@ -521,6 +521,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Control, "PIN") => "The code every phone, Stream Deck and script needs to use the remote. There's always one: Cutaway makes a six-digit PIN if this is empty. A device that gets it wrong five times in a row has to wait a minute before trying again.",
         (Control, "Quick marker names") => "Names you can give a marker with one tap, so you don't type mid-show: the phone's ◆ ▾ lists them, and a Stream Deck Marker key can use one. Separate them with commas, for example Good, Retake, Cut here. They become chapter and timeline marker names, as a named marker from the desk does.",
         (Control, "OSC") => "Accepts OSC commands over the network: QLab, Companion, TouchOSC, lighting desks.",
+        (Control, "From other devices") => "Lets QLab, Companion, TouchOSC or a lighting desk on another computer or tablet send OSC. Off, only programs on this computer can. OSC has no PIN, so with this on anything on the same network can start or stop the stream and recording: turn it on only on a network you trust.",
         (Control, "Listen on UDP port") => "The port OSC commands arrive on. A new port takes effect when you let go of it.",
         (Control, "Send state to") => "Where Cutaway sends its state as OSC whenever it changes (scenes, tally, recording, levels, and /stream: connecting, live, or trouble with /stream/live as \"1 of 2\"), so a controller can show it. Optional.",
         (Control, "MIDI control") => "Lets MIDI controllers' pads, keys and faders run commands. Map them below with Learn. A \"while held\" sound pad or talkback:on stops when you let go of the pad.",
