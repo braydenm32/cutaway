@@ -1108,14 +1108,26 @@ pub(crate) fn timecode(ns: u64, fps: u32) -> String {
 
 /// Edit decision list of every switch, relative to the start of the files.
 /// Switches show up in the program `VIDEO_LATENCY` after the button press.
+/// A name for a quoted CSV field: one line, no double quotes, and never
+/// read as a formula when opened in a spreadsheet (a scene called
+/// "=HYPERLINK(…)" stays text: a ' goes in front, as spreadsheets expect).
+fn csv_text(name: &str) -> String {
+    let t = crate::util::one_line(name).replace('"', "'");
+    if t.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+        format!("'{t}")
+    } else {
+        t
+    }
+}
+
 fn switch_log(t0: Ns, fps: u32, first_scene: &str, events: &[switcher::SwitchEvent]) -> String {
     let mut s = String::from("timecode,seconds,scene,transition,duration_ms\n");
-    s += &format!("{},0.000,\"{}\",start,0\n", timecode(0, fps), first_scene.replace('"', "'"));
+    s += &format!("{},0.000,\"{}\",start,0\n", timecode(0, fps), csv_text(first_scene));
     for e in events {
         let ns = (e.at - VIDEO_LATENCY - t0).max(0) as u64;
         let mode = e.mode.name();
         let dur = if e.mode == TransitionMode::Cut { 0 } else { e.duration_ms };
-        s += &format!("{},{:.3},\"{}\",{mode},{dur}\n", timecode(ns, fps), ns as f64 / 1e9, e.scene.replace('"', "'"));
+        s += &format!("{},{:.3},\"{}\",{mode},{dur}\n", timecode(ns, fps), ns as f64 / 1e9, csv_text(&e.scene));
     }
     s
 }
@@ -1126,7 +1138,7 @@ fn graphics_log(t0: Ns, fps: u32, on_air: &[super::graphics::OnAir]) -> String {
     let mut s = String::from("graphic,times_shown,seconds_on_screen,on_screen_at\n");
     for o in on_air {
         let at: Vec<String> = o.showings.iter().map(|(a, b)| format!("{} - {}", timecode((a - t0).max(0) as u64, fps), timecode((b - t0).max(0) as u64, fps))).collect();
-        s += &format!("\"{}\",{},{:.1},\"{}\"\n", o.name.replace('"', "'"), o.showings.len(), o.seconds(), at.join("; "));
+        s += &format!("\"{}\",{},{:.1},\"{}\"\n", csv_text(&o.name), o.showings.len(), o.seconds(), at.join("; "));
     }
     s
 }
@@ -1219,6 +1231,15 @@ fn remove_marker_in(markers: &mut Vec<Marker>, at: Ns) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn csv_names_are_never_formulas() {
+        assert_eq!(csv_text("=HYPERLINK(\"http://x\")"), "'=HYPERLINK('http://x')");
+        assert_eq!(csv_text("+1"), "'+1");
+        assert_eq!(csv_text("@sum"), "'@sum");
+        assert_eq!(csv_text("Two shot\nnext"), "Two shot next");
+        assert_eq!(csv_text("Wide"), "Wide");
+    }
 
     #[test]
     fn timecodes() {
