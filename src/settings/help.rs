@@ -155,7 +155,7 @@ const PARTS: &[(Section, &str, &[&str])] = &[
     (Section::Control, "remote", &["Remote control", "Port", "PIN", "Quick marker names"]),
     (Section::Control, "osc", &["OSC", "Listen on UDP port", "From other devices", "Send state to"]),
     (Section::Control, "midi", &["MIDI control", "Controller", "Light up pads"]),
-    (Section::Guests, "turn", &["TURN server", "Username", "Password"]),
+    (Section::Guests, "turn", &["TURN server", "Username", "Password", "Logins for guests"]),
     (Section::Mixing, "mix_automix", &["Automatic mixing", "Mics"]),
     (Section::Mixing, "mix_duck", &["Ducking", "Turn down by", "When a voice is above", "Back up after", "These go down"]),
     (Section::Mixing, "mix_phones", &["Output", "Listen to", "Volume"]),
@@ -282,7 +282,8 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Guests, "Backup recordings") => "While you record, each guest's browser also records their camera and mic as captured, before the internet gets at it, and sends it in pieces into the recording's Guests folder. It uses more of their upload, so it suits decent connections; their page tells them it's happening.",
         (Guests, "Screen share") => "Adds a source for the guest's screen. Their page gets a Share screen button: they choose the whole screen, a window or a tab, and it arrives on its own source while their camera stays on.",
         (Guests, "TURN server") => "A relay for guests on strict networks (some offices, schools and hotels) that block direct connections: Cloudflare Calls, Twilio or your own coturn. Most guests never need one.",
-        (Guests, "Username") | (Guests, "Password") => "The TURN server's login.",
+        (Guests, "Username") | (Guests, "Password") => "The TURN server's login. Guests' browsers are given it to use the relay, so use a login just for this.",
+        (Guests, "Logins for guests") => "Made from a shared secret: for a TURN server set up with a shared secret (coturn's use-auth-secret, and others that follow the TURN REST API). Put the server's secret (coturn's static-auth-secret) in Password: each guest gets a login of their own that runs out after a day, and the secret itself is never sent. The Username is then not used.",
 
         // ---- Sound › Mixer, and Headphones & talkback
         (Mixing, "Limiter") => "Catches peaks, so the recording and stream mixes never clip. The ceiling is the loudest they can get; −1 dB is a safe choice.",

@@ -358,6 +358,22 @@ pub fn hub() -> Arc<GuestHub> {
 
 /// The key of a guest's shared screen, beside their own (link ids are
 /// letters and digits, so this can't be one).
+/// How long a guest's TURN login works for (a long show, and then some).
+const TURN_LOGIN_LASTS: u64 = 24 * 3600;
+
+/// A time-limited TURN login from the server's shared secret, as the TURN
+/// REST API has it (coturn's use-auth-secret): the username is when it
+/// stops working and who it's for; the password, that signed with the
+/// secret (HMAC-SHA1, base64). The secret itself never leaves Cutaway.
+pub fn turn_login(secret: &str, expires: u64, who: &str) -> (String, String) {
+    use hmac::{Hmac, Mac};
+    let who: String = who.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').take(40).collect();
+    let username = if who.is_empty() { expires.to_string() } else { format!("{expires}:{who}") };
+    let mut mac = Hmac::<sha1::Sha1>::new_from_slice(secret.as_bytes()).expect("HMAC takes a key of any length");
+    mac.update(username.as_bytes());
+    (username, crate::control::ws::base64(&mac.finalize().into_bytes()))
+}
+
 pub fn screen_key(id: &str) -> String {
     format!("{id}.screen")
 }
@@ -837,11 +853,19 @@ impl GuestHub {
         Ok(Server { port, public, stop, thread: Some(thread) })
     }
 
-    fn ice_servers(&self) -> Vec<RTCIceServer> {
+    /// The address and relay servers for a connection (`who`: the guest
+    /// it's for, which a time-limited TURN login is made out to).
+    fn ice_servers(&self, who: &str) -> Vec<RTCIceServer> {
         let cfg = self.inner.lock_ok().cfg.clone();
         let mut v = vec![RTCIceServer { urls: STUN.iter().map(|s| s.to_string()).collect(), ..Default::default() }];
         if !cfg.turn_url.trim().is_empty() {
-            v.push(RTCIceServer { urls: cfg.turn_url.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(), username: cfg.turn_username.clone(), credential: cfg.turn_password.clone() });
+            let (username, credential) = if cfg.turn_shared_secret {
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                turn_login(&cfg.turn_password, now + TURN_LOGIN_LASTS, who)
+            } else {
+                (cfg.turn_username.clone(), cfg.turn_password.clone())
+            };
+            v.push(RTCIceServer { urls: cfg.turn_url.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(), username, credential });
         }
         v
     }
@@ -860,7 +884,7 @@ impl GuestHub {
         let screen = !camera && inner.slots.contains_key(&screen_key(id));
         drop(inner);
         let ice: Vec<serde_json::Value> = self
-            .ice_servers()
+            .ice_servers(id)
             .into_iter()
             .map(|s| if s.username.is_empty() { serde_json::json!({ "urls": s.urls }) } else { serde_json::json!({ "urls": s.urls, "username": s.username, "credential": s.credential }) })
             .collect();
@@ -900,7 +924,7 @@ impl GuestHub {
             me.register_codec(RTCRtpCodecParameters { rtp_codec: h264(profile), payload_type: pt }, RtpCodecKind::Video)?;
         }
         let registry = register_default_interceptors(rtc::interceptor::Registry::new(), &mut me)?;
-        let config = RTCConfigurationBuilder::new().with_ice_servers(self.ice_servers()).build();
+        let config = RTCConfigurationBuilder::new().with_ice_servers(self.ice_servers(&id)).build();
         let (gathered_tx, mut gathered_rx) = webrtc::runtime::channel::<()>(1);
         let handler = Arc::new(Handler { hub: Arc::downgrade(&self), id: id.clone(), gen, gathered: gathered_tx });
         let runtime = webrtc::runtime::default_runtime().ok_or_else(|| anyhow!("no async runtime"))?;
@@ -1640,6 +1664,15 @@ pub(crate) fn test_turn() -> std::sync::MutexGuard<'static, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn turn_logins_from_a_shared_secret() {
+        // (Checked against Python's hmac: base64(HMAC-SHA1("north", "1700000000:abc123")).)
+        assert_eq!(turn_login("north", 1_700_000_000, "abc123"), ("1700000000:abc123".to_string(), "goAllKpbNiqI7pAGyWTsAvjOk/Y=".to_string()));
+        // Odd characters in who it's for don't end up in the username.
+        assert_eq!(turn_login("north", 5, "a:b c").0, "5:abc");
+        assert_eq!(turn_login("north", 5, "").0, "5");
+    }
     use std::io::{Read, Write};
 
     fn turn() -> std::sync::MutexGuard<'static, ()> {

@@ -2080,6 +2080,10 @@ pub struct GuestsConfig {
     pub turn_url: String,
     pub turn_username: String,
     pub turn_password: String,
+    /// The password is the TURN server's shared secret (coturn's
+    /// use-auth-secret): each guest gets a login of their own that stops
+    /// working after a day, instead of the password itself.
+    pub turn_shared_secret: bool,
 }
 
 impl Default for GuestsConfig {
@@ -2094,6 +2098,7 @@ impl Default for GuestsConfig {
             turn_url: String::new(),
             turn_username: String::new(),
             turn_password: String::new(),
+            turn_shared_secret: false,
         }
     }
 }
