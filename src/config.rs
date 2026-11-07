@@ -1347,7 +1347,8 @@ impl Service {
         match self {
             // RTMPS: the stream key travels encrypted.
             Service::Youtube => "rtmps://a.rtmps.youtube.com:443/live2",
-            Service::Twitch => "rtmp://live.twitch.tv/app",
+            // Twitch's own "Default" (nearest server), the secure one.
+            Service::Twitch => "rtmps://ingest.global-contribute.live-video.net:443/app",
             Service::Facebook => "rtmps://live-api-s.facebook.com:443/rtmp",
             Service::Kick => "",
             Service::CustomRtmp => "rtmp://",
@@ -1358,7 +1359,7 @@ impl Service {
     pub fn help(self) -> &'static str {
         match self {
             Service::Youtube => "Stream key from YouTube Studio → Go live → Stream. The server is YouTube's secure (RTMPS) one; rtmp://a.rtmp.youtube.com/live2 works too.",
-            Service::Twitch => "Stream key from Creator Dashboard → Settings → Stream. Most channels should stay at or below 6000 kbps.",
+            Service::Twitch => "Stream key from Creator Dashboard → Settings → Stream. Most channels should stay at or below 6000 kbps. The server is Twitch's secure (RTMPS) one; rtmp://live.twitch.tv/app works too.",
             Service::Facebook => "Stream key from Live Producer → Streaming software. Facebook requires RTMPS.",
             Service::Kick => "Copy both the Stream URL and Stream key from your Kick creator dashboard.",
             Service::CustomRtmp => "Server URL and stream key from your platform or media server.",
