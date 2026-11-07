@@ -1629,7 +1629,7 @@ pub struct FrameStyle {
 
 impl Default for FrameStyle {
     fn default() -> Self {
-        FrameStyle { corner_radius: 0.0, border_width: 0.0, border_color: "#ffffff".into(), shadow: 0.0 }
+        FrameStyle { corner_radius: 16.0, border_width: 0.0, border_color: "#ffffff".into(), shadow: 0.0 }
     }
 }
 
@@ -2521,8 +2521,7 @@ impl Config {
     /// Scenes to show: the user's own, or presets built from the sources.
     pub fn effective_scenes(&self) -> Vec<Scene> {
         if self.scenes.is_empty() {
-            let names: Vec<String> = self.sources.iter().map(|s| s.name.clone()).collect();
-            crate::scene::presets(&names)
+            crate::scene::defaults(&self.sources)
         } else {
             self.scenes.clone()
         }

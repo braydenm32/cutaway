@@ -187,7 +187,7 @@ mod tests {
         // A full-screen camera fills it.
         assert_eq!(arrange(&p[1], VerticalMode::Auto, None, TALL), vec![(1, FULL)]);
         // Side by side: one above the other, left one on top.
-        let sbs = p.iter().find(|s| s.name == "Side by side").unwrap();
+        let sbs = p.iter().find(|s| s.name == "2 cameras").unwrap();
         assert_eq!(arrange(sbs, VerticalMode::Auto, None, TALL), vec![(0, [0.0, 0.0, 1.0, 0.5]), (1, [0.0, 0.5, 1.0, 0.5])]);
         // Picture in picture keeps its inset, at the top right.
         let pip = p.iter().find(|s| s.name == "Picture in picture").unwrap();
@@ -199,7 +199,7 @@ mod tests {
         let px = (a[1].1[2] * 1080.0, a[1].1[3] * 1920.0);
         assert!((px.0 / px.1 - 16.0 / 9.0).abs() < 0.01);
         // Four sources: a two-by-two grid; five: the last row is one wide frame.
-        let grid = p.iter().find(|s| s.name == "Grid").unwrap();
+        let grid = p.iter().find(|s| s.name == "4 cameras").unwrap();
         let g = arrange(grid, VerticalMode::Auto, None, TALL);
         assert_eq!(g.len(), 4);
         assert!(g.iter().all(|(_, r)| r[2] == 0.5 && r[3] == 0.5));
@@ -241,7 +241,7 @@ mod tests {
         let p = presets(&names(2));
         let f = vec![([0.5, 0.5], 1.0); 2];
         let full = frames(&p[0], VerticalMode::Auto, None, TALL, &f);
-        let sbs = frames(p.iter().find(|s| s.name == "Side by side").unwrap(), VerticalMode::Auto, None, TALL, &f);
+        let sbs = frames(p.iter().find(|s| s.name == "2 cameras").unwrap(), VerticalMode::Auto, None, TALL, &f);
         let mid = compose(Some(&full), &sbs, 0.5);
         let s0 = mid.iter().find(|x| x.source == 0).unwrap();
         let s1 = mid.iter().find(|x| x.source == 1).unwrap();

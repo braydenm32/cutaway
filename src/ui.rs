@@ -2550,7 +2550,9 @@ impl App {
             self.test_hold = true;
             self.rec_hold.hold_back(ctx.input(|i| i.time), 0.6);
         }
-        let pip = self.scenes.iter().position(|s| s.name == "Picture in picture").unwrap_or(0);
+        // The scene taken first: picture in picture, or CUTAWAY_UI_TEST_TAKE=<scene name>.
+        let first = std::env::var("CUTAWAY_UI_TEST_TAKE").unwrap_or_else(|_| "Picture in picture".into());
+        let pip = self.scenes.iter().position(|s| s.name.eq_ignore_ascii_case(&first)).unwrap_or(0);
         let next = match step {
             0 if t > 2.0 => {
                 // A show chosen (takes are named after it).
@@ -3645,8 +3647,26 @@ impl App {
                 })
                 .response
                 .on_hover_text("Also run when this scene is taken: show a title, play a pad, start a mood…");
-                if let Some(s) = crate::settings::new_scene_menu(ui, &names, &self.scenes) {
+                if let Some(s) = crate::settings::new_scene_menu(ui, &self.cfg.sources, &self.scenes) {
                     fresh = Some(s);
+                }
+                // From a default layout: put its frames back (Undo brings
+                // the edit back).
+                if let Some(p) = scene.preset {
+                    let back = crate::scene::reset_layers(&scene, &self.cfg.sources);
+                    let differs = back.as_ref().is_some_and(|l| *l != scene.layers);
+                    let tip = match &back {
+                        None => format!("The {} layout needs {}", p.name(), p.needs()),
+                        Some(_) if !differs => "It's as the default layout has it".to_string(),
+                        Some(_) => "Put the frames back as the default layout has them (its name, sound and cues stay; Undo brings your edit back)".to_string(),
+                    };
+                    if ui.add_enabled(differs, egui::Button::new("Reset to default")).on_hover_text(&tip).on_disabled_hover_text(&tip).clicked() {
+                        if let Some(layers) = back {
+                            scene.layers = layers;
+                            self.selected_layer = None;
+                            changed = true;
+                        }
+                    }
                 }
                 if ui.button("Duplicate").on_hover_text("A copy of this scene, to change").clicked() {
                     let mut s = scene.clone();
@@ -6255,7 +6275,7 @@ impl App {
             self.scenes = self.cfg.effective_scenes();
             return;
         }
-        let presets = crate::scene::presets(&names);
+        let presets = crate::scene::defaults(&self.cfg.sources);
         let mut scenes: Vec<Scene> = Vec::new();
         for mut s in self.cfg.scenes.clone() {
             s.retain_sources(names.len());

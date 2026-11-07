@@ -3,11 +3,11 @@
 //! you go (live.rs). Frames are moved in Show › Edit layout.
 
 use super::*;
-use crate::scene::Scene;
+use crate::scene::{Preset, Scene};
 
 /// ＋ New scene: blank, or from one of the layouts for these sources. The
 /// scene, named so it's the only one with its name.
-pub(crate) fn new_scene_menu(ui: &mut egui::Ui, sources: &[String], existing: &[Scene]) -> Option<Scene> {
+pub(crate) fn new_scene_menu(ui: &mut egui::Ui, sources: &[crate::config::SourceConfig], existing: &[Scene]) -> Option<Scene> {
     let mut out = None;
     ui.menu_button("＋ New scene", |ui| {
         if ui.button("Blank").on_hover_text("No frames yet: add sources with Edit layout").clicked() {
@@ -16,10 +16,19 @@ pub(crate) fn new_scene_menu(ui: &mut egui::Ui, sources: &[String], existing: &[
         }
         ui.separator();
         ui.label(RichText::new("From a layout").size(TEXT_SMALL).color(TEXT_DIM));
-        for l in crate::scene::presets(sources) {
-            let label = if l.layers.len() == 1 { format!("{} full screen", l.name) } else { l.name.clone() };
-            if ui.button(label).clicked() {
-                out = Some(crate::scene::new_scene(Some(&l), existing));
+        let defaults = crate::scene::defaults(sources);
+        for l in defaults.iter().filter(|l| l.preset == Some(Preset::Full)) {
+            if ui.button(format!("{} full screen", l.name)).clicked() {
+                out = Some(crate::scene::new_scene(Some(l), existing));
+                ui.close();
+            }
+        }
+        // Every default layout, greyed out until there are enough cameras.
+        for p in Preset::LAYOUTS {
+            let made = defaults.iter().find(|l| l.preset == Some(p));
+            let r = ui.add_enabled(made.is_some(), egui::Button::new(p.name())).on_disabled_hover_text(format!("Needs {}", p.needs()));
+            if let Some(l) = made.filter(|_| r.clicked()) {
+                out = Some(crate::scene::new_scene(Some(l), existing));
                 ui.close();
             }
         }
@@ -119,8 +128,23 @@ impl SettingsUi {
                 }
                 ui.add_space(6.0);
                 ui.horizontal_wrapped(|ui| {
-                    if let Some(s) = new_scene_menu(ui, &sources, &self.draft.scenes) {
+                    if let Some(s) = new_scene_menu(ui, &self.draft.sources, &self.draft.scenes) {
                         self.draft.scenes.push(s);
+                        self.sel_scene = self.draft.scenes.len() - 1;
+                        self.confirm_scene_delete = None;
+                    }
+                    // The default scenes this show doesn't have, at the end
+                    // (none of the others change).
+                    let missing = crate::scene::missing_defaults(&self.draft.sources, &self.draft.scenes);
+                    let tip = if missing.is_empty() {
+                        "Every default scene is here: each source full screen, and each layout there are enough cameras for".to_string()
+                    } else {
+                        format!("Adds {} at the end. Your other scenes stay as they are.", missing.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", "))
+                    };
+                    let label = if missing.is_empty() { "Add default scenes".to_string() } else { format!("Add default scenes ({})", missing.len()) };
+                    if ui.add_enabled(!missing.is_empty(), egui::Button::new(label)).on_hover_text(&tip).on_disabled_hover_text(&tip).clicked() {
+                        self.commit_scene_rename();
+                        self.draft.scenes.extend(missing);
                         self.sel_scene = self.draft.scenes.len() - 1;
                         self.confirm_scene_delete = None;
                     }
@@ -199,6 +223,21 @@ impl SettingsUi {
                     label(ui, "Shows");
                     ui.vertical(|ui| {
                         sketch(ui, &scene, &sources, vec2(240.0, 135.0));
+                        // From a default layout: put its frames back.
+                        if let Some(p) = scene.preset {
+                            let back = crate::scene::reset_layers(&scene, &self.draft.sources);
+                            let differs = back.as_ref().is_some_and(|l| *l != scene.layers);
+                            let tip = match &back {
+                                None => format!("The {} layout needs {}", p.name(), p.needs()),
+                                Some(_) if !differs => "It's as the default layout has it".to_string(),
+                                Some(_) => "Put the frames back as the default layout has them (its name, sound and cues stay)".to_string(),
+                            };
+                            if ui.add_enabled(differs, egui::Button::new("Reset to default")).on_hover_text(&tip).on_disabled_hover_text(&tip).clicked() {
+                                if let (Some(layers), Some(s)) = (back, self.draft.scenes.get_mut(sel)) {
+                                    s.layers = layers;
+                                }
+                            }
+                        }
                         // Its frames are moved on Show › Edit layout: in
                         // preview with Preview on; on air only if it's on air.
                         let on_air = info.on_air_scene.as_deref() == Some(scene.name.as_str());

@@ -323,7 +323,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Program, "Background image") => "A picture behind everything instead of the colour (PNG or JPEG), filling the frame.",
         (Program, "Program monitor quality") => "How sharp the program monitor is in this window. Recordings aren't affected; lower it on a slower computer.",
         (Program, "Multiview quality") => "How sharp each source's monitor is in this window. Recordings aren't affected; lower it with many sources or a slower computer.",
-        (Program, "Rounded corners") => "Rounds the corners of frames that don't fill the screen (picture in picture, side by side, grids). Full-screen shots stay clean.",
+        (Program, "Rounded corners") => "Rounds the corners of frames that don't fill the screen (picture in picture, side by side, grids), in pixels of the program picture. A new show starts at 16. Full-screen shots stay clean.",
         (Program, "Border") => "A line around those frames, and its colour.",
         (Program, "Drop shadow") => "A soft shadow under those frames, so they lift off the background.",
 
@@ -401,7 +401,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         // ---- Scenes
         (Scenes, "Name") => "What the scene's button says. Renamed when you leave the box; what goes by its name (the rundown, \"if it drops, cut to\", automatic switching, scene:Name commands) follows the new name.",
         (Scenes, "Number key") => "The key that takes it: 1–9 for the first nine scenes, in order, and 0 for the tenth. Use ↑ and ↓ (or drag the scene buttons in Show › Edit layout) to put the ones you use most first. Stream Deck keys, the remote and scene:3 from MIDI or OSC also go by place.",
-        (Scenes, "Shows") => "Its frames and which source is in each. Move and resize them in Show › Edit layout (E): \"Edit its layout\" opens it there, in preview, so the program stays as it is until you Take. If the scene isn't on air and Preview is off, it goes in preview just for the edit, and Preview turns off again when you leave Edit layout.",
+        (Scenes, "Shows") => "Its frames and which source is in each. Move and resize them in Show › Edit layout (E): \"Edit its layout\" opens it there, in preview, so the program stays as it is until you Take. If the scene isn't on air and Preview is off, it goes in preview just for the edit, and Preview turns off again when you leave Edit layout. A scene made from a default layout (2, 3, 4 or 5 cameras, screen and cameras, picture in picture, or a source full screen) has Reset to default: its frames go back as that layout has them, with your sources now. Its name, sound and cues stay. Add default scenes (under the list) brings back any default scene your show doesn't have.",
         (Scenes, "Sound and cues") => "Inputs it turns on or off and commands it runs when it's taken: set them in Show › Edit layout (Audio, Also run…). While you're recording or live, Edit layout edits in preview (it turns Preview on), so the picture on air never changes as you work.",
 
         // ---- Macros

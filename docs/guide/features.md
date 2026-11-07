@@ -249,13 +249,35 @@ Recordings start with the **Take name** from Record & stream › Quality and fil
 
 ### Switching and graphics
 
-- **Scenes.** Preset scenes (each source full screen, side by side,
-  picture-in-picture, grid) plus your own: drag and resize frames live, then
-  save them. Start a new scene blank or from one of those layouts
+- **Scenes.** Default scenes plus your own: drag and resize frames live,
+  then save them. Start a new scene blank or from one of the default layouts
   (**＋ New scene** in Show › Edit layout or Scenes › Scenes), and put the
   scene buttons in the order you want (drag them in Edit layout, or ↑ ↓ in
   Scenes › Scenes): keys 1–9 take the first nine, and 0 the tenth. The Scenes pages save as
   you go, with Undo.
+- **Default layouts.** A new show starts with each source full screen, then
+  a layout for each number of cameras it has enough of:
+  - **2 cameras:** side by side, half the picture each.
+  - **3 cameras:** three across, each as tall as the picture.
+  - **4 cameras:** a 2 × 2 grid.
+  - **5 cameras:** all the same size, two stacked on the left, two on the
+    right and the first camera in the centre, halfway down.
+  - **Screen and cameras:** your screen capture large at the top and the
+    cameras (up to eight) in a row along the bottom.
+  - **Picture in picture:** one camera full screen with another small in the
+    corner.
+
+  The cameras go in in the order of your sources. A wide camera that you cut
+  close-ups from is left out, because its close-ups take its place. Screen
+  captures go in the screen's place. Pictures are cropped to fill their
+  tiles, with a 20-pixel gap between them and gently rounded corners (a new
+  show starts at 16 px: **Scenes › Program picture › Rounded corners**).
+  Change any tile in Edit layout.
+  A scene made from a default layout remembers it: **Reset to default** (in
+  Show › Edit layout, or under the scene in Scenes › Scenes) puts its frames
+  back, keeping its name, sound and cues. **Add default scenes** in
+  Scenes › Scenes adds back any default scene your show doesn't have, at the
+  end, and leaves your other scenes as they are.
 - **Fill, crop and zoom per scene.** Each frame in a scene can show the whole
   picture (fit) or fill the frame, cropped to its shape, so a camera in a tall
   half-screen box has no black bars. Zoom in (scroll over the frame, up to

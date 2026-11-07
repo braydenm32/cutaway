@@ -76,7 +76,7 @@ pub const AREAS: &[Area] = &[
         Tab { id: "edit", label: "Edit layout", more: false, sections: &[
             Sect { id: "canvas", label: "Layout", help: &[], routes: &["bank.edit", "mon.edit.overlay", "mon.edit.toolbar", "edit.done", "edit.save_scenes", "edit.undo", "edit.redo"] },
             Sect { id: "frame", label: "Frame", help: &[], routes: &["edit.frame.add", "edit.frame.remove", "edit.frame.front", "edit.frame.full", "edit.frame.fitfill", "edit.frame.zoom", "edit.frame.reset"] },
-            Sect { id: "scene", label: "Scene", help: &[], routes: &["edit.scene.name", "menu.edit.audio", "menu.edit.cues", "menu.edit.newscene", "edit.scene.duplicate", "edit.scene.delete"] },
+            Sect { id: "scene", label: "Scene", help: &[], routes: &["edit.scene.name", "menu.edit.audio", "menu.edit.cues", "menu.edit.newscene", "edit.scene.reset", "edit.scene.duplicate", "edit.scene.delete"] },
         ]},
     ]},
     Area { id: "sources", label: "Sources", icon: Icon::Camera, key: Some(2), tabs: &[
@@ -99,7 +99,7 @@ pub const AREAS: &[Area] = &[
     ]},
     Area { id: "scenes", label: "Scenes", icon: Icon::Layers, key: Some(3), tabs: &[
         Tab { id: "scenes", label: "Scenes", more: false, sections: &[
-            Sect { id: "list", label: "Your scenes", help: &[Page::Scenes], routes: &["set.show.scenes"] } ]},
+            Sect { id: "list", label: "Your scenes", help: &[Page::Scenes], routes: &["set.show.scenes", "set.scenes.defaults"] } ]},
         Tab { id: "switching", label: "Switching", more: false, sections: &[
             Sect { id: "transition", label: "Transition and Preview", help: &[Page::Switching], routes: &["set.show.switching"] } ]},
         Tab { id: "program", label: "Program picture", more: true, sections: &[
@@ -397,7 +397,7 @@ mod tests {
 
     #[test]
     fn route_count_is_known() {
-        assert_eq!(ROUTES.len(), 251, "a route was added or removed: update shots/4-route-map.md and this number on purpose");
+        assert_eq!(ROUTES.len(), 253, "a route was added or removed: update shots/4-route-map.md and this number on purpose");
         assert_eq!(route_ids().len(), ROUTES.len(), "duplicate route id");
         assert!(ROUTES.iter().all(|r| !r.was.is_empty() && !r.label.trim().is_empty()), "every route says how it was reached and what it's called");
     }

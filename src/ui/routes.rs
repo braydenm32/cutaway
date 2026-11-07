@@ -127,6 +127,7 @@ pub const ROUTES: &[Route] = &[
     m("menu.edit.audio", "Scene audio", &[Mouse]),
     m("menu.edit.cues", "Scene cues", &[Mouse]),
     m("menu.edit.newscene", "New scene", &[Mouse]),
+    m("edit.scene.reset", "Reset scene to default", &[Mouse]),
     m("edit.scene.duplicate", "Duplicate scene", &[Mouse]),
     m("edit.scene.delete", "Delete scene", &[Mouse]),
     // ---- multiview
@@ -200,6 +201,7 @@ pub const ROUTES: &[Route] = &[
     m("set.look.graphics", "Graphics", &[Mouse]),
     m("set.look.captions", "Captions", &[Mouse]),
     m("set.show.scenes", "Scenes", &[Mouse]),
+    m("set.scenes.defaults", "Add default scenes", &[Mouse]),
     m("set.show.switching", "Switching", &[Mouse]),
     m("set.show.rundown", "Rundown", &[Mouse]),
     m("set.show.macros", "Macros", &[Mouse]),
