@@ -2401,6 +2401,8 @@ impl Config {
             toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         cfg.validate()?;
         cfg.adopt_clock_format();
+        // (An older file: keep what OSC did then, and from now on only what's chosen.)
+        cfg.osc.from_network = Some(cfg.osc.from_other_devices());
         cfg.held_secrets = crate::secrets::reveal(cfg.secrets_mut());
         for (field, _) in &cfg.held_secrets {
             eprintln!("{}: the saved value for {field} is missing", path.display());
