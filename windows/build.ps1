@@ -128,7 +128,7 @@ $dml = Get-NuGet "Microsoft.AI.DirectML" "1.15.4" "4e7cb7ddce8cf837a7a75dc029209
 
 # ---- build --------------------------------------------------------------------------------
 
-$cargoArgs = @("build", "--profile", "dist")
+$cargoArgs = @("build", "--locked", "--profile", "dist")
 # The default features are whisper and a macOS-only one, so this drops just whisper here.
 if ($NoWhisper) { $cargoArgs += @("--no-default-features") }
 if ($features.Count -gt 0) { $cargoArgs += @("--features", ($features -join ",")) }
@@ -137,7 +137,7 @@ Say "cargo $($cargoArgs -join ' ')"
 if ($LASTEXITCODE -ne 0) { throw "The build failed." }
 
 Say "Building the virtual camera"
-& cargo build --release --manifest-path windows\vcam\Cargo.toml
+& cargo build --locked --release --manifest-path windows\vcam\Cargo.toml
 if ($LASTEXITCODE -ne 0) { throw "The virtual camera's build failed." }
 
 # ---- package ------------------------------------------------------------------------------

@@ -111,10 +111,28 @@ fn write_private(path: &Path, text: &str) -> std::io::Result<()> {
     use std::io::Write;
     let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(path)?;
     f.write_all(text.as_bytes())?;
-    f.sync_all()
+    f.sync_all()?;
+    drop(f);
+    // Only this user may read it (not whatever the folder allows: a shared
+    // or USB folder, say).
+    #[cfg(windows)]
+    if let Ok(user) = std::env::var("USERNAME") {
+        let ok = std::process::Command::new("icacls").arg(path).args(["/inheritance:r", "/grant:r"]).arg(format!("{user}:F")).stdout(std::process::Stdio::null()).status().is_ok_and(|s| s.success());
+        if !ok {
+            eprintln!("Couldn't limit who may read {}: keep it somewhere only you can open.", path.display());
+        }
+    }
+    Ok(())
 }
 
 fn read_key(path: &Path) -> Result<SigningKey> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if std::fs::metadata(path).is_ok_and(|m| m.permissions().mode() & 0o077 != 0) {
+            eprintln!("Note: others on this computer can read {}. Make it yours alone with: chmod 600 \"{}\"", path.display(), path.display());
+        }
+    }
     let text = std::fs::read_to_string(path).with_context(|| format!("couldn't read the key {}", path.display()))?;
     let seed: [u8; 32] = text
         .lines()
