@@ -13,6 +13,7 @@ mod config;
 mod control;
 mod devices;
 mod engine;
+mod forget;
 mod logging;
 mod media;
 mod net;
@@ -364,6 +365,8 @@ fn run() -> Result<()> {
     // With --demo, edits from the UI shouldn't overwrite the real settings.
     let save_path = if args.demo.is_some() { None } else { Some(cfg_path) };
     let r = ui::run(cfg, save_path, args.ui_test, made_pin && !first_run, first_run, rescue);
+    // Remove my settings and keys: now the window has saved its last.
+    forget::run_if_wanted();
     drop(instance);
     r
 }

@@ -800,6 +800,9 @@ impl App {
             if ui.button("Your first hour").on_hover_text("What your computer needs, the first launch, permissions, privacy and the common first-show problems").clicked() {
                 ui.ctx().open_url(egui::OpenUrl::new_tab(crate::net::update::manual_url("first-hour.md")));
             }
+            if ui.button("Privacy").on_hover_text("What Cutaway keeps and sends, and removing it").clicked() {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(crate::net::update::manual_url("privacy.md")));
+            }
         });
     }
 
@@ -1568,6 +1571,26 @@ impl App {
             a.in_program = on;
             self.cfg_dirty = true;
         }
+    }
+
+    /// Remove my settings and keys: close (without saving again), and have
+    /// everything removed once the window is gone. Recordings stay.
+    fn remove_my_data(&mut self, ctx: &egui::Context) {
+        if self.engine.as_ref().is_some_and(|e| e.is_recording() || e.is_streaming()) {
+            self.toast("Stop recording and streaming first.".into(), true);
+            return;
+        }
+        let mut keep = crate::recovery::folders(&self.cfg);
+        if let Some(dir) = crate::config::default_config_path().parent() {
+            keep.extend(crate::recovery::remembered_folders(dir));
+        }
+        keep.retain(|p| !p.as_os_str().is_empty());
+        crate::forget::on_exit(self.save_path.clone(), keep);
+        self.settings = None;
+        self.cfg_dirty = false;
+        self.scenes_dirty = false;
+        self.quit_ok = true;
+        ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
     }
 
     fn set_virtual_camera(&mut self, on: bool) {
@@ -6098,6 +6121,7 @@ impl App {
                     }
                 }
             }
+            SettingsAction::RemoveMyData => self.remove_my_data(ctx),
             SettingsAction::VirtualCamera(on) => self.set_virtual_camera(on),
             SettingsAction::MeasureSync => {
                 self.settings = None;
@@ -6505,7 +6529,8 @@ impl eframe::App for App {
         self.midi = None;
         self.osc = None;
         // Saved first: a long shutdown that gets force-quit doesn't lose them.
-        if self.cfg_dirty || self.scenes_dirty {
+        // (Not when everything's about to be removed.)
+        if (self.cfg_dirty || self.scenes_dirty) && !crate::forget::wanted() {
             self.save_config();
         }
         // (Whatever the autosave still has to write.)
@@ -6524,6 +6549,9 @@ impl eframe::App for App {
         }
         // An update that's ready and told to go in: the helper takes over
         // once Cutaway has closed.
+        if crate::forget::wanted() {
+            return;
+        }
         if let Some(e) = crate::net::self_update::on_exit() {
             eprintln!("update: {e}");
         }

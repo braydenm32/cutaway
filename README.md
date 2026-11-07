@@ -121,6 +121,7 @@ button on About open it.
 - [Show tools and sound](docs/guide/show-tools.md): replay, macros, the teleprompter, sound pads, your DAW, captions, the vertical version
 - [After the show: uploads and editing](docs/guide/after-the-show.md): YouTube, Google Drive, DaVinci Resolve, Premiere Pro, Final Cut and REAPER
 - [Performance: 4K and many sources](docs/guide/performance.md)
+- [Privacy](docs/guide/privacy.md): what Cutaway keeps, what it sends, your guests, and removing it all
 
 ## Getting help
 

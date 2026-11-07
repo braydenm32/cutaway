@@ -21,5 +21,6 @@ Cutaway and follow its first-show guide.
 | [Show tools and sound](show-tools.md) | Replay, macros, the ticker, viewer comments, the teleprompter, sound pads, Syrinscape, talkback, your DAW, captions, the vertical version |
 | [After the show](after-the-show.md) | Uploads to YouTube and Google Drive, and editing in DaVinci Resolve, Premiere Pro, Final Cut and REAPER |
 | [Performance](performance.md) | 4K and many sources: what a computer can carry |
+| [Privacy](privacy.md) | What Cutaway keeps and sends, recording guests, and removing your settings and keys |
 
 Building or changing Cutaway itself? See [DEVELOPING.md](../DEVELOPING.md).

@@ -255,6 +255,8 @@ pub enum SettingsAction {
     MakeNameTitle,
     /// Load a web graphic's page again (by name).
     ReloadGraphic(String),
+    /// Remove my settings and keys, then quit (asked first on the page).
+    RemoveMyData,
 }
 
 /// A graphic as it is on the program now, for the Graphics pages.
@@ -373,6 +375,8 @@ pub struct SettingsUi {
     show_keys: HashSet<usize>,
     encoders: Arc<Mutex<Option<EncoderLists>>>,
     confirm_discard: bool,
+    /// Diagnostics › Remove my settings and keys: asking first.
+    confirm_forget: bool,
     confirm_remove: Option<RemoveCheck>,
     message: Option<(String, bool)>,
     /// The settings an Apply failed for: its error shows until they change.
@@ -514,6 +518,7 @@ impl SettingsUi {
             show_keys: HashSet::new(),
             encoders: Arc::new(Mutex::new(None)),
             confirm_discard: false,
+            confirm_forget: false,
             confirm_remove: None,
             message: None,
             failed: None,
@@ -859,7 +864,7 @@ impl SettingsUi {
 
     /// Waiting for an answer or a key: the show's keys stay off meanwhile.
     pub fn busy(&self) -> bool {
-        self.key_capture.is_some() || self.confirm_discard || self.confirm_replace.is_some() || self.confirm_remove.is_some()
+        self.key_capture.is_some() || self.confirm_discard || self.confirm_forget || self.confirm_replace.is_some() || self.confirm_remove.is_some()
     }
 
     /// Open one of the page's folded parts (by the id it's drawn with).
@@ -949,6 +954,37 @@ impl SettingsUi {
             });
             if r.should_close() {
                 self.confirm_discard = false;
+            }
+        }
+        if self.confirm_forget {
+            let mut done = false;
+            let r = egui::Modal::new(egui::Id::unique("remove_my_data")).show(ctx, |ui| {
+                ui.set_width(460.0);
+                ui.heading("Remove your settings and keys from this computer?");
+                ui.label("Cutaway closes, then removes:");
+                for line in [
+                    "your settings and every saved show",
+                    if cfg!(windows) { "stream keys, passwords and sign-ins saved in Credential Manager" } else { "stream keys, passwords and sign-ins saved in the Keychain" },
+                    "the log, the window's place and the list of uploads still to go",
+                    "Cutaway's own copy of the guest link helper (cloudflared)",
+                ] {
+                    ui.label(format!("• {line}"));
+                }
+                ui.add_space(4.0);
+                ui.label(RichText::new("Your recordings stay where they are, and so does Cutaway itself. To keep your settings, export them first (More › App › Shows). This can't be undone.").color(TEXT_DIM));
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button(RichText::new("Remove and quit").color(ERROR)).clicked() {
+                        action = Some(SettingsAction::RemoveMyData);
+                        done = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        done = true;
+                    }
+                });
+            });
+            if done || r.should_close() {
+                self.confirm_forget = false;
             }
         }
         if let Some((cfg, label, question, notes)) = self.confirm_replace.clone() {
@@ -2064,6 +2100,19 @@ impl SettingsUi {
                     self.save_report(info);
                 }
                 hint(ui, "One .zip to send when something goes wrong: the log, the last recording's note, your settings and devices. Stream keys and passwords are taken out.");
+            });
+            ui.end_row();
+            label(ui, "Your data");
+            ui.vertical(|ui| {
+                let busy = info.recording || info.streaming;
+                let r = ui.add_enabled(!busy && info.config_path.is_some(), egui::Button::new("Remove my settings and keys…"));
+                if r.clicked() {
+                    self.confirm_forget = true;
+                }
+                if busy {
+                    r.on_disabled_hover_text("Stop recording and streaming first");
+                }
+                hint(ui, "Everything Cutaway keeps about you on this computer goes, and Cutaway closes. Recordings stay.");
             });
             ui.end_row();
             for (k, v) in &info.engine_facts {

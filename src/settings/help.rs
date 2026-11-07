@@ -533,6 +533,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Diagnostics, "Version") => "The Cutaway version you're running.",
         (Diagnostics, "Settings file") => "Where this show's settings are kept (the same file as --config on the command line). Export, import or reset them in More › App › Shows.",
         (Diagnostics, "Log file") => "What Cutaway has been doing, kept in case something goes wrong.",
+        (Diagnostics, "Your data") => "Remove my settings and keys: Cutaway closes, then deletes your settings, every saved show, the stream keys and passwords in the Keychain (Credential Manager on Windows), the log and its own downloads. Recordings stay. Export your settings first to keep a copy. More in the guide's Privacy page.",
         (Diagnostics, "Problem report") => "Saves one .zip to send when something goes wrong: the log, the last recording's note (Take.txt), your settings and the devices found. Stream keys, passwords and tokens are taken out first, even where they appear in the log.",
 
         _ => return None,

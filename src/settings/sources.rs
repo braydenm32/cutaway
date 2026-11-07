@@ -533,7 +533,7 @@ impl SettingsUi {
                     ui.end_row();
                     if let Some(NetSpec::SrtListen { passphrase: Some(p), .. }) = netsrc::parse_spec(&src.device) {
                         if let Err(e) = crate::net::srt::check_passphrase(&p) {
-                            label(ui, "");
+                            ui.label("");
                             ui.label(RichText::new(format!("⚠ {e}")).color(AMBER));
                             ui.end_row();
                         }
