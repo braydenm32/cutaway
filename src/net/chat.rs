@@ -187,12 +187,20 @@ fn twitch(channel: &str, state: Arc<Mutex<State>>, stop: Arc<AtomicBool>, ids: A
 }
 
 fn twitch_session(channel: &str, state: &Arc<Mutex<State>>, stop: &AtomicBool, ids: &AtomicU64, waker: &Arc<dyn Fn() + Send + Sync>, set: &dyn Fn(String)) -> Result<()> {
-    let addr = std::net::ToSocketAddrs::to_socket_addrs("irc.chat.twitch.tv:6667").context("couldn't find Twitch's chat server")?.next().ok_or_else(|| anyhow!("no address for Twitch chat"))?;
-    let mut s = TcpStream::connect_timeout(&addr, Duration::from_secs(10)).context("couldn't reach Twitch chat")?;
-    s.set_read_timeout(Some(Duration::from_millis(500)))?;
+    // Over TLS (port 6697), as Twitch recommends: what's read can't be
+    // changed on the way (a viewer's message rewritten on the screen).
+    let host = "irc.chat.twitch.tv";
+    let addr = std::net::ToSocketAddrs::to_socket_addrs(&(host, 6697)).context("couldn't find Twitch's chat server")?.next().ok_or_else(|| anyhow!("no address for Twitch chat"))?;
+    let tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(10)).context("couldn't reach Twitch chat")?;
+    tcp.set_read_timeout(Some(Duration::from_secs(10)))?;
+    tcp.set_write_timeout(Some(Duration::from_secs(10)))?;
+    let connector = native_tls::TlsConnector::new().context("TLS setup")?;
+    let mut s = connector.connect(host, tcp).map_err(|e| anyhow!("couldn't open a secure connection to Twitch chat ({e})"))?;
+    s.get_ref().set_read_timeout(Some(Duration::from_millis(500)))?;
     let nick = format!("justinfan{}", 10_000 + std::process::id() % 80_000);
     write!(s, "CAP REQ :twitch.tv/tags\r\nPASS SCHMOOPIIE\r\nNICK {nick}\r\nJOIN #{channel}\r\n")?;
-    let mut reader = BufReader::new(s.try_clone()?);
+    s.flush()?;
+    let mut reader = BufReader::new(s);
     let mut line = String::new();
     let mut joined = false;
     while !stop.load(Ordering::Relaxed) {
@@ -211,7 +219,9 @@ fn twitch_session(channel: &str, state: &Arc<Mutex<State>>, stop: &AtomicBool, i
         }
         let l = line.trim_end();
         if let Some(arg) = l.strip_prefix("PING") {
+            let s = reader.get_mut();
             write!(s, "PONG{arg}\r\n")?;
+            s.flush()?;
             continue;
         }
         if !joined && (l.contains(" 366 ") || l.contains(" JOIN #")) {

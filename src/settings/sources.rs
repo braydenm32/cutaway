@@ -509,14 +509,35 @@ impl SettingsUi {
                 }
                 SourceKind::SrtListen => {
                     label(ui, "Listen on port");
-                    let mut port = match netsrc::parse_spec(&src.device) {
-                        Some(NetSpec::SrtListen { port }) => port,
-                        _ => 9000,
+                    let (mut port, mut pass) = match netsrc::parse_spec(&src.device) {
+                        Some(NetSpec::SrtListen { port, passphrase }) => (port, passphrase.unwrap_or_default()),
+                        _ => (9000, String::new()),
                     };
-                    if ui.add(egui::DragValue::new(&mut port).range(1024..=65535)).changed() {
-                        src.device = format!("srt-in:{port}");
+                    let a = ui.add(egui::DragValue::new(&mut port).range(1024..=65535)).changed();
+                    ui.end_row();
+                    label(ui, "Passphrase");
+                    let b = ui
+                        .horizontal(|ui| {
+                            let c = ui.add(egui::TextEdit::singleline(&mut pass).desired_width(200.0).hint_text("none (anyone can send)")).changed();
+                            let d = ui.small_button("New").on_hover_text("A random passphrase").clicked();
+                            if d {
+                                pass = format!("{}{}", crate::engine::guests::new_id(), crate::engine::guests::new_id());
+                            }
+                            c || d
+                        })
+                        .inner;
+                    if a || b {
+                        let pass = pass.trim();
+                        src.device = if pass.is_empty() { format!("srt-in:{port}") } else { format!("srt-in:{port}?passphrase={}", crate::net::google::encode(pass)) };
                     }
                     ui.end_row();
+                    if let Some(NetSpec::SrtListen { passphrase: Some(p), .. }) = netsrc::parse_spec(&src.device) {
+                        if let Err(e) = crate::net::srt::check_passphrase(&p) {
+                            ui.label("");
+                            ui.label(RichText::new(format!("⚠ {e}")).color(AMBER));
+                            ui.end_row();
+                        }
+                    }
                 }
                 SourceKind::SrtCall => {
                     label(ui, "Address");
@@ -749,7 +770,7 @@ impl SettingsUi {
                 let from = src.virtual_ptz_of().unwrap_or("the wide camera");
                 hint(ui, &format!("A camera operator inside {from}: pan, tilt and zoom with the PTZ panel, the Stream Deck or the remote, and save shots as presets it glides to."));
             }
-            SourceKind::SrtCall => hint(ui, "Cutaway connects to an SRT listener (a receiver, an encoder or a relay) and pulls its stream."),
+            SourceKind::SrtCall => hint(ui, "Cutaway connects to an SRT listener (a receiver, an encoder or a relay) and pulls its stream. If the sender uses a passphrase, add &passphrase=… to the address."),
             SourceKind::Phone | SourceKind::Guest => {
                 let id = src.link_id().map(|l| l.0.to_string()).unwrap_or_default();
                 let link = info.guest_base.as_ref().filter(|_| applied.contains(&src.device.trim().to_string())).map(|b| format!("{b}/g/{id}"));

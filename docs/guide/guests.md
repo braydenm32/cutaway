@@ -52,6 +52,11 @@
   almost every home and mobile network. A few office, school and hotel
   networks block that; set a TURN server (Cloudflare Calls, Twilio, your own
   coturn) under **Strict networks (TURN)**, in the **TURN server** box, to relay for them.
+  Guests' browsers are given the relay's username and password, so use a
+  login just for this. With a server set up with a shared secret (coturn's
+  `use-auth-secret`), put the secret in **Password** and tick **Made from a
+  shared secret**: each guest then gets a login of their own that stops
+  working after a day, and the secret never leaves your computer.
 - **Links that stay the same (Tailscale Funnel):** install
   [Tailscale](https://tailscale.com/download) and sign in (a free account),
   then choose **Tailscale Funnel** under **Reached through** and apply.

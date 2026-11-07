@@ -45,13 +45,35 @@ pub fn human_size(bytes: u64) -> String {
     }
 }
 
+/// A name for a file (an extension goes after it): letters, digits, - and
+/// _ only, never a Windows device name (CON, COM1…), at most 120 characters.
 pub fn safe_file_name(s: &str) -> String {
     let cleaned: String = s
         .chars()
         .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' { c } else { '_' })
         .collect();
-    let t = cleaned.trim().replace(' ', "_");
-    if t.is_empty() { "untitled".into() } else { t }
+    let mut t = cleaned.trim().replace(' ', "_");
+    if t.chars().count() > 120 {
+        t = t.chars().take(120).collect();
+    }
+    if t.is_empty() {
+        return "untitled".into();
+    }
+    if windows_device_name(&t) {
+        t.push('_');
+    }
+    t
+}
+
+/// CON, PRN, AUX, NUL, COM1-9 and LPT1-9 (any case, and with ¹²³), which
+/// Windows won't take as a file's name, whatever comes after the dot.
+fn windows_device_name(t: &str) -> bool {
+    let stem = t.to_uppercase();
+    let mut c = stem.chars();
+    let three: String = c.by_ref().take(3).collect();
+    let rest: String = c.collect();
+    (rest.is_empty() && matches!(three.as_str(), "CON" | "PRN" | "AUX" | "NUL"))
+        || (matches!(three.as_str(), "COM" | "LPT") && rest.chars().count() == 1 && rest.chars().all(|d| d.is_ascii_digit() || "¹²³".contains(d)))
 }
 
 /// A name that's safe as a file or folder name on Mac and Windows: no
@@ -68,10 +90,7 @@ pub fn safe_folder_name(s: &str, fallback: &str) -> String {
     if t.chars().count() > 60 {
         t = t.chars().take(60).collect::<String>().trim_end_matches(['_', '-']).to_string();
     }
-    let stem = t.to_ascii_uppercase();
-    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || (stem.len() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && stem.as_bytes()[3].is_ascii_digit());
-    if reserved {
+    if windows_device_name(&t) && !t.ends_with('_') {
         t.push('_');
     }
     t
@@ -198,6 +217,18 @@ pub fn free_udp_port() -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_names_windows_takes() {
+        assert_eq!(safe_file_name("con"), "con_");
+        assert_eq!(safe_file_name("COM1"), "COM1_");
+        assert_eq!(safe_file_name("lpt9"), "lpt9_");
+        assert_eq!(safe_file_name("Console"), "Console");
+        assert_eq!(safe_file_name("COM10"), "COM10");
+        assert_eq!(safe_file_name("../../etc/passwd"), "______etc_passwd");
+        assert_eq!(safe_file_name(&"a".repeat(500)).len(), 120);
+        assert_eq!(safe_folder_name("NUL", "x"), "NUL_");
+    }
 
     #[test]
     fn exists_recent_remembers_for_a_moment() {

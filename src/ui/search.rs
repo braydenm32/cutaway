@@ -81,6 +81,7 @@ const SETTING_HOME: &[(Section, &str, &str)] = &[
     // Sources › Network & phone feeds
     (Section::Sources, "Feed", "sources/network/feeds"),
     (Section::Sources, "Listen on port", "sources/network/feeds"),
+    (Section::Sources, "Passphrase", "sources/network/feeds"),
     (Section::Sources, "Address", "sources/network/feeds"),
     (Section::Sources, "Stream key", "sources/network/feeds"),
     (Section::Sources, "NDI source", "sources/network/feeds"),
@@ -560,6 +561,8 @@ mod tests {
         // The command line's tools have buttons now (route map #14).
         assert!(search("test encoders", 5).iter().any(|h| h.place == "More › App › Diagnostics"));
         assert!(search("list devices", 5).iter().any(|h| h.place == "More › App › Diagnostics"));
+        assert!(search("remove my data", 5).iter().any(|h| h.place == "More › App › Diagnostics"));
+        assert!(search("delete keys", 5).iter().any(|h| h.place == "More › App › Diagnostics"));
         // An area by name.
         let sound = AREAS.iter().position(|a| a.id == "sound").unwrap();
         assert!(search("sound", 8).iter().any(|h| h.go == Go::Area(sound)));

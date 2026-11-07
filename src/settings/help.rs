@@ -153,9 +153,9 @@ pub(super) fn search(query: &str, max: usize) -> Vec<Hit> {
 /// below reads the pages' source, so it can't fall out of step.
 const PARTS: &[(Section, &str, &[&str])] = &[
     (Section::Control, "remote", &["Remote control", "Port", "PIN", "Quick marker names"]),
-    (Section::Control, "osc", &["OSC", "Listen on UDP port", "Send state to"]),
+    (Section::Control, "osc", &["OSC", "Listen on UDP port", "From other devices", "Send state to"]),
     (Section::Control, "midi", &["MIDI control", "Controller", "Light up pads"]),
-    (Section::Guests, "turn", &["TURN server", "Username", "Password"]),
+    (Section::Guests, "turn", &["TURN server", "Username", "Password", "Logins for guests"]),
     (Section::Mixing, "mix_automix", &["Automatic mixing", "Mics"]),
     (Section::Mixing, "mix_duck", &["Ducking", "Turn down by", "When a voice is above", "Back up after", "These go down"]),
     (Section::Mixing, "mix_phones", &["Output", "Listen to", "Volume"]),
@@ -212,6 +212,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Sources, "Pattern") => "Which generated picture to show. Test pictures are for trying layouts and checking that sources line up; each flashes once a second.",
         (Sources, "Listen on port") => "The network port Cutaway listens on for this feed. Each SRT or RTMP input needs its own; the sender points at this computer's address and this port (shown below).",
         (Sources, "Address") => "The SRT address to pull the stream from: srt://host:port, with ?streamid=… if the sender wants one. Cutaway calls out to it, and reconnects if it drops.",
+        (Sources, "Passphrase") => "For an SRT feed: only a sender with the same passphrase (10 to 79 characters) can connect, and the picture and sound are encrypted on the way. Put it in the sender too (in OBS, it's part of the address shown below). Empty: anyone on the network can send to this port.",
         (Sources, "Stream key") => "The key the sender has to use. Leave it empty to accept any stream; a key stops a stray stream from landing here.",
         (Sources, "NDI source") => "Which NDI source on your network: other computers running NDI Tools or OBS, NDI cameras and converters. Press Find to look. Needs the free NDI runtime, which Cutaway can install.",
         (Sources, "Cut from") => "The source this one is cut out of, usually a wide shot. Sources › Close-ups & PTZ makes a close-up for each person from one camera in a click. From a 4K camera, a 1080p cut-out stays sharp; set it much bigger than the part it shows and Cutaway warns, as the file would be big for nothing. Splitting a camera again replaces its close-ups rather than adding more. It runs at that source's frame rate and delay, and records like any source.",
@@ -281,7 +282,8 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Guests, "Backup recordings") => "While you record, each guest's browser also records their camera and mic as captured, before the internet gets at it, and sends it in pieces into the recording's Guests folder. It uses more of their upload, so it suits decent connections; their page tells them it's happening.",
         (Guests, "Screen share") => "Adds a source for the guest's screen. Their page gets a Share screen button: they choose the whole screen, a window or a tab, and it arrives on its own source while their camera stays on.",
         (Guests, "TURN server") => "A relay for guests on strict networks (some offices, schools and hotels) that block direct connections: Cloudflare Calls, Twilio or your own coturn. Most guests never need one.",
-        (Guests, "Username") | (Guests, "Password") => "The TURN server's login.",
+        (Guests, "Username") | (Guests, "Password") => "The TURN server's login. Guests' browsers are given it to use the relay, so use a login just for this.",
+        (Guests, "Logins for guests") => "Made from a shared secret: for a TURN server set up with a shared secret (coturn's use-auth-secret, and others that follow the TURN REST API). Put the server's secret (coturn's static-auth-secret) in Password: each guest gets a login of their own that runs out after a day, and the secret itself is never sent. The Username is then not used.",
 
         // ---- Sound › Mixer, and Headphones & talkback
         (Mixing, "Limiter") => "Catches peaks, so the recording and stream mixes never clip. The ceiling is the loudest they can get; −1 dB is a safe choice.",
@@ -521,6 +523,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Control, "PIN") => "The code every phone, Stream Deck and script needs to use the remote. There's always one: Cutaway makes a six-digit PIN if this is empty. A device that gets it wrong five times in a row has to wait a minute before trying again.",
         (Control, "Quick marker names") => "Names you can give a marker with one tap, so you don't type mid-show: the phone's ◆ ▾ lists them, and a Stream Deck Marker key can use one. Separate them with commas, for example Good, Retake, Cut here. They become chapter and timeline marker names, as a named marker from the desk does.",
         (Control, "OSC") => "Accepts OSC commands over the network: QLab, Companion, TouchOSC, lighting desks.",
+        (Control, "From other devices") => "Lets QLab, Companion, TouchOSC or a lighting desk on another computer or tablet send OSC. Off, only programs on this computer can. OSC has no PIN, so with this on anything on the same network can start or stop the stream and recording: turn it on only on a network you trust.",
         (Control, "Listen on UDP port") => "The port OSC commands arrive on. A new port takes effect when you let go of it.",
         (Control, "Send state to") => "Where Cutaway sends its state as OSC whenever it changes (scenes, tally, recording, levels, and /stream: connecting, live, or trouble with /stream/live as \"1 of 2\"), so a controller can show it. Optional.",
         (Control, "MIDI control") => "Lets MIDI controllers' pads, keys and faders run commands. Map them below with Learn. A \"while held\" sound pad or talkback:on stops when you let go of the pad.",
@@ -531,6 +534,7 @@ pub(super) fn for_page(page: Section, name: &str) -> Option<&'static str> {
         (Diagnostics, "Version") => "The Cutaway version you're running.",
         (Diagnostics, "Settings file") => "Where this show's settings are kept (the same file as --config on the command line). Export, import or reset them in More › App › Shows.",
         (Diagnostics, "Log file") => "What Cutaway has been doing, kept in case something goes wrong.",
+        (Diagnostics, "Your data") => "Remove my settings and keys: Cutaway closes, then deletes your settings, every saved show, the stream keys and passwords in the Keychain (Credential Manager on Windows), the log and its own downloads. Recordings stay. Export your settings first to keep a copy. More in the guide's Privacy page.",
         (Diagnostics, "Problem report") => "Saves one .zip to send when something goes wrong: the log, the last recording's note (Take.txt), your settings and the devices found. Stream keys, passwords and tokens are taken out first, even where they appear in the log.",
 
         _ => return None,

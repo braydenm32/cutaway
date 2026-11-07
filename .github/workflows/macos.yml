@@ -30,23 +30,32 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin
+      # Only GitHub's own actions (actions/*) are used: Rust comes from
+      # rustup, already on the runners, so no one else's action runs here.
+      - name: Rust
+        run: |
+          rustup toolchain install stable --profile minimal --target aarch64-apple-darwin
+          rustup default stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
         with:
-          cache-on-failure: true
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: rust-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: rust-${{ runner.os }}-
 
       - name: Unit tests
         run: |
           mkdir -p ci-logs
           # One test at a time, output shown as it happens: if a test crashes
           # the process, the report can say which one.
-          cargo test --release -- --test-threads=1 --nocapture 2>&1 | tee ci-logs/1-tests.log
+          cargo test --locked --release -- --test-threads=1 --nocapture 2>&1 | tee ci-logs/1-tests.log
 
       - name: Unit tests again, all at once (catches threads getting in each other's way)
-        run: cargo test --release 2>&1 | tee ci-logs/1b-tests-together.log
+        run: cargo test --locked --release 2>&1 | tee ci-logs/1b-tests-together.log
 
       - name: Build Cutaway.app
         run: ./macos/bundle.sh 2>&1 | tee ci-logs/2-bundle.log

@@ -438,6 +438,20 @@ impl Drop for NdiSender {
     }
 }
 
+/// A received video frame's sizes make sense: a picture up to 8K, and
+/// each line (`stride` bytes) at least as long as its pixels need, but not
+/// absurdly longer.
+fn video_sizes_ok(fourcc_code: u32, xres: i32, yres: i32, stride: i32) -> bool {
+    let bytes_per_pixel = if fourcc_code == fourcc(b"UYVY") { 2 } else { 4 };
+    (2..=8192).contains(&xres) && (2..=8192).contains(&yres) && stride >= xres * bytes_per_pixel && stride <= xres * bytes_per_pixel + 4096
+}
+
+/// A received sound frame's sizes make sense: up to 64 channels, each
+/// (`channel_stride` bytes apart) holding its samples, up to a second's worth.
+fn audio_sizes_ok(channels: i32, samples: i32, channel_stride: i32) -> bool {
+    (1..=64).contains(&channels) && (1..=192_000).contains(&samples) && channel_stride / 4 >= samples && channel_stride <= 192_000 * 4 + 4096
+}
+
 /// UYVY (4:2:2) to NV12.
 fn uyvy_to_nv12(data: &[u8], stride: usize, w: usize, h: usize) -> (Vec<u8>, Vec<u8>) {
     let (w, h) = (w & !1, h & !1);
@@ -578,7 +592,9 @@ pub fn start(
                     last_frame = std::time::Instant::now();
                     let (w, h, stride) = (v.xres.max(2) as usize, v.yres.max(2) as usize, v.stride.max(0) as usize);
                     let len = stride * h;
-                    if !v.data.is_null() && stride > 0 {
+                    // The sizes come from the network: only a frame whose
+                    // sizes add up is read (never past what NDI handed over).
+                    if !v.data.is_null() && video_sizes_ok(v.fourcc, v.xres, v.yres, v.stride) {
                         let data = std::slice::from_raw_parts(v.data, len);
                         let planes = if v.fourcc == fourcc(b"UYVY") {
                             Some(uyvy_to_nv12(data, stride, w, h))
@@ -603,7 +619,7 @@ pub fn start(
                 }
                 FRAME_AUDIO => {
                     let (ch, n, stride) = (a.channels.max(1) as usize, a.samples.max(0) as usize, (a.channel_stride / 4).max(0) as usize);
-                    if !a.data.is_null() && n > 0 {
+                    if !a.data.is_null() && n > 0 && audio_sizes_ok(a.channels, a.samples, a.channel_stride) {
                         let planar = std::slice::from_raw_parts(a.data, stride * ch);
                         let mut inter = Vec::with_capacity(n * ch);
                         for i in 0..n {
@@ -640,6 +656,24 @@ pub fn start(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frames_whose_sizes_dont_add_up_are_dropped() {
+        let uyvy = fourcc(b"UYVY");
+        let bgra = fourcc(b"BGRA");
+        assert!(video_sizes_ok(uyvy, 1920, 1080, 3840));
+        assert!(video_sizes_ok(bgra, 1920, 1080, 7680));
+        assert!(!video_sizes_ok(bgra, 1920, 1080, 3840));
+        assert!(!video_sizes_ok(uyvy, 1920, 1080, 0));
+        assert!(!video_sizes_ok(uyvy, 1920, 1080, i32::MAX));
+        assert!(!video_sizes_ok(uyvy, 0, 1080, 3840));
+        assert!(!video_sizes_ok(uyvy, 100_000, 1080, 200_000));
+        assert!(audio_sizes_ok(2, 1600, 6400));
+        assert!(!audio_sizes_ok(2, 1600, 1600));
+        assert!(!audio_sizes_ok(0, 1600, 6400));
+        assert!(!audio_sizes_ok(1000, 1600, 6400));
+        assert!(!audio_sizes_ok(2, 1600, i32::MAX));
+    }
 
     #[test]
     fn converts_uyvy() {

@@ -281,7 +281,10 @@ impl Drop for Osc {
 
 impl Osc {
     pub fn start(cfg: &crate::config::OscConfig, requests: Sender<Request>, waker: Waker) -> Result<Osc> {
-        let sock = UdpSocket::bind(("0.0.0.0", cfg.port)).with_context(|| format!("can't use UDP port {} for OSC (is something else using it?)", cfg.port))?;
+        // Only programs on this computer unless other devices are allowed:
+        // OSC has no PIN, so whatever can reach the port can run the show.
+        let host = if cfg.from_other_devices() { "0.0.0.0" } else { "127.0.0.1" };
+        let sock = UdpSocket::bind((host, cfg.port)).with_context(|| format!("can't use UDP port {} for OSC (is something else using it?)", cfg.port))?;
         sock.set_read_timeout(Some(Duration::from_millis(200)))?;
         let stop = Arc::new(AtomicBool::new(false));
         let s2 = stop.clone();
@@ -405,7 +408,7 @@ mod tests {
         rx.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
         let port = rx.local_addr().unwrap().port();
         let (tx, _rrx) = crossbeam_channel::unbounded();
-        let cfg = crate::config::OscConfig { enabled: true, port: 0, feedback_host: "127.0.0.1".into(), feedback_port: port };
+        let cfg = crate::config::OscConfig { enabled: true, port: 0, feedback_host: "127.0.0.1".into(), feedback_port: port, from_network: Some(false) };
         let mut osc = Osc::start(&cfg, tx, Arc::new(|| {})).unwrap();
         let mut s = ShowState { program: "Wide".into(), recording: true, ..Default::default() };
         s.scenes.push(super::super::state::SceneState { name: "Wide".into(), program: true, preview: false });

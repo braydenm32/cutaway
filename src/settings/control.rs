@@ -231,6 +231,12 @@ impl SettingsUi {
                 label(ui, "Listen on UDP port");
                 ui.add(egui::DragValue::new(&mut o.port).range(1024..=65535));
                 ui.end_row();
+                label(ui, "From other devices");
+                let mut others = o.from_other_devices();
+                if ui.checkbox(&mut others, "allow other devices on the network").changed() {
+                    o.from_network = Some(others);
+                }
+                ui.end_row();
                 label(ui, "Send state to");
                 ui.horizontal(|ui| {
                     ui.add(egui::TextEdit::singleline(&mut o.feedback_host).desired_width(160.0).hint_text("address (optional)"));

@@ -33,7 +33,8 @@ Everything Cutaway can do, area by area. For the steps of a first show, see [Get
   - **RTMP in:** Cutaway runs its own RTMP server (`rtmp-in:1935/key`); point
     OBS, Larix, a hardware encoder or another Cutaway at it.
   - **SRT:** listen for a sender (`srt-in:9000`) or call one
-    (`srt://host:port`).
+    (`srt://host:port`), with an optional passphrase so only senders who
+    know it get in and the feed is encrypted on the way.
   - **NDI:** any NDI source on the network (`ndi:Name`), once the free NDI
     runtime is installed (see [NDI](install.md#ndi)).
   - Each network source has a fixed latency buffer so its picture and sound
@@ -48,7 +49,8 @@ Everything Cutaway can do, area by area. For the steps of a first show, see [Get
   struggling, before their picture freezes. Cutaway reaches them through a
   free Cloudflare tunnel, so there's no router setup, or through Tailscale
   Funnel for links that stay the same from one show to the next (see
-  [Remote guests](guests.md#remote-guests)).
+  [Remote guests](guests.md#remote-guests)). The guest page tells guests
+  before they join that the show may be recorded or streamed.
 - **Media player.** A source that plays a playlist of video files and still
   images, with sound: intros, stings, holding slides, B-roll. Play, pause,
   next and restart from its tile, the remote or MIDI; optionally restart when
@@ -539,8 +541,9 @@ Recordings start with the **Take name** from Record & stream › Quality and fil
   comments. As on the desk, fading to black and turning a mic off while
   you're recording or live take a one-second hold.
 - **Show-control software:** OSC from QLab, Bitfocus Companion, TouchOSC or
-  a lighting desk, with state sent back; a WebSocket API that pushes every
-  change; and every action is also a plain web address.
+  a lighting desk, with state sent back (from this computer only, unless you
+  allow other devices); a WebSocket API that pushes every change; and every
+  action is also a plain web address.
 - **MIDI controllers:** map pads, keys and faders with Learn; pads light up to
   show what's on air.
 - **Show profiles:** save complete setups (sources, scenes, audio, graphics,
@@ -552,6 +555,17 @@ Recordings start with the **Take name** from Record & stream › Quality and fil
   you've given them a Take name of your own). The interface size and the
   update choices belong to this computer, not the show: switching shows,
   importing settings or starting over leaves them as they are.
+- **Import settings** (More › App › Shows) lists what the file would do
+  before you say yes: where it streams, the web pages it shows, where it
+  records, and whether it turns on the phone remote, guests or OSC from
+  other devices. Stream destinations come in switched off, and no keys or
+  passwords come with the file, so a settings file someone sends you can't
+  quietly stream your show somewhere else.
+- **Your data:** stream keys and passwords live in the Keychain (Mac) or
+  Credential Manager (Windows), not the settings file, and nothing about you
+  or your shows is sent anywhere you didn't set up. **More › App ›
+  Diagnostics → Remove my settings and keys…** removes everything Cutaway
+  keeps on the computer (recordings stay). See [Privacy](privacy.md).
 - **Pre-show check:** one button checks every source for a picture, every
   input for sound, the disk, and that every stream server answers. It also
   starts every encoder the show needs at the same time (program, each

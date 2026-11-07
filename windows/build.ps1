@@ -63,6 +63,14 @@ if (-not $NoAsio) {
         try {
             $zip = Join-Path $deps "asiosdk.zip"
             Invoke-WebRequest -Uri "https://www.steinberg.net/asiosdk" -OutFile $zip
+            # Steinberg's link always gives its newest SDK, so there's no fixed
+            # fingerprint; set CUTAWAY_ASIO_SHA256 to insist on one.
+            $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLower()
+            Write-Host "    ASIO SDK SHA-256 $got"
+            if ($env:CUTAWAY_ASIO_SHA256 -and $got -ne $env:CUTAWAY_ASIO_SHA256.ToLower()) {
+                Remove-Item $zip
+                throw "The ASIO SDK isn't the expected one (SHA-256 $got)."
+            }
             Expand-Archive -Path $zip -DestinationPath $deps -Force
             Remove-Item $zip
             $asio = Get-ChildItem -Path $deps -Directory -Filter "asiosdk*" | Select-Object -First 1 -ExpandProperty FullName
@@ -90,39 +98,50 @@ if (-not $NoAsio) {
 
 # ---- ONNX Runtime with DirectML ------------------------------------------------------
 
-function Get-NuGet($id, $file, $inner) {
+# A fixed version of each, checked against its SHA-256 before use, so a
+# changed package never ends up in the app. To move to a newer one, change
+# the version and put in the new package's SHA-256 (docs/DEVELOPING.md).
+function Get-NuGet($id, $version, $sha256, $file, $inner) {
     $out = Join-Path $deps $file
-    if (Test-Path $out) { return $out }
-    Say "Downloading $id"
-    $index = Invoke-RestMethod "https://api.nuget.org/v3-flatcontainer/$($id.ToLower())/index.json"
-    $version = $index.versions | Where-Object { $_ -notmatch "-" } | Select-Object -Last 1
+    $stamp = "$out.version"
+    if ((Test-Path $out) -and (Test-Path $stamp) -and ((Get-Content $stamp -Raw).Trim() -eq "$version $sha256")) { return $out }
+    Say "Downloading $id $version"
     $pkg = Join-Path $deps "$id.$version.zip"
     Invoke-WebRequest "https://api.nuget.org/v3-flatcontainer/$($id.ToLower())/$version/$($id.ToLower()).$version.nupkg" -OutFile $pkg
+    $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $pkg).Hash.ToLower()
+    if ($got -ne $sha256) {
+        Remove-Item $pkg
+        throw "$id $version isn't the expected package (SHA-256 $got, expected $sha256)."
+    }
     $tmp = Join-Path $deps "$id.$version"
     Expand-Archive -Path $pkg -DestinationPath $tmp -Force
-    Copy-Item (Join-Path $tmp $inner) $out
+    Copy-Item (Join-Path $tmp $inner) $out -Force
+    Set-Content -LiteralPath $stamp -Value "$version $sha256"
     Remove-Item $pkg
     Remove-Item $tmp -Recurse -Force
     Write-Host "    $id $version"
     return $out
 }
 
-$ort = Get-NuGet "Microsoft.ML.OnnxRuntime.DirectML" "onnxruntime.dll" "runtimes\win-x64\native\onnxruntime.dll"
-$dml = Get-NuGet "Microsoft.AI.DirectML" "DirectML.dll" "bin\x64-win\DirectML.dll"
+$ort = Get-NuGet "Microsoft.ML.OnnxRuntime.DirectML" "1.24.4" "57e9f11b73437bef7a309496135d4c1f96b1a8e9ddba60013fa27bfc1d788681" "onnxruntime.dll" "runtimes\win-x64\native\onnxruntime.dll"
+$dml = Get-NuGet "Microsoft.AI.DirectML" "1.15.4" "4e7cb7ddce8cf837a7a75dc029209b520ca0101470fcdf275c1f49736a3615b9" "DirectML.dll" "bin\x64-win\DirectML.dll"
 
 # ---- build --------------------------------------------------------------------------------
 
-$cargoArgs = @("build", "--profile", "dist")
+# The virtual camera first: Cutaway carries its fingerprint, and installs
+# (as administrator) only that exact file.
+Say "Building the virtual camera"
+& cargo build --locked --release --manifest-path windows\vcam\Cargo.toml
+if ($LASTEXITCODE -ne 0) { throw "The virtual camera's build failed." }
+$env:CUTAWAY_VCAM_SHA256 = (Get-FileHash -Algorithm SHA256 -LiteralPath windows\vcam\target\release\cutaway_vcam.dll).Hash.ToLower()
+
+$cargoArgs = @("build", "--locked", "--profile", "dist")
 # The default features are whisper and a macOS-only one, so this drops just whisper here.
 if ($NoWhisper) { $cargoArgs += @("--no-default-features") }
 if ($features.Count -gt 0) { $cargoArgs += @("--features", ($features -join ",")) }
 Say "cargo $($cargoArgs -join ' ')"
 & cargo @cargoArgs
 if ($LASTEXITCODE -ne 0) { throw "The build failed." }
-
-Say "Building the virtual camera"
-& cargo build --release --manifest-path windows\vcam\Cargo.toml
-if ($LASTEXITCODE -ne 0) { throw "The virtual camera's build failed." }
 
 # ---- package ------------------------------------------------------------------------------
 

@@ -15,7 +15,7 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
     exit 1
 fi
 
-cargo build --profile dist --target aarch64-apple-darwin
+cargo build --locked --profile dist --target aarch64-apple-darwin
 version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
 
 app=target/Cutaway.app

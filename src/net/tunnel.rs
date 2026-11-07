@@ -72,24 +72,28 @@ pub fn find() -> Option<PathBuf> {
     dirs.into_iter().map(|d| d.join(exe_name())).find(|p| p.is_file())
 }
 
-/// The release to download for this computer.
-fn download_url() -> Result<String> {
-    let base = "https://github.com/cloudflare/cloudflared/releases/latest/download/";
-    let file = match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("macos", "aarch64") => "cloudflared-darwin-arm64.tgz",
-        ("macos", _) => "cloudflared-darwin-amd64.tgz",
-        ("windows", "aarch64") => "cloudflared-windows-arm64.exe",
-        ("windows", _) => "cloudflared-windows-amd64.exe",
-        ("linux", "aarch64") => "cloudflared-linux-arm64",
-        ("linux", _) => "cloudflared-linux-amd64",
+/// The cloudflared version Cutaway downloads: a fixed one, checked against
+/// the fingerprints Cloudflare publishes with it (its release notes), so a
+/// changed file is never run. Move both on together (docs/DEVELOPING.md).
+const CLOUDFLARED: &str = "2026.10.4";
+
+/// The release to download for this computer, and its SHA-256.
+fn download_url() -> Result<(String, &'static str)> {
+    let (file, sha256) = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => ("cloudflared-darwin-arm64.tgz", "49e7963072b2ca83fb44c09f4d4a7cda52d390c0c9c6f55bac83454a5bc43910"),
+        ("macos", _) => ("cloudflared-darwin-amd64.tgz", "fdec0f9a1c726f4c10283fc0cd70e602d510c72887b737270433c81a08c883a9"),
+        // (Windows on Arm runs the x64 one.)
+        ("windows", _) => ("cloudflared-windows-amd64.exe", "411b16d40c8d872243efeb52c550053d00af0a8a97fbb32e730fb8aba429eaa8"),
+        ("linux", "aarch64") => ("cloudflared-linux-arm64", "2b7203b4fb0ba28a0c1e12f8855ce2c25f76d266a8d5edafac5540b6812acff6"),
+        ("linux", _) => ("cloudflared-linux-amd64", "ae5e8add7884b0531d66bbca4570d1de491ff6da51e4ebe7eb160cdf241d9e42"),
         (os, arch) => bail!("there's no cloudflared for {os} on {arch}"),
     };
-    Ok(format!("{base}{file}"))
+    Ok((format!("https://github.com/cloudflare/cloudflared/releases/download/{CLOUDFLARED}/{file}"), sha256))
 }
 
 /// Download cloudflared into Cutaway's folder.
 pub fn download(progress: &dyn Fn(String)) -> Result<PathBuf> {
-    let url = download_url()?;
+    let (url, sha256) = download_url()?;
     progress("Downloading Cloudflare's tunnel program (about 20 MB, once)…".into());
     let agent = crate::util::https_agent(Duration::from_secs(120));
     let mut resp = agent.get(&url).call().map_err(|e| anyhow!("couldn't download cloudflared: {e}"))?;
@@ -99,6 +103,9 @@ pub fn download(progress: &dyn Fn(String)) -> Result<PathBuf> {
         bail!("couldn't download cloudflared: GitHub answered {}", resp.status());
     }
     let bytes = resp.body_mut().with_config().limit(200 << 20).read_to_vec().map_err(|e| anyhow!("couldn't download cloudflared: {e}"))?;
+    if crate::net::fetch::sha256_hex(&bytes) != sha256 {
+        bail!("the download wasn't Cloudflare's tunnel program (its fingerprint didn't match); try again later");
+    }
     let dest = bundled_path();
     std::fs::create_dir_all(dest.parent().unwrap())?;
     let tmp = dest.with_extension("download");
@@ -392,7 +399,10 @@ mod tests {
         let found: Vec<String> = lines.iter().filter_map(|l| address_in(l)).collect();
         assert_eq!(found, vec!["https://mild-sunset-river-lake.trycloudflare.com".to_string()]);
         assert_eq!(address_in("ERR failed to request quick Tunnel: Post \"https://api.trycloudflare.com/tunnel\""), None);
-        assert!(download_url().unwrap().starts_with("https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-"));
+        let (url, sha) = download_url().unwrap();
+        assert!(url.starts_with(&format!("https://github.com/cloudflare/cloudflared/releases/download/{CLOUDFLARED}/cloudflared-")));
+        assert!(sha.len() == 64 && sha.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert_eq!(crate::net::fetch::sha256_hex(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
     }
 
     #[test]
