@@ -80,6 +80,8 @@ impl Decoder {
     /// One packet (or None for a lost one) as interleaved stereo samples.
     pub fn decode(&mut self, packet: Option<&[u8]>) -> Vec<f32> {
         let (ptr, len) = match packet {
+            // (No real packet is bigger: 48 frames of 1275 bytes, and more.)
+            Some(p) if p.len() > 64 * 1024 => return Vec::new(),
             Some(p) if !p.is_empty() => (p.as_ptr(), p.len() as i32),
             _ => (std::ptr::null(), 0),
         };
@@ -102,6 +104,51 @@ impl Drop for Decoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A guest's browser sends whatever it likes: random and damaged packets
+    /// (real ones with bytes changed, cut short or stretched) must only
+    /// ever decode to sound or nothing. (Run under Miri or a sanitizer, this
+    /// is also the decoder's fuzz test.)
+    #[test]
+    fn damaged_packets_never_crash_the_decoder() {
+        let mut enc = Encoder::new(64_000).unwrap();
+        let tone: Vec<f32> = (0..48_000 * 2).map(|i| ((i / 2) as f32 * 0.03).sin() * 0.5).collect();
+        let good = enc.push(&tone);
+        assert!(!good.is_empty());
+        let mut dec = Decoder::new().unwrap();
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let rounds = if cfg!(debug_assertions) { 20_000 } else { 200_000 };
+        for i in 0..rounds {
+            let mut p = match i % 4 {
+                0 => (0..(next() % 1500) as usize).map(|_| next() as u8).collect::<Vec<u8>>(),
+                _ => good[(next() as usize) % good.len()].clone(),
+            };
+            for _ in 0..(next() % 8) {
+                if !p.is_empty() {
+                    let at = (next() as usize) % p.len();
+                    p[at] = next() as u8;
+                }
+            }
+            match next() % 5 {
+                0 => p.truncate((next() as usize) % (p.len() + 1)),
+                1 => p.extend((0..(next() % 64)).map(|_| next() as u8)),
+                _ => {}
+            }
+            let out = dec.decode(Some(&p));
+            assert!(out.len() <= 5760 * 2 && out.len() % 2 == 0);
+            assert!(out.iter().all(|s| s.is_finite()));
+            if i % 97 == 0 {
+                let _ = dec.decode(None);
+            }
+        }
+        assert!(dec.decode(Some(&vec![0xFC; 70_000])).is_empty());
+    }
 
     #[test]
     fn round_trip() {
