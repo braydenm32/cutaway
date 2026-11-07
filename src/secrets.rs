@@ -18,9 +18,13 @@ pub const PREFIX: &str = "@keychain:";
 /// file, so the window can say so once (review G13).
 static WRITE_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// True once after keys had to stay in the settings file.
+/// Said already this session (a failing store fails at every save).
+static WRITE_FAILURE_SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// True once after keys had to stay in the settings file (once a session).
 pub fn take_write_failure() -> bool {
-    WRITE_FAILED.swap(false, std::sync::atomic::Ordering::Relaxed)
+    use std::sync::atomic::Ordering::Relaxed;
+    WRITE_FAILED.swap(false, Relaxed) && !WRITE_FAILURE_SAID.swap(true, Relaxed)
 }
 
 /// Where the list is kept.
@@ -28,6 +32,8 @@ pub trait Store: Send {
     /// The saved text, or None if there isn't any yet.
     fn read(&self) -> Result<Option<String>, String>;
     fn write(&self, text: &str) -> Result<(), String>;
+    /// Remove the entry altogether.
+    fn forget(&self) -> Result<(), String>;
 }
 
 pub struct Vault<S: Store> {
@@ -74,7 +80,14 @@ impl<S: Store> Vault<S> {
     /// fails, values are left as they are (written to the file).
     pub fn hide(&mut self, mut fields: Vec<(String, &mut String)>, held: &[(String, String)]) {
         restore_held(&mut fields, held);
-        let Some(map) = self.map() else { return };
+        let Some(map) = self.map() else {
+            // The store couldn't be read: a key typed now goes in the file
+            // as it is. Say so, rather than let it happen quietly.
+            if fields.iter().any(|(_, v)| !v.trim().is_empty() && !v.starts_with(PREFIX)) {
+                WRITE_FAILED.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            return;
+        };
         let mut added = Vec::new();
         let mut ids = Vec::new();
         for (_, v) in fields.iter() {
@@ -129,6 +142,14 @@ impl<S: Store> Vault<S> {
             }
         }
         held
+    }
+
+    /// Remove every saved value (Remove my data).
+    pub fn forget(&mut self) -> Result<(), String> {
+        self.store.forget()?;
+        self.map = Some(BTreeMap::new());
+        self.broken = false;
+        Ok(())
     }
 
     /// Forget values no settings file uses any more.
@@ -197,6 +218,13 @@ mod system {
         fn write(&self, text: &str) -> Result<(), String> {
             passwords::set_generic_password(SERVICE, ACCOUNT, text.as_bytes()).map_err(|e| e.to_string())
         }
+        fn forget(&self) -> Result<(), String> {
+            match passwords::delete_generic_password(SERVICE, ACCOUNT) {
+                Ok(()) => Ok(()),
+                Err(e) if e.code() == NOT_FOUND => Ok(()),
+                Err(e) => Err(e.to_string()),
+            }
+        }
     }
 
     pub fn available() -> bool {
@@ -213,76 +241,66 @@ mod system {
         CRED_TYPE_GENERIC,
     };
 
-    /// A credential holds at most 2560 bytes, so a long list is split.
-    const CHUNK: usize = 2000;
-
     pub struct System;
 
-    fn target(i: usize) -> Vec<u16> {
-        format!("Cutaway/settings keys and passwords/{i}").encode_utf16().chain([0]).collect()
+    fn wide(name: &str) -> Vec<u16> {
+        name.encode_utf16().chain([0]).collect()
     }
 
-    /// One piece, or None if there isn't one.
-    fn read_one(i: usize) -> Result<Option<Vec<u8>>, String> {
-        let name = target(i);
-        let mut p: *mut CREDENTIALW = std::ptr::null_mut();
-        unsafe {
-            match CredReadW(PCWSTR(name.as_ptr()), CRED_TYPE_GENERIC, None, &mut p) {
-                Ok(()) => {
-                    let c = &*p;
-                    let bytes = if c.CredentialBlob.is_null() {
-                        Vec::new()
-                    } else {
-                        std::slice::from_raw_parts(c.CredentialBlob, c.CredentialBlobSize as usize).to_vec()
-                    };
-                    CredFree(p as *const _);
-                    Ok(Some(bytes))
+    /// Credential Manager, one named credential at a time.
+    struct Creds;
+
+    impl super::chunked::Creds for Creds {
+        fn read(&self, name: &str) -> Result<Option<Vec<u8>>, String> {
+            let name = wide(name);
+            let mut p: *mut CREDENTIALW = std::ptr::null_mut();
+            // SAFETY: `p` is filled by Windows and freed with CredFree.
+            unsafe {
+                match CredReadW(PCWSTR(name.as_ptr()), CRED_TYPE_GENERIC, None, &mut p) {
+                    Ok(()) => {
+                        let c = &*p;
+                        let bytes = if c.CredentialBlob.is_null() { Vec::new() } else { std::slice::from_raw_parts(c.CredentialBlob, c.CredentialBlobSize as usize).to_vec() };
+                        CredFree(p as *const _);
+                        Ok(Some(bytes))
+                    }
+                    Err(e) if e.code() == ERROR_NOT_FOUND.to_hresult() => Ok(None),
+                    Err(e) => Err(e.message()),
                 }
-                Err(e) if e.code() == ERROR_NOT_FOUND.to_hresult() => Ok(None),
-                Err(e) => Err(e.message()),
             }
+        }
+        fn write(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
+            let mut name = wide(name);
+            let mut user = wide("Cutaway");
+            let mut blob = bytes.to_vec();
+            let cred = CREDENTIALW {
+                Flags: CRED_FLAGS(0),
+                Type: CRED_TYPE_GENERIC,
+                TargetName: PWSTR(name.as_mut_ptr()),
+                CredentialBlobSize: blob.len() as u32,
+                CredentialBlob: blob.as_mut_ptr(),
+                Persist: CRED_PERSIST_LOCAL_MACHINE,
+                UserName: PWSTR(user.as_mut_ptr()),
+                ..Default::default()
+            };
+            // SAFETY: the buffers live until the call returns.
+            unsafe { CredWriteW(&cred, 0) }.map_err(|e| e.message())
+        }
+        fn delete(&self, name: &str) -> bool {
+            let name = wide(name);
+            // SAFETY: a plain call with a string that lives until it returns.
+            unsafe { CredDeleteW(PCWSTR(name.as_ptr()), CRED_TYPE_GENERIC, None) }.is_ok()
         }
     }
 
     impl super::Store for System {
         fn read(&self) -> Result<Option<String>, String> {
-            let mut all = Vec::new();
-            let mut i = 0;
-            while let Some(part) = read_one(i)? {
-                all.extend_from_slice(&part);
-                i += 1;
-            }
-            Ok((i > 0).then(|| String::from_utf8_lossy(&all).into_owned()))
+            super::chunked::read(&Creds)
         }
-
         fn write(&self, text: &str) -> Result<(), String> {
-            let bytes = text.as_bytes();
-            let mut user: Vec<u16> = "Cutaway".encode_utf16().chain([0]).collect();
-            let parts: Vec<&[u8]> = if bytes.is_empty() { vec![&[][..]] } else { bytes.chunks(CHUNK).collect() };
-            for (i, part) in parts.iter().enumerate() {
-                let mut name = target(i);
-                let mut blob = part.to_vec();
-                let cred = CREDENTIALW {
-                    Flags: CRED_FLAGS(0),
-                    Type: CRED_TYPE_GENERIC,
-                    TargetName: PWSTR(name.as_mut_ptr()),
-                    CredentialBlobSize: blob.len() as u32,
-                    CredentialBlob: blob.as_mut_ptr(),
-                    Persist: CRED_PERSIST_LOCAL_MACHINE,
-                    UserName: PWSTR(user.as_mut_ptr()),
-                    ..Default::default()
-                };
-                unsafe { CredWriteW(&cred, 0) }.map_err(|e| e.message())?;
-            }
-            // Remove pieces left over from a longer list.
-            let mut i = parts.len();
-            loop {
-                let name = target(i);
-                if unsafe { CredDeleteW(PCWSTR(name.as_ptr()), CRED_TYPE_GENERIC, None) }.is_err() {
-                    break;
-                }
-                i += 1;
-            }
+            super::chunked::write(&Creds, text)
+        }
+        fn forget(&self) -> Result<(), String> {
+            super::chunked::forget(&Creds);
             Ok(())
         }
     }
@@ -304,10 +322,174 @@ mod system {
         fn write(&self, _: &str) -> Result<(), String> {
             Err("not supported here".into())
         }
+        fn forget(&self) -> Result<(), String> {
+            Ok(())
+        }
     }
 
     pub fn available() -> bool {
         false
+    }
+}
+
+/// Credential Manager keeps at most 2560 bytes a credential, so the list is
+/// split over several. To change it all at once (a crash part way through
+/// mustn't leave half an old list and half a new one, and lose every key),
+/// each save goes into a new numbered set, and one small "current" entry
+/// then points at it; the old set is removed after.
+#[cfg_attr(not(windows), allow(dead_code))]
+mod chunked {
+    /// One named credential at a time.
+    pub trait Creds {
+        fn read(&self, name: &str) -> Result<Option<Vec<u8>>, String>;
+        fn write(&self, name: &str, bytes: &[u8]) -> Result<(), String>;
+        /// True if there was one.
+        fn delete(&self, name: &str) -> bool;
+    }
+
+    const CHUNK: usize = 2000;
+    const BASE: &str = "Cutaway/settings keys and passwords";
+
+    fn current() -> String {
+        format!("{BASE}/current")
+    }
+    /// Before sets: pieces 0, 1, 2… straight under the base name.
+    fn legacy(i: usize) -> String {
+        format!("{BASE}/{i}")
+    }
+    fn piece(set: u64, i: usize) -> String {
+        format!("{BASE}/set {set}/{i}")
+    }
+
+    /// (set, pieces) from the "current" entry.
+    fn pointer(c: &dyn Creds) -> Result<Option<(u64, usize)>, String> {
+        let Some(b) = c.read(&current())? else { return Ok(None) };
+        let t = String::from_utf8_lossy(&b).to_string();
+        let (set, n) = t.trim().split_once(' ').ok_or("the saved keys' index is damaged")?;
+        Ok(Some((set.parse().map_err(|_| "the saved keys' index is damaged")?, n.parse().map_err(|_| "the saved keys' index is damaged")?)))
+    }
+
+    pub fn read(c: &dyn Creds) -> Result<Option<String>, String> {
+        let mut all = Vec::new();
+        match pointer(c)? {
+            Some((set, n)) => {
+                for i in 0..n {
+                    all.extend(c.read(&piece(set, i))?.ok_or("part of the saved keys is missing")?);
+                }
+                Ok(Some(String::from_utf8_lossy(&all).into_owned()))
+            }
+            None => {
+                let mut i = 0;
+                while let Some(part) = c.read(&legacy(i))? {
+                    all.extend_from_slice(&part);
+                    i += 1;
+                }
+                Ok((i > 0).then(|| String::from_utf8_lossy(&all).into_owned()))
+            }
+        }
+    }
+
+    pub fn write(c: &dyn Creds, text: &str) -> Result<(), String> {
+        let old = pointer(c)?;
+        let set = old.map(|(s, _)| s + 1).unwrap_or(1);
+        let bytes = text.as_bytes();
+        let parts: Vec<&[u8]> = if bytes.is_empty() { vec![&[][..]] } else { bytes.chunks(CHUNK).collect() };
+        for (i, p) in parts.iter().enumerate() {
+            c.write(&piece(set, i), p)?;
+        }
+        // The switch: one small write.
+        c.write(&current(), format!("{set} {}", parts.len()).as_bytes())?;
+        // Then the old set (or the list from before sets) goes.
+        match old {
+            Some((s, n)) => {
+                for i in 0..n {
+                    c.delete(&piece(s, i));
+                }
+            }
+            None => {
+                let mut i = 0;
+                while c.delete(&legacy(i)) {
+                    i += 1;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn forget(c: &dyn Creds) {
+        if let Ok(Some((s, n))) = pointer(c) {
+            for i in 0..n {
+                c.delete(&piece(s, i));
+            }
+        }
+        c.delete(&current());
+        let mut i = 0;
+        while c.delete(&legacy(i)) {
+            i += 1;
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::cell::RefCell;
+        use std::collections::BTreeMap;
+
+        #[derive(Default)]
+        struct Mem {
+            m: RefCell<BTreeMap<String, Vec<u8>>>,
+            /// Fail the write after this many have gone through.
+            fail_after: RefCell<Option<usize>>,
+        }
+
+        impl Creds for Mem {
+            fn read(&self, name: &str) -> Result<Option<Vec<u8>>, String> {
+                Ok(self.m.borrow().get(name).cloned())
+            }
+            fn write(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
+                let mut f = self.fail_after.borrow_mut();
+                if let Some(n) = f.as_mut() {
+                    if *n == 0 {
+                        return Err("power cut".into());
+                    }
+                    *n -= 1;
+                }
+                self.m.borrow_mut().insert(name.to_string(), bytes.to_vec());
+                Ok(())
+            }
+            fn delete(&self, name: &str) -> bool {
+                self.m.borrow_mut().remove(name).is_some()
+            }
+        }
+
+        #[test]
+        fn a_write_that_stops_part_way_leaves_the_old_list() {
+            let c = Mem::default();
+            let old = "a".repeat(5000);
+            write(&c, &old).unwrap();
+            assert_eq!(read(&c).unwrap().as_deref(), Some(old.as_str()));
+            *c.fail_after.borrow_mut() = Some(2);
+            assert!(write(&c, &"b".repeat(5000)).is_err());
+            assert_eq!(read(&c).unwrap().as_deref(), Some(old.as_str()), "still the whole old list");
+            *c.fail_after.borrow_mut() = None;
+            write(&c, "new").unwrap();
+            assert_eq!(read(&c).unwrap().as_deref(), Some("new"));
+            assert_eq!(c.m.borrow().len(), 2 + 1, "one piece, the pointer, and the unfinished piece of the failed set at most");
+        }
+
+        #[test]
+        fn reads_and_replaces_the_list_from_before_sets() {
+            let c = Mem::default();
+            c.write(&legacy(0), b"{\"a\":").unwrap();
+            c.write(&legacy(1), b"\"1\"}").unwrap();
+            assert_eq!(read(&c).unwrap().as_deref(), Some("{\"a\":\"1\"}"));
+            write(&c, "{}").unwrap();
+            assert!(c.m.borrow().keys().all(|k| !k.ends_with("/0") || k.contains("set")), "the old pieces are gone");
+            assert_eq!(read(&c).unwrap().as_deref(), Some("{}"));
+            forget(&c);
+            assert!(c.m.borrow().is_empty());
+            assert_eq!(read(&c).unwrap(), None);
+        }
     }
 }
 
@@ -346,6 +528,12 @@ pub fn reveal(fields: Vec<(String, &mut String)>) -> Vec<(String, String)> {
         }
     }
     held
+}
+
+/// Remove every saved key and password from the Keychain or Credential
+/// Manager (Remove my data).
+pub fn forget_all() -> Result<(), String> {
+    with(|v| v.forget()).unwrap_or(Ok(()))
 }
 
 /// Forget values that no settings file next to `config_path` (or in its
@@ -393,6 +581,10 @@ mod tests {
                 return Err("full".into());
             }
             *self.text.lock().unwrap() = Some(text.to_string());
+            Ok(())
+        }
+        fn forget(&self) -> Result<(), String> {
+            *self.text.lock().unwrap() = None;
             Ok(())
         }
     }
