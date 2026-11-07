@@ -81,6 +81,7 @@ const SETTING_HOME: &[(Section, &str, &str)] = &[
     // Sources › Network & phone feeds
     (Section::Sources, "Feed", "sources/network/feeds"),
     (Section::Sources, "Listen on port", "sources/network/feeds"),
+    (Section::Sources, "Passphrase", "sources/network/feeds"),
     (Section::Sources, "Address", "sources/network/feeds"),
     (Section::Sources, "Stream key", "sources/network/feeds"),
     (Section::Sources, "NDI source", "sources/network/feeds"),

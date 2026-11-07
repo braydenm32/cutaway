@@ -19,8 +19,10 @@ use std::time::Duration;
 /// What a network source's device setting means.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NetSpec {
-    /// "srt-in:9000": wait for an SRT caller on this port.
-    SrtListen { port: u16 },
+    /// "srt-in:9000": wait for an SRT caller on this port
+    /// ("srt-in:9000?passphrase=…": only one that has the passphrase, and
+    /// the stream encrypted).
+    SrtListen { port: u16, passphrase: Option<String> },
     /// "srt://host:port?streamid=...": call an SRT listener.
     SrtCall { url: String },
     /// "rtmp-in:1935/key": accept an RTMP publisher.
@@ -30,15 +32,18 @@ pub enum NetSpec {
 pub fn parse_spec(device: &str) -> Option<NetSpec> {
     let d = device.trim();
     let lower = d.to_lowercase();
-    if let Some(rest) = lower.strip_prefix("srt-in:") {
-        return rest.trim().parse().ok().map(|port| NetSpec::SrtListen { port });
+    if crate::util::strip_prefix_ci(d, "srt-in:").is_some() {
+        let rest = &d[7..];
+        let (port, query) = rest.split_once('?').unwrap_or((rest, ""));
+        return port.trim().parse().ok().map(|port| NetSpec::SrtListen { port, passphrase: crate::net::srt::passphrase_in(query) });
     }
     if lower.starts_with("srt://") {
         let u = crate::net::srt::parse_url(d).ok();
         let host_empty = d[6..].starts_with(':') || u.as_ref().is_some_and(|u| u.host == "0.0.0.0");
         if host_empty || lower.contains("mode=listener") {
             let port = d[6..].split(['?', '/']).next()?.rsplit(':').next()?.parse().ok()?;
-            return Some(NetSpec::SrtListen { port });
+            let passphrase = d.split_once('?').and_then(|(_, q)| crate::net::srt::passphrase_in(q));
+            return Some(NetSpec::SrtListen { port, passphrase });
         }
         return Some(NetSpec::SrtCall { url: d.to_string() });
     }
@@ -65,7 +70,8 @@ pub fn local_ip() -> Option<String> {
 pub fn sender_address(spec: &NetSpec) -> String {
     let ip = local_ip().unwrap_or_else(|| "<this computer>".into());
     match spec {
-        NetSpec::SrtListen { port } => format!("srt://{ip}:{port}"),
+        NetSpec::SrtListen { port, passphrase: None } => format!("srt://{ip}:{port}"),
+        NetSpec::SrtListen { port, passphrase: Some(p) } => format!("srt://{ip}:{port}?passphrase={}", crate::net::google::encode(p)),
         NetSpec::SrtCall { url } => url.clone(),
         NetSpec::RtmpListen { port, key } => {
             if key.is_empty() {
@@ -143,10 +149,10 @@ fn srt_loop(spec: NetSpec, latency_ms: u32, mut feeder: Feeder, stop: Arc<Atomic
             let builder = srt_tokio::SrtSocket::builder().latency(Duration::from_millis(latency_ms.max(20) as u64));
             let connect = async {
                 match &spec {
-                    NetSpec::SrtListen { port } => builder.listen_on(*port).await.map_err(|e| anyhow!("can't listen on port {port}: {e}")),
+                    NetSpec::SrtListen { port, passphrase } => crate::net::srt::with_passphrase(builder, passphrase.as_deref())?.listen_on(*port).await.map_err(|e| anyhow!("can't listen on port {port}: {e}")),
                     NetSpec::SrtCall { url } => {
                         let u = crate::net::srt::parse_url(url)?;
-                        builder.call(format!("{}:{}", u.host, u.port).as_str(), u.stream_id.as_deref()).await.map_err(|e| anyhow!("{e}"))
+                        crate::net::srt::with_passphrase(builder, u.passphrase.as_deref())?.call(format!("{}:{}", u.host, u.port).as_str(), u.stream_id.as_deref()).await.map_err(|e| anyhow!("{e}"))
                     }
                     _ => bail!("not SRT"),
                 }
@@ -247,7 +253,7 @@ pub fn start(cfg: &SourceConfig, slot: Arc<SourceSlot>, hub: Arc<AudioHub>, stat
     let stop = Arc::new(AtomicBool::new(false));
     let feeder = Feeder::new(&cfg.name, slot, hub, (cfg.width, cfg.height), cfg.network_latency_ms, stop.clone());
     let desc = match &spec {
-        NetSpec::SrtListen { port } => format!("SRT input on port {port}"),
+        NetSpec::SrtListen { port, passphrase } => format!("SRT input on port {port}{}", if passphrase.is_some() { " (encrypted)" } else { "" }),
         NetSpec::SrtCall { url } => format!("SRT from {url}"),
         NetSpec::RtmpListen { port, .. } => format!("RTMP input on port {port}"),
     };
@@ -267,9 +273,11 @@ mod tests {
 
     #[test]
     fn specs() {
-        assert_eq!(parse_spec("srt-in:9000"), Some(NetSpec::SrtListen { port: 9000 }));
-        assert_eq!(parse_spec("srt://:9001"), Some(NetSpec::SrtListen { port: 9001 }));
-        assert_eq!(parse_spec("srt://0.0.0.0:9002"), Some(NetSpec::SrtListen { port: 9002 }));
+        assert_eq!(parse_spec("srt-in:9000"), Some(NetSpec::SrtListen { port: 9000, passphrase: None }));
+        assert_eq!(parse_spec("srt://:9001"), Some(NetSpec::SrtListen { port: 9001, passphrase: None }));
+        assert_eq!(parse_spec("srt://0.0.0.0:9002"), Some(NetSpec::SrtListen { port: 9002, passphrase: None }));
+        assert_eq!(parse_spec("srt-in:9000?passphrase=Keep%20it%20secret"), Some(NetSpec::SrtListen { port: 9000, passphrase: Some("Keep it secret".into()) }));
+        assert_eq!(parse_spec("SRT-IN:9000?passphrase=CaseMatters1"), Some(NetSpec::SrtListen { port: 9000, passphrase: Some("CaseMatters1".into()) }));
         assert_eq!(parse_spec("srt://10.0.0.4:9000?streamid=cam"), Some(NetSpec::SrtCall { url: "srt://10.0.0.4:9000?streamid=cam".into() }));
         assert_eq!(parse_spec("rtmp-in:1935/abc"), Some(NetSpec::RtmpListen { port: 1935, key: "abc".into() }));
         assert_eq!(parse_spec("rtmp-in:1936"), Some(NetSpec::RtmpListen { port: 1936, key: String::new() }));
