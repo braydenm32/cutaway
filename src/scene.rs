@@ -75,6 +75,10 @@ pub struct Scene {
     /// pad, a graphic (e.g. "syrinscape:Tavern", "pad:Whoosh").
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cues: Vec<String>,
+    /// The default layout this scene was made from, if any (Reset to
+    /// default puts its frames back as that layout has them).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<Preset>,
 }
 
 impl Scene {
@@ -137,45 +141,227 @@ impl Scene {
     }
 }
 
-/// Built-in layouts for `names.len()` sources.
-pub fn presets(names: &[String]) -> Vec<Scene> {
-    let n = names.len();
-    let mut out: Vec<Scene> = names
+/// The built-in layouts a scene can come from ("defaults"). A scene made
+/// from one remembers which, so Reset to default can put its frames back.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum Preset {
+    /// One source full screen (the 1-camera layout, one for each source).
+    Full,
+    /// Two cameras side by side, each half the picture.
+    Two,
+    /// Three cameras across.
+    Three,
+    /// Four cameras in a 2 × 2 grid.
+    Four,
+    /// Five cameras, all the same size: two stacked on the left, two on the
+    /// right, one in the centre midway between them.
+    Five,
+    /// The screen capture large at the top, the cameras in a row below.
+    Screen,
+    /// One camera full screen with another small in the corner.
+    PictureInPicture,
+}
+
+impl Preset {
+    /// In the order the defaults go in the bank.
+    pub const LAYOUTS: [Preset; 6] = [Preset::Two, Preset::Three, Preset::Four, Preset::Five, Preset::Screen, Preset::PictureInPicture];
+
+    /// Its scene's name (Full scenes are named after their source).
+    pub fn name(self) -> &'static str {
+        match self {
+            Preset::Full => "Full screen",
+            Preset::Two => "2 cameras",
+            Preset::Three => "3 cameras",
+            Preset::Four => "4 cameras",
+            Preset::Five => "5 cameras",
+            Preset::Screen => "Screen and cameras",
+            Preset::PictureInPicture => "Picture in picture",
+        }
+    }
+
+    /// What it needs, for a layout that can't be made yet.
+    pub fn needs(self) -> &'static str {
+        match self {
+            Preset::Full => "a source",
+            Preset::Two | Preset::PictureInPicture => "2 cameras",
+            Preset::Three => "3 cameras",
+            Preset::Four => "4 cameras",
+            Preset::Five => "5 cameras",
+            Preset::Screen => "a screen capture and a camera",
+        }
+    }
+}
+
+/// Which sources go where in the default layouts: the cameras (and
+/// close-ups) in source order, and the screen capture.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Slots {
+    pub cameras: Vec<usize>,
+    pub screen: Option<usize>,
+}
+
+/// Sort the sources into cameras and a screen. A screen capture (or a
+/// guest's shared screen) goes in the screen slot; a media player isn't a
+/// camera; a wide camera that close-ups are cut from is left out, as its
+/// close-ups take its place. With nothing else left, every source that
+/// isn't a screen counts as a camera.
+pub fn slots(sources: &[crate::config::SourceConfig]) -> Slots {
+    let dev = |s: &crate::config::SourceConfig| s.device.trim().to_lowercase();
+    let is_screen = |s: &crate::config::SourceConfig| {
+        let d = dev(s);
+        crate::platform::capture::is_screen(&d) || d.starts_with("guest-screen:")
+    };
+    let has_close_ups = |s: &crate::config::SourceConfig| {
+        let name = s.name.trim();
+        sources.iter().any(|o| o.cut_from().is_some_and(|f| f.eq_ignore_ascii_case(name)))
+    };
+    let screen = sources.iter().position(is_screen);
+    let mut cameras: Vec<usize> = sources.iter().enumerate().filter(|(_, s)| !is_screen(s) && dev(s) != "media" && !has_close_ups(s)).map(|(i, _)| i).collect();
+    if cameras.is_empty() {
+        cameras = sources.iter().enumerate().filter(|(_, s)| !is_screen(s)).map(|(i, _)| i).collect();
+    }
+    Slots { cameras, screen }
+}
+
+/// The default layouts are drawn on a 1920 × 1080 picture, with a thin gap.
+const PW: f32 = 1920.0;
+const PH: f32 = 1080.0;
+const GAP: f32 = 12.0;
+
+/// A frame given in pixels of the 1920 × 1080 picture, filled (cropped to
+/// its shape, centred).
+fn tile(source: usize, x: f32, y: f32, w: f32, h: f32) -> Layer {
+    Layer { fill: true, ..Layer::at(source, x / PW, y / PH, w / PW, h / PH) }
+}
+
+/// The most cameras the screen layout puts in its row.
+pub const MAX_SCREEN_CAMERAS: usize = 8;
+
+/// The frames of a default layout for these slots. `full` is the source a
+/// Full scene shows. None if there aren't enough cameras (or no screen).
+pub fn preset_layers(preset: Preset, slots: &Slots, full: Option<usize>) -> Option<Vec<Layer>> {
+    let c = &slots.cameras;
+    let need = |n: usize| (c.len() >= n).then_some(());
+    let g = GAP;
+    Some(match preset {
+        Preset::Full => vec![Layer::at(full?, 0.0, 0.0, 1.0, 1.0)],
+        Preset::Two => {
+            need(2)?;
+            let w = (PW - 3.0 * g) / 2.0;
+            (0..2).map(|k| tile(c[k], g + k as f32 * (w + g), g, w, PH - 2.0 * g)).collect()
+        }
+        Preset::Three => {
+            need(3)?;
+            let w = (PW - 4.0 * g) / 3.0;
+            (0..3).map(|k| tile(c[k], g + k as f32 * (w + g), g, w, PH - 2.0 * g)).collect()
+        }
+        Preset::Four => {
+            need(4)?;
+            let (w, h) = ((PW - 3.0 * g) / 2.0, (PH - 3.0 * g) / 2.0);
+            (0..4).map(|k| tile(c[k], g + (k % 2) as f32 * (w + g), g + (k / 2) as f32 * (h + g), w, h)).collect()
+        }
+        Preset::Five => {
+            need(5)?;
+            let (w, h) = ((PW - 4.0 * g) / 3.0, (PH - 3.0 * g) / 2.0);
+            let (left, mid, right) = (g, 2.0 * g + w, 3.0 * g + 2.0 * w);
+            vec![
+                tile(c[0], mid, (PH - h) / 2.0, w, h),
+                tile(c[1], left, g, w, h),
+                tile(c[2], left, 2.0 * g + h, w, h),
+                tile(c[3], right, g, w, h),
+                tile(c[4], right, 2.0 * g + h, w, h),
+            ]
+        }
+        Preset::Screen => {
+            let screen = slots.screen?;
+            need(1)?;
+            let n = c.len().min(MAX_SCREEN_CAMERAS);
+            let sh = (PH - 3.0 * g) * 0.74;
+            let sw = sh * 16.0 / 9.0;
+            // The whole screen shows (fitted), large and centred at the top.
+            let mut out = vec![Layer::at(screen, (PW - sw) / 2.0 / PW, g / PH, sw / PW, sh / PH)];
+            let th = PH - 3.0 * g - sh;
+            let tw = ((PW - (n as f32 + 1.0) * g) / n as f32).min(th * 16.0 / 9.0);
+            let x0 = (PW - (n as f32 * tw + (n as f32 - 1.0) * g)) / 2.0;
+            out.extend((0..n).map(|k| tile(c[k], x0 + k as f32 * (tw + g), 2.0 * g + sh, tw, th)));
+            out
+        }
+        Preset::PictureInPicture => {
+            need(2)?;
+            vec![Layer::at(c[0], 0.0, 0.0, 1.0, 1.0), Layer::at(c[1], 0.70, 0.68, 0.27, 0.27)]
+        }
+    })
+}
+
+/// The source a Full scene is about: the one it's named after, or else the
+/// one it shows.
+fn full_source(scene: &Scene, sources: &[crate::config::SourceConfig]) -> Option<usize> {
+    sources.iter().position(|s| s.name.trim().eq_ignore_ascii_case(scene.name.trim())).or_else(|| scene.layers.first().map(|l| l.source).filter(|&i| i < sources.len()))
+}
+
+/// A scene's frames as its default layout has them for these sources (for
+/// Reset to default). None if it isn't from a default layout, or that
+/// layout can't be made with these sources.
+pub fn reset_layers(scene: &Scene, sources: &[crate::config::SourceConfig]) -> Option<Vec<Layer>> {
+    let preset = scene.preset?;
+    preset_layers(preset, &slots(sources), full_source(scene, sources))
+}
+
+/// The default scenes for these sources: each source full screen, then
+/// each layout there are enough cameras for.
+pub fn defaults(sources: &[crate::config::SourceConfig]) -> Vec<Scene> {
+    let sl = slots(sources);
+    let mut out: Vec<Scene> = sources
         .iter()
         .enumerate()
-        .map(|(i, name)| Scene { name: name.clone(), layers: vec![Layer::at(i, 0.0, 0.0, 1.0, 1.0)], ..Default::default() })
+        .map(|(i, s)| Scene { name: s.name.clone(), layers: vec![Layer::at(i, 0.0, 0.0, 1.0, 1.0)], preset: Some(Preset::Full), ..Default::default() })
         .collect();
-    if n >= 2 {
-        out.push(Scene {
-            name: "Side by side".into(),
-            layers: vec![
-                Layer::at(0, 0.01, 0.2525, 0.485, 0.485),
-                Layer::at(1, 0.505, 0.2525, 0.485, 0.485),
-            ],
-            ..Default::default()
-        });
-        out.push(Scene {
-            name: "Picture in picture".into(),
-            layers: vec![
-                Layer::at(0, 0.0, 0.0, 1.0, 1.0),
-                Layer::at(1, 0.70, 0.68, 0.27, 0.27),
-            ],
-            ..Default::default()
-        });
-    }
-    if n >= 3 {
-        out.push(grid(n));
+    for p in Preset::LAYOUTS {
+        if let Some(layers) = preset_layers(p, &sl, None) {
+            out.push(Scene { name: p.name().into(), layers, preset: Some(p), ..Default::default() });
+        }
     }
     out
 }
 
+/// The default scenes the bank doesn't have (deleted, or from before there
+/// were defaults), named so they clash with none: a source with no scene
+/// of its own full screen, and each layout no scene was made from.
+pub fn missing_defaults(sources: &[crate::config::SourceConfig], existing: &[Scene]) -> Vec<Scene> {
+    let mut have: Vec<Scene> = existing.to_vec();
+    let mut out = Vec::new();
+    for d in defaults(sources) {
+        let there = match d.preset {
+            Some(Preset::Full) => {
+                let src = d.layers[0].source;
+                have.iter().any(|s| s.layers.len() == 1 && s.layers[0].source == src && s.full_frame_source() == Some(src))
+            }
+            p => have.iter().any(|s| s.preset == p),
+        };
+        if !there {
+            let s = new_scene(Some(&d), &have);
+            have.push(s.clone());
+            out.push(s);
+        }
+    }
+    out
+}
+
+/// The defaults for sources with these names, all cameras (for tests).
+#[cfg(test)]
+pub fn presets(names: &[String]) -> Vec<Scene> {
+    let sources: Vec<crate::config::SourceConfig> = names.iter().map(|n| crate::config::SourceConfig { name: n.clone(), device: "test".into(), ..Default::default() }).collect();
+    defaults(&sources)
+}
+
 /// A new scene for the bank: blank, or a copy of a layout (one of
-/// `presets`), named so no other scene has its name.
+/// `defaults`), named so no other scene has its name.
 pub fn new_scene(layout: Option<&Scene>, existing: &[Scene]) -> Scene {
     let base = layout.map_or("New scene", |l| l.name.as_str());
     let taken = |n: &str| existing.iter().any(|s| s.name.eq_ignore_ascii_case(n));
     let name = if taken(base) { (2..).map(|i| format!("{base} {i}")).find(|n| !taken(n)).unwrap() } else { base.to_string() };
-    Scene { name, layers: layout.map(|l| l.layers.clone()).unwrap_or_default(), ..Default::default() }
+    Scene { name, layers: layout.map(|l| l.layers.clone()).unwrap_or_default(), preset: layout.and_then(|l| l.preset), ..Default::default() }
 }
 
 /// A scene showing close-ups (sources `close`, in order) side by side, for
@@ -372,11 +558,10 @@ mod tests {
         assert_eq!(found[0].name, "Wide: both");
         let (a, b) = (found[0].layers[0], found[0].layers[1]);
         assert_eq!((a.source, b.source), (1, 2));
-        // The same frames as "Side by side".
-        let sbs = presets(&names(2)).into_iter().find(|s| s.name == "Side by side").unwrap();
-        assert_eq!((a.x, a.w, a.h), (sbs.layers[0].x, sbs.layers[0].w, sbs.layers[0].h));
-        assert!((a.y - sbs.layers[0].y).abs() < 0.01);
-        assert!((b.x - sbs.layers[1].x).abs() < 1e-4);
+        // Two square-ish frames, centred, side by side.
+        assert!((a.x - 0.01).abs() < 1e-4 && (a.w - 0.485).abs() < 1e-4 && (a.h - 0.485).abs() < 1e-4);
+        assert!((a.y - 0.2575).abs() < 0.01);
+        assert!((b.x - 0.505).abs() < 1e-4);
         // Not again if the scene is there, or if the close-ups aren't new.
         assert!(split_scenes(&src, &|i| i == 1 || i == 2, &found).is_empty());
         assert!(split_scenes(&src, &|_| false, &[]).is_empty());
@@ -427,10 +612,152 @@ mod tests {
     fn presets_cover_sources() {
         let p = presets(&names(4));
         assert_eq!(p[0].name, "Cam 1");
-        assert_eq!(p.len(), 4 + 3);
-        let grid = p.iter().find(|s| s.name == "Grid").unwrap();
-        assert_eq!(grid.sources(), vec![0, 1, 2, 3]);
+        let layouts: Vec<&str> = p[4..].iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(layouts, ["2 cameras", "3 cameras", "4 cameras", "Picture in picture"], "5 cameras needs five; no screen");
+        let four = p.iter().find(|s| s.name == "4 cameras").unwrap();
+        assert_eq!(four.sources(), vec![0, 1, 2, 3]);
+        assert!(p.iter().all(|s| s.preset.is_some()));
         assert_eq!(presets(&names(1)).len(), 1);
+        assert_eq!(presets(&names(5)).iter().filter(|s| s.preset == Some(Preset::Five)).count(), 1);
+    }
+
+    fn src(name: &str, device: &str) -> crate::config::SourceConfig {
+        crate::config::SourceConfig { name: name.into(), device: device.into(), ..Default::default() }
+    }
+
+    fn on_canvas_apart(layers: &[Layer], what: &str) {
+        for l in layers {
+            assert!(l.x >= 0.0 && l.y >= 0.0 && l.x + l.w <= 1.0001 && l.y + l.h <= 1.0001, "{what}: {l:?}");
+        }
+        for (i, a) in layers.iter().enumerate() {
+            for b in &layers[i + 1..] {
+                let overlap = a.x < b.x + b.w - 1e-4 && b.x < a.x + a.w - 1e-4 && a.y < b.y + b.h - 1e-4 && b.y < a.y + a.h - 1e-4;
+                assert!(!overlap, "{what}: {a:?} {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn default_layouts_stay_on_the_picture_and_apart() {
+        let mut sources: Vec<_> = (1..=MAX_SCREEN_CAMERAS + 2).map(|i| src(&format!("Cam {i}"), "test")).collect();
+        sources.push(src("Slides", "screen"));
+        for n in 1..=MAX_SCREEN_CAMERAS + 2 {
+            let sl = Slots { cameras: (0..n).collect(), screen: Some(sources.len() - 1) };
+            for p in Preset::LAYOUTS {
+                if let Some(layers) = preset_layers(p, &sl, None) {
+                    on_canvas_apart(if p == Preset::PictureInPicture { &layers[1..] } else { &layers }, &format!("{p:?} with {n}"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn five_cameras_are_all_the_same_size() {
+        let l = preset_layers(Preset::Five, &Slots { cameras: vec![0, 1, 2, 3, 4], screen: None }, None).unwrap();
+        assert!(l.iter().all(|f| (f.w - l[0].w).abs() < 1e-6 && (f.h - l[0].h).abs() < 1e-6 && f.fill));
+        // Cam 1 in the centre, midway down; two each side, one above the other.
+        assert!((l[0].x + l[0].w / 2.0 - 0.5).abs() < 1e-4 && (l[0].y + l[0].h / 2.0 - 0.5).abs() < 1e-4);
+        assert!(l[1].x < l[0].x && l[2].x == l[1].x && l[2].y > l[1].y);
+        assert!(l[3].x > l[0].x && l[4].x == l[3].x && l[4].y > l[3].y);
+        // Three across: as tall as the picture, the same width.
+        let t = preset_layers(Preset::Three, &Slots { cameras: vec![0, 1, 2], screen: None }, None).unwrap();
+        assert!(t.iter().all(|f| f.h > 0.97 && (f.w - t[0].w).abs() < 1e-6));
+        assert!(t[0].x < t[1].x && t[1].x < t[2].x);
+    }
+
+    #[test]
+    fn the_screen_layout_puts_the_cameras_in_a_row_below() {
+        let sl = Slots { cameras: vec![0, 1, 2, 3, 4], screen: Some(5) };
+        let l = preset_layers(Preset::Screen, &sl, None).unwrap();
+        assert_eq!(l[0].source, 5);
+        assert!(!l[0].fill, "the whole screen shows");
+        assert!(l[0].w > 0.7 && (l[0].x + l[0].w / 2.0 - 0.5).abs() < 1e-4);
+        let row = &l[1..];
+        assert_eq!(row.iter().map(|f| f.source).collect::<Vec<_>>(), vec![0, 1, 2, 3, 4]);
+        assert!(row.iter().all(|f| f.y > l[0].y + l[0].h && (f.y - row[0].y).abs() < 1e-6));
+        // Up to four keep a 16:9 shape, centred.
+        let one = preset_layers(Preset::Screen, &Slots { cameras: vec![0], screen: Some(1) }, None).unwrap();
+        assert!(((one[1].w * 16.0) / (one[1].h * 9.0) - 16.0 / 9.0).abs() < 0.01);
+        assert!((one[1].x + one[1].w / 2.0 - 0.5).abs() < 1e-4);
+        // No screen, or no camera: no layout.
+        assert!(preset_layers(Preset::Screen, &Slots { cameras: vec![0], screen: None }, None).is_none());
+        assert!(preset_layers(Preset::Screen, &Slots { cameras: vec![], screen: Some(0) }, None).is_none());
+        // Many cameras: only the first eight.
+        let many = preset_layers(Preset::Screen, &Slots { cameras: (0..12).collect(), screen: Some(12) }, None).unwrap();
+        assert_eq!(many.len(), 1 + MAX_SCREEN_CAMERAS);
+    }
+
+    #[test]
+    fn close_ups_take_the_wide_cameras_place_and_screens_go_in_the_screen_slot() {
+        // Like Brayden's show: Cam 3 is cut into two close-ups.
+        let sources = vec![
+            src("Cam 1", "FaceTime"),
+            src("Cam 2", "#2"),
+            src("Cam 3", "#3"),
+            src("Screen", "screen:display:Main"),
+            src("Cam 3 left", "vptz:Cam 3"),
+            src("Cam 3 right", "vptz: cam 3"),
+            src("Clips", "media"),
+        ];
+        let sl = slots(&sources);
+        assert_eq!(sl.cameras, vec![0, 1, 4, 5]);
+        assert_eq!(sl.screen, Some(3));
+        let d = defaults(&sources);
+        assert_eq!(d.iter().filter(|s| s.preset == Some(Preset::Full)).count(), sources.len(), "every source full screen");
+        let four = d.iter().find(|s| s.preset == Some(Preset::Four)).unwrap();
+        assert_eq!(four.sources(), vec![0, 1, 4, 5]);
+        assert!(d.iter().any(|s| s.preset == Some(Preset::Screen)));
+        assert!(!d.iter().any(|s| s.preset == Some(Preset::Five)));
+        // Only screens: nothing to put beside them.
+        assert!(slots(&[src("Screen", "screen")]).cameras.is_empty());
+        // Only a wide camera and its close-ups... its close-ups are the cameras.
+        assert_eq!(slots(&[src("Wide", "test"), src("a", "frame:Wide")]).cameras, vec![1]);
+    }
+
+    #[test]
+    fn reset_puts_the_default_frames_back() {
+        let sources: Vec<_> = (1..=3).map(|i| src(&format!("Cam {i}"), "test")).collect();
+        let d = defaults(&sources);
+        let mut three = d.iter().find(|s| s.preset == Some(Preset::Three)).unwrap().clone();
+        let want = three.layers.clone();
+        three.layers[1].x = 0.3;
+        three.layers.pop();
+        three.name = "Panel".into();
+        assert_eq!(reset_layers(&three, &sources), Some(want));
+        // A full-screen scene: the source it's named after.
+        let mut cam2 = d[1].clone();
+        cam2.layers.clear();
+        assert_eq!(reset_layers(&cam2, &sources), Some(vec![Layer::at(1, 0.0, 0.0, 1.0, 1.0)]));
+        // Too few cameras now, or not from a default: nothing.
+        assert!(reset_layers(&three, &sources[..2]).is_none());
+        assert!(reset_layers(&Scene { name: "Mine".into(), ..Default::default() }, &sources).is_none());
+        // A copy of a default remembers it.
+        assert_eq!(new_scene(Some(&three), &d).preset, Some(Preset::Three));
+    }
+
+    #[test]
+    fn missing_defaults_come_back_and_others_are_left_alone() {
+        let sources: Vec<_> = (1..=2).map(|i| src(&format!("Cam {i}"), "test")).collect();
+        let d = defaults(&sources);
+        assert!(missing_defaults(&sources, &d).is_empty());
+        // An older show: its own scenes, one with a default's name.
+        let mine = vec![d[0].clone(), Scene { name: "2 cameras".into(), layers: vec![Layer::at(1, 0.0, 0.0, 0.5, 0.5)], ..Default::default() }];
+        let back = missing_defaults(&sources, &mine);
+        assert_eq!(back.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Cam 2", "2 cameras 2", "Picture in picture"]);
+        assert_eq!(back[1].preset, Some(Preset::Two));
+        // The old scene is a scene of yours, not the default.
+        assert_eq!(mine[1].preset, None);
+    }
+
+    #[test]
+    fn a_scenes_default_is_saved_and_old_scenes_load() {
+        let s = Scene { name: "Panel".into(), layers: vec![Layer::at(0, 0.0, 0.0, 1.0, 1.0)], preset: Some(Preset::PictureInPicture), ..Default::default() };
+        let t = toml::to_string(&s).unwrap();
+        assert!(t.contains("preset = \"picture_in_picture\""), "{t}");
+        assert_eq!(toml::from_str::<Scene>(&t).unwrap(), s);
+        let old: Scene = toml::from_str("name = \"Wide\"").unwrap();
+        assert_eq!(old.preset, None);
+        assert!(!toml::to_string(&old).unwrap().contains("preset"));
     }
 
     #[test]
@@ -549,7 +876,7 @@ mod tests {
     fn shared_source_moves_between_rects() {
         let names = names(2);
         let p = presets(&names);
-        let sbs = p.iter().find(|s| s.name == "Side by side").unwrap();
+        let sbs = p.iter().find(|s| s.name == "2 cameras").unwrap();
         let aspects = [16.0 / 9.0; 2];
         let start = compose(None, &p[0], 0.0, CANVAS, &aspects)[0];
         let end = compose(None, sbs, 0.0, CANVAS, &aspects)[0];

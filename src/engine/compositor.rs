@@ -2151,7 +2151,7 @@ mod tests {
         };
         let near = |a: (u8, u8, u8), b: (u8, u8, u8)| (a.0 as i32 - b.0 as i32).abs() <= 6 && (a.1 as i32 - b.1 as i32).abs() <= 6 && (a.2 as i32 - b.2 as i32).abs() <= 6;
         let scenes = crate::scene::presets(&["A".to_string(), "B".to_string()]);
-        let sbs = scenes.iter().find(|s| s.name == "Side by side").unwrap();
+        let sbs = scenes.iter().find(|s| s.name == "2 cameras").unwrap();
         let wants = Wants { tall: true, tall_preview: true, ..Default::default() };
         let tall = |c: &mut Compositor, scene: &crate::scene::Scene, focus: f32| {
             let framing = vec![([focus, 0.5], 1.0); 2];

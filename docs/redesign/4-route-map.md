@@ -64,6 +64,7 @@ Every place a user can go and every action they can take, each with a stable id.
 - `menu.edit.audio`: Audio (n) menu (ui.rs:3331).
 - `menu.edit.cues`: Cues (n) menu with ＋Add (ui.rs:3365).
 - `menu.edit.newscene`: New scene menu.
+- `edit.scene.reset`: Reset to default, for a scene made from a default layout (added after the redesign).
 - `edit.scene.duplicate`: Duplicate (ui.rs:3401).
 - `edit.scene.delete`: Delete (ui.rs:3406).
 
@@ -159,6 +160,7 @@ Groups and pages (mod.rs:152–181):
 - `set.look.graphics`: Graphics (graphics.rs:14; rotations.rs:12).
 - `set.look.captions`: Captions (captions.rs:8).
 - `set.show.scenes`: Scenes (scenes.rs:88).
+- `set.scenes.defaults`: Add default scenes, under the scene list (added after the redesign).
 - `set.show.switching`: Switching (switching.rs:7): stinger (51), FTB (101), replay (115), auto (157).
 - `set.show.rundown`: Rundown (rundown.rs:66).
 - `set.show.macros`: Macros (macros.rs:9).
@@ -272,7 +274,7 @@ Unique route ids in this file, counted with grep:
 - OSC/MIDI: 5
 - CLI: 13 (plus 5 headless sub-flags)
 
-**Total: 251 route ids, or 276 if each Stream Deck action counts separately.** Some desktop bullets bundle several small buttons (for example the uploads panel and the pre-check), so there are about 300 clickable actions in all.
+**Total: 253 route ids, or 278 if each Stream Deck action counts separately.** Some desktop bullets bundle several small buttons (for example the uploads panel and the pre-check), so there are about 300 clickable actions in all.
 
 ## Routes reachable only one obscure way
 
