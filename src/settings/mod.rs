@@ -448,7 +448,9 @@ pub struct SettingsUi {
     part_only: Option<&'static str>,
     /// Replacing every setting (importing them, resetting them), waiting
     /// for a yes: the settings, the Undo step's name, the question.
-    confirm_replace: Option<(Box<Config>, String, String)>,
+    /// Settings to put in place once asked: the settings, the button, the
+    /// question, and what's worth knowing about them first.
+    confirm_replace: Option<(Box<Config>, String, String, Vec<String>)>,
     /// More › App › Diagnostics › Test encoders: what was found, while it looks.
     encoder_test: Arc<Mutex<Option<Vec<String>>>>,
     encoder_testing: bool,
@@ -949,12 +951,22 @@ impl SettingsUi {
                 self.confirm_discard = false;
             }
         }
-        if let Some((cfg, label, question)) = self.confirm_replace.clone() {
+        if let Some((cfg, label, question, notes)) = self.confirm_replace.clone() {
             let mut done = false;
             let r = egui::Modal::new(egui::Id::unique("replace_settings")).show(ctx, |ui| {
-                ui.set_width(400.0);
+                ui.set_width(440.0);
                 ui.heading(question);
                 ui.label("Sources, inputs, scenes, graphics and stream destinations all change at once, and the cameras restart. ↶ Undo puts everything back.");
+                if !notes.is_empty() {
+                    ui.add_space(6.0);
+                    ui.label(RichText::new("What these settings do:").strong());
+                    egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+                        for n in &notes {
+                            ui.label(format!("• {n}"));
+                        }
+                    });
+                    ui.label(RichText::new("Stream keys and passwords aren't brought in: type yours again where needed.").color(TEXT_DIM));
+                }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if ui.button(RichText::new(&label).color(ERROR)).clicked() {
@@ -1182,10 +1194,10 @@ impl SettingsUi {
             }
             if ui.button("Import settings…").on_hover_text("Replaces these settings with a file's, after asking; ↶ Undo puts them back").clicked() {
                 if let Some(path) = rfd::FileDialog::new().add_filter("Cutaway settings", &["toml"]).pick_file() {
-                    match Config::load(&path) {
-                        Ok(cfg) => {
+                    match Config::load_import(&path) {
+                        Ok((cfg, notes)) => {
                             let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                            self.confirm_replace = Some((Box::new(cfg), "Import settings".into(), format!("Use the settings in {name}?")));
+                            self.confirm_replace = Some((Box::new(cfg), "Import settings".into(), format!("Use the settings in {name}?"), notes));
                         }
                         Err(e) => self.message = Some((format!("Couldn't import: {e:#}"), true)),
                     }
@@ -1194,7 +1206,7 @@ impl SettingsUi {
             if ui.button("Reset to defaults…").on_hover_text("Every setting back to how it was the first time, after asking; ↶ Undo puts them back").clicked() {
                 let mut fresh = Config::default();
                 fresh.output.folder = self.draft.output.folder.clone();
-                self.confirm_replace = Some((Box::new(fresh), "Reset to defaults".into(), "Reset everything?".into()));
+                self.confirm_replace = Some((Box::new(fresh), "Reset to defaults".into(), "Reset everything?".into(), Vec::new()));
             }
         });
     }

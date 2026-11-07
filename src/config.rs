@@ -2410,6 +2410,46 @@ impl Config {
         Ok(cfg)
     }
 
+    /// A settings file from somewhere else (Import settings), made safe to
+    /// try: its keychain placeholders are dropped, not looked up (a file
+    /// someone made could point one of *your* keys at their server), and
+    /// its stream destinations come in switched off. With what it brings
+    /// that's worth a look before using it, in plain words.
+    pub fn load_import(path: &Path) -> Result<(Self, Vec<String>)> {
+        let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        let mut cfg: Config = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+        cfg.validate()?;
+        cfg.adopt_clock_format();
+        cfg.osc.from_network = Some(cfg.osc.from_other_devices());
+        for (_, v) in cfg.secrets_mut() {
+            if v.starts_with(crate::secrets::PREFIX) {
+                v.clear();
+            }
+        }
+        cfg.held_secrets.clear();
+        let mut notes = Vec::new();
+        for d in &mut cfg.streaming.destinations {
+            let host = d.server.split("://").nth(1).unwrap_or(&d.server).split(['/', '?']).next().unwrap_or("").to_string();
+            let name = if d.name.trim().is_empty() { d.service.label().to_string() } else { d.name.trim().to_string() };
+            notes.push(format!("Streams to {name}{} (switched off: turn it on in Record & stream if you want it)", if host.is_empty() { String::new() } else { format!(" at {host}") }));
+            d.enabled = false;
+        }
+        for g in cfg.graphics.iter().filter(|g| g.kind == GraphicKind::Web && !g.url.trim().is_empty()) {
+            notes.push(format!("Shows a web page: {}", crate::util::truncate_str(g.url.trim(), 120)));
+        }
+        notes.push(format!("Records to {}", cfg.output.folder.display()));
+        if cfg.remote.enabled {
+            notes.push("Turns on the phone remote".into());
+        }
+        if cfg.guests.enabled {
+            notes.push("Lets guests join by link".into());
+        }
+        if cfg.osc.enabled && cfg.osc.from_other_devices() {
+            notes.push("Takes OSC commands from other devices on the network".into());
+        }
+        Ok((cfg, notes))
+    }
+
     /// Stream keys, passwords and tokens, by name. They're kept in the
     /// Keychain (Mac) or Credential Manager (Windows), not the file.
     pub fn secrets_mut(&mut self) -> Vec<(String, &mut String)> {
@@ -2956,6 +2996,23 @@ mod tests {
         named.sources[0].person = "Alex".into();
         assert!(!cfg.lineup_changed(&named));
         assert!(cfg.lineup_changed(&{ let mut r = cfg.clone(); r.rename_source(2, "Else").unwrap(); r }));
+    }
+
+    #[test]
+    fn imported_settings_dont_bring_keys_or_switched_on_streams() {
+        let dir = std::env::temp_dir().join(format!("cutaway-import-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut c = Config::default();
+        c.streaming.destinations.push(StreamDestination { name: "Mine".into(), server: "rtmp://stream.example.net/live".into(), key: "@keychain:0123456789ab".into(), enabled: true, ..Default::default() });
+        c.graphics.push(Graphic::web("Overlay", "http://192.168.1.1/admin"));
+        let p = dir.join("theirs.toml");
+        std::fs::write(&p, toml::to_string_pretty(&c).unwrap()).unwrap();
+        let (got, notes) = Config::load_import(&p).unwrap();
+        assert!(got.streaming.destinations[0].key.is_empty(), "a placeholder from the file isn't looked up");
+        assert!(!got.streaming.destinations[0].enabled, "streams come in off");
+        let all = notes.join("\n");
+        assert!(all.contains("Mine at stream.example.net") && all.contains("http://192.168.1.1/admin"), "{all}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

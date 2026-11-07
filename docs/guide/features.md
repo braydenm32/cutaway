@@ -552,6 +552,12 @@ Recordings start with the **Take name** from Record & stream › Quality and fil
   you've given them a Take name of your own). The interface size and the
   update choices belong to this computer, not the show: switching shows,
   importing settings or starting over leaves them as they are.
+- **Import settings** (More › App › Shows) lists what the file would do
+  before you say yes: where it streams, the web pages it shows, where it
+  records, and whether it turns on the phone remote, guests or OSC from
+  other devices. Stream destinations come in switched off, and no keys or
+  passwords come with the file, so a settings file someone sends you can't
+  quietly stream your show somewhere else.
 - **Pre-show check:** one button checks every source for a picture, every
   input for sound, the disk, and that every stream server answers. It also
   starts every encoder the show needs at the same time (program, each
