@@ -9,7 +9,7 @@ shows (e.g. `http://192.168.1.20:8790`) on a phone or tablet on the same
 network and type the PIN (on Windows, allow Cutaway through the firewall
 when asked: see [Install on Windows](install.md#install-on-windows), step 5). The
 remote always has one (Cutaway makes a
-four-digit PIN if you don't set your own), and a device that guesses five
+six-digit PIN if you don't set your own), and a device that guesses five
 different wrong PINs in a row waits a minute before it can try again (a
 phone or Stream Deck still using an old PIN after you change it just asks
 for the new one). If the phone or a Stream Deck key asks for something that

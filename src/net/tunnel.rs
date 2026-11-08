@@ -93,6 +93,11 @@ pub fn download(progress: &dyn Fn(String)) -> Result<PathBuf> {
     progress("Downloading Cloudflare's tunnel program (about 20 MB, once)…".into());
     let agent = crate::util::https_agent(Duration::from_secs(120));
     let mut resp = agent.get(&url).call().map_err(|e| anyhow!("couldn't download cloudflared: {e}"))?;
+    // (The agent hands back error pages too: one of those mustn't be saved
+    // as the program.)
+    if resp.status() != 200 {
+        bail!("couldn't download cloudflared: GitHub answered {}", resp.status());
+    }
     let bytes = resp.body_mut().with_config().limit(200 << 20).read_to_vec().map_err(|e| anyhow!("couldn't download cloudflared: {e}"))?;
     let dest = bundled_path();
     std::fs::create_dir_all(dest.parent().unwrap())?;
@@ -114,6 +119,20 @@ pub fn download(progress: &dyn Fn(String)) -> Result<PathBuf> {
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755))?;
+    }
+    // It has to be cloudflared: it says so when asked its version. Anything
+    // else (a damaged or cut-short download) is thrown away.
+    let mut ask = Command::new(&dest);
+    ask.arg("--version").stdin(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        ask.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let says = ask.output();
+    if !says.as_ref().is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).to_lowercase().contains("cloudflared")) {
+        let _ = std::fs::remove_file(&dest);
+        bail!("the download wasn't Cloudflare's tunnel program; try again");
     }
     Ok(dest)
 }

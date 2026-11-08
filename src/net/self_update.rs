@@ -451,8 +451,11 @@ exit 0
         )
     }
 
-    /// Windows' helper (PowerShell). Everything in the Cutaway folder but the
-    /// update folder is moved aside, and the new files moved in.
+    /// Windows' helper (PowerShell). Cutaway's own files in its folder (the
+    /// new version's names, and the ones the last update listed) are moved
+    /// aside, and the new files moved in. Nothing else in the folder is
+    /// touched, so a Cutaway.exe left loose in Downloads can't take the rest
+    /// of Downloads with it.
     pub fn powershell_script(&self) -> String {
         let work_name = self.previous.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| ".update".into());
         format!(
@@ -472,8 +475,15 @@ function Say($m) {{ Add-Content -LiteralPath $Log -Value ("{{0}} {{1}}" -f (Get-
 function Again([scriptblock]$b) {{
   for ($i = 0; ; $i++) {{ try {{ & $b; return }} catch {{ if ($i -ge 20) {{ throw }}; Start-Sleep -Milliseconds 500 }} }}
 }}
+# Only Cutaway's own files are touched: the new version's, and the ones the
+# last update put here. Anything else in the folder (if Cutaway.exe was put
+# on the Desktop, say) stays where it is.
+$Listed = Join-Path (Join-Path $Dir $Keep) 'files.txt'
+$Names = @(Get-ChildItem -LiteralPath $New -Force | ForEach-Object {{ $_.Name }})
+$Ours = @($Names)
+if (Test-Path -LiteralPath $Listed) {{ $Ours += @(Get-Content -LiteralPath $Listed | Where-Object {{ $_ -and $_ -notmatch '[\\/:]' -and $_ -ne '..' -and $_ -ne '.' }}) }}
 function Restore {{
-  foreach ($x in @(Get-ChildItem -LiteralPath $Dir -Force)) {{ if ($x.Name -ne $Keep) {{ Again {{ Remove-Item -LiteralPath $x.FullName -Recurse -Force }} }} }}
+  foreach ($x in @(Get-ChildItem -LiteralPath $Dir -Force)) {{ if ($x.Name -ne $Keep -and $Names -contains $x.Name) {{ Again {{ Remove-Item -LiteralPath $x.FullName -Recurse -Force }} }} }}
   foreach ($x in @(Get-ChildItem -LiteralPath $Old -Force)) {{ Again {{ Move-Item -LiteralPath $x.FullName -Destination $Dir }} }}
 }}
 Say "waiting for Cutaway ($Id) to close"
@@ -483,8 +493,9 @@ Start-Sleep -Milliseconds 300
 try {{
   if (Test-Path -LiteralPath $Old) {{ Remove-Item -LiteralPath $Old -Recurse -Force }}
   New-Item -ItemType Directory -Path $Old | Out-Null
-  foreach ($x in @(Get-ChildItem -LiteralPath $Dir -Force)) {{ if ($x.Name -ne $Keep) {{ Again {{ Move-Item -LiteralPath $x.FullName -Destination $Old }} }} }}
+  foreach ($x in @(Get-ChildItem -LiteralPath $Dir -Force)) {{ if ($x.Name -ne $Keep -and $Ours -contains $x.Name) {{ Again {{ Move-Item -LiteralPath $x.FullName -Destination $Old }} }} }}
   foreach ($x in @(Get-ChildItem -LiteralPath $New -Force)) {{ Again {{ Move-Item -LiteralPath $x.FullName -Destination $Dir }} }}
+  try {{ Set-Content -LiteralPath $Listed -Value $Names -Encoding UTF8 }} catch {{ Say "couldn't note the new version's files ($_)" }}
 }} catch {{
   Say "couldn't put the new version in place ($_); putting the old one back"
   try {{ Restore }} catch {{ Say "couldn't put everything back ($_)" }}
@@ -531,7 +542,17 @@ fn sh(p: &Path) -> String {
 
 /// A path for PowerShell, single-quoted.
 fn ps(p: &Path) -> String {
-    format!("'{}'", p.to_string_lossy().replace('\'', "''"))
+    // PowerShell ends a single-quoted string at any of its four single-quote
+    // marks (straight and curly), so each is doubled.
+    let mut out = String::from("'");
+    for c in p.to_string_lossy().chars() {
+        if matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}') {
+            out.push(c);
+        }
+        out.push(c);
+    }
+    out.push('\'');
+    out
 }
 
 /// Hand over to the helper: it does the rest once Cutaway has closed.
@@ -1077,6 +1098,13 @@ mod tests {
         format!("http://{addr}")
     }
 
+    #[test]
+    fn powershell_quotes_curly_apostrophes_too() {
+        assert_eq!(ps(Path::new("C:\\Users\\O'Neil")), "'C:\\Users\\O''Neil'");
+        assert_eq!(ps(Path::new("C:\\Users\\O\u{2019}Neil")), "'C:\\Users\\O\u{2019}\u{2019}Neil'");
+        assert_eq!(ps(Path::new("a\u{2018}b\u{201A}c\u{201B}d")), "'a\u{2018}\u{2018}b\u{201A}\u{201A}c\u{201B}\u{201B}d'");
+    }
+
     /// Windows' helper, run for real with PowerShell (on Windows).
     #[cfg(windows)]
     #[test]
@@ -1088,6 +1116,9 @@ mod tests {
             std::fs::create_dir_all(dir.join("licenses")).unwrap();
             std::fs::write(dir.join("Cutaway.exe"), "old").unwrap();
             std::fs::write(dir.join("old-only.dll"), "old").unwrap();
+            std::fs::write(dir.join("my-notes.txt"), "mine").unwrap();
+            std::fs::create_dir_all(dir.join(".update")).unwrap();
+            std::fs::write(dir.join(".update").join("files.txt"), "Cutaway.exe\r\nold-only.dll\r\nlicenses\r\n..\r\n").unwrap();
             let staged = Staged { version: "9.9.9".into(), new_item: me.work.join("9.9.9\\new\\Cutaway") };
             std::fs::create_dir_all(staged.new_item.join("licenses")).unwrap();
             std::fs::write(staged.new_item.join("Cutaway.exe"), "new").unwrap();
@@ -1112,10 +1143,15 @@ mod tests {
                 assert!(!dir.join("old-only.dll").exists(), "the old version's files are set aside");
                 assert!(swap.previous.join("old-only.dll").exists() && swap.previous.join("Cutaway.exe").exists());
                 assert!(dir.join(".update").exists(), "the update folder stays where it was");
+                assert_eq!(std::fs::read_to_string(dir.join("my-notes.txt")).unwrap_or_default(), "mine", "files that aren't Cutaway's are left alone");
+                assert!(!swap.previous.join("my-notes.txt").exists());
+                let listed = std::fs::read_to_string(dir.join(".update").join("files.txt")).unwrap_or_default();
+                assert!(listed.contains("Cutaway.exe") && !listed.contains("old-only.dll"), "the new version's files are noted: {listed}");
             } else {
                 assert!(!status.success());
                 assert_eq!(exe, "old", "back to the old version: {log}");
                 assert!(dir.join("old-only.dll").exists() && dir.join("licenses").exists());
+                assert!(dir.join("my-notes.txt").exists());
                 assert!(swap.rolled_back.exists() && opened.exists(), "{log}");
             }
         }

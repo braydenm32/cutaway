@@ -39,15 +39,28 @@ fn append(text: &str) {
     }
 }
 
+/// Logs are kept for this long.
+const KEEP_LOGS: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 3600);
+
+fn older_than_a_month(t: std::time::SystemTime) -> bool {
+    t.elapsed().is_ok_and(|age| age > KEEP_LOGS)
+}
+
 /// Set up the log file and the crash handler. Call first thing.
 pub fn init() {
     let path = default_path();
     if let Some(dir) = path.parent() {
         let _ = fs::create_dir_all(dir);
     }
-    // Keep one previous log; don't grow forever.
-    if fs::metadata(&path).map(|m| m.len() > 5_000_000).unwrap_or(false) {
-        let _ = fs::rename(&path, path.with_extension("previous.log"));
+    // Keep one previous log; don't grow forever, or keep anything (guests'
+    // names, file paths) for longer than a month.
+    let previous = path.with_extension("previous.log");
+    let started = fs::metadata(&path).ok().and_then(|m| m.created().or_else(|_| m.modified()).ok());
+    if fs::metadata(&path).map(|m| m.len() > 5_000_000).unwrap_or(false) || started.is_some_and(|t| older_than_a_month(t)) {
+        let _ = fs::rename(&path, &previous);
+    }
+    if fs::metadata(&previous).and_then(|m| m.modified()).is_ok_and(older_than_a_month) {
+        let _ = fs::remove_file(&previous);
     }
     let _ = PATH.set(path.clone());
 

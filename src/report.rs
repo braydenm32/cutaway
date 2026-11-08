@@ -19,6 +19,23 @@ pub struct Report<'a> {
     pub log: PathBuf,
 }
 
+/// The user's home folder as it appears in paths (both slash styles on
+/// Windows), longest first.
+fn dirs_home() -> Vec<String> {
+    let Some(h) = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }) else { return Vec::new() };
+    let h = h.to_string_lossy().trim_end_matches(['/', '\\']).to_string();
+    if h.len() < 4 {
+        return Vec::new();
+    }
+    let mut v = vec![h.clone()];
+    if cfg!(windows) {
+        v.push(h.replace('\\', "/"));
+        v.push(h.replace('\\', "\\\\"));
+    }
+    v.sort_by_key(|s| std::cmp::Reverse(s.len()));
+    v
+}
+
 /// A suggested file name: "Cutaway problem report 2026-10-25 1930.zip".
 pub fn file_name() -> String {
     format!("Cutaway problem report {}.zip", chrono::Local::now().format("%Y-%m-%d %H%M"))
@@ -28,16 +45,38 @@ impl Report<'_> {
     pub fn write(&self, path: &Path) -> Result<()> {
         // Keys and passwords, and the remote's PIN (it lets anyone on the
         // network run the show).
+        // Stream keys of RTMP inputs (`rtmp-in:1935/<key>`) too.
         let secrets: Vec<String> = {
             let mut c = self.cfg.clone();
-            let mut v: Vec<String> = c.secrets_mut().into_iter().map(|(_, v)| v.clone()).collect();
+            let mut v: Vec<String> = c.secrets_mut().into_iter().map(|(_, v)| v.trim().to_string()).collect();
             v.push(self.cfg.remote.pin.trim().to_string());
-            v.into_iter().filter(|v| v.trim().len() >= 4).collect()
+            for src in &self.cfg.sources {
+                if let Some(key) = crate::util::strip_prefix_ci(src.device.trim(), "rtmp-in:").and_then(|r| r.split_once('/')).map(|(_, k)| k.trim()) {
+                    v.push(key.to_string());
+                }
+            }
+            // As typed, and as they'd appear in a web address.
+            let encoded: Vec<String> = v.iter().map(|s| crate::net::google::encode(s)).filter(|e| !v.contains(e)).collect();
+            v.extend(encoded);
+            let mut v: Vec<String> = v.into_iter().filter(|v| v.len() >= 4).collect();
+            // Longest first, so a key inside a longer one is hidden whole.
+            v.sort_by_key(|s| std::cmp::Reverse(s.len()));
+            v
         };
+        // Who this is: the signed-in Google account, and the user's own
+        // folder (which carries their name) in every path.
+        let account = self.cfg.upload.account.trim().to_string();
+        let home = dirs_home();
         let scrub = |text: &str| -> String {
             let mut t = text.to_string();
             for s in &secrets {
                 t = t.replace(s.as_str(), "[hidden]");
+            }
+            if account.len() >= 3 {
+                t = t.replace(account.as_str(), "[account]");
+            }
+            for h in &home {
+                t = t.replace(h.as_str(), "~");
             }
             t
         };
@@ -118,6 +157,7 @@ fn last_take(output: &Path) -> Option<(PathBuf, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::SourceConfig;
     use std::io::Read;
 
     #[test]
@@ -136,6 +176,9 @@ mod tests {
         cfg.streaming.destinations[0].key = "live_secret_123".into();
         cfg.guests.turn_password = "hunter22".into();
         cfg.remote.pin = "975318".into();
+        cfg.upload.account = "maya@example.com".into();
+        cfg.sources.push(SourceConfig { device: "rtmp-in:1935/cam-Zq8rT2vX9kPw".into(), ..Default::default() });
+        std::fs::write(&log, "connecting to rtmp://a.rtmp.youtube.com/live2/live_secret_123\nsigned in as maya@example.com\n").unwrap();
 
         let out = dir.join("report.zip");
         Report { cfg: &cfg, facts: &[("Engine".into(), "Metal".into())], devices: &["FaceTime camera".into()], log }
@@ -157,6 +200,8 @@ mod tests {
         assert!(!all.contains("live_secret_123"));
         assert!(!all.contains("975318"));
         assert!(!all.contains("hunter22"));
+        assert!(!all.contains("cam-Zq8rT2vX9kPw") && all.contains("rtmp-in:1935/[hidden]"), "the RTMP input's key");
+        assert!(!all.contains("maya@example.com") && all.contains("[account]"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

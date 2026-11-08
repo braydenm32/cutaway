@@ -299,17 +299,40 @@ pub fn bundled(name: &str, folder: &str) -> Option<std::path::PathBuf> {
 
 /// Open a file with the app the system uses for it.
 pub fn open_with_system(path: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        // Straight to Windows' "open" (as a double-click does), not through
+        // `cmd /C start`: cmd reads `&`, `|` and `^` in a folder's name as
+        // commands of its own.
+        use windows::core::{HSTRING, PCWSTR};
+        use windows::Win32::UI::Shell::{ShellExecuteExW, SHELLEXECUTEINFOW};
+        let file = HSTRING::from(path.as_os_str());
+        let mut info = SHELLEXECUTEINFOW {
+            cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+            lpFile: PCWSTR(file.as_ptr()),
+            nShow: 1, // SW_SHOWNORMAL
+            ..Default::default()
+        };
+        // SAFETY: `file` lives until the call returns; nothing is kept.
+        return unsafe { ShellExecuteExW(&mut info) }.map_err(|e| std::io::Error::other(e.to_string()));
+    }
     #[cfg(target_os = "macos")]
     let mut cmd = std::process::Command::new("open");
-    #[cfg(target_os = "windows")]
-    let mut cmd = {
-        let mut c = std::process::Command::new("cmd");
-        c.args(["/C", "start", ""]);
-        c
-    };
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let mut cmd = std::process::Command::new("xdg-open");
+    #[cfg(not(target_os = "windows"))]
     cmd.arg(path).spawn().map(|_| ())
+}
+
+/// `s` on one line: line breaks, tabs and other control characters become
+/// spaces. For names written into other programs' files (a timeline, a
+/// project, a script), where one would end a line or a string early.
+pub fn one_line(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.chars().any(char::is_control) {
+        s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect::<String>().into()
+    } else {
+        s.into()
+    }
 }
 
 /// `s` without `prefix`, ignoring ASCII case ("NDI:Cam" and "ndi:Cam" alike).

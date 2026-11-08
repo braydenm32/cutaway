@@ -109,7 +109,9 @@ fn boxes(data: &[u8]) -> Vec<([u8; 4], &[u8])> {
         } else if size == 0 {
             size = data.len() - i;
         }
-        if size < hdr || i + size > data.len() {
+        // (Compared as a remainder: a damaged size near the top of the range
+        // would wrap `i + size` round to something small.)
+        if size < hdr || size > data.len() - i {
             break;
         }
         out.push((kind, &data[i + hdr..i + size]));
@@ -132,7 +134,7 @@ fn find_deep<'a>(data: &'a [u8], kind: &[u8; 4], depth: usize) -> Option<&'a [u8
     while i + 8 <= data.len() {
         if &data[i + 4..i + 8] == kind {
             let size = be32(data, i) as usize;
-            if size >= 8 && i + size <= data.len() {
+            if size >= 8 && size <= data.len() - i {
                 return Some(&data[i + 8..i + size]);
             }
         }
@@ -287,7 +289,7 @@ fn parse_stbl(stbl: &[u8]) -> Result<Vec<SampleInfo>> {
     let stsc: Vec<(u32, u32)> = (0..entries(stsc, 4, 8, 12)).map(|i| (be32(stsc, 8 + i * 12), be32(stsc, 12 + i * 12))).collect();
     let stts = child(stbl, b"stts").context("stts")?;
     // Runs only fill as many samples as there are.
-    let mut durations = Vec::with_capacity(count);
+    let mut durations = Vec::with_capacity(count.min(1 << 16));
     for i in 0..entries(stts, 4, 8, 8) {
         let (n, d) = (be32(stts, 8 + i * 8), be32(stts, 12 + i * 8));
         durations.extend(std::iter::repeat_n(d, (n as usize).min(count - durations.len())));
@@ -301,7 +303,8 @@ fn parse_stbl(stbl: &[u8]) -> Result<Vec<SampleInfo>> {
     }
     let sync: Option<std::collections::HashSet<u32>> = child(stbl, b"stss").map(|s| (0..entries(s, 4, 8, 4)).map(|i| be32(s, 8 + i * 4)).collect());
 
-    let mut out = Vec::with_capacity(count);
+    // (Grows as samples are found: a damaged count can't reserve gigabytes.)
+    let mut out = Vec::with_capacity(count.min(1 << 16));
     let mut sample = 0usize;
     let mut dts = 0i64;
     // The sample-to-chunk run in force (runs are in chunk order).
@@ -332,6 +335,10 @@ fn parse_stbl(stbl: &[u8]) -> Result<Vec<SampleInfo>> {
     Ok(out)
 }
 
+/// The largest index (`moov` or `moof` box) read: real ones are a few MB even
+/// for hours of video.
+const MAX_INDEX: u64 = 512 << 20;
+
 impl Mp4Reader {
     pub fn open(path: &Path) -> Result<Mp4Reader> {
         let mut file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
@@ -353,8 +360,14 @@ impl Mp4Reader {
             } else if size == 0 {
                 size = len - pos;
             }
-            if size < head {
+            // A box can't be bigger than what's left of the file (a damaged
+            // size would otherwise ask for terabytes, or wrap `pos` round
+            // to the start and go on for ever).
+            if size < head || size > len - pos {
                 break;
+            }
+            if (&kind == b"moov" || &kind == b"moof") && size - head > MAX_INDEX {
+                bail!("{}: damaged file (its index is {} MB)", path.display(), (size - head) >> 20);
             }
             if &kind == b"moov" || &kind == b"moof" {
                 let mut body = vec![0u8; (size - head) as usize];
@@ -535,6 +548,40 @@ impl Mp4Reader {
 mod tests {
     use super::*;
     use crate::media::mp4::{tests::audio_config, tests::fake_video_config, Brand, Mp4Writer};
+
+    /// Damaged or hostile box sizes end the read instead of hanging, or
+    /// asking for terabytes.
+    #[test]
+    fn damaged_box_sizes_dont_hang_or_eat_memory() {
+        let dir = std::env::temp_dir().join(format!("cutaway-demux-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // 8 bytes of `free`, then a 64-bit size of 2^64 - 8 (wraps back to 0).
+        let mut wrap = Vec::new();
+        wrap.extend_from_slice(&8u32.to_be_bytes());
+        wrap.extend_from_slice(b"free");
+        wrap.extend_from_slice(&1u32.to_be_bytes());
+        wrap.extend_from_slice(b"free");
+        wrap.extend_from_slice(&(u64::MAX - 7).to_be_bytes());
+        // A `moov` that says it's a petabyte.
+        let mut huge = Vec::new();
+        huge.extend_from_slice(&1u32.to_be_bytes());
+        huge.extend_from_slice(b"moov");
+        huge.extend_from_slice(&(1u64 << 50).to_be_bytes());
+        for (name, bytes) in [("wrap.mp4", wrap), ("huge.mp4", huge)] {
+            let p = dir.join(name);
+            std::fs::write(&p, bytes).unwrap();
+            assert!(Mp4Reader::open(&p).is_err(), "{name}");
+            let _ = crate::media::mp4::duration_secs(&p);
+            let _ = crate::media::mp4::recover(&p);
+        }
+        // Boxes inside a box, the same way.
+        let mut inner = vec![0u8; 16];
+        inner[..4].copy_from_slice(&1u32.to_be_bytes());
+        inner[4..8].copy_from_slice(b"trak");
+        inner[8..16].copy_from_slice(&(u64::MAX - 7).to_be_bytes());
+        assert!(boxes(&inner).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn reads_back_what_we_write() {

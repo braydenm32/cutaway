@@ -287,6 +287,9 @@ impl Osc {
         let s2 = stop.clone();
         let thread = std::thread::Builder::new().name("osc".into()).spawn(move || {
             let mut buf = vec![0u8; 65536];
+            // Bad commands go in the log, but at most 20 a minute: anything
+            // on the network can send them, and the log shouldn't fill a disk.
+            let mut noted = (Instant::now(), 0u32);
             while !s2.load(Ordering::Relaxed) {
                 let Ok((n, _from)) = sock.recv_from(&mut buf) else { continue };
                 for m in decode(&buf[..n]) {
@@ -296,7 +299,17 @@ impl Osc {
                             let _ = requests.send(Request { action, reply: None });
                             waker();
                         }
-                        Err(e) => crate::logging::note(&format!("OSC {}: {e}", m.addr)),
+                        Err(e) => {
+                            if noted.0.elapsed() > Duration::from_secs(60) {
+                                noted = (Instant::now(), 0);
+                            }
+                            noted.1 += 1;
+                            if noted.1 <= 20 {
+                                crate::logging::note(crate::util::truncate_str(&format!("OSC {}: {e}", m.addr), 300));
+                            } else if noted.1 == 21 {
+                                crate::logging::note("OSC: many more bad commands this minute (not logged)");
+                            }
+                        }
                     }
                 }
             }
