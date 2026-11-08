@@ -76,6 +76,7 @@ pub fn start() {
     let spawned = std::thread::Builder::new().name("ndi download".into()).spawn(move || {
         let to = std::env::temp_dir().join("Cutaway").join(name);
         let r = download(url, &to, magic, &mut |got, total| set(Stage::Downloading { got, total })).and_then(|path| {
+            check_signed(&path)?;
             crate::util::open_with_system(&path).map_err(|e| anyhow!("couldn't open NDI's installer ({e})"))?;
             Ok(path)
         });
@@ -112,6 +113,55 @@ pub fn open_again() {
     }
 }
 
+/// NDI's link always points at its newest installer, so there's no fixed
+/// fingerprint to check it against. Instead it must carry a valid code
+/// signature (Authenticode on Windows, an Apple-issued certificate on a
+/// Mac) before it's opened; anything unsigned or altered is deleted.
+fn check_signed(path: &Path) -> Result<()> {
+    let refuse = |why: String| -> Result<()> {
+        let _ = std::fs::remove_file(path);
+        Err(anyhow!("NDI's installer {why}, so it wasn't opened. Get it from {PAGE} instead"))
+    };
+    if cfg!(target_os = "macos") {
+        let out = std::process::Command::new("/usr/sbin/pkgutil").arg("--check-signature").arg(path).output();
+        let Ok(out) = out else { return refuse("couldn't be checked".into()) };
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        crate::logging::note(&format!("NDI installer signature: {}", text.lines().take(4).collect::<Vec<_>>().join(" / ")));
+        if !out.status.success() || !signed_pkg(&text) {
+            return refuse("isn't signed".into());
+        }
+    } else if cfg!(windows) {
+        let mut cmd = std::process::Command::new("powershell.exe");
+        cmd.args(["-NoProfile", "-NonInteractive", "-Command", "$s = Get-AuthenticodeSignature -LiteralPath $env:CUTAWAY_FILE; \"$($s.Status)|$($s.SignerCertificate.Subject)\""]).env("CUTAWAY_FILE", path).stdin(std::process::Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
+        let Ok(out) = cmd.output() else { return refuse("couldn't be checked".into()) };
+        let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        crate::logging::note(&format!("NDI installer signature: {text}"));
+        if !valid_authenticode(&text) {
+            return refuse("isn't signed".into());
+        }
+    }
+    Ok(())
+}
+
+/// What `pkgutil --check-signature` says of a package signed with a
+/// certificate Apple issued.
+fn signed_pkg(text: &str) -> bool {
+    text.lines().any(|l| {
+        let l = l.trim();
+        l.starts_with("Status: signed") && !l.contains("untrusted") && !l.contains("expired")
+    })
+}
+
+/// "Valid|CN=…" from Get-AuthenticodeSignature.
+fn valid_authenticode(text: &str) -> bool {
+    text.split('|').next().is_some_and(|s| s.trim() == "Valid")
+}
+
 /// "12 of 48 MB".
 pub fn progress_text(got: u64, total: Option<u64>) -> String {
     let mb = |b: u64| b as f64 / 1_000_000.0;
@@ -131,6 +181,17 @@ pub fn download(url: &str, to: &Path, magic: &[u8], progress: &mut dyn FnMut(u64
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_signed_installers_are_opened() {
+        assert!(signed_pkg("Package \"NDI Runtime.pkg\":\n   Status: signed by a developer certificate issued by Apple for distribution\n   Notarization: trusted by the Apple notary service\n"));
+        assert!(!signed_pkg("Package \"x.pkg\":\n   Status: no signature\n"));
+        assert!(!signed_pkg("   Status: signed by untrusted certificate\n"));
+        assert!(valid_authenticode("Valid|CN=Vizrt NDI AB, O=Vizrt NDI AB"));
+        assert!(!valid_authenticode("NotSigned|"));
+        assert!(!valid_authenticode("HashMismatch|CN=Vizrt NDI AB"));
+        assert!(!valid_authenticode(""));
+    }
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
 

@@ -1488,6 +1488,9 @@ impl App {
             if ui.button("Your first hour").clicked() {
                 ui.ctx().open_url(egui::OpenUrl::new_tab(crate::net::update::manual_url("first-hour.md")));
             }
+            if ui.button("Privacy").clicked() {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(crate::net::update::manual_url("privacy.md")));
+            }
             ui.label(RichText::new("Everything Cutaway does, and fixes for the common first-show problems (opens in your browser).").color(TEXT_DIM));
         });
         ui.add_space(10.0);

@@ -109,7 +109,7 @@ TALK, Undo, the graphics) always show the key as it's set now.
 | Service | Server |
 |---|---|
 | YouTube | `rtmps://a.rtmps.youtube.com:443/live2` (secure; new YouTube destinations use it), or `rtmp://a.rtmp.youtube.com/live2` |
-| Twitch | `rtmp://live.twitch.tv/app` |
+| Twitch | `rtmps://ingest.global-contribute.live-video.net:443/app` (secure; `rtmp://live.twitch.tv/app` works too) |
 | Facebook | `rtmps://live-api-s.facebook.com:443/rtmp` (RTMPS only) |
 | Kick | copy the Stream URL from your Kick dashboard |
 | Custom | any `rtmp://` / `rtmps://` server: Restream, vMix, OBS, a media server |

@@ -243,7 +243,17 @@ impl SettingsUi {
                 label(ui, "Password");
                 ui.add(egui::TextEdit::singleline(&mut g.turn_password).password(true).desired_width(200.0));
                 ui.end_row();
+                label(ui, "Logins for guests");
+                ui.checkbox(&mut g.turn_shared_secret, "Made from a shared secret");
+                ui.end_row();
             });
+            if !g.turn_url.trim().is_empty() && !g.turn_password.is_empty() {
+                if g.turn_shared_secret {
+                    hint(ui, "Each guest gets a login of their own that stops working after a day; the secret stays here.");
+                } else {
+                    hint(ui, "Guests' browsers are given this username and password to use the relay. A server with a shared secret (coturn's use-auth-secret) gives each guest a login that runs out instead.");
+                }
+            }
         });
         ui.add_space(4.0);
         hint(ui, "Guests need Chrome, Edge, Safari or Firefox; headphones help.");

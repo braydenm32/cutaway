@@ -14,9 +14,15 @@ is **Sound from <source name>**.
 |---|---|---|
 | `rtmp-in:1935/mykey` | Cutaway's own RTMP server, port 1935, stream key `mykey` (leave the key out to accept any) | OBS: Server `rtmp://<this Mac's IP>:1935/live`, key `mykey`. Larix and hardware encoders the same way |
 | `srt-in:9000` | Waits for an SRT sender on port 9000 | `srt://<this Mac's IP>:9000` |
-| `srt://10.0.0.5:9000` | Calls an SRT listener (another machine, a decoder) | — |
+| `srt-in:9000?passphrase=…` | The same, but only a sender with the passphrase gets in, and the feed is encrypted | `srt://<this Mac's IP>:9000?passphrase=…` (the settings show it whole) |
+| `srt://10.0.0.5:9000` | Calls an SRT listener (another machine, a decoder); add `?passphrase=…` if it uses one | — |
 | `ndi:Studio PC (OBS)` | An NDI source by name | Any NDI sender |
 | `media` | The media player; files are set in its settings | — |
+
+Anyone on the same network can send to an SRT input that has no
+passphrase, and to an RTMP input that has no stream key: give SRT inputs a
+**Passphrase** (press **New** for a random one) and keep RTMP's key, above
+all on a venue's Wi-Fi.
 
 Senders can use H.264 or HEVC video with AAC sound. Network sources show
 "Standing by" until a sender connects, and pick up again if it reconnects. The

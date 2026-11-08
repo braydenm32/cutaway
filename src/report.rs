@@ -36,6 +36,23 @@ fn dirs_home() -> Vec<String> {
     v
 }
 
+/// SRT passphrases (`passphrase=…` in an address) hidden, wherever they are.
+fn hide_passphrases(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find("passphrase=") {
+        let (before, after) = rest.split_at(i + "passphrase=".len());
+        out.push_str(before);
+        let end = after.find(|c: char| c == '&' || c == '"' || c == '\'' || c.is_whitespace()).unwrap_or(after.len());
+        if end > 0 {
+            out.push_str("[hidden]");
+        }
+        rest = &after[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// A suggested file name: "Cutaway problem report 2026-10-25 1930.zip".
 pub fn file_name() -> String {
     format!("Cutaway problem report {}.zip", chrono::Local::now().format("%Y-%m-%d %H%M"))
@@ -78,7 +95,7 @@ impl Report<'_> {
             for h in &home {
                 t = t.replace(h.as_str(), "~");
             }
-            t
+            hide_passphrases(&t)
         };
 
         let file = std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?;
@@ -178,6 +195,7 @@ mod tests {
         cfg.remote.pin = "975318".into();
         cfg.upload.account = "maya@example.com".into();
         cfg.sources.push(SourceConfig { device: "rtmp-in:1935/cam-Zq8rT2vX9kPw".into(), ..Default::default() });
+        cfg.sources.push(SourceConfig { device: "srt-in:9000?passphrase=Sup3rSecretPass".into(), ..Default::default() });
         std::fs::write(&log, "connecting to rtmp://a.rtmp.youtube.com/live2/live_secret_123\nsigned in as maya@example.com\n").unwrap();
 
         let out = dir.join("report.zip");
@@ -202,6 +220,7 @@ mod tests {
         assert!(!all.contains("hunter22"));
         assert!(!all.contains("cam-Zq8rT2vX9kPw") && all.contains("rtmp-in:1935/[hidden]"), "the RTMP input's key");
         assert!(!all.contains("maya@example.com") && all.contains("[account]"));
+        assert!(!all.contains("Sup3rSecretPass") && all.contains("passphrase=[hidden]"), "SRT passphrases");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

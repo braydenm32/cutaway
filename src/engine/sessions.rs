@@ -343,9 +343,9 @@ pub fn premiere_take(xml: &str) -> Option<PremiereTake> {
     // The sequence's video (files describe their own <video> inside it).
     let v = xml.find("<video>")? + 7;
     let video = &xml[v..xml.find("</video>\n      <audio>").or_else(|| xml.rfind("</video>")).filter(|e| *e > v)?];
-    let fps = num(xml, "timebase")? as u32;
-    let width = num(video, "width").unwrap_or(1920) as u32;
-    let height = num(video, "height").unwrap_or(1080) as u32;
+    let fps = u32::try_from(num(xml, "timebase")?).ok().filter(|f| (1..=240).contains(f))?;
+    let size = |t: &str, or: u32| num(video, t).and_then(|v| u32::try_from(v).ok()).filter(|v| (16..=crate::config::MAX_SIZE).contains(v)).unwrap_or(or);
+    let (width, height) = (size("width", 1920), size("height", 1080));
     let frames = num(xml, "duration").unwrap_or(0);
     // Every file's name by id (each is described once, then referred to).
     let mut names = std::collections::HashMap::new();
@@ -355,7 +355,9 @@ pub fn premiere_take(xml: &str) -> Option<PremiereTake> {
         let Some(q) = rest.find('"') else { break };
         let id = rest[..q].to_string();
         if rest[q..].starts_with("\">") {
-            if let Some(n) = tag(rest, "name") {
+            // (Its name comes first: looking further would make a file of
+            // many <file>s without names take minutes.)
+            if let Some(n) = tag(&rest[..rest.floor_char_boundary(4096)], "name") {
                 names.entry(id).or_insert_with(|| xml_unescape(n));
             }
         }
@@ -368,17 +370,18 @@ pub fn premiere_take(xml: &str) -> Option<PremiereTake> {
         .filter_map(|t| {
             let item = t.split("<clipitem ").nth(1)?;
             let from = num(item, "in").unwrap_or(0);
-            Some(ResolveAngle { file: file_of(item)?, name: xml_unescape(tag(item, "name")?), frames: num(item, "out")? - from, at: num(item, "start").unwrap_or(0), framing: None, from })
+            Some(ResolveAngle { file: file_of(item)?, name: xml_unescape(tag(item, "name")?), frames: num(item, "out")?.checked_sub(from)?, at: num(item, "start").unwrap_or(0), framing: None, from })
         })
         .collect();
     let mut cuts = Vec::new();
     for item in v1.split("<clipitem ").skip(1) {
         let (Some(start), Some(end), Some(from), Some(to)) = (num(item, "start"), num(item, "end"), num(item, "in"), num(item, "out")) else { continue };
         let Some(file) = file_of(item) else { continue };
+        let Some(length) = end.checked_sub(start) else { continue };
         // "Cam middle (Cam middle)": the angle, then the scene.
         let label = xml_unescape(tag(item, "name").unwrap_or(""));
         let scene = label.rsplit_once(" (").map(|(_, sc)| sc.trim_end_matches(')').to_string()).unwrap_or(label);
-        cuts.push(ResolveCut { file, scene, at: start, length: end - start, from, to, framing: None });
+        cuts.push(ResolveCut { file, scene, at: start, length, from, to, framing: None });
     }
     let mut markers = Vec::new();
     let after = xml.rfind("</media>").map(|i| &xml[i..]).unwrap_or("");
@@ -565,7 +568,8 @@ pub fn prepare_resolve_take(folder: &Path) -> Result<PathBuf> {
         }
     }
     let files: Vec<String> = std::fs::read_dir(folder).with_context(|| format!("reading {}", folder.display()))?.flatten().filter(|e| e.path().is_file()).map(|e| e.file_name().to_string_lossy().to_string()).collect();
-    let premiere = files.iter().find(|n| n.ends_with("(Premiere).xml")).and_then(|n| std::fs::read_to_string(folder.join(n)).ok()).and_then(|x| premiere_take(&x));
+    // (Cutaway's own timeline is well under a few MB: a far bigger one isn't ours.)
+    let premiere = files.iter().find(|n| n.ends_with("(Premiere).xml")).map(|n| folder.join(n)).filter(|p| std::fs::metadata(p).is_ok_and(|m| m.len() <= 16 << 20)).and_then(|p| std::fs::read_to_string(p).ok()).and_then(|x| premiere_take(&x));
     if let (Some(p), None) = (&existing, &premiere) {
         return Ok(p.clone()); // nothing better to write
     }
@@ -601,6 +605,17 @@ pub fn prepare_resolve_take(folder: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_hostile_premiere_timeline_is_quick_and_safe() {
+        // Many files without names: read in well under a second, not minutes.
+        let xml = format!("<xmeml><sequence><rate><timebase>30</timebase></rate><media><video>{}</video></media></sequence></xmeml>", "<file id=\"x\">".repeat(200_000));
+        let t = std::time::Instant::now();
+        let _ = premiere_take(&xml);
+        assert!(t.elapsed() < std::time::Duration::from_secs(5), "{:?}", t.elapsed());
+        // Numbers that would wrap round are refused, not turned into nonsense.
+        assert!(premiere_take("<timebase>-1</timebase><video><track></track></video>").is_none());
+    }
 
     fn wav(path: &Path, channels: u16, frames: usize) {
         let mut w = crate::media::wav::WavWriter::create(path, crate::media::wav::SampleFormat::from_bits(24), channels, 48_000).unwrap();

@@ -21,13 +21,17 @@ pub const EXTENSIONS: &[&str] = &["wav", "wave", "aif", "aiff", "mp3", "m4a", "a
 
 /// The file as interleaved 48 kHz stereo samples.
 pub fn load(path: &Path) -> Result<Vec<f32>> {
-    let (rate, channels, pcm) = decode(path).with_context(|| format!("reading {}", path.display()))?;
-    let stereo = to_stereo(&pcm, channels);
+    let (rate, stereo) = decode(path).with_context(|| format!("reading {}", path.display()))?;
     Ok(if rate == 48_000 { stereo } else { resample_stereo(&stereo, rate) })
 }
 
-/// (sample rate, channels, interleaved samples) as stored.
-fn decode(path: &Path) -> Result<(u32, usize, Vec<f32>)> {
+/// The highest sample rate taken (studio files go up to 192 kHz).
+const MAX_RATE: u32 = 192_000;
+
+/// (sample rate, interleaved stereo samples), up to MAX_SECONDS. Made
+/// stereo as it's read, and capped by what comes out rather than what the
+/// file says it holds, so a small file can't fill the memory.
+fn decode(path: &Path) -> Result<(u32, Vec<f32>)> {
     let file = std::fs::File::open(path)?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
     let mut hint = Hint::new();
@@ -44,7 +48,6 @@ fn decode(path: &Path) -> Result<(u32, usize, Vec<f32>)> {
         .make_audio_decoder(&params, &AudioDecoderOptions::default())
         .map_err(|e| anyhow!("its sound format isn't supported ({e})"))?;
     let mut rate = params.sample_rate.unwrap_or(48_000);
-    let mut channels = params.channels.as_ref().map(|c| c.count()).unwrap_or(2).max(1);
     let mut pcm: Vec<f32> = Vec::new();
     let mut chunk: Vec<f32> = Vec::new();
     loop {
@@ -60,23 +63,27 @@ fn decode(path: &Path) -> Result<(u32, usize, Vec<f32>)> {
         match decoder.decode(&packet) {
             Ok(buf) => {
                 rate = buf.spec().rate();
-                channels = buf.spec().channels().count().max(1);
+                let channels = buf.spec().channels().count().max(1);
+                if !(1..=MAX_RATE).contains(&rate) {
+                    bail!("its sample rate ({rate} Hz) is higher than Cutaway takes");
+                }
                 chunk.clear();
                 buf.copy_to_vec_interleaved(&mut chunk);
-                pcm.extend_from_slice(&chunk);
+                pcm.extend(to_stereo(&chunk, channels));
             }
             // A damaged packet: skip it, as players do.
             Err(SymError::DecodeError(_)) => continue,
             Err(e) => return Err(anyhow!("{e}")),
         }
-        if pcm.len() > MAX_SECONDS * rate as usize * channels {
+        // (At most 10 minutes at 96 kHz kept, whatever the rate: under 500 MB.)
+        if pcm.len() / 2 > MAX_SECONDS * rate.min(96_000) as usize {
             break;
         }
     }
     if pcm.is_empty() {
         bail!("there's no sound in it");
     }
-    Ok((rate, channels, pcm))
+    Ok((rate, pcm))
 }
 
 /// Mono becomes both sides; more than two channels keep the first two.

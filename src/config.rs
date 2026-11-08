@@ -1347,7 +1347,8 @@ impl Service {
         match self {
             // RTMPS: the stream key travels encrypted.
             Service::Youtube => "rtmps://a.rtmps.youtube.com:443/live2",
-            Service::Twitch => "rtmp://live.twitch.tv/app",
+            // Twitch's own "Default" (nearest server), the secure one.
+            Service::Twitch => "rtmps://ingest.global-contribute.live-video.net:443/app",
             Service::Facebook => "rtmps://live-api-s.facebook.com:443/rtmp",
             Service::Kick => "",
             Service::CustomRtmp => "rtmp://",
@@ -1358,7 +1359,7 @@ impl Service {
     pub fn help(self) -> &'static str {
         match self {
             Service::Youtube => "Stream key from YouTube Studio → Go live → Stream. The server is YouTube's secure (RTMPS) one; rtmp://a.rtmp.youtube.com/live2 works too.",
-            Service::Twitch => "Stream key from Creator Dashboard → Settings → Stream. Most channels should stay at or below 6000 kbps.",
+            Service::Twitch => "Stream key from Creator Dashboard → Settings → Stream. Most channels should stay at or below 6000 kbps. The server is Twitch's secure (RTMPS) one; rtmp://live.twitch.tv/app works too.",
             Service::Facebook => "Stream key from Live Producer → Streaming software. Facebook requires RTMPS.",
             Service::Kick => "Copy both the Stream URL and Stream key from your Kick creator dashboard.",
             Service::CustomRtmp => "Server URL and stream key from your platform or media server.",
@@ -2079,6 +2080,10 @@ pub struct GuestsConfig {
     pub turn_url: String,
     pub turn_username: String,
     pub turn_password: String,
+    /// The password is the TURN server's shared secret (coturn's
+    /// use-auth-secret): each guest gets a login of their own that stops
+    /// working after a day, instead of the password itself.
+    pub turn_shared_secret: bool,
 }
 
 impl Default for GuestsConfig {
@@ -2093,6 +2098,7 @@ impl Default for GuestsConfig {
             turn_url: String::new(),
             turn_username: String::new(),
             turn_password: String::new(),
+            turn_shared_secret: false,
         }
     }
 }
@@ -2275,11 +2281,24 @@ pub struct OscConfig {
     /// Where to send state ("" = nowhere): a host name or address.
     pub feedback_host: String,
     pub feedback_port: u16,
+    /// Take commands from other devices on the network, not only programs
+    /// on this computer. OSC has no PIN, so anything on the network could
+    /// send them. Left out of older settings files: those that already had
+    /// OSC on keep taking them from the network, as they did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_network: Option<bool>,
+}
+
+impl OscConfig {
+    /// Whether OSC listens to the network (or only to this computer).
+    pub fn from_other_devices(&self) -> bool {
+        self.from_network.unwrap_or(self.enabled)
+    }
 }
 
 impl Default for OscConfig {
     fn default() -> Self {
-        OscConfig { enabled: false, port: 8791, feedback_host: String::new(), feedback_port: 9001 }
+        OscConfig { enabled: false, port: 8791, feedback_host: String::new(), feedback_port: 9001, from_network: Some(false) }
     }
 }
 
@@ -2388,11 +2407,53 @@ impl Config {
             toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         cfg.validate()?;
         cfg.adopt_clock_format();
+        // (An older file: keep what OSC did then, and from now on only what's chosen.)
+        cfg.osc.from_network = Some(cfg.osc.from_other_devices());
         cfg.held_secrets = crate::secrets::reveal(cfg.secrets_mut());
         for (field, _) in &cfg.held_secrets {
             eprintln!("{}: the saved value for {field} is missing", path.display());
         }
         Ok(cfg)
+    }
+
+    /// A settings file from somewhere else (Import settings), made safe to
+    /// try: its keychain placeholders are dropped, not looked up (a file
+    /// someone made could point one of *your* keys at their server), and
+    /// its stream destinations come in switched off. With what it brings
+    /// that's worth a look before using it, in plain words.
+    pub fn load_import(path: &Path) -> Result<(Self, Vec<String>)> {
+        let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        let mut cfg: Config = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+        cfg.validate()?;
+        cfg.adopt_clock_format();
+        cfg.osc.from_network = Some(cfg.osc.from_other_devices());
+        for (_, v) in cfg.secrets_mut() {
+            if v.starts_with(crate::secrets::PREFIX) {
+                v.clear();
+            }
+        }
+        cfg.held_secrets.clear();
+        let mut notes = Vec::new();
+        for d in &mut cfg.streaming.destinations {
+            let host = d.server.split("://").nth(1).unwrap_or(&d.server).split(['/', '?']).next().unwrap_or("").to_string();
+            let name = if d.name.trim().is_empty() { d.service.label().to_string() } else { d.name.trim().to_string() };
+            notes.push(format!("Streams to {name}{} (switched off: turn it on in Record & stream if you want it)", if host.is_empty() { String::new() } else { format!(" at {host}") }));
+            d.enabled = false;
+        }
+        for g in cfg.graphics.iter().filter(|g| g.kind == GraphicKind::Web && !g.url.trim().is_empty()) {
+            notes.push(format!("Shows a web page: {}", crate::util::truncate_str(g.url.trim(), 120)));
+        }
+        notes.push(format!("Records to {}", cfg.output.folder.display()));
+        if cfg.remote.enabled {
+            notes.push("Turns on the phone remote".into());
+        }
+        if cfg.guests.enabled {
+            notes.push("Lets guests join by link".into());
+        }
+        if cfg.osc.enabled && cfg.osc.from_other_devices() {
+            notes.push("Takes OSC commands from other devices on the network".into());
+        }
+        Ok((cfg, notes))
     }
 
     /// Stream keys, passwords and tokens, by name. They're kept in the
@@ -2484,11 +2545,13 @@ impl Config {
         }
         let p = &self.program;
         ensure(p.width >= 160 && p.height >= 90, ProblemAt::Program, || "program size is too small".into())?;
+        ensure(p.width <= MAX_SIZE && p.height <= MAX_SIZE, ProblemAt::Program, || format!("program size is too big (up to {MAX_SIZE}×{MAX_SIZE})"))?;
         ensure(p.width.is_multiple_of(2) && p.height.is_multiple_of(2), ProblemAt::Program, || "program width and height must be even".into())?;
         ensure((1..=120).contains(&p.fps), ProblemAt::Program, || "program fps must be between 1 and 120".into())?;
         for (i, s) in self.sources.iter().enumerate() {
             let at = ProblemAt::Source(i);
             ensure(s.width >= 16 && s.height >= 16, at, || format!("source '{}': width and height must be at least 16", s.name))?;
+            ensure(s.width <= MAX_SIZE && s.height <= MAX_SIZE, at, || format!("source '{}': width and height can be at most {MAX_SIZE}", s.name))?;
             ensure(s.width % 2 == 0 && s.height % 2 == 0, at, || format!("source '{}': width and height must be even", s.name))?;
             ensure((1..=120).contains(&s.fps), at, || format!("source '{}': fps must be between 1 and 120", s.name))?;
         }
@@ -2509,6 +2572,7 @@ impl Config {
         ensure(matches!(self.output.wav_bit_depth, 16 | 24 | 32), ProblemAt::Recording, || "wav_bit_depth must be 16, 24 or 32".into())?;
         let st = &self.streaming;
         ensure(st.width.is_multiple_of(2) && st.height.is_multiple_of(2) && st.width >= 160, ProblemAt::Streaming, || "stream width and height must be even".into())?;
+        ensure(st.width <= MAX_SIZE && st.height <= MAX_SIZE, ProblemAt::Streaming, || format!("stream size is too big (up to {MAX_SIZE}×{MAX_SIZE})"))?;
         ensure((1..=120).contains(&st.fps), ProblemAt::Streaming, || "stream fps must be between 1 and 120".into())?;
         ensure((200..=100_000).contains(&st.video_bitrate_kbps), ProblemAt::Streaming, || "stream video bitrate must be 200-100000 kbps".into())?;
         let mut names = std::collections::HashSet::new();
@@ -2561,6 +2625,11 @@ pub fn default_output_folder() -> PathBuf {
 pub fn profiles_dir(config_path: &Path) -> PathBuf {
     config_path.parent().map(|p| p.join("profiles")).unwrap_or_else(|| PathBuf::from("profiles"))
 }
+
+/// The largest picture size taken anywhere (8K is 7680×4320): a typo or a
+/// damaged settings file can't make Cutaway try to allocate a picture that
+/// can never fit in memory.
+pub const MAX_SIZE: u32 = 8192;
 
 pub fn default_config_path() -> PathBuf {
     if cfg!(target_os = "macos") {
@@ -2941,6 +3010,34 @@ mod tests {
         named.sources[0].person = "Alex".into();
         assert!(!cfg.lineup_changed(&named));
         assert!(cfg.lineup_changed(&{ let mut r = cfg.clone(); r.rename_source(2, "Else").unwrap(); r }));
+    }
+
+    #[test]
+    fn imported_settings_dont_bring_keys_or_switched_on_streams() {
+        let dir = std::env::temp_dir().join(format!("cutaway-import-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut c = Config::default();
+        c.streaming.destinations.push(StreamDestination { name: "Mine".into(), server: "rtmp://stream.example.net/live".into(), key: "@keychain:0123456789ab".into(), enabled: true, ..Default::default() });
+        c.graphics.push(Graphic::web("Overlay", "http://192.168.1.1/admin"));
+        let p = dir.join("theirs.toml");
+        std::fs::write(&p, toml::to_string_pretty(&c).unwrap()).unwrap();
+        let (got, notes) = Config::load_import(&p).unwrap();
+        assert!(got.streaming.destinations[0].key.is_empty(), "a placeholder from the file isn't looked up");
+        assert!(!got.streaming.destinations[0].enabled, "streams come in off");
+        let all = notes.join("\n");
+        assert!(all.contains("Mine at stream.example.net") && all.contains("http://192.168.1.1/admin"), "{all}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn osc_from_other_devices_only_when_allowed() {
+        assert!(!OscConfig::default().from_other_devices(), "new settings: this computer only");
+        let old: OscConfig = toml::from_str("enabled = true\nport = 8791").unwrap();
+        assert!(old.from_other_devices(), "older settings with OSC on keep working as before");
+        let old_off: OscConfig = toml::from_str("enabled = false").unwrap();
+        assert!(!old_off.from_other_devices());
+        let chosen: OscConfig = toml::from_str("enabled = true\nfrom_network = false").unwrap();
+        assert!(!chosen.from_other_devices());
     }
 
     #[test]

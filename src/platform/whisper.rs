@@ -27,7 +27,14 @@ const RATE: usize = 16_000;
 pub struct ModelFile {
     pub file: &'static str,
     pub megabytes: u32,
+    /// Its SHA-256 at `MODELS_AT` (Hugging Face's own fingerprint for it).
+    pub sha256: &'static str,
 }
+
+/// The version of the models downloaded (a fixed commit of
+/// ggerganov/whisper.cpp on Hugging Face), so the file is always the one
+/// whose fingerprint is below.
+const MODELS_AT: &str = "5359861c739e955e79d9a303bcbc70fb988958b1";
 
 fn english(language: &str) -> bool {
     let l = language.trim().to_lowercase();
@@ -38,10 +45,10 @@ fn english(language: &str) -> bool {
 /// English).
 pub fn model_file(language: &str, model: SpeechModel) -> ModelFile {
     match (model, english(language)) {
-        (SpeechModel::Fast, true) => ModelFile { file: "ggml-base.en-q5_1.bin", megabytes: 57 },
-        (SpeechModel::Fast, false) => ModelFile { file: "ggml-base-q5_1.bin", megabytes: 57 },
-        (SpeechModel::Accurate, true) => ModelFile { file: "ggml-small.en-q5_1.bin", megabytes: 181 },
-        (SpeechModel::Accurate, false) => ModelFile { file: "ggml-small-q5_1.bin", megabytes: 181 },
+        (SpeechModel::Fast, true) => ModelFile { file: "ggml-base.en-q5_1.bin", megabytes: 57, sha256: "4baf70dd0d7c4247ba2b81fafd9c01005ac77c2f9ef064e00dcf195d0e2fdd2f" },
+        (SpeechModel::Fast, false) => ModelFile { file: "ggml-base-q5_1.bin", megabytes: 57, sha256: "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898" },
+        (SpeechModel::Accurate, true) => ModelFile { file: "ggml-small.en-q5_1.bin", megabytes: 181, sha256: "bfdff4894dcb76bbf647d56263ea2a96645423f1669176f4844a1bf8e478ad30" },
+        (SpeechModel::Accurate, false) => ModelFile { file: "ggml-small-q5_1.bin", megabytes: 181, sha256: "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb" },
     }
 }
 
@@ -100,7 +107,7 @@ pub fn download(language: &str, model: SpeechModel) {
         d.insert(m.file, Download { running: true, ..Default::default() });
     }
     std::thread::spawn(move || {
-        let r = fetch(m.file);
+        let r = fetch(m);
         let mut d = downloads().lock_ok();
         let s = d.entry(m.file).or_default();
         s.running = false;
@@ -108,8 +115,9 @@ pub fn download(language: &str, model: SpeechModel) {
     });
 }
 
-fn fetch(file: &'static str) -> Result<()> {
-    let url = format!("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{file}");
+fn fetch(m: ModelFile) -> Result<()> {
+    let file = m.file;
+    let url = format!("https://huggingface.co/ggerganov/whisper.cpp/resolve/{MODELS_AT}/{file}");
     // A whisper.cpp model starts with "lmgg". The shared downloader checks
     // that, the answer and the length, and gives up on a stalled connection.
     let never = std::sync::atomic::AtomicBool::new(false);
@@ -119,6 +127,7 @@ fn fetch(file: &'static str) -> Result<()> {
             s.total = total.unwrap_or(0);
         }
     })?;
+    crate::net::fetch::check_sha256(&models_dir().join(file), m.sha256, "speech model")?;
     Ok(())
 }
 

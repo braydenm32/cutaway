@@ -74,12 +74,12 @@ doesn't break anything else, and you can change your mind later.
 Change where recordings go in **Record & stream › Quality and files**. **More
 › App › Diagnostics → Settings file → Show** opens the settings folder.
 
-**Starting again or removing Cutaway:** quit it, then delete the settings
-folder above to start from scratch (your recordings aren't in it). To remove
-Cutaway, also delete the app (or the Windows folder) and the log folder. On
+**Starting again or removing Cutaway:** **More › App › Diagnostics →
+Remove my settings and keys…** closes Cutaway and removes the settings,
+saved shows, stream keys and passwords, and the log (your recordings stay).
+To remove Cutaway itself, also delete the app (or the Windows folder). On
 Windows, remove the virtual camera first if you installed it (**Record &
-stream › Screens & webcam → Remove**). Stream keys stay in the Keychain or
-Credential Manager until you delete them there.
+stream › Screens & webcam → Remove**). More in [Privacy](privacy.md).
 
 ## What Cutaway sends over the internet
 
@@ -105,7 +105,8 @@ Nothing about you or your shows, unless you ask it to.
 Everything else stays on your computer: recordings, captions, markers and
 the log. The log is kept for a month at most. Cutaway doesn't encrypt
 recordings itself, so if the computer could be lost or shared, turn on
-FileVault (Mac) or BitLocker (Windows).
+FileVault (Mac) or BitLocker (Windows). [Privacy](privacy.md) has the
+whole list, and what to tell the people you record.
 
 ## The first hour's common problems
 

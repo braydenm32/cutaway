@@ -96,6 +96,27 @@ cargo check --target x86_64-pc-windows-msvc --no-default-features        # Windo
 cargo check --target x86_64-pc-windows-msvc --manifest-path windows/vcam/Cargo.toml
 ```
 
+## Pinned downloads
+
+Everything Cutaway (or its build) downloads from someone else is a fixed
+version, checked against its SHA-256 before it's used, so a changed file is
+refused rather than run. To move one on, change the version and the
+fingerprint together:
+
+| What | Where | Fingerprint from |
+|---|---|---|
+| cloudflared (the guest link) | `CLOUDFLARED` and `download_url` in `src/net/tunnel.rs` | The "SHA256 Checksums" list in that release's notes on GitHub |
+| Whisper speech models (Windows captions) | `MODELS_AT` and `model_file` in `src/platform/whisper.rs` | Each file's page on Hugging Face (ggerganov/whisper.cpp at that commit) shows its SHA256 |
+| ONNX Runtime and DirectML (Windows build) | The `Get-NuGet` lines in `windows/build.ps1` | `Get-FileHash` (or `sha256sum`) of the .nupkg from api.nuget.org |
+
+cloudflared stops being supported by Cloudflare about a year after its
+release, so move it on at least that often. NDI's installer always comes
+from NDI's newest link, so instead of a fingerprint it must carry a valid
+code signature before it's opened. Steinberg's ASIO SDK (only for
+self-builds with ASIO) is the same; set `CUTAWAY_ASIO_SHA256` to insist on
+one. The workflows use only GitHub's own actions (`actions/*`); Rust comes
+from rustup on the runner.
+
 ## Signed updates (for whoever publishes releases)
 
 The updater checks each download against the release's `SHA256SUMS.txt`.

@@ -166,7 +166,14 @@ fn all_files(dir: &Path, path: Vec<String>, out: &mut Vec<(PathBuf, Vec<String>)
     entries.sort_by_key(|e| e.file_name());
     for e in entries {
         let p = e.path();
-        if p.is_dir() {
+        // A link (or Windows junction) is skipped: only what's really in the
+        // take's folder goes up, never something it points to elsewhere.
+        let Ok(kind) = e.file_type() else { continue };
+        // (On Windows, is_symlink covers junctions too.)
+        if kind.is_symlink() {
+            continue;
+        }
+        if kind.is_dir() {
             let mut sub = path.clone();
             sub.push(e.file_name().to_string_lossy().to_string());
             all_files(&p, sub, out);
@@ -610,6 +617,26 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn links_in_a_take_folder_are_not_uploaded() {
+        let d = std::env::temp_dir().join(format!("cutaway-upload-links-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let take = d.join("take");
+        std::fs::create_dir_all(take.join("Proxies")).unwrap();
+        std::fs::write(take.join("Program.mp4"), "x").unwrap();
+        std::fs::write(take.join("Proxies").join("Wide.mp4"), "x").unwrap();
+        std::fs::create_dir_all(d.join("private")).unwrap();
+        std::fs::write(d.join("private").join("secret.txt"), "x").unwrap();
+        std::os::unix::fs::symlink(d.join("private"), take.join("elsewhere")).unwrap();
+        std::os::unix::fs::symlink(d.join("private").join("secret.txt"), take.join("secret.txt")).unwrap();
+        let mut out = Vec::new();
+        all_files(&take, Vec::new(), &mut out);
+        let names: Vec<String> = out.iter().map(|(p, _)| p.file_name().unwrap().to_string_lossy().to_string()).collect();
+        assert_eq!(names, vec!["Program.mp4", "Wide.mp4"]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     fn take(dir: &Path) -> TakeReport {
         std::fs::create_dir_all(dir.join("Guests")).unwrap();
