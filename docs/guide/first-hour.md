@@ -28,13 +28,12 @@ doesn't work there, the log and a problem report (below) are the best help.
 
 ## Opening Cutaway the first time
 
-Cutaway isn't signed by Apple or Microsoft yet, so each system warns you
-once.
-
-- **Mac:** unzip, move **Cutaway.app** to Applications and open it. macOS
-  refuses the first time. Open **System Settings → Privacy & Security**,
-  scroll down and choose **Open Anyway** (once for each new download).
-- **Windows:** unzip the whole folder anywhere (running it from inside the
+- **Mac:** unzip, move **Cutaway.app** to Applications and open it. It's
+  signed and checked by Apple, so it opens straight away. (Versions before
+  0.9.12 weren't: for those, macOS refuses the first time, and **System
+  Settings → Privacy & Security → Open Anyway** lets it in.)
+- **Windows:** the Windows app isn't signed yet, so Windows warns you once.
+  Unzip the whole folder anywhere (running it from inside the
   zip doesn't work) and run **Cutaway.exe**. When Windows says it "protected
   your PC", choose **More info → Run anyway**.
   - **No "Run anyway" button:** Smart App Control is on (**Windows Security
