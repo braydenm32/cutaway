@@ -135,6 +135,52 @@ From the first version with the public key in it, Cutaway refuses an update
 whose fingerprints aren't signed with that key. Versions before it keep
 updating as they always have.
 
+## Signing the Mac app (Developer ID and notarization)
+
+The Release workflow signs Cutaway.app with an Apple Developer ID and has
+Apple notarize it, so Macs open it without "Apple could not verify". It only
+does this for releases; builds of ordinary pushes stay ad-hoc signed and never
+see the certificate. Until the secrets below exist, releases are unsigned and
+the workflow says so with a warning.
+
+Once (needs the Apple Developer Program):
+
+1. Xcode → Settings → Accounts → your team → Manage Certificates → **+** →
+   **Developer ID Application**. Export it from Keychain Access (My
+   Certificates) as a `.p12` with a password.
+2. App Store Connect → Users and Access → Integrations → App Store Connect
+   API → **+**, access **Developer**. Download the `.p8` and note its Key ID
+   and the Issuer ID.
+3. Optional, to ship the virtual camera: register the App ID
+   `app.cutaway.Cutaway` with the **System Extension** capability and make a
+   **Developer ID** provisioning profile for it.
+4. Repository → Settings → Secrets and variables → Actions, add (files as
+   base64, e.g. `base64 -i file | pbcopy`):
+
+| Secret | What it is |
+|---|---|
+| `MAC_CERT_P12` | the `.p12`, base64 |
+| `MAC_CERT_PASSWORD` | its password |
+| `MAC_NOTARY_KEY_P8` | the `.p8`, base64 |
+| `MAC_NOTARY_KEY_ID` | the key's Key ID |
+| `MAC_NOTARY_ISSUER` | the Issuer ID |
+| `MAC_PROVISION_PROFILE` | optional: the provisioning profile, base64; adds the virtual camera |
+
+What it does (`macos/sign.sh`, which also works on your own Mac): signs with
+the hardened runtime, a secure timestamp and `macos/Cutaway.entitlements`
+(camera, microphone, and loading NDI's own runtime), sends the app to Apple's
+notary service, staples the approval on, and checks it with Gatekeeper
+(`spctl`), before and after the zip round trip. Any failure stops the
+release, so a half-signed app can't be published. The update fingerprints
+(`SHA256SUMS.txt`) are made from the signed zips, so signing updates works
+the same as before.
+
+When the first signed release goes out, change the "Open Anyway" steps in
+README.md, docs/guide/install.md and docs/guide/first-hour.md for the Mac.
+Existing users see one last Keychain prompt (and may need to allow camera,
+microphone and screen recording once more), because to macOS the signed app
+is a new app; after that, updates are quiet.
+
 ## What has been tested
 
 These were tested on Linux, in a sandbox with test sources, software encoders

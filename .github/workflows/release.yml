@@ -37,6 +37,11 @@ jobs:
   macos:
     needs: check
     uses: ./.github/workflows/macos.yml
+    # Signed with the Developer ID and notarized when the MAC_* secrets are
+    # set (docs/DEVELOPING.md); unsigned with a warning until then.
+    with:
+      sign: true
+    secrets: inherit
 
   windows:
     needs: check
