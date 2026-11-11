@@ -5,7 +5,14 @@ name: macOS
 on:
   push:
     branches: ["**"]
+  # Run by hand from Actions → macOS; tick "sign" to try the Developer ID
+  # signing and notarization on any branch without making a release.
   workflow_dispatch:
+    inputs:
+      sign:
+        description: "Sign with the Developer ID and notarize (needs the MAC_* secrets)"
+        type: boolean
+        default: false
   # The release workflow builds with this too, and asks for a signed app.
   workflow_call:
     inputs:
