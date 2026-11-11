@@ -91,7 +91,7 @@ impl SettingsUi {
         });
 
         if !crate::platform::vcam::available() {
-            part(ui, "vcam", "Virtual camera", if cfg!(target_os = "macos") { "coming later on Mac" } else { "needs macOS or Windows 11" }, false, |ui| {
+            part(ui, "vcam", "Virtual camera", if cfg!(target_os = "macos") { "not in this copy" } else { "needs macOS or Windows 11" }, false, |ui| {
                 hint(ui, crate::platform::vcam::missing_note());
             });
             return;

@@ -499,8 +499,8 @@ Recordings start with the **Take name** from Record & stream › Quality and fil
   shown on the stream (and optionally burned into the recording), from the
   mix or any one input.
 - **Virtual webcam:** the program as a "Cutaway" camera in Zoom, Teams, Meet
-  and others. On Windows 11 now; on the Mac it's coming in a later version
-  (it isn't in the Mac download yet, see [Virtual camera](install.md#virtual-camera)).
+  and others. On Windows 11, and on the Mac from 0.9.12 (see
+  [Virtual camera](install.md#virtual-camera)).
 
 ### Control
 

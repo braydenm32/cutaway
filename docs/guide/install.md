@@ -23,9 +23,10 @@ Needs a Mac with Apple Silicon (M1 or later) and macOS 13 Ventura or newer.
    **Or download it ready-made** from the
    [Releases page](https://github.com/braydenm32/cutaway/releases/latest)
    (see [Download](../../README.md#download)). Builds of every change are also kept under
-   **Actions → macOS →** a run **→ Artifacts**. It isn't signed by an Apple
-   developer, so macOS refuses the first time: go to **System Settings →
-   Privacy & Security** and choose **Open Anyway** (once per new build).
+   **Actions → macOS →** a run **→ Artifacts**. The download is signed and
+   checked by Apple, so it opens straight away. Builds of every change and
+   ones you make yourself aren't: macOS refuses those the first time, and
+   **System Settings → Privacy & Security → Open Anyway** lets them in.
 4. **Permissions:** on first launch, macOS asks for camera and microphone
    access. Allow both. For screen sources, also turn Cutaway on in **System
    Settings → Privacy & Security → Screen Recording**, then reopen the app.
@@ -47,11 +48,21 @@ cargo run --release
 On Windows 11, see the Windows install steps: **Record & stream › Screens & webcam ›
 Install…** asks for administrator rights once.
 
-On a Mac, the virtual camera isn't in the download yet, so there's no
-**Webcam** button and Record & stream › Screens & webcam says it's coming later.
+On a Mac (the download, 0.9.12 and later):
+
+1. Make sure **Cutaway.app** is in **Applications**; macOS only loads camera
+   extensions from there.
+2. Choose **Record & stream › Screens & webcam › Install…**. Approve the
+   extension in System Settings if asked (Privacy & Security on macOS 13–14;
+   General → Login Items & Extensions on macOS 15 and later).
+3. Press **Webcam** under the status light (top right). In the video-call app,
+   choose the **Cutaway** camera, and your interface or a loopback device as
+   the microphone.
+
 macOS only runs camera extensions from apps signed with a paid Apple
-Developer account, which the download isn't yet. If you build Cutaway
-yourself and have such an account, this is the one-time signing step:
+Developer account. The download is; a copy you build yourself isn't, so it
+has no **Webcam** button. If you build Cutaway yourself and have such an
+account, this is the one-time signing step:
 
 1. In your [Apple Developer account](https://developer.apple.com/account),
    create an App ID `app.cutaway.Cutaway` with the **System Extension**
@@ -145,7 +156,7 @@ Settings are in `%APPDATA%\Cutaway\config.toml`, recordings go to
 | Audio | CoreAudio | Windows audio (WASAPI) and **ASIO** (interfaces show as "ASIO: …", every channel) |
 | Live captions | Apple's speech recognition | **Whisper**, on the PC: the speech model downloads once from Graphics › More ▾ › Captions (57 MB Fast, 181 MB Accurate) |
 | Auto-framing, background removal | Apple's Vision | Open models (YuNet, PP-HumanSeg) on the graphics card through ONNX Runtime and DirectML |
-| Virtual webcam | Not in the Mac download yet (coming later; a self-signed build can have it) | Windows 11's virtual camera: **Record & stream › Screens & webcam › Install…** asks for administrator rights once |
+| Virtual webcam | A camera extension: **Record & stream › Screens & webcam › Install…** once, with Cutaway in Applications (not in builds you make yourself unless you sign them) | Windows 11's virtual camera: **Record & stream › Screens & webcam › Install…** asks for administrator rights once |
 | Log | `~/Library/Logs/Cutaway` | `%LOCALAPPDATA%\Cutaway\Logs` |
 
 Everything else (switching, graphics, the mixer, recording formats,

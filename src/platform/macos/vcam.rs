@@ -138,7 +138,7 @@ fn helper() -> Option<PathBuf> {
 /// Install (or remove) the camera extension. Returns what macOS said.
 pub fn install(remove: bool) -> Result<String> {
     let Some(h) = helper() else {
-        bail!("the virtual camera isn't in this copy of Cutaway (it isn't in the Mac download yet)");
+        bail!("the virtual camera isn't in this copy of Cutaway (the download from the Releases page has it)");
     };
     let out = std::process::Command::new(h).arg(if remove { "uninstall" } else { "install" }).output()?;
     let text = String::from_utf8_lossy(&out.stdout).trim().to_string();

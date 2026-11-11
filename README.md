@@ -34,12 +34,10 @@ Get the newest version from the
 **Windows is new:** it passes the same tests as the Mac on every change, but
 it hasn't been used on a Windows PC with real cameras yet.
 
-The apps aren't signed yet, so the first launch takes one extra step:
-
-- **Mac:** unzip, move **Cutaway.app** to Applications and open it. macOS
-  refuses the first time: open **System Settings → Privacy & Security** and
-  choose **Open Anyway**.
-- **Windows:** unzip anywhere and run **Cutaway.exe**. When Windows says it
+- **Mac:** unzip, move **Cutaway.app** to Applications and open it. It's
+  signed and checked by Apple, so it opens like any other app.
+- **Windows:** the Windows app isn't signed yet, so the first launch takes one
+  extra step. Unzip anywhere and run **Cutaway.exe**. When Windows says it
   "protected your PC", choose **More info → Run anyway**.
 
 > **Windows won't open it?**

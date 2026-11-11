@@ -161,6 +161,7 @@ mod tests {
         assert!(is_newer("0.10.0", "0.9.9"));
         assert!(is_newer("0.9.10", "0.9.9"));
         assert!(is_newer("0.9.11", "0.9.10"));
+        assert!(is_newer("0.9.12", "0.9.11"));
         assert!(is_newer("v1.0", "0.9.12"));
         assert!(!is_newer("v0.6.0", "0.6.0"));
         assert!(!is_newer("0.5.9", "0.6.0"));

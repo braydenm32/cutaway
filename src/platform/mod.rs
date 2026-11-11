@@ -170,7 +170,7 @@ pub mod vcam {
     /// Why there's no virtual camera, in a line, when there isn't one.
     pub fn missing_note() -> &'static str {
         if cfg!(target_os = "macos") {
-            "The virtual camera (Cutaway as a webcam in Zoom, Teams or Meet) isn't in the Mac download yet. It's coming in a later version. It works on Windows 11 now."
+            "The virtual camera (Cutaway as a webcam in Zoom, Teams or Meet) isn't in this copy of Cutaway. The download from the Releases page has it; a copy you build yourself needs a Developer ID signature for it (see Installing Cutaway › Virtual camera)."
         } else {
             "The virtual camera needs macOS or Windows 11."
         }
