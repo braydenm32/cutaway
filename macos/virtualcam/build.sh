@@ -30,9 +30,9 @@ sed "s/__TEAM__/$team/g" macos/virtualcam/Extension.entitlements > "$work/ext.en
 sed "s/__TEAM__/$team/g" macos/virtualcam/App.entitlements > "$work/app.entitlements"
 cp "$profile" "$app/Contents/embedded.provisionprofile"
 
-codesign --force --options runtime --sign "$identity" --entitlements "$work/ext.entitlements" "$ext"
-codesign --force --options runtime --sign "$identity" --entitlements "$work/app.entitlements" "$app/Contents/MacOS/cutaway-camera"
-codesign --force --options runtime --sign "$identity" --entitlements "$work/app.entitlements" "$app"
+codesign --force --options runtime --timestamp --sign "$identity" --entitlements "$work/ext.entitlements" "$ext"
+codesign --force --options runtime --timestamp --sign "$identity" --entitlements "$work/app.entitlements" "$app/Contents/MacOS/cutaway-camera"
+codesign --force --options runtime --timestamp --sign "$identity" --entitlements "$work/app.entitlements" "$app"
 codesign --verify --deep --strict "$app"
 echo "Signed $app with the virtual camera. Copy it to /Applications, open it, and choose"
 echo "Settings → Screens & webcam → Install…"

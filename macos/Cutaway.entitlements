@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- What the Developer ID-signed app may do under the hardened runtime
+     (macos/sign.sh). Screen capture needs nothing here. The virtual camera
+     build uses macos/virtualcam/App.entitlements instead, which has these too. -->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.device.camera</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <!-- NDI's runtime (libndi.dylib) is loaded at run time and signed by NDI,
+         not by us; without this the hardened runtime refuses to load it. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

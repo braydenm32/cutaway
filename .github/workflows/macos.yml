@@ -6,8 +6,13 @@ on:
   push:
     branches: ["**"]
   workflow_dispatch:
-  # The release workflow builds with this too.
+  # The release workflow builds with this too, and asks for a signed app.
   workflow_call:
+    inputs:
+      sign:
+        description: "Sign with the Developer ID and notarize (needs the MAC_* secrets)"
+        type: boolean
+        default: false
 
 # Builds only read the repository.
 permissions:
@@ -25,6 +30,10 @@ jobs:
     defaults:
       run:
         shell: bash
+    env:
+      # Only the Release workflow signs (inputs.sign); ordinary pushes build
+      # the same ad-hoc-signed app as always and never touch the certificate.
+      SIGN: ${{ inputs.sign == true && secrets.MAC_CERT_P12 != '' }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -60,6 +69,45 @@ jobs:
       - name: Build Cutaway.app
         run: ./macos/bundle.sh 2>&1 | tee ci-logs/2-bundle.log
 
+      - name: No Developer ID certificate yet
+        if: inputs.sign == true && env.SIGN != 'true'
+        run: echo "::warning::MAC_CERT_P12 isn't in the repository's secrets, so this Mac build is unsigned (see docs/DEVELOPING.md, Signing the Mac app)."
+
+      # A keychain of its own, only for this run, holding the Developer ID
+      # certificate; it's deleted at the end of the job.
+      - name: Sign with the Developer ID
+        if: env.SIGN == 'true'
+        env:
+          MAC_CERT_P12: ${{ secrets.MAC_CERT_P12 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          MAC_PROVISION_PROFILE: ${{ secrets.MAC_PROVISION_PROFILE }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/cutaway-signing.keychain-db"
+          pass=$(openssl rand -hex 24)
+          echo "$MAC_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          # Apple's intermediate certificate, in case the runner lacks it.
+          curl -fsSL -o "$RUNNER_TEMP/DeveloperIDG2CA.cer" https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+          security create-keychain -p "$pass" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$pass" "$keychain"
+          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$keychain" || true
+          security import "$RUNNER_TEMP/cert.p12" -P "$MAC_CERT_PASSWORD" -f pkcs12 -k "$keychain" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$pass" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity=$(security find-identity -v -p codesigning "$keychain" | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"' || true)
+          if [[ -z "$identity" ]]; then
+            echo "::error::MAC_CERT_P12 has no \"Developer ID Application\" certificate with its private key."
+            exit 1
+          fi
+          profile=""
+          if [[ -n "$MAC_PROVISION_PROFILE" ]]; then
+            profile="$RUNNER_TEMP/cutaway.provisionprofile"
+            echo "$MAC_PROVISION_PROFILE" | base64 --decode > "$profile"
+          fi
+          ./macos/sign.sh sign "$identity" $profile 2>&1 | tee ci-logs/2b-sign.log
+
       # Bundling the camera needs a paid Apple Developer signature, so here
       # it's only compiled, to catch mistakes in the Swift code.
       - name: The virtual camera compiles
@@ -79,6 +127,23 @@ jobs:
           cat ci-logs/4-recording.log
           python3 .github/check-take.py ci-logs/4-recording.log ~/Movies/Cutaway $status
 
+      - name: Notarize with Apple
+        if: env.SIGN == 'true'
+        env:
+          MAC_NOTARY_KEY_P8: ${{ secrets.MAC_NOTARY_KEY_P8 }}
+          MAC_NOTARY_KEY_ID: ${{ secrets.MAC_NOTARY_KEY_ID }}
+          MAC_NOTARY_ISSUER: ${{ secrets.MAC_NOTARY_ISSUER }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$MAC_NOTARY_KEY_P8" || -z "$MAC_NOTARY_KEY_ID" || -z "$MAC_NOTARY_ISSUER" ]]; then
+            echo "::error::A signed app also needs MAC_NOTARY_KEY_P8, MAC_NOTARY_KEY_ID and MAC_NOTARY_ISSUER, or Macs still refuse it."
+            exit 1
+          fi
+          key="$RUNNER_TEMP/notary.p8"
+          echo "$MAC_NOTARY_KEY_P8" | base64 --decode > "$key"
+          ./macos/sign.sh notarize "$key" "$MAC_NOTARY_KEY_ID" "$MAC_NOTARY_ISSUER" 2>&1 | tee ci-logs/4b-notarize.log
+          rm -f "$key"
+
       - name: Zip the app
         run: |
           version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
@@ -92,11 +157,20 @@ jobs:
           ditto -x -k "dist/Cutaway-$version-macos-arm64.zip" "$RUNNER_TEMP/unpack"
           "$RUNNER_TEMP/unpack/Cutaway.app/Contents/MacOS/Cutaway" --version | tee ci-logs/5-unpack.log
           grep -q "$version" ci-logs/5-unpack.log
+          if [[ "$SIGN" == "true" ]]; then
+            # Still signed and notarized after the zip round trip.
+            spctl --assess --type execute --verbose=4 "$RUNNER_TEMP/unpack/Cutaway.app" 2>&1 | tee -a ci-logs/5-unpack.log
+            xcrun stapler validate "$RUNNER_TEMP/unpack/Cutaway.app" | tee -a ci-logs/5-unpack.log
+          fi
 
       - uses: actions/upload-artifact@v6
         with:
           name: Cutaway-macos-arm64
           path: dist/*.zip
+
+      - name: Remove the signing keychain
+        if: always() && env.SIGN == 'true'
+        run: security delete-keychain "$RUNNER_TEMP/cutaway-signing.keychain-db" || true
 
       - name: Report what failed
         if: failure()
