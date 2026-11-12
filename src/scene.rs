@@ -48,6 +48,25 @@ fn is_centre(f: &[f32; 2]) -> bool {
 pub const MAX_ZOOM: f32 = 4.0;
 
 impl Layer {
+    /// Move the frame by `dx`, `dy` (parts of the canvas), as precisely as
+    /// asked (no snapping), kept where part of it still shows.
+    pub fn nudge(&mut self, dx: f32, dy: f32) {
+        self.x = (self.x + dx).clamp(-self.w + 0.02, 0.98);
+        self.y = (self.y + dy).clamp(-self.h + 0.02, 0.98);
+    }
+
+    /// Move the picture inside its frame by `dx`, `dy` canvas pixels: the
+    /// picture follows, the view goes the other way, by the part of the
+    /// picture that shows (`src_aspect` is the source's shape). Kept where
+    /// the view can actually be, so moving back responds at once.
+    pub fn pan(&mut self, dx: f32, dy: f32, canvas: (u32, u32), src_aspect: f32) {
+        let (frame, part) = place(self, canvas, src_aspect);
+        let (pw, ph) = (part[2] - part[0], part[3] - part[1]);
+        let fx = (self.focus[0] - dx / frame.2.max(1.0) * pw).clamp(pw / 2.0, 1.0 - pw / 2.0);
+        let fy = (self.focus[1] - dy / frame.3.max(1.0) * ph).clamp(ph / 2.0, 1.0 - ph / 2.0);
+        self.focus = [fx, fy];
+    }
+
     /// A frame showing all of `source`'s picture, fitted.
     pub const fn at(source: usize, x: f32, y: f32, w: f32, h: f32) -> Layer {
         Layer { source, x, y, w, h, fill: false, zoom: 1.0, focus: [0.5, 0.5] }
@@ -121,6 +140,34 @@ impl Scene {
         let top = self.layers.last()?;
         let covers = top.x <= 0.01 && top.y <= 0.01 && top.x + top.w >= 0.99 && top.y + top.h >= 0.99;
         covers.then_some(top.source)
+    }
+
+    /// Show `source` in frame `layer` instead of what's there. If `source`
+    /// is already in another frame of this scene (each source shows once),
+    /// the two frames trade sources. Each frame keeps its place, size and
+    /// Fit/Fill; how far a picture is zoomed and where it's centred go with
+    /// the picture when two trade, and a source new to the scene starts
+    /// whole and centred. Returns whether anything changed.
+    pub fn set_source(&mut self, layer: usize, source: usize) -> bool {
+        let Some(old) = self.layers.get(layer).map(|l| l.source) else { return false };
+        if old == source {
+            return false;
+        }
+        let (zoom, focus) = (self.layers[layer].zoom, self.layers[layer].focus);
+        match self.layers.iter().position(|l| l.source == source) {
+            Some(other) => {
+                let o = &mut self.layers[other];
+                let (oz, of) = (o.zoom, o.focus);
+                (o.source, o.zoom, o.focus) = (old, zoom, focus);
+                let l = &mut self.layers[layer];
+                (l.source, l.zoom, l.focus) = (source, oz, of);
+            }
+            None => {
+                let l = &mut self.layers[layer];
+                (l.source, l.zoom, l.focus) = (source, 1.0, [0.5, 0.5]);
+            }
+        }
+        true
     }
 
     /// Drop layers that point at sources that no longer exist.
@@ -548,6 +595,53 @@ mod tests {
     use super::*;
 
     const CANVAS: (u32, u32) = (1920, 1080);
+
+    #[test]
+    fn swapping_a_source_keeps_the_frame_and_trades_with_one_already_there() {
+        let mut s = Scene { name: "Three".into(), layers: vec![Layer::at(0, 0.0, 0.0, 0.33, 1.0), Layer::at(1, 0.33, 0.0, 0.33, 1.0)], ..Default::default() };
+        s.layers[1].fill = true;
+        s.layers[1].zoom = 2.0;
+        // A source new to the scene: same place, size and Fill, whole picture.
+        assert!(s.set_source(1, 3));
+        assert_eq!((s.layers[1].source, s.layers[1].x, s.layers[1].fill, s.layers[1].zoom), (3, 0.33, true, 1.0));
+        // One already in the scene: the two trade places, zoom going with the picture.
+        s.layers[1].zoom = 1.5;
+        assert!(s.set_source(0, 3));
+        assert_eq!((s.layers[0].source, s.layers[0].zoom, s.layers[0].x), (3, 1.5, 0.0));
+        assert_eq!((s.layers[1].source, s.layers[1].zoom, s.layers[1].x), (0, 1.0, 0.33));
+        assert!(!s.set_source(0, 3));
+        assert!(!s.set_source(5, 0));
+    }
+
+    #[test]
+    fn nudging_moves_by_exactly_what_was_asked_and_keeps_the_frame_in_view() {
+        let mut l = Layer::at(0, 0.5, 0.5, 0.25, 0.25);
+        l.nudge(1.0 / 1920.0, -10.0 / 1080.0);
+        assert!((l.x * 1920.0 - 961.0).abs() < 1e-3 && (l.y * 1080.0 - 530.0).abs() < 1e-3);
+        l.nudge(5.0, 5.0);
+        assert_eq!((l.x, l.y), (0.98, 0.98));
+        l.nudge(-5.0, -5.0);
+        assert!((l.x + 0.23).abs() < 1e-6);
+    }
+
+    #[test]
+    fn panning_a_filled_picture_follows_the_keys_and_stops_at_its_edge() {
+        // A 16:9 picture filling a tall frame: only part of it across shows.
+        let mut l = Layer::at(0, 0.0, 0.0, 0.25, 1.0);
+        l.fill = true;
+        l.pan(10.0, 0.0, CANVAS, 16.0 / 9.0);
+        assert!(l.focus[0] < 0.5, "the picture moved right, so the view moved left");
+        assert_eq!(l.focus[1], 0.5, "nothing to move up and down");
+        for _ in 0..1000 {
+            l.pan(10.0, 0.0, CANVAS, 16.0 / 9.0);
+        }
+        let (_, part) = place(&l, CANVAS, 16.0 / 9.0);
+        assert!(part[0].abs() < 1e-4, "stops at the picture's edge");
+        // Fitted and not zoomed: nothing to move.
+        let mut f = Layer::at(0, 0.0, 0.0, 0.5, 0.5);
+        f.pan(50.0, 50.0, CANVAS, 16.0 / 9.0);
+        assert_eq!(f.focus, [0.5, 0.5]);
+    }
 
     #[test]
     fn a_split_gets_a_scene_with_its_close_ups_side_by_side() {
