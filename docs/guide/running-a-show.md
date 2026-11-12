@@ -52,7 +52,7 @@
 
 ### Edit layout
 
-- **Preview:** with **Preview** on you edit the scene in preview (click a scene to pick it; the one on air goes there if preview is empty). The program, and so the recording and stream, stays exactly as it is until you **Take** or **Cut** it.
+- **Preview:** with **Preview** on you edit the scene in preview (click a scene to pick it; the one on air goes there if preview is empty). The program, and so the recording and stream, stays exactly as it is until you **Take** or **Cut** it. While you edit, **TAKE** and **CUT** sit in the bar at the top, beside **PREVIEW**, so nothing covers the frames.
 - **Preview off:** you edit the scene on air, and a red **ON AIR** label says so, with **Edit in preview** to turn Preview on.
 - **Recording or live:** opening Edit layout (`E` or the tab) turns Preview on for you and says so, so a stray `E` and a scroll can't change the picture on air.
 - **Undo and redo:** **↶ Undo** and **↷ Redo** sit at the top.
