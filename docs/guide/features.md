@@ -60,6 +60,13 @@ Everything Cutaway can do, area by area. For the steps of a first show, see [Get
   without touching anything else. Its tile says what's happening: "Connecting"
   while a camera starts, "Reconnecting" for the first 20 seconds after its
   picture stops, and "NO SIGNAL" only once it really isn't there.
+- **Several of the same camera.** Cameras that share a name are listed as
+  "CamStream 4K", "CamStream 4K (2)", "CamStream 4K (3)", and each source
+  remembers the exact camera you picked, so every one shows its own picture.
+  They're numbered by the USB port they're plugged into: keep each camera in
+  the same port and it keeps its number. Plug one into another port and its
+  source falls back to the camera with the same number, so check the
+  pictures once before the show.
 - **Auto-framing:** a virtual close-up cut from one wide (ideally 4K)
   camera that follows the people in it — everyone, the closest person, or
   whoever is on the left, in the middle or on the right — and glides to a

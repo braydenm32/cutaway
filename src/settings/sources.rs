@@ -84,6 +84,14 @@ impl SourceKind {
         }
     }
 
+    /// The system ID that goes with `default_device` (a camera's).
+    fn default_device_id(self, devices: &[DeviceInfo]) -> String {
+        match self {
+            SourceKind::Device => devices.first().map(|d| d.id.clone()).unwrap_or_default(),
+            _ => String::new(),
+        }
+    }
+
     fn default_device(self, devices: &[DeviceInfo]) -> String {
         match self {
             SourceKind::Device => devices.first().map(|d| d.name.clone()).unwrap_or_else(|| "#1".into()),
@@ -235,7 +243,7 @@ impl SettingsUi {
         }
         ui.add_enabled_ui(!loading, |ui| ui.menu_button("＋ Add", |ui| {
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-            let free = self.video.iter().any(|d| !self.draft.sources.iter().any(|s| s.device == d.name));
+            let free = self.video.iter().any(|d| !self.draft.sources.iter().any(|s| devices::chosen(&s.device, &s.device_id, &self.video).is_some_and(|u| u.id == d.id)));
             let camera = ui.add_enabled(free, egui::Button::new("Camera or capture card"));
             let camera = if free { camera } else { camera.on_disabled_hover_text("Every camera this computer has is already a source. Plug another one in, or change a source's Device.") };
             if camera.clicked() {
@@ -253,11 +261,11 @@ impl SettingsUi {
         }));
         match add {
             Some(SourceKind::Device) => {
-                let used: Vec<&str> = self.draft.sources.iter().map(|s| s.device.as_str()).collect();
-                if let Some(device) = self.video.iter().find(|d| !used.contains(&d.name.as_str())).map(|d| d.name.clone()) {
+                let used: Vec<&str> = self.draft.sources.iter().filter_map(|s| devices::chosen(&s.device, &s.device_id, &self.video)).map(|d| d.id.as_str()).collect();
+                if let Some((device, id)) = self.video.iter().find(|d| !used.contains(&d.id.as_str())).map(|d| (d.name.clone(), d.id.clone())) {
                     self.add_source(SourceKind::Device, "Cam");
                     if let Some(s) = self.draft.sources.last_mut() {
-                        s.device = device;
+                        (s.device, s.device_id) = (device, id);
                     }
                 }
             }
@@ -302,7 +310,7 @@ impl SettingsUi {
     /// A new source of this kind at the end of the list, picked.
     fn add_source(&mut self, kind: SourceKind, base: &str) {
         let name = unique(self.draft.sources.iter().map(|s| s.name.clone()).collect(), base);
-        let mut s = SourceConfig { name, device: kind.default_device(&self.video), record: kind != SourceKind::Media, ..Default::default() };
+        let mut s = SourceConfig { name, device: kind.default_device(&self.video), device_id: kind.default_device_id(&self.video), record: kind != SourceKind::Media, ..Default::default() };
         if kind == SourceKind::Phone {
             let p = super::guests::phone_source(&s.name);
             (s.device, s.width, s.height, s.fps, s.network_latency_ms) = (p.device, p.width, p.height, p.fps, p.network_latency_ms);
@@ -464,6 +472,7 @@ impl SettingsUi {
             }
             if let Some(k) = chosen {
                 src.device = k.default_device(devices);
+                src.device_id = k.default_device_id(devices);
                 if k == SourceKind::Framed {
                     src.device = format!("frame:{}", wides.first().map(|w| w.0.as_str()).unwrap_or(""));
                     src.framing = FramingConfig::default();
@@ -485,9 +494,9 @@ impl SettingsUi {
             match kind {
                 SourceKind::Device => {
                     label(ui, "Device");
-                    video_device_combo(ui, &mut src.device, devices);
+                    video_device_combo(ui, &mut src.device, &mut src.device_id, devices);
                     ui.end_row();
-                    let dev = devices.iter().find(|d| d.name == src.device);
+                    let dev = devices::chosen(&src.device, &src.device_id, devices);
                     let modes = dev.map(|d| d.modes.clone()).unwrap_or_default();
                     if !modes.is_empty() {
                         label(ui, "Device modes");

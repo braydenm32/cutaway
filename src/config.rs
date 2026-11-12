@@ -646,6 +646,11 @@ pub struct SourceConfig {
     ///   - "frame:<source name>" for an auto-framed close-up cut from
     ///     another (wide) source, following the people in it
     pub device: String,
+    /// A camera's system ID (set when it's picked in the settings): tells
+    /// cameras with the same name apart, and finds this one first. When it
+    /// isn't plugged in (moved to another USB port, say), `device` is used.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub device_id: String,
     /// Capture size and rate. The source is scaled/rate-converted to this
     /// if the device can't provide it exactly, so every file is consistent.
     pub width: u32,
@@ -1132,6 +1137,7 @@ impl Default for SourceConfig {
         Self {
             name: "Camera".into(),
             device: "test".into(),
+            device_id: String::new(),
             width: 1920,
             height: 1080,
             fps: 30,

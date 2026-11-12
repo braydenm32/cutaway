@@ -41,11 +41,16 @@ pub struct DeviceInfo {
     pub modes: Vec<Mode>,
 }
 
-/// List capture devices of one kind.
+/// List capture devices of one kind. Cameras that share a name get one
+/// of their own ("CamStream 4K", "CamStream 4K (2)", …).
 pub fn list(kind: Kind) -> Vec<DeviceInfo> {
     let found = crate::util::guard("Listing devices", || {
         Ok(match kind {
-            Kind::Video => crate::platform::list_video_devices(),
+            Kind::Video => {
+                let mut v = crate::platform::list_video_devices();
+                number_alike(&mut v);
+                v
+            }
             Kind::Audio => crate::platform::list_audio_devices(),
         })
     });
@@ -53,6 +58,58 @@ pub fn list(kind: Kind) -> Vec<DeviceInfo> {
         eprintln!("{e:#}");
         Vec::new()
     })
+}
+
+/// Give devices with the same name names of their own: the first keeps it
+/// (so settings saved before still find it), the rest get " (2)", " (3)"…
+/// They're numbered in the order of their system IDs, not the order the
+/// system happens to list them in, so the same camera keeps the same
+/// number from one run to the next (the ID follows the USB port it's in).
+pub fn number_alike(devices: &mut [DeviceInfo]) {
+    let names: Vec<String> = devices.iter().map(|d| d.name.clone()).collect();
+    let taken = |n: &str| names.iter().any(|e| e.eq_ignore_ascii_case(n));
+    let mut done: Vec<String> = Vec::new();
+    for name in &names {
+        let key = name.to_lowercase();
+        if done.contains(&key) {
+            continue;
+        }
+        done.push(key.clone());
+        let mut same: Vec<usize> = (0..devices.len()).filter(|&i| devices[i].name.to_lowercase() == key).collect();
+        if same.len() < 2 {
+            continue;
+        }
+        same.sort_by(|&a, &b| devices[a].id.cmp(&devices[b].id).then(a.cmp(&b)));
+        let mut n = 2;
+        for &i in &same[1..] {
+            // (Never a name another device already has.)
+            while taken(&format!("{name} ({n})")) {
+                n += 1;
+            }
+            devices[i].name = format!("{} ({n})", devices[i].name);
+            n += 1;
+        }
+    }
+}
+
+/// The camera a source uses: the one with its saved ID when that's plugged
+/// in, otherwise by name (`find`), so a camera moved to another USB port
+/// (which gives it a new ID) is still found.
+pub fn find_camera<'a>(spec: &str, id: &str, devices: &'a [DeviceInfo]) -> Result<&'a DeviceInfo> {
+    let id = id.trim();
+    if !id.is_empty() {
+        if let Some(d) = devices.iter().find(|d| d.id == id) {
+            return Ok(d);
+        }
+    }
+    find(spec, devices)
+}
+
+/// The listed camera a source's settings point at, if it's plugged in
+/// (by ID, else by its exact name).
+pub fn chosen<'a>(spec: &str, id: &str, devices: &'a [DeviceInfo]) -> Option<&'a DeviceInfo> {
+    let id = id.trim();
+    (!id.is_empty()).then(|| devices.iter().find(|d| d.id == id)).flatten().or_else(|| devices.iter().find(|d| d.name == spec))
 }
 
 /// What this computer has plugged in, kept for the whole run and filled on
@@ -274,6 +331,39 @@ mod tests {
         assert_eq!(find("id-Cam Link 4K", &list).unwrap().name, "Cam Link 4K");
         assert!(find("#3", &list).is_err());
         assert!(find("Elgato", &list).is_err());
+    }
+
+    fn cam(name: &str, id: &str) -> DeviceInfo {
+        DeviceInfo { name: name.into(), id: id.into(), summary: String::new(), max_channels: 0, rate: 0, modes: vec![] }
+    }
+
+    /// Three of the same camera: a name each, numbered by ID (not by the
+    /// order the system lists them), and each one found by its own ID.
+    #[test]
+    fn same_named_cameras() {
+        let mut list = vec![
+            cam("CamStream 4K", "0x22000007ca2113"),
+            cam("MacBook Pro Camera", "6C707041-05AC-0011-0008-000000000001"),
+            cam("CamStream 4K", "0x23000007ca2113"),
+            cam("CamStream 4K", "0x21000007ca2113"),
+        ];
+        number_alike(&mut list);
+        let names: Vec<&str> = list.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["CamStream 4K (2)", "MacBook Pro Camera", "CamStream 4K (3)", "CamStream 4K"]);
+        // By ID first…
+        assert_eq!(find_camera("CamStream 4K", "0x23000007ca2113", &list).unwrap().name, "CamStream 4K (3)");
+        // …by name when that ID isn't plugged in (moved to another port).
+        assert_eq!(find_camera("CamStream 4K (2)", "0x99000007ca2113", &list).unwrap().id, "0x22000007ca2113");
+        // Settings from before IDs were saved: the first one, as before.
+        assert_eq!(find_camera("CamStream 4K", "", &list).unwrap().id, "0x21000007ca2113");
+        assert_eq!(chosen("CamStream 4K", "0x22000007ca2113", &list).unwrap().name, "CamStream 4K (2)");
+        assert_eq!(chosen("CamStream 4K (3)", "", &list).unwrap().id, "0x23000007ca2113");
+        assert!(chosen("Elgato", "", &list).is_none());
+        // A camera really called "X (2)" keeps its name.
+        let mut odd = vec![cam("X", "b"), cam("X (2)", "z"), cam("X", "a")];
+        number_alike(&mut odd);
+        let names: Vec<&str> = odd.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["X (3)", "X (2)", "X"]);
     }
 }
 
