@@ -2462,13 +2462,22 @@ pub(super) fn unique(existing: Vec<String>, base: &str) -> String {
     (2..).map(|i| format!("{base} {i}")).find(|n| !taken(n)).unwrap()
 }
 
-pub(super) fn video_device_combo(ui: &mut egui::Ui, value: &mut String, devices: &[DeviceInfo]) {
-    egui::ComboBox::from_id_salt("video_device").selected_text(short_device(value)).width(300.0).show_ui(ui, |ui| {
+/// A camera is remembered by its system ID as well as its name, so
+/// cameras with the same name ("CamStream 4K", "CamStream 4K (2)") each
+/// stay the one that was picked.
+pub(super) fn video_device_combo(ui: &mut egui::Ui, value: &mut String, id: &mut String, devices: &[DeviceInfo]) {
+    let current = crate::devices::chosen(value, id, devices);
+    let shown = current.map(|d| d.name.clone()).unwrap_or_else(|| short_device(value));
+    let before = value.clone();
+    egui::ComboBox::from_id_salt("video_device").selected_text(shown).width(300.0).show_ui(ui, |ui| {
         if devices.is_empty() {
             ui.label(RichText::new("No cameras or capture cards found").color(TEXT_DIM));
         }
         for d in devices {
-            ui.selectable_value(value, d.name.clone(), &d.name).on_hover_text(&d.summary);
+            let on = current.is_some_and(|c| c.id == d.id);
+            if ui.selectable_label(on, &d.name).on_hover_text(&d.summary).clicked() {
+                (*value, *id) = (d.name.clone(), d.id.clone());
+            }
         }
         ui.separator();
         ui.selectable_value(value, "screen".to_string(), "Screen capture");
@@ -2476,6 +2485,10 @@ pub(super) fn video_device_combo(ui: &mut egui::Ui, value: &mut String, devices:
             ui.selectable_value(value, format!("test:{p}"), format!("Test picture: {}", crate::media::testsrc::pattern_label(p).to_lowercase()));
         }
     });
+    // Not a camera any more: no camera ID.
+    if *value != before && !devices.iter().any(|d| d.name == *value) {
+        id.clear();
+    }
 }
 
 /// Returns true while the list is open (so the app list can be fetched).

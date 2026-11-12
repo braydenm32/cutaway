@@ -278,7 +278,7 @@ pub fn start_video(
         let r = platform::open_screen(&target, cfg.width, cfg.height, cfg.fps, sink)?;
         return Ok((r, target.describe()));
     }
-    let dev = crate::devices::find(spec, devices)?;
+    let dev = crate::devices::find_camera(spec, &cfg.device_id, devices)?;
     let r = platform::open_camera(dev, cfg.width, cfg.height, cfg.fps, sink)?;
     Ok((r, dev.name.clone()))
 }

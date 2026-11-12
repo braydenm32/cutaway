@@ -452,6 +452,7 @@ fn auto_config() -> Config {
         cfg.sources.push(SourceConfig {
             name,
             device: d.name.clone(),
+            device_id: d.id.clone(),
             ..Default::default()
         });
     }
