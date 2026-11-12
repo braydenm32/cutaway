@@ -82,10 +82,10 @@ impl From<&SourceLook> for LookGpu {
         let cr = (128.0 + 224.0 * (0.5 * k[0] - 0.4542 * k[1] - 0.0458 * k[2])) / 255.0;
         LookGpu {
             uv,
-            color: [l.brightness.clamp(-1.0, 1.0), l.contrast.clamp(0.0, 3.0), l.saturation.clamp(0.0, 3.0), 0.0],
+            color: [l.brightness.clamp(-1.0, 1.0), l.contrast.clamp(0.0, 3.0), l.saturation.clamp(0.0, 3.0), l.warmth.clamp(-1.0, 1.0)],
             key: [cb, cr, l.key_similarity.clamp(0.0, 1.0) * 0.5, l.key_smoothness.clamp(0.0, 1.0) * 0.5],
             key2: [l.key_spill.clamp(0.0, 1.0), if l.chroma_key { 1.0 } else { 0.0 }, if l.remove_background { 1.0 } else { 0.0 }, 0.0],
-            keyrgb: [k[0], k[1], k[2], 0.0],
+            keyrgb: [k[0], k[1], k[2], l.tint.clamp(-1.0, 1.0)],
             lut_strength: if l.lut.is_some() { l.lut_strength.clamp(0.0, 1.0) } else { 0.0 },
             bg_mode: match l.background {
                 BackgroundMode::Remove => 0.0,

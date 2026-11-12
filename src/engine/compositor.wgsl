@@ -13,15 +13,19 @@ struct U {
     style: vec4<f32>,  // corner radius, border width, shadow strength, style amount (0..1)
     style2: vec4<f32>, // shadow offset x, y, shadow blur, unused
     border: vec4<f32>, // border rgb, unused
-    color: vec4<f32>,  // brightness, contrast, saturation, unused
+    color: vec4<f32>,  // brightness, contrast, saturation, warmth (-1..1)
     key: vec4<f32>,    // key colour cb, cr, similarity, smoothness
     key2: vec4<f32>,   // spill, key enabled (0/1), person mask enabled (0/1), unused
-    keyrgb: vec4<f32>, // key colour rgb, unused
+    keyrgb: vec4<f32>, // key colour rgb, tint (-1 green .. 1 pink)
     trans: vec4<f32>,  // kind (2 wipe, 3 push, 4 dip), progress 0..1, direction x, y
     dip: vec4<f32>,    // dip colour rgb, unused
     lut: vec4<f32>,    // strength (0 = none), domain min, domain max, points
     bg: vec4<f32>,     // behind the people: mode (0 cut out, 1 blur, 2 picture), blur radius (of width), picture scale x, y
 };
+
+// How far Look's warmth and tint go at their ends (as in `camcheck::look_gains`).
+const WARMTH: f32 = 0.25;
+const TINT: f32 = 0.2;
 
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var samp: sampler;
@@ -154,7 +158,9 @@ fn fs_layer(in: VsOut) -> @location(0) vec4<f32> {
             rgb = mix(blurred_background(uv), rgb, person);
         }
     }
-    // Colour: brightness, contrast, saturation.
+    // Colour: warmth and tint (see `engine::camcheck::look_gains`), then
+    // brightness, contrast, saturation.
+    rgb = rgb * vec3<f32>(1.0 + WARMTH * u.color.w, 1.0 - TINT * u.keyrgb.w, 1.0 - WARMTH * u.color.w);
     rgb = (rgb - vec3<f32>(0.5)) * u.color.y + vec3<f32>(0.5) + vec3<f32>(u.color.x);
     let luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
     rgb = clamp(mix(vec3<f32>(luma), rgb, u.color.z), vec3<f32>(0.0), vec3<f32>(1.0));

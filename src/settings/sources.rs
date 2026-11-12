@@ -142,6 +142,16 @@ impl SourcesView {
     }
 }
 
+/// A camera or capture card (what Check cameras looks at).
+pub(super) fn is_camera(s: &SourceConfig) -> bool {
+    SourceKind::of(&s.device) == SourceKind::Device
+}
+
+/// A test picture.
+pub(super) fn is_test(s: &SourceConfig) -> bool {
+    SourceKind::of(&s.device) == SourceKind::Test
+}
+
 /// A camera close-ups can be cut from (not a close-up itself, a media
 /// player or a guest).
 fn is_wide(s: &SourceConfig) -> bool {
@@ -151,12 +161,17 @@ fn is_wide(s: &SourceConfig) -> bool {
 impl SettingsUi {
     pub(super) fn sources(&mut self, ui: &mut egui::Ui, info: &SettingsContext) {
         let view = self.view;
+        if view == SourcesView::Cameras && self.camcheck.is_some() {
+            self.camcheck(ui, info);
+            return;
+        }
         match view {
             SourcesView::Cameras => {
                 ui.horizontal(|ui| {
                     if ui.button("Rescan devices").clicked() {
                         devices::refresh_catalog();
                     }
+                    self.camcheck_button(ui, info);
                     hint(ui, &match self.video.len() {
                         0 if devices::catalog_busy() => "Looking for cameras…".to_string(),
                         0 => "No cameras or capture cards found on this computer".to_string(),
@@ -396,6 +411,15 @@ impl SettingsUi {
         // Which of them record their own file (a close-up can be saved as a crop of those).
         let recorded_wides: Vec<String> = self.draft.sources.iter().filter(|s| s.record && s.cut_from().is_none()).map(|s| s.name.clone()).collect();
         let scene_names: Vec<String> = self.draft.effective_scenes().iter().map(|s| s.name.clone()).collect();
+        // Other cameras' remembered settings, to copy from.
+        let others: Vec<(String, crate::config::CameraNotes)> = self
+            .draft
+            .sources
+            .iter()
+            .enumerate()
+            .filter(|(i, s)| *i != self.sel_source && is_camera(s) && !s.camera.filled().is_empty())
+            .map(|(_, s)| (s.name.clone(), s.camera.clone()))
+            .collect();
         let Some(src) = self.draft.sources.get_mut(self.sel_source) else {
             hint(ui, "No sources yet. Add your cameras, capture cards, the screen, a media player or a network input.");
             return;
@@ -839,6 +863,17 @@ impl SettingsUi {
         part(ui, ("look", self.sel_source), "Picture adjustments", &look, false, |ui| {
             look_editor(ui, &mut src.look, src.uid, &mut self.lut_check);
         });
+        if kind == SourceKind::Device {
+            let model = src.camera.model_for(&src.device);
+            let state = match (model, src.camera.filled().len()) {
+                (crate::config::CameraModel::Webcam, _) => "no settings of its own".to_string(),
+                (_, 0) => "not filled in".to_string(),
+                (_, n) => format!("{n} remembered"),
+            };
+            part(ui, ("camera_notes", self.sel_source), "Camera's own settings", &state, false, |ui| {
+                camera_notes_editor(ui, &mut src.camera, &src.device, &others);
+            });
+        }
         if guests_on {
             self.draft.guests.enabled = true;
         }
@@ -1104,6 +1139,79 @@ fn media_editor(ui: &mut egui::Ui, m: &mut MediaConfig, uid: u64) {
     });
 }
 
+/// A camera's own settings as set on the camera (most capture cards can't
+/// tell Cutaway), kept for Check cameras' advice and for next time, and
+/// the things worth setting once on this kind of camera.
+fn camera_notes_editor(ui: &mut egui::Ui, n: &mut crate::config::CameraNotes, device: &str, others: &[(String, crate::config::CameraNotes)]) {
+    use crate::config::CameraModel;
+    hint(ui, "What this camera is set to on the camera itself. Check cameras words its advice with these numbers (\"change 4300K to 4000K\"), and they're here for next time.");
+    ui.add_space(4.0);
+    let mut model = n.model_for(device);
+    egui::Grid::new("camera_notes").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
+        label(ui, "Kind of camera");
+        egui::ComboBox::from_id_salt("camera_model").selected_text(model.label()).width(300.0).show_ui(ui, |ui| {
+            for m in CameraModel::ALL {
+                ui.selectable_value(&mut model, m, m.label());
+            }
+        });
+        ui.end_row();
+        if model.has_settings() {
+            let field = |ui: &mut egui::Ui, name: &str, v: &mut String, example: &str| {
+                label(ui, name);
+                ui.add(egui::TextEdit::singleline(v).hint_text(example).desired_width(220.0));
+                ui.end_row();
+            };
+            field(ui, "Lens", &mut n.lens, "12-60mm at 25mm");
+            field(ui, "Shutter", &mut n.shutter, "1/50");
+            field(ui, "Aperture", &mut n.aperture, "f/4");
+            field(ui, "ISO", &mut n.iso, "800");
+            field(ui, "White balance", &mut n.white_balance, "4300K");
+            field(ui, "Photo Style", &mut n.photo_style, "Natural, contrast 0");
+            field(ui, "Luminance level", &mut n.luminance, "16-235");
+            field(ui, "Frequency, frame rate", &mut n.frequency, "50 Hz, 25p");
+            field(ui, "Focus", &mut n.focus, "Manual");
+        }
+        label(ui, "Notes");
+        ui.add(egui::TextEdit::multiline(&mut n.notes).hint_text("Battery swapped at the break").desired_rows(2).desired_width(300.0));
+        ui.end_row();
+    });
+    if Some(model) != n.model && (n.model.is_some() || model != CameraModel::guess(device)) {
+        n.model = Some(model);
+    }
+    if !model.has_settings() {
+        hint(ui, "Its colour and brightness are matched in Picture adjustments (Warmth, Tint, Brightness): Check cameras says what to set.");
+    }
+    if model.has_settings() && !others.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Copy from").size(TEXT_BODY));
+            for (name, o) in others {
+                if ui.small_button(name).on_hover_text(format!("The same settings as {name} (cameras of the same kind should match)")).clicked() {
+                    n.copy_settings_from(o);
+                }
+            }
+        });
+    }
+    if let Some(l) = &n.last_check {
+        hint(ui, &format!("Last checked {}.", l.when));
+    }
+    ui.add_space(6.0);
+    let list = crate::engine::camcheck::setup_list(model);
+    let done = list.iter().filter(|i| n.setup_done.iter().any(|d| d == i.key)).count();
+    ui.label(RichText::new(format!("Set once on the camera ({done} of {} done)", list.len())).strong().size(TEXT_BODY));
+    for item in list {
+        let mut on = n.setup_done.iter().any(|d| d == item.key);
+        if ui.checkbox(&mut on, RichText::new(item.text).size(TEXT_BODY)).changed() {
+            n.setup_done.retain(|d| d != item.key);
+            if on {
+                n.setup_done.push(item.key.to_string());
+            }
+        }
+    }
+    if model == CameraModel::LumixG85 {
+        hint(ui, "Menu names as on the G85; check your camera's manual if one isn't where you expect.");
+    }
+}
+
 /// What's been done to a source's picture, in a few words.
 fn look_summary(l: &SourceLook) -> String {
     let d = SourceLook::default();
@@ -1114,7 +1222,7 @@ fn look_summary(l: &SourceLook) -> String {
     if l.mirror {
         on.push("mirrored");
     }
-    if l.brightness != d.brightness || l.contrast != d.contrast || l.saturation != d.saturation {
+    if l.brightness != d.brightness || l.contrast != d.contrast || l.saturation != d.saturation || l.warmth != d.warmth || l.tint != d.tint {
         on.push("colour");
     }
     if l.lut.is_some() {
@@ -1158,6 +1266,14 @@ fn look_editor(ui: &mut egui::Ui, l: &mut SourceLook, uid: u64, lut_check: &mut 
         ui.end_row();
         label(ui, "Saturation");
         ui.add(egui::Slider::new(&mut l.saturation, 0.0..=2.0).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
+        ui.end_row();
+        label(ui, "Warmth");
+        ui.add(egui::Slider::new(&mut l.warmth, -1.0..=1.0).custom_formatter(|v, _| format!("{:+.0}", v * 100.0)))
+            .on_hover_text("Left is cooler (bluer), right is warmer (more orange). Check cameras says how much, to match another camera.");
+        ui.end_row();
+        label(ui, "Tint");
+        ui.add(egui::Slider::new(&mut l.tint, -1.0..=1.0).custom_formatter(|v, _| format!("{:+.0}", v * 100.0)))
+            .on_hover_text("Left is greener, right is pinker.");
         ui.end_row();
         label(ui, "Colour look file");
         ui.vertical(|ui| {

@@ -206,7 +206,7 @@ fn look_picture(ui: &mut egui::Ui, pic: &Picture, look: &SourceLook) {
 }
 
 /// Draw a picture `width` wide (its own shape); returns where.
-fn draw_picture(ui: &mut egui::Ui, pic: &Picture, width: f32, sense: Sense) -> (Rect, egui::Response) {
+pub(super) fn draw_picture(ui: &mut egui::Ui, pic: &Picture, width: f32, sense: Sense) -> (Rect, egui::Response) {
     let w = width.min(ui.available_width()).max(120.0);
     let aspect = pic.size[1].max(1) as f32 / pic.size[0].max(1) as f32;
     let (r, resp) = ui.allocate_exact_size(vec2(w, w * aspect), sense);
@@ -223,7 +223,7 @@ fn caption(ui: &mut egui::Ui, _r: Rect, text: &str) {
 }
 
 /// Where a picture will be, until there is one.
-fn placeholder(ui: &mut egui::Ui, text: &str) {
+pub(super) fn placeholder(ui: &mut egui::Ui, text: &str) {
     let w = WIDE.min(ui.available_width());
     let (r, _) = ui.allocate_exact_size(vec2(w, w * 9.0 / 16.0 * 0.5), Sense::hover());
     ui.painter().rect_filled(r, 4.0, Color32::from_rgb(18, 20, 25));

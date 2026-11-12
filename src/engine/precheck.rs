@@ -20,6 +20,14 @@ pub struct CheckItem {
     pub detail: String,
 }
 
+/// A camera or capture card (not a screen, test picture, network feed,
+/// player or close-up).
+pub fn is_camera(device: &str) -> bool {
+    let d = device.trim().to_lowercase();
+    let other = ["test", "media", "ndi:", "frame:", "vptz:", "phone:", "guest:", "guest-screen:"];
+    !(crate::platform::capture::is_screen(&d) || other.iter().any(|p| d.starts_with(p)) || super::netsrc::parse_spec(device).is_some())
+}
+
 /// The check for the NDI runtime, when the show uses NDI.
 pub const NDI: &str = "NDI";
 
@@ -51,6 +59,15 @@ impl Engine {
                 Some(l) if l < 0.03 => out.push(item(Level::Warn, what, "the picture is black (lens cap? camera asleep?)")),
                 _ => out.push(item(Level::Ok, what, s.description())),
             }
+        }
+        // When the cameras were last checked against each other.
+        let cameras: Vec<&crate::config::SourceConfig> = cfg.sources.iter().filter(|s| is_camera(&s.device)).collect();
+        if !cameras.is_empty() {
+            let last = cameras.iter().filter_map(|s| s.camera.last_check.as_ref().map(|l| l.when.clone())).max();
+            out.push(match last {
+                Some(when) => item(Level::Ok, "Camera check", format!("last checked {when} (Sources › Cameras › Check cameras)")),
+                None => item(Level::Ok, "Camera check", "not checked yet: Sources › Cameras › Check cameras matches their colour and brightness"),
+            });
         }
         // Sound, at the level its meter shows.
         let levels = self.input_levels();

@@ -67,6 +67,12 @@ Everything Cutaway can do, area by area. For the steps of a first show, see [Get
   the same port and it keeps its number. Plug one into another port and its
   source falls back to the camera with the same number, so check the
   pictures once before the show.
+- **Check cameras:** in **Sources › Cameras**, **Check cameras…** reads each
+  camera's picture, and a sheet of white paper you hold in front of it, and
+  says in plain words what to change on each camera so they all match:
+  colour, brightness, flicker under room lights, black level, focus and
+  grain. It only gives advice and nothing leaves your computer. See
+  [Checking your cameras match](sources.md#checking-your-cameras-match).
 - **Auto-framing:** a virtual close-up cut from one wide (ideally 4K)
   camera that follows the people in it — everyone, the closest person, or
   whoever is on the left, in the middle or on the right — and glides to a
@@ -75,6 +81,7 @@ Everything Cutaway can do, area by area. For the steps of a first show, see [Get
 - **Background removal without a green screen:** cut the people out of any
   source and put them over slides, a background image or another camera.
 - **Frame fixes per source:** crop, mirror, brightness, contrast, saturation,
+  warmth and tint,
   a **colour LUT** (`.cube`, e.g. a camera's log to Rec.709, with a strength),
   and a **green-screen key** with spill suppression.
 - **Phone cameras:** scan a QR code with a phone and it becomes a camera —
