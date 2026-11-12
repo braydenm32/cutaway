@@ -113,7 +113,7 @@ button on About open it.
 - [Installing Cutaway](docs/guide/install.md): Mac and Windows, the virtual camera, NDI
 - [Getting started](docs/guide/getting-started.md): the first run, finding your way, and what to do if something goes wrong
 - [Running a show and going live](docs/guide/running-a-show.md)
-- [Network, phone and PTZ cameras, framing and backgrounds](docs/guide/sources.md)
+- [Network, phone and PTZ cameras, framing, backgrounds and matching cameras](docs/guide/sources.md)
 - [Remote guests](docs/guide/guests.md)
 - [Remote control, Stream Deck, OSC and MIDI](docs/guide/control.md)
 - [Show tools and sound](docs/guide/show-tools.md): replay, macros, the teleprompter, sound pads, your DAW, captions, the vertical version

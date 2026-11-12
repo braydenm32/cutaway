@@ -1,6 +1,6 @@
 [← The manual](README.md)
 
-# Network, phone and PTZ cameras, framing and backgrounds
+# Network, phone and PTZ cameras, framing, backgrounds and matching cameras
 
 ## Network sources
 
@@ -112,3 +112,52 @@ close-up of the person on the left, cut from the same camera.*
 - On a Mac both use Apple's **Vision** framework on the Neural Engine; on
   Windows, two small open models on the graphics card (see `models/`).
   Nothing leaves the computer.
+
+## Checking your cameras match
+
+**Sources › Cameras › Check cameras…** looks at each camera's picture before
+the show and tells you what to change on each camera so they all match and
+look their best. It only gives advice: it never changes a camera or the
+picture, and everything is measured on your computer.
+
+1. Turn the room lights on as they'll be for the show, and pick the camera
+   the others should match (**Match the others to**; your main camera).
+2. **Start**. For each camera in turn:
+   - Step out of the shot for two seconds while it reads the normal picture.
+   - Hold a sheet of plain white paper where a guest sits, facing that
+     camera, filling about a quarter of the picture. A green box shows where
+     it sees the page; hold still until it moves on. Use the same sheet for
+     every camera.
+3. Each camera gets a card with a green, amber or red mark and its one or two
+   most important fixes. A strip along the top shows every camera with a
+   square of its page as it comes out on the program, so you can see the
+   match by eye too.
+4. Change the camera, then **Check again** on its card. **Mark as done**
+   saves any new numbers (white balance, ISO) in its remembered settings.
+   **Done** remembers the check, so next time it can tell you if a camera
+   got softer.
+
+What it checks:
+
+| Check | What it looks at |
+|---|---|
+| Colour | The page should come out white, and the same as on the reference camera: warmer, cooler, greener or pinker says which way to move white balance |
+| Brightness match | How bright the page is compared with the reference, in stops |
+| Too dark or bright | Pure white areas, and how bright faces are |
+| Flicker | Bands rolling through the picture, or the whole picture pulsing, when the lights and the shutter are out of step. Where mains power is 50 Hz (Australia, the UK, Europe) use a 1/50 or 1/100 shutter and run the show at 25 fps; where it's 60 Hz, 1/60 or 1/120 and 30 fps |
+| Black level | Blacks that look grey (or crushed) next to the other cameras, usually a camera and capture card disagreeing about the video range (16-235 or 0-255) |
+| Focus and grain | How crisp it is and how grainy, compared with the reference and with the last check |
+
+**Remembered settings:** a capture card can't tell Cutaway what the camera
+itself is set to, so each camera has **Camera's own settings** under its
+picture: the kind of camera, lens, shutter, aperture, ISO, white balance,
+Photo Style, luminance level, frequency and frame rate, focus and notes.
+Fill them in once (**Copy from** fills them from another camera); they stay
+for next time, and the advice uses them: "change white balance from 4300K to
+4000K". Underneath is a list of things worth setting once on that kind of
+camera, with a separate list for the Panasonic Lumix G85.
+
+**Webcams and built-in cameras** have no settings of their own, so set
+**Kind of camera** to webcam and the advice is for its **Picture adjustments**
+instead: Warmth, Tint and Brightness, with the values to set. These change the
+program only; the camera's own file stays as it came.

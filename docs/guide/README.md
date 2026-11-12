@@ -15,7 +15,7 @@ Cutaway and follow its first-show guide.
 | [Installing Cutaway](install.md) | Mac and Windows, building it yourself, the virtual camera, NDI |
 | [Getting started](getting-started.md) | The first run, finding your way round the window, and what to do if something goes wrong |
 | [Running a show and going live](running-a-show.md) | The desk's controls and keys, streaming to several places, scheduled streams |
-| [Network, phone and PTZ cameras](sources.md) | Network sources, phone cameras, PTZ cameras, auto-framing and backgrounds |
+| [Network, phone and PTZ cameras](sources.md) | Network sources, phone cameras, PTZ cameras, auto-framing and backgrounds, checking your cameras match |
 | [Remote guests](guests.md) | Inviting guests from a browser, their backup recordings, strict networks |
 | [Remote control, Stream Deck, OSC and MIDI](control.md) | The phone remote, the Stream Deck plugin, OSC, MIDI and the command list |
 | [Show tools and sound](show-tools.md) | Replay, macros, the ticker, viewer comments, the teleprompter, sound pads, Syrinscape, talkback, your DAW, captions, the vertical version |

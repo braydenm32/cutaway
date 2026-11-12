@@ -5,6 +5,7 @@
 //! on the page's bar for "Apply (restarts cameras)".
 
 mod captions;
+mod camcheck;
 mod capture_picker;
 mod comments;
 mod control;
@@ -327,6 +328,10 @@ pub struct SettingsContext {
     pub redo: Option<String>,
     /// Running sources' pictures (by uid), as the multiview shows them.
     pub pictures: Vec<preview::Picture>,
+    /// The same pictures as they arrive (by uid), for Check cameras.
+    pub slots: Vec<(u64, Arc<crate::engine::FrameSlot>)>,
+    /// The program's frame rate as it runs.
+    pub show_fps: u32,
     /// Virtual PTZ cameras (by uid), for the shot they're on.
     pub virtual_ptz: Vec<(u64, Arc<crate::engine::ptz::VirtualPtz>)>,
     /// The graphics as they are on the program now.
@@ -424,6 +429,8 @@ pub struct SettingsUi {
     resolve_note: Option<(String, bool)>,
     /// The LUT picked for a source, checked: (file, description or problem).
     lut_check: Option<(PathBuf, Result<String, String>)>,
+    /// Sources › Cameras › Check cameras, while it's open.
+    camcheck: Option<camcheck::CamCheck>,
     /// The virtual PTZ preset picked in the picture: (source, preset).
     sel_preset: Option<(usize, usize)>,
     /// The bottom bar's height, as last drawn.
@@ -551,6 +558,7 @@ impl SettingsUi {
             apps: None,
             resolve_note: None,
             lut_check: None,
+            camcheck: None,
             sel_preset: None,
             bar_h: 48.0,
             last_live: None,
@@ -2933,6 +2941,8 @@ mod tests {
             undo: None,
             redo: None,
             pictures: Vec::new(),
+            slots: Vec::new(),
+            show_fps: 30,
             virtual_ptz: Vec::new(),
             graphics_now: Vec::new(),
             rotations_now: Vec::new(),

@@ -688,6 +688,10 @@ pub struct SourceConfig {
     /// The line under their name: a role, a topic or a handle.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub role: String,
+    /// What the camera itself is set to (typed in: most capture cards can't
+    /// tell), for Check cameras' advice and next time's setup.
+    #[serde(skip_serializing_if = "CameraNotes::is_empty")]
+    pub camera: CameraNotes,
     /// Which source this is while Cutaway runs (never saved): a settings
     /// change finds the same source by it, however it was renamed or moved.
     #[serde(skip)]
@@ -944,6 +948,136 @@ impl Default for MediaConfig {
     }
 }
 
+/// What kind of camera a source is, for Check cameras' advice.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CameraModel {
+    /// A camera with its own exposure and white balance settings.
+    Other,
+    /// A webcam or built-in camera with no manual settings: fixed in Look.
+    Webcam,
+    /// Panasonic Lumix G85 (G80 outside the US) through a capture card.
+    LumixG85,
+}
+
+impl CameraModel {
+    pub const ALL: [CameraModel; 3] = [CameraModel::Other, CameraModel::LumixG85, CameraModel::Webcam];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            CameraModel::Other => "A camera with its own settings",
+            CameraModel::LumixG85 => "Panasonic Lumix G85 / G80",
+            CameraModel::Webcam => "Webcam or built-in camera (no manual settings)",
+        }
+    }
+
+    /// The camera's own settings can be changed (otherwise fixes go in Look).
+    pub fn has_settings(self) -> bool {
+        self != CameraModel::Webcam
+    }
+
+    /// A guess from the device's name, until someone picks.
+    pub fn guess(device: &str) -> CameraModel {
+        let d = device.to_lowercase();
+        let webcam = ["facetime", "macbook", "built-in", "integrated", "webcam", "iphone", "continuity", "c920", "c922", "brio", "lifecam", "usb camera"];
+        if webcam.iter().any(|w| d.contains(w)) {
+            CameraModel::Webcam
+        } else {
+            CameraModel::Other
+        }
+    }
+}
+
+/// A camera's own settings as last set (typed in: what you set on the
+/// camera), and what the last Check cameras measured.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct CameraNotes {
+    /// None: guessed from the device's name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<CameraModel>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub lens: String,
+    /// "1/50"
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub shutter: String,
+    /// "f/4"
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub aperture: String,
+    /// "800"
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub iso: String,
+    /// Kelvin, "4300K" (or a preset's name).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub white_balance: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub photo_style: String,
+    /// "16-235" or "0-255".
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub luminance: String,
+    /// "50 Hz, 25p"
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub frequency: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub focus: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub notes: String,
+    /// The setup list's items ticked off (by their key).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub setup_done: Vec<String>,
+    /// What the last check measured, to compare with next time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_check: Option<LastCheck>,
+}
+
+/// What Check cameras measured last time.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct LastCheck {
+    /// "2026-11-12 17:40"
+    pub when: String,
+    /// Edge crispness (see `engine::camcheck`).
+    pub sharpness: f32,
+    /// Grain.
+    pub noise: f32,
+}
+
+impl CameraNotes {
+    pub fn is_empty(&self) -> bool {
+        *self == CameraNotes::default()
+    }
+
+    /// The kind of camera, picked or guessed.
+    pub fn model_for(&self, device: &str) -> CameraModel {
+        self.model.unwrap_or_else(|| CameraModel::guess(device))
+    }
+
+    /// The settings typed in, as (label, value) for the ones filled.
+    pub fn filled(&self) -> Vec<(&'static str, &str)> {
+        [
+            ("Lens", self.lens.as_str()),
+            ("Shutter", &self.shutter),
+            ("Aperture", &self.aperture),
+            ("ISO", &self.iso),
+            ("White balance", &self.white_balance),
+            ("Photo Style", &self.photo_style),
+            ("Luminance", &self.luminance),
+            ("Frequency", &self.frequency),
+            ("Focus", &self.focus),
+        ]
+        .into_iter()
+        .filter(|(_, v)| !v.trim().is_empty())
+        .collect()
+    }
+
+    /// The camera's settings from another camera (what's measured and
+    /// what's ticked stay this camera's own).
+    pub fn copy_settings_from(&mut self, o: &CameraNotes) {
+        let (model, notes, done, last) = (self.model, std::mem::take(&mut self.notes), std::mem::take(&mut self.setup_done), self.last_check.take());
+        *self = CameraNotes { model: o.model.or(model), notes, setup_done: done, last_check: last, ..o.clone() };
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct SourceLook {
@@ -956,6 +1090,10 @@ pub struct SourceLook {
     pub mirror: bool,
     /// -1..1, 0 = unchanged.
     pub brightness: f32,
+    /// -1 (cooler, bluer) .. 1 (warmer, more orange), 0 = unchanged.
+    pub warmth: f32,
+    /// -1 (greener) .. 1 (pinker), 0 = unchanged.
+    pub tint: f32,
     /// 0..2, 1 = unchanged.
     pub contrast: f32,
     /// 0..2, 1 = unchanged (0 = black and white).
@@ -1058,6 +1196,8 @@ impl Default for SourceLook {
             crop_bottom: 0.0,
             mirror: false,
             brightness: 0.0,
+            warmth: 0.0,
+            tint: 0.0,
             contrast: 1.0,
             saturation: 1.0,
             chroma_key: false,
@@ -1105,6 +1245,7 @@ pub fn source_key(s: &SourceConfig) -> SourceConfig {
         person: String::new(),
         role: String::new(),
         on_drop_scene: String::new(),
+        camera: CameraNotes::default(),
         ..s.clone()
     }
 }
@@ -1152,6 +1293,7 @@ impl Default for SourceConfig {
             ptz: PtzConfig::default(),
             person: String::new(),
             role: String::new(),
+            camera: CameraNotes::default(),
             uid: 0,
         }
     }

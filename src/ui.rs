@@ -6121,6 +6121,8 @@ impl App {
             undo: self.history.can_undo().map(String::from),
             redo: self.history.can_redo().map(String::from),
             pictures: Vec::new(),
+            slots: Vec::new(),
+            show_fps: self.engine.as_ref().map(|e| e.info.fps).unwrap_or(30),
             virtual_ptz: Vec::new(),
             graphics_now: self.graphics_now(),
             rotations_now: self.engine.as_ref().map(|e| e.rotations.list().into_iter().map(|r| (r.name, r.running)).collect()).unwrap_or_default(),
@@ -6148,6 +6150,7 @@ impl App {
         if let (Some(e), Some(crate::settings::Section::Sources)) = (&self.engine, section) {
             let slots: Vec<(usize, u64, Arc<FrameSlot>)> = e.sources.iter().enumerate().map(|(i, s)| (i, s.uid, s.preview.clone())).collect();
             info.virtual_ptz = e.sources.iter().enumerate().filter_map(|(i, s)| Some((s.uid, e.ptz(i)?.virt.clone()?))).collect();
+            info.slots = slots.iter().map(|(_, uid, slot)| (*uid, slot.clone())).collect();
             for (i, uid, slot) in slots {
                 let size = slot.latest().map(|(_, f)| [f.width, f.height]);
                 if let (Some(tex), Some(size)) = (self.texture(ctx, &format!("src{i}"), &slot), size) {

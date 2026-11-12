@@ -19,6 +19,7 @@
 
 pub mod audio;
 pub mod autoswitch;
+pub mod camcheck;
 pub mod captions;
 pub mod compositor;
 pub mod clips;
