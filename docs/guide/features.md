@@ -280,11 +280,16 @@ Recordings start with the **Take name** from Record & stream › Quality and fil
   back, keeping its name, sound and cues. **Add default scenes** in
   Scenes › Scenes adds back any default scene your show doesn't have, at the
   end, and leaves your other scenes as they are.
+- **Fine moves and swapping sources.** In Edit layout, the arrow keys move
+  the picked frame a pixel at a time (Shift: ten), or its picture inside it
+  with **✥ Move picture** on or Option/Alt held. Right-click a frame (or
+  **Swap for ▾**) to show another source in the same place and size, such as
+  Cam 3 left where Cam 2 left was; one already in the scene trades places.
 - **Fill, crop and zoom per scene.** Each frame in a scene can show the whole
   picture (fit) or fill the frame, cropped to its shape, so a camera in a tall
   half-screen box has no black bars. Zoom in (scroll over the frame, up to
   4×) and move the picture inside its frame (**✥ Move picture**, or
-  Option/Alt-drag), so the same
+  Option/Alt-drag, or the arrow keys), so the same
   camera can be a close-up in one scene and wide in another. Mixes glide the
   crop along with the frame.
 - **Transitions:** Cut, Mix (shared frames glide to their new places while

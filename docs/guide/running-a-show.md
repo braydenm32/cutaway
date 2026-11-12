@@ -56,9 +56,11 @@
 - **Preview off:** you edit the scene on air, and a red **ON AIR** label says so, with **Edit in preview** to turn Preview on.
 - **Recording or live:** opening Edit layout (`E` or the tab) turns Preview on for you and says so, so a stray `E` and a scroll can't change the picture on air.
 - **Undo and redo:** **↶ Undo** and **↷ Redo** sit at the top.
-- **Picture** (in the selected frame): **Fit/Fill**, **Zoom**, **✥ Move picture** (drag inside a frame to move its picture; Option/Alt-drag does the same) and **Reset**.
+- **Picture** (in the selected frame): **Fit/Fill**, **Zoom**, **✥ Move picture** (drag inside a frame, or use the arrow keys, to move its picture; Option/Alt-drag and Option/Alt + arrows do the same) and **Reset**.
 - **Scene:** its name, **Add source**, **Audio** (inputs it turns on or off), **Also run…** (commands it runs when it's taken: a title, a pad, a mood), **＋ New scene**, **Duplicate**, and **Delete…** (it asks first, says what uses the scene, and Undo brings it back).
-- **Frames:** once you click a frame, **Frame** offers **Remove**, **To front** and **Full frame**. Drag frames, drag a corner to resize (Shift keeps the shape), scroll to zoom, and double-click to fit or fill. A line under the bar says what the mouse does.
+- **Frames:** once you click a frame, **Frame** offers **Remove**, **To front**, **Full frame** and **Swap for ▾**. Drag frames, drag a corner to resize (Shift keeps the shape), scroll to zoom, and double-click to fit or fill. A line under the bar says what the mouse does.
+- **Fine moves:** with a frame picked, the arrow keys move it one pixel of the program at a time (Shift + arrow: ten). With **✥ Move picture** on, or Option/Alt held, they move the picture inside the frame instead. Presses close together are one step to undo. While a frame is picked in Edit layout, the arrow keys do only this, even if you've given them something else in Shortcuts.
+- **Swap a source:** right-click a frame (or pick it and use **Swap for ▾**) and choose another source: it shows in the same place and size, keeping Fit or Fill, so you can turn *Cam 2 left* into *Cam 3 left* in one click. A source that's already in the scene (marked ⇄) trades places with it, each picture keeping its own zoom. Undo puts it back.
 - **Saving:** **Unsaved** shows until the scenes are written to disk: press **Save scenes**, or wait a few seconds after **Done**. **Done** or Esc goes back to Switch.
 
 The keys above are the built-in ones. Any of them (except the numbered

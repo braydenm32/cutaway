@@ -2282,6 +2282,8 @@ impl App {
         if ctx.egui_wants_keyboard_input() || self.search_open() || self.settings.as_ref().is_some_and(|s| s.busy()) || self.title_edit.is_some() || self.marker_name.is_some() || self.confirm.is_some() || self.precheck.is_some() || self.sync.is_some() {
             return;
         }
+        // Edit layout: the arrow keys move the frame that's picked.
+        self.edit_nudge(ctx);
         let downs: Vec<(KeyCombo, bool)> = ctx.input(|i| {
             i.events
                 .iter()
@@ -2320,6 +2322,59 @@ impl App {
                 None => {}
             }
         }
+    }
+
+    /// Edit layout with a frame picked: the arrow keys move it a pixel of
+    /// the program at a time (Shift: ten), and with ✥ Move picture on or
+    /// Alt/Option held they move its picture inside it instead. The keys are
+    /// taken here, so whatever else they do waits until the editing's done.
+    fn edit_nudge(&mut self, ctx: &egui::Context) {
+        if !self.edit_mode || !self.on_show() {
+            return;
+        }
+        let Some(mut scene) = self.edit_target() else { return };
+        let Some(i) = self.selected_layer.filter(|&i| i < scene.layers.len()) else { return };
+        let is_arrow = |k: &Key| matches!(k, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown);
+        let presses: Vec<(Key, egui::Modifiers)> = ctx.input_mut(|inp| {
+            let mut v = Vec::new();
+            inp.events.retain(|e| match e {
+                egui::Event::Key { key, pressed: true, modifiers, .. } if is_arrow(key) && !modifiers.command && !modifiers.ctrl => {
+                    v.push((*key, *modifiers));
+                    false
+                }
+                _ => true,
+            });
+            v
+        });
+        if presses.is_empty() {
+            return;
+        }
+        let Some(engine) = &self.engine else { return };
+        let canvas = engine.info.canvas;
+        let source = scene.layers[i].source;
+        let name = engine.sources.get(source).map(|s| s.name.clone()).unwrap_or_else(|| format!("Source {}", source + 1));
+        let aspect = engine.sources.get(source).map(|s| s.size.0 as f32 / s.size.1.max(1) as f32).map(|a| self.cfg.sources.get(source).map(|c| c.look.cropped_aspect(a)).unwrap_or(a)).unwrap_or(16.0 / 9.0);
+        let mut pan = false;
+        for (key, m) in presses {
+            let step = if m.shift { 10.0 } else { 1.0 };
+            let (dx, dy) = match key {
+                Key::ArrowLeft => (-step, 0.0),
+                Key::ArrowRight => (step, 0.0),
+                Key::ArrowUp => (0.0, -step),
+                _ => (0.0, step),
+            };
+            let l = &mut scene.layers[i];
+            if self.pan_tool || m.alt {
+                pan = true;
+                l.pan(dx, dy, canvas, aspect);
+            } else {
+                l.nudge(dx / canvas.0.max(1) as f32, dy / canvas.1.max(1) as f32);
+            }
+        }
+        // (Presses close together are one step to undo.)
+        self.remember(undo::Kind::Scenes, if pan { format!("Move the picture of {name}") } else { format!("Move {name}") });
+        self.apply_edit(scene);
+        ctx.request_repaint();
     }
 
     /// A command on one of your keys. Recording and going live take the same
@@ -3169,7 +3224,12 @@ impl App {
                 label_chip(&painter, badge.right_center() + vec2(12.0, 0.0), &p.name);
             }
         }
-        // Take / cut under the preview (over the frames being edited).
+        // Take / cut at the bottom right of the preview. While editing they
+        // sit in the bar above instead, so nothing covers the frames (a
+        // frame's resize corner is at its bottom right, where they'd be).
+        if self.edit_mode {
+            return;
+        }
         let take = Rect::from_min_size(pos2(rect.right() - 170.0, rect.bottom() - 46.0), vec2(80.0, 36.0));
         let cut = Rect::from_min_size(pos2(rect.right() - 86.0, rect.bottom() - 46.0), vec2(76.0, 36.0));
         let rt = ui.interact(take, ui.scope_id().with("take_btn"), Sense::click());
@@ -3324,6 +3384,25 @@ impl App {
             }
         }
 
+        // Right-click a frame: show another source in it.
+        if resp.secondary_clicked() {
+            self.selected_layer = pointer.and_then(|p| hit_at(&scene.layers, p));
+        }
+        if let Some(i) = self.selected_layer.filter(|&i| i < scene.layers.len()) {
+            let current = scene.layers[i].source;
+            let mut to = None;
+            resp.context_menu(|ui| {
+                ui.label(RichText::new("Swap for").strong());
+                swap_list(ui, &scene, current, &names, &mut to);
+            });
+            if let Some(to) = to {
+                let from = names.get(current).cloned().unwrap_or_default();
+                self.remember(undo::Kind::Scenes, format!("Swap {from} for {}", names.get(to).cloned().unwrap_or_default()));
+                if scene.set_source(i, to) {
+                    self.apply_edit(scene.clone());
+                }
+            }
+        }
         if resp.drag_started() || resp.clicked() {
             if let Some(p) = pointer {
                 let hit = scene.layers.iter().enumerate().rev().find_map(|(i, l)| {
@@ -3356,18 +3435,10 @@ impl App {
                 let keep_aspect = ui.input(|i| i.modifiers.shift);
                 if let Some(l) = scene.layers.get_mut(d.layer) {
                     if d.pan {
-                        // The picture follows the pointer: the view moves
-                        // the other way, by the part of it that shows.
+                        // The picture follows the pointer.
                         let aspect = aspects.get(l.source).copied().unwrap_or(16.0 / 9.0);
-                        let (frame, part) = crate::scene::place(l, canvas, aspect);
-                        let k = rect.width() / canvas.0 as f32;
-                        let (fw, fh) = ((frame.2 * k).max(1.0), (frame.3 * k).max(1.0));
-                        l.focus[0] = (l.focus[0] - delta.x / fw * (part[2] - part[0])).clamp(0.0, 1.0);
-                        l.focus[1] = (l.focus[1] - delta.y / fh * (part[3] - part[1])).clamp(0.0, 1.0);
-                        // Kept where the view can actually be, so moving back
-                        // responds at once.
-                        let (pw, ph) = ((part[2] - part[0]) / 2.0, (part[3] - part[1]) / 2.0);
-                        l.focus = [l.focus[0].clamp(pw, 1.0 - pw), l.focus[1].clamp(ph, 1.0 - ph)];
+                        let k = canvas.0 as f32 / rect.width().max(1.0);
+                        l.pan(delta.x * k, delta.y * k, canvas, aspect);
                     } else if d.resize {
                         let aspect = l.w / l.h.max(1e-4);
                         l.w = (l.w + dx).clamp(0.05, 1.5);
@@ -3457,6 +3528,8 @@ impl App {
         let cue_suggestions = control::suggestions(&self.cfg);
         let mut changed = false;
         let mut new_scene: Option<Scene> = None;
+        // A frame given another source (its own undo step).
+        let mut swapped = false;
         // ＋ New scene: blank or from a layout.
         let mut fresh: Option<Scene> = None;
         let mut delete = false;
@@ -3466,6 +3539,8 @@ impl App {
         // The keys as they're set now (numbers audit #22).
         let (undo_key, redo_key) = (self.key_hint(Builtin::Undo), self.key_hint(Builtin::Redo));
         let mut preview_on = false;
+        let (take_key, cut_key) = (self.key_hint(Builtin::Take), self.key_hint(Builtin::CutPreview));
+        let mut take_clicked: Option<bool> = None;
         // What's being edited (red ON AIR with Preview off: forensics edit
         // #1), then Undo / Redo / Save / Done.
         ui.horizontal(|ui| {
@@ -3497,6 +3572,13 @@ impl App {
                     if in_preview {
                         let chip = egui::Button::new(RichText::new("PREVIEW").strong().size(TEXT_BODY).color(Color32::WHITE)).fill(GREEN_DIM).sense(Sense::hover());
                         ui.add(chip);
+                        // (Here while editing, rather than over the frames.)
+                        if ui.add(egui::Button::new(RichText::new("TAKE").strong().size(TEXT_BODY).color(Color32::WHITE)).fill(TAKE)).on_hover_text(format!("{} to program{}", self.cfg.transition.mode.label(), take_key)).clicked() {
+                            take_clicked = Some(false);
+                        }
+                        if ui.add(egui::Button::new(RichText::new("CUT").strong().size(TEXT_BODY).color(Color32::WHITE))).on_hover_text(format!("Straight to program{cut_key}")).clicked() {
+                            take_clicked = Some(true);
+                        }
                         let what = format!("{}: the program stays as it is until you Take", scene.name);
                         ui.add(egui::Label::new(RichText::new(what).color(GREEN).size(TEXT_BODY)).truncate()).on_hover_text("With Preview on you edit the next shot. Take (or Cut) puts it on air.");
                     } else {
@@ -3706,9 +3788,9 @@ impl App {
         // no button of their own).
         let alt = if cfg!(target_os = "macos") { "Option" } else { "Alt" };
         let hint = if self.pan_tool {
-            "✥ Move picture is on: drag inside a frame to move its picture · scroll to zoom · click ✥ again to move frames".to_string()
+            "✥ Move picture is on: drag inside a frame or use the arrow keys to move its picture · scroll to zoom · click ✥ again to move frames".to_string()
         } else {
-            format!("Drag a frame to move it · corner to resize (Shift keeps shape) · scroll to zoom · double-click to fit or fill · ✥ or {alt}-drag moves the picture · Esc when done")
+            format!("Drag a frame to move it, or arrow keys for a pixel (Shift: 10) · corner to resize (Shift keeps shape) · scroll to zoom · double-click to fit or fill · right-click to swap the source · ✥ or {alt}-drag moves the picture · Esc when done")
         };
         // One line, always as tall: FRAME and its buttons when a frame is
         // selected, then what the mouse does. (Its height never changes, so
@@ -3732,6 +3814,16 @@ impl App {
                         let l = &mut scene.layers[self.selected_layer.unwrap_or(i)];
                         (l.x, l.y, l.w, l.h) = (0.0, 0.0, 1.0, 1.0);
                         changed = true;
+                    }
+                    // Another source in this frame (trading places with
+                    // it if it's in the scene already).
+                    let at = self.selected_layer.unwrap_or(i);
+                    if let Some(to) = swap_menu(ui, &scene, at, &names) {
+                        let from = names.get(scene.layers[at].source).cloned().unwrap_or_default();
+                        if scene.set_source(at, to) {
+                            self.remember(undo::Kind::Scenes, format!("Swap {from} for {}", names.get(to).cloned().unwrap_or_default()));
+                            swapped = true;
+                        }
                     }
                 }
                 ui.add_space(6.0);
@@ -3775,7 +3867,7 @@ impl App {
             self.remember(undo::Kind::Scenes, label);
         }
         let before = self.scene_names();
-        if changed {
+        if changed || swapped {
             self.show_edit(scene.clone());
             if let Some(s) = self.scenes.iter_mut().find(|s| s.name == old_name) {
                 *s = scene;
@@ -3789,6 +3881,9 @@ impl App {
         }
         self.scenes_moved(&before);
         let ctx = ui.ctx().clone();
+        if let Some(cut) = take_clicked {
+            self.take_preview(cut);
+        }
         if undo_clicked {
             self.undo(&ctx);
         }
@@ -6651,6 +6746,36 @@ fn draw_reduction(ui: &mut egui::Ui, size: egui::Vec2, db: f32) {
     let h = (db / 20.0).clamp(0.0, 1.0) * rect.height();
     painter.rect_filled(Rect::from_min_size(rect.min, vec2(rect.width(), h)), 0.0, ACCENT);
     resp.on_hover_text(format!("Compressor: −{db:.1} dB"));
+}
+
+/// "Swap for ▾": the sources to show in frame `at` of `scene` instead of
+/// the one there. One that's in another frame already trades places with
+/// it. Returns the source picked.
+fn swap_menu(ui: &mut egui::Ui, scene: &Scene, at: usize, names: &[String]) -> Option<usize> {
+    let current = scene.layers.get(at)?.source;
+    let mut picked = None;
+    ui.menu_button("Swap for ▾", |ui| {
+        swap_list(ui, scene, current, names, &mut picked);
+    })
+    .response
+    .on_hover_text("Show another source in this frame, in the same place and size (one already in the scene trades places with it). Or right-click the frame.");
+    picked
+}
+
+/// The sources in a Swap for list: `current` ticked, the ones in the scene
+/// already marked as trading places.
+fn swap_list(ui: &mut egui::Ui, scene: &Scene, current: usize, names: &[String], picked: &mut Option<usize>) {
+    ui.set_min_width(220.0);
+    for (s, n) in names.iter().enumerate() {
+        let elsewhere = s != current && scene.layer_for(s).is_some();
+        let label = if elsewhere { format!("{n}  ⇄") } else { n.clone() };
+        let r = ui.add(egui::Button::selectable(s == current, label));
+        let r = if elsewhere { r.on_hover_text(format!("{n} is in this scene already: the two trade places")) } else { r };
+        if r.clicked() && s != current {
+            *picked = Some(s);
+            ui.close();
+        }
+    }
 }
 
 fn snap(v: f32, size: f32) -> f32 {
